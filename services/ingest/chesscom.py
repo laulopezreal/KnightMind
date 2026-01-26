@@ -2,12 +2,41 @@
 Chess.com game import service.
 
 This module handles fetching and parsing games from the Chess.com API.
-Currently a placeholder - will be fully implemented in a future phase.
 """
 
 import httpx
 from dataclasses import dataclass
-from typing import Iterator
+from typing import AsyncIterator
+from enum import Enum
+
+
+class ImportError(Exception):
+    """Base exception for import errors."""
+    pass
+
+
+class UserNotFoundError(ImportError):
+    """Raised when the Chess.com user is not found."""
+    def __init__(self, username: str):
+        self.username = username
+        super().__init__(f"Chess.com user '{username}' not found")
+
+
+class RateLimitError(ImportError):
+    """Raised when Chess.com API rate limit is exceeded."""
+    def __init__(self, retry_after: int | None = None):
+        self.retry_after = retry_after
+        msg = "Chess.com API rate limit exceeded"
+        if retry_after:
+            msg += f", retry after {retry_after} seconds"
+        super().__init__(msg)
+
+
+class NetworkError(ImportError):
+    """Raised when a network error occurs."""
+    def __init__(self, message: str, original_error: Exception | None = None):
+        self.original_error = original_error
+        super().__init__(f"Network error: {message}")
 
 
 @dataclass
@@ -26,6 +55,26 @@ class ChessGame:
 
 CHESSCOM_API_BASE = "https://api.chess.com/pub"
 
+# Chess.com API requires a User-Agent header
+DEFAULT_HEADERS = {
+    "User-Agent": "KnightMind/1.0 (https://github.com/laulopezreal/KnightMind)"
+}
+
+
+def _handle_response_error(response: httpx.Response, username: str | None = None) -> None:
+    """Handle HTTP error responses from Chess.com API."""
+    if response.status_code == 404:
+        if username:
+            raise UserNotFoundError(username)
+        raise ImportError(f"Resource not found: {response.url}")
+    elif response.status_code == 429:
+        retry_after = response.headers.get("Retry-After")
+        raise RateLimitError(int(retry_after) if retry_after else None)
+    elif response.status_code >= 500:
+        raise NetworkError(f"Chess.com server error: {response.status_code}")
+    elif response.status_code >= 400:
+        raise ImportError(f"Chess.com API error: {response.status_code} - {response.text}")
+
 
 async def get_player_archives(username: str) -> list[str]:
     """
@@ -36,11 +85,26 @@ async def get_player_archives(username: str) -> list[str]:
         
     Returns:
         List of archive URLs
+        
+    Raises:
+        UserNotFoundError: If the user doesn't exist
+        RateLimitError: If rate limited by Chess.com
+        NetworkError: If a network error occurs
     """
-    async with httpx.AsyncClient() as client:
-        response = await client.get(f"{CHESSCOM_API_BASE}/player/{username}/games/archives")
-        response.raise_for_status()
-        return response.json().get("archives", [])
+    try:
+        async with httpx.AsyncClient(headers=DEFAULT_HEADERS, timeout=30.0) as client:
+            response = await client.get(
+                f"{CHESSCOM_API_BASE}/player/{username}/games/archives"
+            )
+            if not response.is_success:
+                _handle_response_error(response, username)
+            return response.json().get("archives", [])
+    except httpx.TimeoutException as e:
+        raise NetworkError("Request timed out", e)
+    except httpx.ConnectError as e:
+        raise NetworkError("Failed to connect to Chess.com", e)
+    except httpx.HTTPError as e:
+        raise NetworkError(str(e), e)
 
 
 async def fetch_games_from_archive(archive_url: str) -> list[dict]:
@@ -52,11 +116,23 @@ async def fetch_games_from_archive(archive_url: str) -> list[dict]:
         
     Returns:
         List of game data dictionaries
+        
+    Raises:
+        RateLimitError: If rate limited by Chess.com
+        NetworkError: If a network error occurs
     """
-    async with httpx.AsyncClient() as client:
-        response = await client.get(archive_url)
-        response.raise_for_status()
-        return response.json().get("games", [])
+    try:
+        async with httpx.AsyncClient(headers=DEFAULT_HEADERS, timeout=60.0) as client:
+            response = await client.get(archive_url)
+            if not response.is_success:
+                _handle_response_error(response)
+            return response.json().get("games", [])
+    except httpx.TimeoutException as e:
+        raise NetworkError("Request timed out", e)
+    except httpx.ConnectError as e:
+        raise NetworkError("Failed to connect to Chess.com", e)
+    except httpx.HTTPError as e:
+        raise NetworkError(str(e), e)
 
 
 def parse_game(game_data: dict) -> ChessGame:
@@ -82,7 +158,7 @@ def parse_game(game_data: dict) -> ChessGame:
     )
 
 
-async def import_all_games(username: str) -> Iterator[ChessGame]:
+async def import_all_games(username: str) -> AsyncIterator[ChessGame]:
     """
     Import all games for a Chess.com user.
     
@@ -91,6 +167,11 @@ async def import_all_games(username: str) -> Iterator[ChessGame]:
         
     Yields:
         ChessGame objects for each game
+        
+    Raises:
+        UserNotFoundError: If the user doesn't exist
+        RateLimitError: If rate limited by Chess.com
+        NetworkError: If a network error occurs
     """
     archives = await get_player_archives(username)
     for archive_url in archives:
@@ -111,12 +192,22 @@ if __name__ == "__main__":
         username = sys.argv[1]
         print(f"Fetching games for {username}...")
         
-        archives = await get_player_archives(username)
-        print(f"Found {len(archives)} monthly archives")
-        
-        # Just fetch the most recent archive as a demo
-        if archives:
-            games = await fetch_games_from_archive(archives[-1])
-            print(f"Most recent month has {len(games)} games")
+        try:
+            archives = await get_player_archives(username)
+            print(f"Found {len(archives)} monthly archives")
+            
+            # Just fetch the most recent archive as a demo
+            if archives:
+                games = await fetch_games_from_archive(archives[-1])
+                print(f"Most recent month has {len(games)} games")
+        except UserNotFoundError as e:
+            print(f"Error: {e}")
+            sys.exit(1)
+        except RateLimitError as e:
+            print(f"Error: {e}")
+            sys.exit(1)
+        except NetworkError as e:
+            print(f"Error: {e}")
+            sys.exit(1)
     
     asyncio.run(main())

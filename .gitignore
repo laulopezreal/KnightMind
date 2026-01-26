@@ -29,3 +29,9 @@ htmlcov/
 # OS
 .DS_Store
 Thumbs.db
+
+# Local preferences
+WARP.md
+
+# Data storage
+data/

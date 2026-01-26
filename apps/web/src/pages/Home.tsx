@@ -1,24 +1,47 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { importChessComGames } from '../api/client';
+import { importChessComGames, ApiError } from '../api/client';
 
 export default function Home() {
   const [username, setUsername] = useState('');
   const [status, setStatus] = useState<string | null>(null);
+  const [isError, setIsError] = useState(false);
   const [loading, setLoading] = useState(false);
 
   const handleImport = async () => {
     if (!username.trim()) {
       setStatus('Please enter a Chess.com username');
+      setIsError(true);
       return;
     }
     setLoading(true);
-    setStatus(null);
+    setStatus('Fetching games from Chess.com... This may take a moment.');
+    setIsError(false);
+    
     try {
       const result = await importChessComGames(username);
-      setStatus(`${result.message} (${result.games_count} games)`);
+      
+      if (result.games_count === 0) {
+        setStatus('No games found for this user.');
+        setIsError(false);
+      } else if (result.new_games === 0) {
+        setStatus(`All ${result.games_count} games already imported.`);
+        setIsError(false);
+      } else {
+        setStatus(
+          `Imported ${result.new_games} new games. ` +
+          `Total: ${result.games_count} games` +
+          (result.skipped_duplicates > 0 ? ` (${result.skipped_duplicates} duplicates skipped)` : '')
+        );
+        setIsError(false);
+      }
     } catch (error) {
-      setStatus(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      if (error instanceof ApiError) {
+        setStatus(error.detail || error.message);
+      } else {
+        setStatus(error instanceof Error ? error.message : 'Unknown error');
+      }
+      setIsError(true);
     } finally {
       setLoading(false);
     }
@@ -56,7 +79,7 @@ export default function Home() {
             </button>
           </div>
           {status && (
-            <p className={`text-sm ${status.startsWith('Error') ? 'text-red-400' : 'text-emerald-400'}`}>
+            <p className={`text-sm ${isError ? 'text-red-400' : 'text-emerald-400'}`}>
               {status}
             </p>
           )}
