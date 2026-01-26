@@ -1,6 +1,23 @@
-from fastapi import FastAPI, Query
+import sys
+from pathlib import Path
+
+from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+
+# Add ingest service to path
+sys.path.insert(0, str(Path(__file__).parent.parent / "ingest"))
+
+from chesscom import (
+    get_player_archives,
+    fetch_games_from_archive,
+    parse_game,
+    UserNotFoundError,
+    RateLimitError,
+    NetworkError,
+    ImportError as ChessComImportError,
+)
+from storage import get_storage
 
 app = FastAPI(title="KnightMind API", version="0.1.0")
 
@@ -17,6 +34,8 @@ app.add_middleware(
 class ImportResponse(BaseModel):
     message: str
     games_count: int
+    new_games: int
+    skipped_duplicates: int
 
 
 class OpeningNode(BaseModel):
@@ -80,14 +99,77 @@ async def root():
 async def import_chesscom_games(username: str = Query(..., description="Chess.com username")):
     """
     Import games from Chess.com for a given username.
-    Currently returns mocked data - actual implementation will call Chess.com API.
+    
+    Fetches all games from Chess.com API and stores them locally.
+    Duplicate games are skipped automatically.
     """
-    # TODO: Implement actual Chess.com API integration
-    # For now, return mock response
-    return ImportResponse(
-        message=f"Successfully imported games for {username}",
-        games_count=42,  # Mock count
-    )
+    storage = get_storage()
+    
+    try:
+        # Get all archive URLs for the user
+        archives = await get_player_archives(username)
+        
+        if not archives:
+            return ImportResponse(
+                message=f"No games found for {username}",
+                games_count=0,
+                new_games=0,
+                skipped_duplicates=0,
+            )
+        
+        new_games = 0
+        skipped = 0
+        
+        # Process each monthly archive
+        for archive_url in archives:
+            games = await fetch_games_from_archive(archive_url)
+            
+            for game_data in games:
+                game = parse_game(game_data)
+                
+                # Skip games without PGN
+                if not game.pgn:
+                    continue
+                
+                is_new, _ = storage.store_game(
+                    username=username,
+                    url=game.url,
+                    pgn=game.pgn,
+                    white_username=game.white_username,
+                    black_username=game.black_username,
+                    white_result=game.white_result,
+                    black_result=game.black_result,
+                    time_control=game.time_control,
+                    end_time=game.end_time,
+                    rated=game.rated,
+                )
+                
+                if is_new:
+                    new_games += 1
+                else:
+                    skipped += 1
+        
+        total_games = storage.get_game_count(username)
+        
+        return ImportResponse(
+            message=f"Successfully imported games for {username}",
+            games_count=total_games,
+            new_games=new_games,
+            skipped_duplicates=skipped,
+        )
+        
+    except UserNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except RateLimitError as e:
+        raise HTTPException(
+            status_code=429,
+            detail=str(e),
+            headers={"Retry-After": str(e.retry_after)} if e.retry_after else None,
+        )
+    except NetworkError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    except ChessComImportError as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/openings", response_model=OpeningNode)
