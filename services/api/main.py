@@ -1,6 +1,8 @@
 import sys
 from pathlib import Path
 
+from typing import Literal
+
 from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -18,6 +20,7 @@ from ingest import (
     ImportError as ChessComImportError,
 )
 from storage import get_storage
+from openings import build_opening_tree
 
 app = FastAPI(title="KnightMind API", version="0.1.0")
 
@@ -38,56 +41,6 @@ class ImportResponse(BaseModel):
     skipped_duplicates: int
 
 
-class OpeningNode(BaseModel):
-    name: str
-    moves: str
-    count: int
-    children: list["OpeningNode"] | None = None
-
-
-# Mock opening tree data
-MOCK_OPENINGS: OpeningNode = OpeningNode(
-    name="Start",
-    moves="",
-    count=150,
-    children=[
-        OpeningNode(
-            name="King's Pawn",
-            moves="1.e4",
-            count=80,
-            children=[
-                OpeningNode(
-                    name="Sicilian Defense",
-                    moves="1.e4 c5",
-                    count=35,
-                    children=[
-                        OpeningNode(name="Najdorf", moves="1.e4 c5 2.Nf3 d6 3.d4 cxd4 4.Nxd4 Nf6 5.Nc3 a6", count=15),
-                        OpeningNode(name="Dragon", moves="1.e4 c5 2.Nf3 d6 3.d4 cxd4 4.Nxd4 Nf6 5.Nc3 g6", count=12),
-                    ],
-                ),
-                OpeningNode(
-                    name="French Defense",
-                    moves="1.e4 e6",
-                    count=25,
-                    children=[
-                        OpeningNode(name="Winawer", moves="1.e4 e6 2.d4 d5 3.Nc3 Bb4", count=10),
-                    ],
-                ),
-                OpeningNode(name="Caro-Kann", moves="1.e4 c6", count=20),
-            ],
-        ),
-        OpeningNode(
-            name="Queen's Pawn",
-            moves="1.d4",
-            count=50,
-            children=[
-                OpeningNode(name="Queen's Gambit", moves="1.d4 d5 2.c4", count=30),
-                OpeningNode(name="King's Indian", moves="1.d4 Nf6 2.c4 g6", count=20),
-            ],
-        ),
-        OpeningNode(name="English", moves="1.c4", count=20),
-    ],
-)
 
 
 @app.get("/")
@@ -172,10 +125,55 @@ async def import_chesscom_games(username: str = Query(..., description="Chess.co
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/openings", response_model=OpeningNode)
-async def get_openings():
+@app.get("/openings")
+async def get_openings(
+    username: str = Query(..., description="Username to build opening tree for"),
+    color: Literal["white", "black", "both"] = Query("both", description="Filter by player's color"),
+    max_ply: int = Query(12, ge=1, le=40, description="Maximum number of half-moves to include")
+):
     """
-    Get the opening tree for the user's games.
-    Currently returns mocked data.
+    Get the opening tree for a user's games.
+    
+    Builds a tree structure from the user's stored PGN games showing:
+    - move_san: The move in Standard Algebraic Notation
+    - ply: Half-move number (1 = white's first, 2 = black's first, etc.)
+    - games_count: Number of games reaching this position
+    - wins/draws/losses: Results from the player's perspective
+    - win_rate: Win percentage (wins + 0.5*draws) / games
+    - children: Subsequent moves played from this position
+    
+    Args:
+        username: The username to build the tree for (must have imported games)
+        color: Filter games by the player's color ("white", "black", or "both")
+        max_ply: Maximum depth in half-moves (default 12 = 6 full moves each side)
+    
+    Returns:
+        Opening tree as nested JSON structure
     """
-    return MOCK_OPENINGS
+    storage = get_storage()
+    
+    # Check if user has any games
+    game_count = storage.get_game_count(username)
+    if game_count == 0:
+        raise HTTPException(
+            status_code=404, 
+            detail=f"No games found for user '{username}'. Import games first using POST /import/chesscom"
+        )
+    
+    # Get all PGNs for the user
+    pgn_texts = []
+    metadata_list = storage.get_all_metadata(username)
+    for meta in metadata_list:
+        pgn = storage.get_pgn(username, meta.game_id)
+        if pgn:
+            pgn_texts.append(pgn)
+    
+    # Build the opening tree
+    tree = build_opening_tree(
+        pgn_texts=pgn_texts,
+        player_username=username,
+        color_filter=color,
+        max_ply=max_ply
+    )
+    
+    return tree
