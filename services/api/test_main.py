@@ -41,14 +41,44 @@ def test_import_chesscom_missing_username():
     assert response.status_code == 422  # Validation error
 
 
-def test_get_openings():
+def test_get_openings_missing_username():
+    """Test that /openings requires username parameter."""
     response = client.get("/openings")
+    assert response.status_code == 422  # Validation error
+
+
+@patch("main.fetch_games_from_archive")
+@patch("main.get_player_archives")
+def test_get_openings_with_games(mock_get_archives, mock_fetch_games, client_with_temp_storage):
+    """Test /openings endpoint with imported games."""
+    # First import some games
+    mock_get_archives.return_value = MOCK_ARCHIVES
+    mock_fetch_games.return_value = MOCK_GAMES
+    
+    import_response = client_with_temp_storage.post("/import/chesscom?username=testuser")
+    assert import_response.status_code == 200
+    
+    # Now fetch openings
+    response = client_with_temp_storage.get("/openings?username=testuser")
     assert response.status_code == 200
     data = response.json()
-    assert "name" in data
-    assert "moves" in data
-    assert "count" in data
-    assert "children" in data
+    
+    # Verify structure
+    assert "move_san" in data
+    assert "ply" in data
+    assert "games_count" in data
+    assert "wins" in data
+    assert "draws" in data
+    assert "losses" in data
+    assert "win_rate" in data
+    assert data["games_count"] == 2
+
+
+def test_get_openings_no_games(client_with_temp_storage):
+    """Test /openings returns 404 when user has no games."""
+    response = client_with_temp_storage.get("/openings?username=unknownuser")
+    assert response.status_code == 404
+    assert "no games" in response.json()["detail"].lower()
 
 
 # --- Import endpoint tests with mocking ---
@@ -58,7 +88,7 @@ MOCK_ARCHIVES = ["https://api.chess.com/pub/player/testuser/games/2024/01"]
 MOCK_GAMES = [
     {
         "url": "https://www.chess.com/game/live/12345",
-        "pgn": '[Event "Live Chess"]\n1. e4 e5 2. Nf3 Nc6 *',
+        "pgn": '[Event "Live Chess"]\n[Site "Chess.com"]\n[White "testuser"]\n[Black "opponent1"]\n[Result "1-0"]\n\n1. e4 e5 2. Nf3 Nc6 1-0',
         "time_control": "600",
         "end_time": 1704067200,
         "rated": True,
@@ -67,7 +97,7 @@ MOCK_GAMES = [
     },
     {
         "url": "https://www.chess.com/game/live/12346",
-        "pgn": '[Event "Live Chess"]\n1. d4 d5 2. c4 e6 *',
+        "pgn": '[Event "Live Chess"]\n[Site "Chess.com"]\n[White "opponent2"]\n[Black "testuser"]\n[Result "0-1"]\n\n1. d4 d5 2. c4 e6 0-1',
         "time_control": "300",
         "end_time": 1704153600,
         "rated": True,

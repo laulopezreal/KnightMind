@@ -4,3 +4,4 @@ pydantic>=2.0.0
 httpx>=0.26.0
 pytest>=8.0.0
 pytest-asyncio>=0.23.0
+chess>=1.10.0
