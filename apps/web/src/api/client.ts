@@ -43,16 +43,41 @@ export async function importChessComGames(username: string): Promise<ImportResul
 }
 
 export interface OpeningNode {
-  name: string;
-  moves: string;
-  count: number;
+  move_san: string;
+  ply: number;
+  games_count: number;
+  wins: number;
+  draws: number;
+  losses: number;
+  win_rate: number;
   children?: OpeningNode[];
 }
 
-export async function getOpenings(): Promise<OpeningNode> {
-  const response = await fetch(`${API_BASE}/openings`);
+export type ColorFilter = 'white' | 'black' | 'both';
+
+export async function getOpenings(
+  username: string,
+  color: ColorFilter = 'both',
+  maxPly: number = 12
+): Promise<OpeningNode> {
+  const params = new URLSearchParams({
+    username,
+    color,
+    max_ply: maxPly.toString(),
+  });
+  
+  const response = await fetch(`${API_BASE}/openings?${params}`);
+  
   if (!response.ok) {
-    throw new Error(`Failed to fetch openings: ${response.statusText}`);
+    const errorData = await response.json().catch(() => ({}));
+    const detail = errorData.detail || response.statusText;
+    
+    if (response.status === 404) {
+      throw new ApiError('No games found', 404, detail);
+    } else {
+      throw new ApiError(`Failed to fetch openings: ${detail}`, response.status, detail);
+    }
   }
+  
   return response.json();
 }
