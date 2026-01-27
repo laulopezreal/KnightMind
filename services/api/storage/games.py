@@ -57,7 +57,7 @@ class GameStorage:
     
     def _game_id_from_url(self, url: str) -> str:
         """Generate a unique game ID from the Chess.com game URL."""
-        return hashlib.sha256(url.encode()).hexdigest()[:16]
+        return hashlib.sha256(url.encode()).hexdigest()
     
     def _get_user_index(self, username: str) -> set[str]:
         """Get the set of game IDs already imported for a user."""
