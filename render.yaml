@@ -1,0 +1,24 @@
+services:
+  # FastAPI Backend
+  - type: web
+    name: knightmind-api
+    runtime: python
+    region: oregon
+    plan: free
+    branch: main
+    buildCommand: "cd services/api && pip install -r requirements.txt"
+    startCommand: "cd services/api && uvicorn main:app --host 0.0.0.0 --port $PORT"
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: DATABASE_URL
+        fromDatabase:
+          name: knightmind-db
+          property: connectionString
+    
+databases:
+  # PostgreSQL for storing games
+  - name: knightmind-db
+    databaseName: knightmind
+    plan: free
+    region: oregon
