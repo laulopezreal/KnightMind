@@ -5,10 +5,10 @@ from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-# Add ingest service to path
-sys.path.insert(0, str(Path(__file__).parent.parent / "ingest"))
+# Add services directory to path for package imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from chesscom import (
+from ingest import (
     get_player_archives,
     fetch_games_from_archive,
     parse_game,
