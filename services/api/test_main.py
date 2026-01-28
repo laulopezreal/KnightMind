@@ -118,7 +118,7 @@ def test_import_chesscom_deduplication(mock_get_archives, mock_fetch_games, clie
 @patch("main.get_player_archives")
 def test_import_chesscom_user_not_found(mock_get_archives, client_with_temp_storage):
     """Test error handling for non-existent user."""
-    from chesscom import UserNotFoundError
+    from ingest import UserNotFoundError
     mock_get_archives.side_effect = UserNotFoundError("nonexistent_user")
     
     response = client_with_temp_storage.post("/import/chesscom?username=nonexistent_user")
@@ -130,7 +130,7 @@ def test_import_chesscom_user_not_found(mock_get_archives, client_with_temp_stor
 @patch("main.get_player_archives")
 def test_import_chesscom_rate_limit(mock_get_archives, client_with_temp_storage):
     """Test error handling for rate limiting."""
-    from chesscom import RateLimitError
+    from ingest import RateLimitError
     mock_get_archives.side_effect = RateLimitError(retry_after=60)
     
     response = client_with_temp_storage.post("/import/chesscom?username=testuser")
@@ -142,7 +142,7 @@ def test_import_chesscom_rate_limit(mock_get_archives, client_with_temp_storage)
 @patch("main.get_player_archives")
 def test_import_chesscom_network_error(mock_get_archives, client_with_temp_storage):
     """Test error handling for network errors."""
-    from chesscom import NetworkError
+    from ingest import NetworkError
     mock_get_archives.side_effect = NetworkError("Connection refused")
     
     response = client_with_temp_storage.post("/import/chesscom?username=testuser")
