@@ -224,15 +224,18 @@ export default function Openings() {
 
         {/* Legend */}
         {treeData && (
-          <div className="flex gap-4 mb-4 text-sm">
+          <div className="flex flex-wrap gap-4 mb-4 text-sm">
             <span className="flex items-center gap-1">
-              <span className="w-3 h-3 rounded-full bg-emerald-500"></span> &gt;60% win
+              <span className="w-3 h-3 rounded-full bg-emerald-500"></span> &ge;60%
             </span>
             <span className="flex items-center gap-1">
-              <span className="w-3 h-3 rounded-full bg-lime-500"></span> 50-60%
+              <span className="w-3 h-3 rounded-full bg-green-500"></span> 50-60%
             </span>
             <span className="flex items-center gap-1">
-              <span className="w-3 h-3 rounded-full bg-yellow-500"></span> 40-50%
+              <span className="w-3 h-3 rounded-full bg-lime-500"></span> 45-50%
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="w-3 h-3 rounded-full bg-yellow-500"></span> 40-45%
             </span>
             <span className="flex items-center gap-1">
               <span className="w-3 h-3 rounded-full bg-orange-500"></span> 30-40%
