@@ -9,7 +9,7 @@
     </radialGradient>
   </defs>
 
-  <g transform="translate(100, 50) scale(0.6)">
+  <g transform="translate(-20, 10) scale(1.1)">
     
     <path d="M100 450 L420 450 C440 450 450 440 450 420 L450 400 L70 400 L70 420 C70 440 80 450 100 450 Z" fill="url(#darkWoodGradient)" stroke="#1F1209" stroke-width="2"/>
     
