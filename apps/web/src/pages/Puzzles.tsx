@@ -17,6 +17,7 @@ export default function Puzzles() {
     const [isGenerating, setIsGenerating] = useState(false);
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [showUciInput, setShowUciInput] = useState(false);
 
     useEffect(() => {
         getUsers().then(setAvailableUsers).catch(console.error);
@@ -25,35 +26,66 @@ export default function Puzzles() {
     const currentPuzzle = puzzles[currentIndex];
 
     // ... (keep logic same as original, just updating UI)
+    // ... (keep logic same as original, just updating UI)
     const handleGeneratePuzzles = async () => {
-        if (!username.trim()) { setError('Please enter a username'); return; }
-        setIsGenerating(true); setError(null);
+        if (!username.trim()) {
+            setError('Please enter a username');
+            return;
+        }
+        setIsGenerating(true);
+        setError(null);
+
         try {
             await generatePuzzles(username.trim());
             const dailyPuzzles = await getDailyPuzzles(username.trim(), 5);
             setPuzzles(dailyPuzzles.puzzles);
-            setCurrentIndex(0); setStatus('solving'); setUserMove(''); setError(null);
+            setCurrentIndex(0);
+            setStatus('solving');
+            setUserMove('');
+            setError(null);
         } catch (err) {
             if (err instanceof ApiError) {
-                if (err.statusCode === 404) setError('No games found. Please import games first.');
-                else setError(err.detail || err.message);
-            } else setError(err instanceof Error ? err.message : 'Failed to generate puzzles');
-        } finally { setIsGenerating(false); }
+                if (err.statusCode === 404) {
+                    setError('No games found. Please import games first.');
+                } else {
+                    setError(err.detail || err.message);
+                }
+            } else {
+                setError(err instanceof Error ? err.message : 'Failed to generate puzzles');
+            }
+        } finally {
+            setIsGenerating(false);
+        }
     };
 
     const handleLoadPuzzles = async () => {
-        if (!username.trim()) { setError('Please enter a username'); return; }
-        setIsLoading(true); setError(null);
+        if (!username.trim()) {
+            setError('Please enter a username');
+            return;
+        }
+        setIsLoading(true);
+        setError(null);
+
         try {
             const dailyPuzzles = await getDailyPuzzles(username.trim(), 5);
             setPuzzles(dailyPuzzles.puzzles);
-            setCurrentIndex(0); setStatus('solving'); setUserMove(''); setError(null);
+            setCurrentIndex(0);
+            setStatus('solving');
+            setUserMove('');
+            setError(null);
         } catch (err) {
             if (err instanceof ApiError) {
-                if (err.statusCode === 404) setError('No puzzles found. Generate puzzles first.');
-                else setError(err.detail || err.message);
-            } else setError(err instanceof Error ? err.message : 'Failed to load puzzles');
-        } finally { setIsLoading(false); }
+                if (err.statusCode === 404) {
+                    setError('No puzzles found. Generate puzzles first.');
+                } else {
+                    setError(err.detail || err.message);
+                }
+            } else {
+                setError(err instanceof Error ? err.message : 'Failed to load puzzles');
+            }
+        } finally {
+            setIsLoading(false);
+        }
     };
 
     const handleCheckAnswer = () => {
@@ -208,27 +240,56 @@ export default function Puzzles() {
                         </div>
 
                         {/* Actions */}
-                        <div className="space-y-4">
+                        <div className="space-y-6">
+                            {/* Type Move Toggle */}
+                            <div className="flex justify-between items-center px-2">
+                                <span className="text-xs text-primary/40 uppercase tracking-widest font-sans">Input Method</span>
+                                <button
+                                    onClick={() => setShowUciInput(!showUciInput)}
+                                    className="text-primary hover:text-primary/60 text-xs font-serif underline decoration-primary/30 underline-offset-4 transition-colors">
+                                    {showUciInput ? 'Switch to Drag & Drop' : 'Type Move Manually'}
+                                </button>
+                            </div>
+
+                            {showUciInput && (
+                                <div className="animate-switchedin">
+                                    <input
+                                        type="text"
+                                        placeholder="e.g. e2e4"
+                                        value={userMove}
+                                        onChange={(e) => setUserMove(e.target.value)}
+                                        className="w-full bg-primary/5 border border-primary/20 p-3 rounded-sm text-primary font-mono text-center focus:outline-none focus:border-primary/60 transition-colors"
+                                        onKeyPress={(e) => e.key === 'Enter' && handleCheckAnswer()}
+                                    />
+                                </div>
+                            )}
+
                             {status === 'solving' && (
                                 <div className="grid grid-cols-2 gap-4">
-                                    <button onClick={handleCheckAnswer} disabled={!userMove}
-                                        className="px-6 py-4 bg-primary text-bg-primary hover:opacity-90 rounded-sm font-serif text-lg transition-all disabled:opacity-50">
+                                    <button
+                                        onClick={handleCheckAnswer}
+                                        disabled={!userMove}
+                                        className="px-6 py-4 bg-primary text-bg-primary hover:opacity-90 rounded-sm font-serif text-lg transition-all disabled:opacity-50 shadow-lg shadow-primary/5">
                                         Check Move
                                     </button>
-                                    <button onClick={handleRevealSolution}
+                                    <button
+                                        onClick={handleRevealSolution}
                                         className="px-6 py-4 border border-primary/20 text-primary hover:bg-primary/5 rounded-sm font-serif text-lg transition-all">
                                         Reveal
                                     </button>
                                 </div>
                             )}
                             {(status === 'correct' || status === 'revealed') && (
-                                <button onClick={handleNextPuzzle} disabled={currentIndex >= puzzles.length - 1}
+                                <button
+                                    onClick={handleNextPuzzle}
+                                    disabled={currentIndex >= puzzles.length - 1}
                                     className="w-full px-6 py-4 bg-green-600 text-white hover:bg-green-700 rounded-sm font-serif text-lg transition-all shadow-lg shadow-green-900/20">
                                     {currentIndex >= puzzles.length - 1 ? 'All Done' : 'Next Puzzle →'}
                                 </button>
                             )}
                             {status === 'incorrect' && (
-                                <button onClick={() => { setStatus('solving'); setUserMove(''); setGame(new Chess(currentPuzzle.fen)); }}
+                                <button
+                                    onClick={() => { setStatus('solving'); setUserMove(''); setGame(new Chess(currentPuzzle.fen)); }}
                                     className="w-full px-6 py-4 border border-primary/20 text-primary hover:bg-primary hover:text-bg-primary rounded-sm font-serif text-lg transition-all">
                                     Try Again
                                 </button>
