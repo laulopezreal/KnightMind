@@ -38,17 +38,17 @@ def get_stockfish_path() -> str:
 
 
 def get_analysis_params() -> dict:
-    """Get analysis parameters from environment."""
+    """Get analysis parameters from environment in UCI format."""
     depth = os.environ.get("STOCKFISH_DEPTH")
     movetime = os.environ.get("STOCKFISH_MOVETIME_MS")
     
     if depth:
-        return {"depth": int(depth)}
+        return {"Depth": int(depth)}
     elif movetime:
-        return {"movetime": int(movetime)}
+        return {"Move Time": int(movetime)}
     else:
         # Default: depth 12 for reasonable speed/quality tradeoff
-        return {"depth": 12}
+        return {"Depth": 12}
 
 
 def create_engine() -> "StockfishEngine":
@@ -107,9 +107,7 @@ def evaluate_fen(fen: str, engine: Optional["StockfishEngine"] = None) -> EvalRe
         
         # Get analysis parameters and configure engine
         params = get_analysis_params()
-        if "depth" in params:
-            engine.set_depth(params["depth"])
-        # Note: movetime is not directly supported by this library
+        engine.update_engine_parameters(params)
         
         # Get best move
         best_move = engine.get_best_move()
