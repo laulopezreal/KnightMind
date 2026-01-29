@@ -7,6 +7,7 @@ testpaths = [
 ]
 python_files = ["test_*.py", "*_test.py"]
 
+[tool.ruff]
 # Exclude a variety of commonly ignored directories.
 exclude = [
     ".bzr",

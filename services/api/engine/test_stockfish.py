@@ -98,7 +98,7 @@ class TestGetAnalysisParams:
 class TestEvaluateFen:
     """Test FEN evaluation with mocked Stockfish."""
     
-    @patch("engine.stockfish.StockfishEngine")
+    @patch("services.api.engine.stockfish.StockfishEngine")
     def test_evaluate_starting_position(self, mock_engine_class):
         """Evaluate starting position."""
         mock_engine = MagicMock()
@@ -113,7 +113,7 @@ class TestEvaluateFen:
         assert result.best_move_uci == "e2e4"
         assert result.eval == 0.2
     
-    @patch("engine.stockfish.StockfishEngine")
+    @patch("services.api.engine.stockfish.StockfishEngine")
     def test_evaluate_invalid_fen(self, mock_engine_class):
         """Invalid FEN raises error."""
         mock_engine = MagicMock()
@@ -123,11 +123,11 @@ class TestEvaluateFen:
         with pytest.raises(StockfishError, match="Invalid FEN"):
             evaluate_fen("invalid fen string")
     
-    @patch("engine.stockfish.StockfishEngine", None)
+    @patch("services.api.engine.stockfish.StockfishEngine", None)
     def test_stockfish_package_not_installed(self):
         """Error when stockfish package not installed."""
         # Temporarily set StockfishEngine to None to simulate missing package
-        import engine.stockfish as sf_module
+        import services.api.engine.stockfish as sf_module
         original = sf_module.StockfishEngine
         sf_module.StockfishEngine = None
         
@@ -141,7 +141,7 @@ class TestEvaluateFen:
 class TestIsStockfishAvailable:
     """Test Stockfish availability check."""
     
-    @patch("engine.stockfish.StockfishEngine")
+    @patch("services.api.engine.stockfish.StockfishEngine")
     def test_available(self, mock_engine_class):
         """Returns True when Stockfish works."""
         mock_engine = MagicMock()
@@ -149,7 +149,7 @@ class TestIsStockfishAvailable:
         
         assert is_stockfish_available() is True
     
-    @patch("engine.stockfish._create_engine")
+    @patch("services.api.engine.stockfish._create_engine")
     def test_not_available(self, mock_create):
         """Returns False when Stockfish not found."""
         mock_create.side_effect = StockfishNotFoundError("Not found")

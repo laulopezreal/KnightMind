@@ -7,7 +7,6 @@ returning the best move and evaluation in pawns from the side-to-move perspectiv
 
 import os
 from dataclasses import dataclass
-from typing import Optional
 
 try:
     from stockfish import Stockfish as StockfishEngine
