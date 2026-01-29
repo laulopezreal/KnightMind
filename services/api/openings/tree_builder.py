@@ -8,6 +8,7 @@ with statistics for each position (games count, win/draw/loss).
 import io
 from dataclasses import dataclass, field
 from typing import Literal
+
 import chess.pgn
 
 
@@ -18,7 +19,7 @@ class OpeningStats:
     wins: int = 0
     draws: int = 0
     losses: int = 0
-    
+
     def add_result(self, result: Literal["win", "draw", "loss"]) -> None:
         """Add a game result to the stats."""
         self.games += 1
@@ -28,7 +29,7 @@ class OpeningStats:
             self.draws += 1
         else:
             self.losses += 1
-    
+
     @property
     def win_rate(self) -> float:
         """Calculate win rate as percentage."""
@@ -44,7 +45,7 @@ class OpeningNode:
     ply: int  # Half-move number (1 = white's first move, 2 = black's first move, etc.)
     stats: OpeningStats = field(default_factory=OpeningStats)
     children: dict[str, "OpeningNode"] = field(default_factory=dict)
-    
+
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
         result = {
@@ -69,7 +70,7 @@ class OpeningTreeBuilder:
     for each position showing how many games reached that position and
     the results (win/draw/loss from the player's perspective).
     """
-    
+
     def __init__(self, max_ply: int = 12):
         """
         Initialize the tree builder.
@@ -79,7 +80,7 @@ class OpeningTreeBuilder:
         """
         self.max_ply = max_ply
         self.root = OpeningNode(move_san="root", ply=0)
-    
+
     def add_game(
         self,
         pgn_text: str,
@@ -101,12 +102,12 @@ class OpeningTreeBuilder:
             game = chess.pgn.read_game(io.StringIO(pgn_text))
             if game is None:
                 return False
-            
+
             # Determine player's color
             white_player = game.headers.get("White", "").lower()
             black_player = game.headers.get("Black", "").lower()
             player_lower = player_username.lower()
-            
+
             if player_lower == white_player:
                 player_color = "white"
             elif player_lower == black_player:
@@ -114,11 +115,11 @@ class OpeningTreeBuilder:
             else:
                 # Player not in this game
                 return False
-            
+
             # Apply color filter
             if color_filter != "both" and color_filter != player_color:
                 return False
-            
+
             # Determine result from player's perspective
             result_str = game.headers.get("Result", "*")
             if result_str == "1-0":
@@ -130,15 +131,15 @@ class OpeningTreeBuilder:
             else:
                 # Ongoing or unknown result - count as draw for stats
                 result = "draw"
-            
+
             # Walk through the moves and update the tree
             self._add_moves_to_tree(game, result, player_color)
             return True
-            
+
         except Exception:
             # Skip games that can't be parsed
             return False
-    
+
     def _add_moves_to_tree(
         self,
         game: chess.pgn.Game,
@@ -149,31 +150,31 @@ class OpeningTreeBuilder:
         node = game
         current_tree_node = self.root
         ply = 0
-        
+
         # Update root stats
         current_tree_node.stats.add_result(result)
-        
+
         while node.variations and ply < self.max_ply:
             next_node = node.variation(0)  # Main line
             move = next_node.move
             board = node.board()
             move_san = board.san(move)
-            
+
             ply += 1
-            
+
             # Get or create child node
             if move_san not in current_tree_node.children:
                 current_tree_node.children[move_san] = OpeningNode(
                     move_san=move_san,
                     ply=ply
                 )
-            
+
             child_node = current_tree_node.children[move_san]
             child_node.stats.add_result(result)
-            
+
             current_tree_node = child_node
             node = next_node
-    
+
     def build_tree(self) -> dict:
         """
         Build and return the opening tree as a dictionary.
@@ -213,8 +214,8 @@ def build_opening_tree(
         Dictionary representation of the opening tree
     """
     builder = OpeningTreeBuilder(max_ply=max_ply)
-    
+
     for pgn in pgn_texts:
         builder.add_game(pgn, player_username, color_filter)
-    
+
     return builder.build_tree()

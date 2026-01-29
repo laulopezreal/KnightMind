@@ -1,0 +1,7 @@
+-r services/api/requirements.txt
+-r services/ingest/requirements.txt
+ruff
+black
+flake8
+mypy
+pytest
