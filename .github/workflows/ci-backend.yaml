@@ -1,0 +1,43 @@
+name: Backend CI
+
+on:
+  push:
+    branches: [ main, dev ]
+    paths:
+      - 'services/api/**'
+      - 'services/ingest/**'
+      - '.github/workflows/ci-backend.yaml'
+  pull_request:
+    branches: [ main, dev ]
+    paths:
+      - 'services/api/**'
+      - 'services/ingest/**'
+      - '.github/workflows/ci-backend.yaml'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11"]
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+        cache: 'pip'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r services/api/requirements.txt
+        pip install -r services/ingest/requirements.txt
+        pip install pytest httpx
+
+    - name: Run Tests
+      working-directory: ./services/api
+      run: |
+        pytest
