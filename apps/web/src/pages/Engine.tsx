@@ -7,7 +7,6 @@ import { evaluateFen, getEngineStatus, ApiError } from '../api/client';
 const STARTING_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
 
 export default function Engine() {
-  const [game, setGame] = useState(new Chess());
   const [fen, setFen] = useState(STARTING_FEN);
   const [fenInput, setFenInput] = useState(STARTING_FEN);
   const [evaluation, setEvaluation] = useState<{ bestMove: string; eval: number } | null>(null);
@@ -32,13 +31,13 @@ export default function Engine() {
   };
 
   const handleReset = () => {
-    const newGame = new Chess(); setGame(newGame); setFen(STARTING_FEN); setFenInput(STARTING_FEN);
+    setFen(STARTING_FEN); setFenInput(STARTING_FEN);
     setEvaluation(null); setShowBestMove(false); setError(null);
   };
 
   const handleFenSubmit = () => {
     try {
-      const newGame = new Chess(fenInput); setGame(newGame); setFen(fenInput);
+      new Chess(fenInput); setFen(fenInput);
       setEvaluation(null); setShowBestMove(false); setError(null);
     } catch { setError('Invalid FEN string'); }
   };
@@ -49,7 +48,7 @@ export default function Engine() {
       const move = gameCopy.move({ from: sourceSquare, to: targetSquare, promotion: 'q' });
       if (move === null) return false;
       const newFen = gameCopy.fen();
-      setGame(gameCopy); setFen(newFen); setFenInput(newFen);
+      setFen(newFen); setFenInput(newFen);
       setEvaluation(null); setShowBestMove(false);
       return true;
     } catch { return false; }
@@ -93,8 +92,8 @@ export default function Engine() {
                 onPieceDrop: ({ sourceSquare, targetSquare }) => onDrop(sourceSquare, targetSquare || ""),
                 arrows: showBestMove && evaluation ? [{ startSquare: evaluation.bestMove.slice(0, 2), endSquare: evaluation.bestMove.slice(2, 4), color: 'rgba(16, 185, 129, 0.8)' }] : [],
                 boardOrientation: "white",
-                customDarkSquareStyle: { backgroundColor: 'var(--color-chess-brown-700)' },
-                customLightSquareStyle: { backgroundColor: 'var(--color-chess-cream-300)' },
+                darkSquareStyle: { backgroundColor: 'var(--color-chess-brown-700)' },
+                lightSquareStyle: { backgroundColor: 'var(--color-chess-cream-300)' },
               }}
             />
           </div>
