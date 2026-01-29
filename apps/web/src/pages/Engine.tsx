@@ -20,26 +20,43 @@ export default function Engine() {
   }, []);
 
   const handleEvaluate = async () => {
-    setLoading(true); setError(null); setEvaluation(null); setShowBestMove(false);
+    setLoading(true);
+    setError(null);
+    setEvaluation(null);
+    setShowBestMove(false);
+
     try {
       const result = await evaluateFen(fen);
       setEvaluation({ bestMove: result.best_move_uci, eval: result.eval });
     } catch (err) {
-      if (err instanceof ApiError) setError(err.detail || err.message);
-      else setError(err instanceof Error ? err.message : 'Evaluation failed');
-    } finally { setLoading(false); }
+      if (err instanceof ApiError) {
+        setError(err.detail || err.message);
+      } else {
+        setError(err instanceof Error ? err.message : 'Evaluation failed');
+      }
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleReset = () => {
-    setFen(STARTING_FEN); setFenInput(STARTING_FEN);
-    setEvaluation(null); setShowBestMove(false); setError(null);
+    setFen(STARTING_FEN);
+    setFenInput(STARTING_FEN);
+    setEvaluation(null);
+    setShowBestMove(false);
+    setError(null);
   };
 
   const handleFenSubmit = () => {
     try {
-      new Chess(fenInput); setFen(fenInput);
-      setEvaluation(null); setShowBestMove(false); setError(null);
-    } catch { setError('Invalid FEN string'); }
+      new Chess(fenInput);
+      setFen(fenInput);
+      setEvaluation(null);
+      setShowBestMove(false);
+      setError(null);
+    } catch {
+      setError('Invalid FEN string');
+    }
   };
 
   const onDrop = (sourceSquare: string, targetSquare: string) => {
@@ -48,8 +65,10 @@ export default function Engine() {
       const move = gameCopy.move({ from: sourceSquare, to: targetSquare, promotion: 'q' });
       if (move === null) return false;
       const newFen = gameCopy.fen();
-      setFen(newFen); setFenInput(newFen);
-      setEvaluation(null); setShowBestMove(false);
+      setFen(newFen);
+      setFenInput(newFen);
+      setEvaluation(null);
+      setShowBestMove(false);
       return true;
     } catch { return false; }
   };
