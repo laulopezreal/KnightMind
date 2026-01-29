@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from dataclasses import asdict
 from datetime import date
 from typing import Literal
@@ -5,7 +6,17 @@ from typing import Literal
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from sqlalchemy import select, or_
 
+import os
+import sys
+
+# Add project root to path to verify imports work even if CWD is services/api
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
+
+from services.api.db import SessionLocal
+from services.api.models import Job, JobStatus
+from services.api.worker import worker
 from services.api.engine import (
     EngineNotAvailableError,
     InvalidFenError,
@@ -28,7 +39,13 @@ from services.ingest import (
     import_all_games,
 )
 
-app = FastAPI(title="KnightMind API", version="0.1.0")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    worker.start()
+    yield
+    await worker.stop()
+
+app = FastAPI(title="KnightMind API", version="0.1.0", lifespan=lifespan)
 
 # CORS configuration
 app.add_middleware(
@@ -134,11 +151,13 @@ class EngineStatusResponse(BaseModel):
     message: str
 
 
-class PuzzleGenerationResponse(BaseModel):
-    message: str
-    generated: int
-    skipped: int
-    analyzed_positions: int
+class JobStatusResponse(BaseModel):
+    job_id: str
+    status: str
+    message: str | None = None
+    progress: int = 0
+    result: dict | None = None
+    error: str | None = None
 
 
 class DailyPuzzlesResponse(BaseModel):
@@ -309,35 +328,66 @@ async def evaluate_fen(request: EvalRequest):
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@app.post("/puzzles/generate", response_model=PuzzleGenerationResponse)
+@app.post("/puzzles/generate", response_model=JobStatusResponse)
 async def generate_puzzles_endpoint(
     username: str = Query(..., description="Username to generate puzzles for"),
     max_games: int = Query(30, description="Maximum number of recent games to analyze"),
     max_puzzles: int = Query(30, description="Maximum number of puzzles to generate"),
 ):
     """
-    Generate puzzles from a user's games.
+    Start a background job to generate puzzles.
     
-    analyzes recent games to find blunders and creates puzzles from them.
+    If a job is already running/queued for this user, returns the existing job status.
     """
-    try:
-        result = generate_puzzles(
-            username=username,
-            max_games=max_games,
-            max_puzzles=max_puzzles,
+    with SessionLocal() as db:
+        # Check for active job
+        stmt = select(Job).where(
+            Job.username == username,
+            or_(Job.status == JobStatus.QUEUED, Job.status == JobStatus.RUNNING)
         )
+        existing_job = db.scalars(stmt).first()
         
-        return PuzzleGenerationResponse(
-            message=f"Analyzed {result.analyzed_positions} positions",
-            generated=result.generated,
-            skipped=result.skipped,
-            analyzed_positions=result.analyzed_positions,
+        if existing_job:
+            return JobStatusResponse(
+                job_id=existing_job.id,
+                status=existing_job.status,
+                message="Job already in progress",
+                progress=existing_job.progress_current
+            )
+            
+        new_job = Job(
+            username=username,
+            status=JobStatus.QUEUED,
+            message="Queued for generation"
         )
-    except ValueError as e:
-        # e.g. user has no games
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Generation failed: {str(e)}")
+        db.add(new_job)
+        db.commit()
+        db.refresh(new_job)
+        
+        return JobStatusResponse(
+            job_id=new_job.id,
+            status=new_job.status,
+            message="Job queued",
+            progress=0
+        )
+
+
+@app.get("/jobs/{job_id}", response_model=JobStatusResponse)
+async def get_job_status(job_id: str):
+    """Get status of a specific job."""
+    with SessionLocal() as db:
+        job = db.get(Job, job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+        
+        return JobStatusResponse(
+            job_id=job.id,
+            status=job.status,
+            message=job.message,
+            progress=job.progress_current,
+            result=job.result_json,
+            error=job.error_message
+        )
 
 
 @app.get("/puzzles/daily", response_model=DailyPuzzlesResponse)
