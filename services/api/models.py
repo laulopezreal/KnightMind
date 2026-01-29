@@ -10,6 +10,7 @@ class Job(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     type: Mapped[str] = mapped_column(String, default="puzzle_generation")
     username: Mapped[str] = mapped_column(String, index=True)
+    params: Mapped[dict] = mapped_column(JSON, nullable=True)
     status: Mapped[str] = mapped_column(String, default="queued")  # queued, running, succeeded, failed, canceled
     progress_current: Mapped[int] = mapped_column(Integer, default=0)
     progress_total: Mapped[int] = mapped_column(Integer, default=0)
