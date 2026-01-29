@@ -123,6 +123,10 @@ def evaluate_fen(fen: str) -> EvalResult:
         raise StockfishError(f"Evaluation failed: {e}")
 
 
+# Arbitrary large value representing a decisive advantage (mate)
+MATE_EVALUATION = 100.0
+
+
 def _convert_eval_to_pawns(evaluation: dict) -> float:
     """
     Convert Stockfish evaluation to pawns.
@@ -143,9 +147,9 @@ def _convert_eval_to_pawns(evaluation: dict) -> float:
         # Mate in N moves - use large value with sign
         # Positive = side to move is winning, negative = losing
         if value > 0:
-            return 100.0  # Winning
+            return MATE_EVALUATION  # Winning
         elif value < 0:
-            return -100.0  # Losing
+            return -MATE_EVALUATION  # Losing
         else:
             return 0.0
     else:
