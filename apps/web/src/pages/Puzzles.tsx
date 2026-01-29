@@ -17,7 +17,6 @@ export default function Puzzles() {
     const [isGenerating, setIsGenerating] = useState(false);
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
-    const [showUciInput, setShowUciInput] = useState(false);
 
     useEffect(() => {
         getUsers().then(setAvailableUsers).catch(console.error);
@@ -108,8 +107,6 @@ export default function Puzzles() {
         }
     };
 
-    const formatEval = (evalScore: number) => evalScore > 0 ? `+${evalScore.toFixed(2)}` : evalScore.toFixed(2);
-
     const filteredUsers = availableUsers.filter(user =>
         user.toLowerCase().includes(username.toLowerCase()) &&
         user.toLowerCase() !== username.toLowerCase()
@@ -179,8 +176,8 @@ export default function Puzzles() {
                                     position: game.fen(),
                                     onPieceDrop: ({ sourceSquare, targetSquare }) => onPieceDrop(sourceSquare, targetSquare || ""),
                                     boardOrientation: currentPuzzle.side_to_move === 'white' ? 'white' : 'black',
-                                    customDarkSquareStyle: { backgroundColor: 'var(--color-chess-brown-700)' },
-                                    customLightSquareStyle: { backgroundColor: 'var(--color-chess-cream-300)' },
+                                    darkSquareStyle: { backgroundColor: 'var(--color-chess-brown-700)' },
+                                    lightSquareStyle: { backgroundColor: 'var(--color-chess-cream-300)' },
                                 }}
                             />
                         </div>
