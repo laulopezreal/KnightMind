@@ -133,15 +133,11 @@ export default function Engine() {
         <h1 className="text-4xl font-bold mb-4">Engine Evaluation</h1>
         <p className="text-gray-400 mb-6">Test Stockfish position evaluation</p>
 
-        {/* Engine status */}
-        {engineAvailable === false && (
-          <div className="bg-red-900/50 border border-red-700 rounded-lg p-4 mb-6">
-            <p className="text-red-300">Stockfish engine is not available. Make sure it's installed and the backend is running.</p>
-          </div>
-        )}
+        {/* Engine status - only show when available */}
         {engineAvailable === true && (
-          <div className="bg-emerald-900/50 border border-emerald-700 rounded-lg p-4 mb-6">
-            <p className="text-emerald-300">Stockfish engine is ready</p>
+          <div className="bg-emerald-900/30 border border-emerald-800 rounded-lg px-4 py-2 mb-6 inline-flex items-center gap-2">
+            <div className="w-2 h-2 rounded-full bg-emerald-500"></div>
+            <p className="text-emerald-400 text-sm">Stockfish ready</p>
           </div>
         )}
 
@@ -197,14 +193,43 @@ export default function Engine() {
 
             {/* Evaluate */}
             <div className="bg-gray-800 rounded-lg p-6">
-              <h2 className="text-lg font-semibold mb-3">Evaluation</h2>
-              <button
-                onClick={handleEvaluate}
-                disabled={loading || !engineAvailable}
-                className="w-full px-6 py-3 bg-emerald-600 hover:bg-emerald-700 disabled:bg-gray-600 disabled:cursor-not-allowed rounded font-medium transition-colors"
-              >
-                {loading ? 'Evaluating...' : 'Evaluate Position'}
-              </button>
+              <div className="flex items-center gap-2 mb-3">
+                <h2 className="text-lg font-semibold">Evaluation</h2>
+                {!engineAvailable && engineAvailable !== null && (
+                  <div className="relative group">
+                    <div className="w-5 h-5 rounded-full bg-amber-600 flex items-center justify-center cursor-help text-xs font-bold">
+                      !
+                    </div>
+                    <div className="absolute left-0 bottom-full mb-2 w-64 p-3 bg-gray-900 border border-gray-600 rounded-lg shadow-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-20">
+                      <p className="text-sm text-gray-300 mb-2">
+                        <strong className="text-amber-400">Engine unavailable</strong>
+                      </p>
+                      <p className="text-xs text-gray-400">
+                        Make sure the backend server is running and Stockfish is installed. 
+                        See the README for setup instructions.
+                      </p>
+                      <div className="absolute left-3 -bottom-1 w-2 h-2 bg-gray-900 border-b border-r border-gray-600 transform rotate-45"></div>
+                    </div>
+                  </div>
+                )}
+              </div>
+              <div className="relative">
+                <button
+                  onClick={handleEvaluate}
+                  disabled={loading || !engineAvailable}
+                  className="w-full px-6 py-3 bg-emerald-600 hover:bg-emerald-700 disabled:bg-gray-600 disabled:cursor-not-allowed rounded font-medium transition-colors"
+                >
+                  {loading ? 'Evaluating...' : 'Evaluate Position'}
+                </button>
+                {!engineAvailable && engineAvailable !== null && (
+                  <p className="text-amber-400 text-xs mt-2 flex items-center gap-1">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    Hover the icon above for details
+                  </p>
+                )}
+              </div>
 
               {error && (
                 <p className="text-red-400 mt-3 text-sm">{error}</p>
