@@ -107,6 +107,57 @@ source venv/bin/activate
 pytest            # Run tests
 ```
 
+## Data Schema
+
+### Games Storage
+
+Games are stored as PGN files with JSON metadata:
+
+```
+data/
+  pgn/<username>/<game_id>.pgn
+  metadata/<username>/<game_id>.json
+  index/<username>.json
+```
+
+**GameMetadata fields:**
+- `game_id`: SHA256 hash of game URL (unique identifier)
+- `url`: Chess.com game URL
+- `username`: User who imported the game
+- `white_username`, `black_username`: Player usernames
+- `white_result`, `black_result`: Game results
+- `time_control`: Time control string
+- `end_time`: Unix timestamp
+- `rated`: Boolean
+- `imported_at`: ISO timestamp
+
+### Puzzles Storage
+
+Puzzles are generated from user blunders and stored as JSON:
+
+```
+data/
+  puzzles/<username>/<puzzle_id>.json
+  puzzle_index/<username>.json
+```
+
+**Puzzle fields:**
+- `id`: UUID (unique identifier)
+- `username`: User who played the game
+- `source_game_id`: ID of the game this puzzle came from
+- `ply`: Half-move number where blunder occurred
+- `fen`: Position BEFORE the user's move
+- `side_to_move`: "white" or "black"
+- `played_move_uci`: The move the user actually played (blunder)
+- `best_move_uci`: The best move according to engine
+- `eval_before`: Evaluation before the move (in pawns)
+- `eval_after`: Evaluation after the move (in pawns)
+- `swing`: `eval_before - eval_after` (magnitude of blunder)
+- `created_at`: ISO timestamp
+- `used_on`: Date when puzzle was used (YYYY-MM-DD), null if unused
+
+**Unique constraint:** `(username, source_game_id, ply)` prevents duplicate puzzles.
+
 ## API Endpoints
 
 | Method | Endpoint | Description |
