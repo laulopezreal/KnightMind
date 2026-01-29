@@ -319,12 +319,12 @@ def test_get_daily_puzzles_rotation(client_with_temp_puzzle_storage):
     
     client, puzzle_storage = client_with_temp_puzzle_storage
     
-    # Create 3 unused and 2 used puzzles
-    yesterday = (date.today() - timedelta(days=1)).isoformat()
+    # Create 5 puzzles and collect IDs for the first 2 to mark as used
+    yesterday_date = date.today() - timedelta(days=1)
+    used_puzzle_ids = []
     
     for i in range(5):
-        used_on = yesterday if i < 2 else None  # First 2 are used
-        puzzle_storage.save_puzzle(
+        _, puzzle_id = puzzle_storage.save_puzzle(
             username="testuser",
             source_game_id=f"game-{i}",
             ply=10 + i,
@@ -336,11 +336,11 @@ def test_get_daily_puzzles_rotation(client_with_temp_puzzle_storage):
             eval_after=-1.5,
             swing=2.0
         )
-        
-        # Manually mark first 2 as used
         if i < 2:
-            all_puzzles = puzzle_storage.get_all_puzzles("testuser")
-            puzzle_storage.mark_puzzles_used("testuser", [all_puzzles[i].id], date.today() - timedelta(days=1))
+            used_puzzle_ids.append(puzzle_id)
+    
+    # Mark the first 2 puzzles as used yesterday in a single batch
+    puzzle_storage.mark_puzzles_used("testuser", used_puzzle_ids, yesterday_date)
     
     # Request 4 puzzles - should get 3 unused + 1 used
     response = client.get("/puzzles/daily?username=testuser&n=4")
