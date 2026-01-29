@@ -5,11 +5,13 @@ import { getOpenings, ApiError, type OpeningNode, type ColorFilter } from '../ap
 
 export default function Openings() {
   const svgRef = useRef<SVGSVGElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [username, setUsername] = useState('');
   const [colorFilter, setColorFilter] = useState<ColorFilter>('both');
   const [treeData, setTreeData] = useState<OpeningNode | null>(null);
+  const [tooltip, setTooltip] = useState<{ x: number; y: number; data: OpeningNode } | null>(null);
 
   const fetchOpenings = useCallback(async (user: string, color: ColorFilter) => {
     if (!user.trim()) {
@@ -44,7 +46,6 @@ export default function Openings() {
     if (treeData && svgRef.current) {
       renderTree(treeData);
     }
-    // renderTree is stable (defined inside component but doesn't depend on any state)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [treeData]);
 
@@ -59,85 +60,113 @@ export default function Openings() {
   const renderTree = (data: OpeningNode) => {
     if (!svgRef.current) return;
 
-    // Calculate dynamic height based on tree size
-    const nodeCount = countNodes(data);
-    const width = 900;
-    const height = Math.max(500, nodeCount * 25);
-    const margin = { top: 20, right: 200, bottom: 20, left: 80 };
+    // Calculate dynamic dimensions based on tree size
+    const leafCount = countLeaves(data);
+    const maxDepth = getMaxDepth(data);
+    const nodeSpacing = 35; // Vertical spacing between nodes
+    const levelWidth = 180; // Horizontal spacing between levels
+    
+    const width = Math.max(800, (maxDepth + 1) * levelWidth + 100);
+    const height = Math.max(400, leafCount * nodeSpacing + 60);
+    const margin = { top: 30, right: 150, bottom: 30, left: 60 };
 
     // Clear previous content
     d3.select(svgRef.current).selectAll('*').remove();
 
     const svg = d3.select(svgRef.current)
       .attr('width', width)
-      .attr('height', height)
-      .append('g')
+      .attr('height', height);
+
+    const g = svg.append('g')
       .attr('transform', `translate(${margin.left},${margin.top})`);
 
     const root = d3.hierarchy(data);
-    const treeLayout = d3.tree<OpeningNode>().size([
-      height - margin.top - margin.bottom,
-      width - margin.left - margin.right
-    ]);
+    const treeLayout = d3.tree<OpeningNode>()
+      .size([height - margin.top - margin.bottom, width - margin.left - margin.right])
+      .separation((a, b) => (a.parent === b.parent ? 1 : 1.2));
 
     const treeDataLayout = treeLayout(root);
 
-    // Links
-    svg.selectAll('.link')
+    // Links with curved paths
+    g.selectAll('.link')
       .data(treeDataLayout.links())
       .enter()
       .append('path')
       .attr('class', 'link')
       .attr('fill', 'none')
       .attr('stroke', '#4b5563')
-      .attr('stroke-width', 1.5)
+      .attr('stroke-width', 2)
+      .attr('stroke-opacity', 0.6)
       .attr('d', d3.linkHorizontal<d3.HierarchyPointLink<OpeningNode>, d3.HierarchyPointNode<OpeningNode>>()
         .x(d => d.y)
         .y(d => d.x)
       );
 
     // Nodes
-    const nodes = svg.selectAll('.node')
+    const nodes = g.selectAll('.node')
       .data(treeDataLayout.descendants())
       .enter()
       .append('g')
       .attr('class', 'node')
-      .attr('transform', d => `translate(${d.y},${d.x})`);
+      .attr('transform', d => `translate(${d.y},${d.x})`)
+      .style('cursor', 'pointer');
 
-    // Color based on win rate
+    // Node circles - size based on game count
     nodes.append('circle')
-      .attr('r', d => Math.max(4, Math.min(12, Math.sqrt(d.data.games_count) * 2)))
+      .attr('r', d => Math.max(6, Math.min(16, Math.sqrt(d.data.games_count) * 1.5 + 4)))
       .attr('fill', d => getWinRateColor(d.data.win_rate))
-      .attr('stroke', '#1f2937')
-      .attr('stroke-width', 1);
-
-    // Labels
-    nodes.append('text')
-      .attr('dy', 4)
-      .attr('x', d => d.children ? -14 : 14)
-      .attr('text-anchor', d => d.children ? 'end' : 'start')
-      .attr('fill', '#e5e7eb')
-      .attr('font-size', '11px')
-      .text(d => {
-        const move = d.data.move_san === 'Start' ? 'Start' : d.data.move_san;
-        return `${move} (${d.data.games_count}) ${d.data.win_rate}%`;
+      .attr('stroke', '#fff')
+      .attr('stroke-width', 2)
+      .on('mouseenter', function(event, d) {
+        d3.select(this).attr('stroke-width', 3);
+        const rect = containerRef.current?.getBoundingClientRect();
+        if (rect) {
+          setTooltip({
+            x: event.clientX - rect.left + 10,
+            y: event.clientY - rect.top - 10,
+            data: d.data
+          });
+        }
+      })
+      .on('mouseleave', function() {
+        d3.select(this).attr('stroke-width', 2);
+        setTooltip(null);
       });
+
+    // Move labels - show only the move, not all stats
+    nodes.append('text')
+      .attr('dy', 5)
+      .attr('x', d => d.children ? -20 : 20)
+      .attr('text-anchor', d => d.children ? 'end' : 'start')
+      .attr('fill', '#f3f4f6')
+      .attr('font-size', '13px')
+      .attr('font-weight', '500')
+      .text(d => d.data.move_san === 'Start' ? '●' : d.data.move_san);
+
+    // Game count badge
+    nodes.append('text')
+      .attr('dy', -12)
+      .attr('text-anchor', 'middle')
+      .attr('fill', '#9ca3af')
+      .attr('font-size', '10px')
+      .text(d => d.data.games_count > 1 ? d.data.games_count.toString() : '');
   };
 
-  const countNodes = (node: OpeningNode): number => {
-    let count = 1;
-    if (node.children) {
-      for (const child of node.children) {
-        count += countNodes(child);
-      }
-    }
-    return count;
+  const countLeaves = (node: OpeningNode): number => {
+    if (!node.children || node.children.length === 0) return 1;
+    return node.children.reduce((sum, child) => sum + countLeaves(child), 0);
+  };
+
+  const getMaxDepth = (node: OpeningNode, depth = 0): number => {
+    if (!node.children || node.children.length === 0) return depth;
+    return Math.max(...node.children.map(child => getMaxDepth(child, depth + 1)));
   };
 
   const getWinRateColor = (winRate: number): string => {
     // Green for high win rate, red for low, yellow for ~50%
-    if (winRate >= 60) return '#10b981'; // Green
-    if (winRate >= 50) return '#84cc16'; // Lime
+    if (winRate >= 60) return '#10b981'; // Emerald
+    if (winRate >= 50) return '#22c55e'; // Green
+    if (winRate >= 45) return '#84cc16'; // Lime
     if (winRate >= 40) return '#eab308'; // Yellow
     if (winRate >= 30) return '#f97316'; // Orange
     return '#ef4444'; // Red
@@ -195,15 +224,18 @@ export default function Openings() {
 
         {/* Legend */}
         {treeData && (
-          <div className="flex gap-4 mb-4 text-sm">
+          <div className="flex flex-wrap gap-4 mb-4 text-sm">
             <span className="flex items-center gap-1">
-              <span className="w-3 h-3 rounded-full bg-emerald-500"></span> &gt;60% win
+              <span className="w-3 h-3 rounded-full bg-emerald-500"></span> &ge;60%
             </span>
             <span className="flex items-center gap-1">
-              <span className="w-3 h-3 rounded-full bg-lime-500"></span> 50-60%
+              <span className="w-3 h-3 rounded-full bg-green-500"></span> 50-60%
             </span>
             <span className="flex items-center gap-1">
-              <span className="w-3 h-3 rounded-full bg-yellow-500"></span> 40-50%
+              <span className="w-3 h-3 rounded-full bg-lime-500"></span> 45-50%
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="w-3 h-3 rounded-full bg-yellow-500"></span> 40-45%
             </span>
             <span className="flex items-center gap-1">
               <span className="w-3 h-3 rounded-full bg-orange-500"></span> 30-40%
@@ -215,12 +247,33 @@ export default function Openings() {
         )}
 
         {/* Tree visualization */}
-        <div className="bg-gray-800 rounded-lg p-6 overflow-x-auto">
+        <div ref={containerRef} className="bg-gray-800 rounded-lg p-6 overflow-x-auto relative">
           {!treeData && !loading && (
             <p className="text-gray-400">Enter a username and click "Load Openings" to visualize your opening repertoire.</p>
           )}
           {loading && <p className="text-gray-400">Building opening tree...</p>}
           <svg ref={svgRef}></svg>
+          
+          {/* Tooltip */}
+          {tooltip && (
+            <div 
+              className="absolute bg-gray-900 border border-gray-600 rounded-lg p-3 shadow-xl z-10 pointer-events-none"
+              style={{ left: tooltip.x, top: tooltip.y }}
+            >
+              <div className="font-bold text-white mb-1">
+                {tooltip.data.move_san === 'Start' ? 'Starting Position' : tooltip.data.move_san}
+              </div>
+              <div className="text-sm text-gray-300 space-y-1">
+                <div>Games: <span className="text-white font-medium">{tooltip.data.games_count}</span></div>
+                <div className="flex gap-3">
+                  <span className="text-green-400">W: {tooltip.data.wins}</span>
+                  <span className="text-gray-400">D: {tooltip.data.draws}</span>
+                  <span className="text-red-400">L: {tooltip.data.losses}</span>
+                </div>
+                <div>Win rate: <span className="font-medium" style={{ color: getWinRateColor(tooltip.data.win_rate) }}>{tooltip.data.win_rate}%</span></div>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Stats summary */}

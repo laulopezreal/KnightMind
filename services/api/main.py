@@ -48,6 +48,18 @@ class ImportResponse(BaseModel):
     skipped_duplicates: int
 
 
+class EvalRequest(BaseModel):
+    fen: str
+
+
+class EvalResponse(BaseModel):
+    best_move_uci: str
+    eval: float  # In pawns, from side-to-move perspective
+
+
+class EngineStatusResponse(BaseModel):
+    available: bool
+    message: str
 
 
 @app.get("/")
@@ -184,21 +196,6 @@ async def get_openings(
     )
     
     return tree
-
-
-# Engine endpoints
-class EvalRequest(BaseModel):
-    fen: str
-
-
-class EvalResponse(BaseModel):
-    best_move_uci: str
-    eval: float
-
-
-class EngineStatusResponse(BaseModel):
-    available: bool
-    message: str
 
 
 @app.get("/engine/status", response_model=EngineStatusResponse)

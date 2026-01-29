@@ -1,3 +1,4 @@
+
 """
 Stockfish engine wrapper module.
 
