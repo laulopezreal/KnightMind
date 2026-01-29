@@ -1,3 +1,5 @@
+from dataclasses import asdict
+from datetime import date
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Query
@@ -289,9 +291,6 @@ async def get_daily_puzzles(
     Returns:
         List of puzzles with metadata
     """
-    from datetime import date
-    from dataclasses import asdict
-    
     puzzle_storage = get_puzzle_storage()
     
     # Get puzzles using the storage's selection logic
@@ -307,10 +306,9 @@ async def get_daily_puzzles(
     puzzle_ids = [p.id for p in puzzles]
     puzzle_storage.mark_puzzles_used(username, puzzle_ids, date.today())
     
-    # Reload puzzles to get updated used_on field
-    all_puzzles = puzzle_storage.get_all_puzzles(username)
-    puzzle_id_set = set(puzzle_ids)
-    updated_puzzles = [p for p in all_puzzles if p.id in puzzle_id_set]
+    # Reload specific puzzles to get updated used_on field
+    updated_puzzles = [puzzle_storage.get_puzzle(username, pid) for pid in puzzle_ids]
+    updated_puzzles = [p for p in updated_puzzles if p is not None]
     
     # Convert to dict format for response
     puzzles_dict = [asdict(p) for p in updated_puzzles]
