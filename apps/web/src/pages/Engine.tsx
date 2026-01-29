@@ -101,11 +101,11 @@ export default function Engine() {
   };
 
   // Convert UCI move to arrow for visualization
-  const getArrows = (): [string, string, string][] => {
+  const getArrows = () => {
     if (!showBestMove || !evaluation?.bestMove) return [];
     const startSquare = evaluation.bestMove.slice(0, 2);
     const endSquare = evaluation.bestMove.slice(2, 4);
-    return [[startSquare, endSquare, 'rgb(16, 185, 129)']]; // Emerald color
+    return [{ startSquare, endSquare, color: 'rgb(16, 185, 129)' }]; // Emerald color
   };
 
   const formatEval = (evalValue: number): string => {
@@ -150,12 +150,14 @@ export default function Engine() {
           <div className="bg-gray-800 rounded-lg p-6">
             <div className="max-w-md mx-auto">
               <Chessboard
-                position={fen}
-                onPieceDrop={onDrop}
-                customArrows={getArrows()}
-                boardOrientation="white"
-                customDarkSquareStyle={{ backgroundColor: '#4a5568' }}
-                customLightSquareStyle={{ backgroundColor: '#a0aec0' }}
+                options={{
+                  position: fen,
+                  onPieceDrop: ({ sourceSquare, targetSquare }) => onDrop(sourceSquare, targetSquare ?? ""),
+                  arrows: getArrows(),
+                  boardOrientation: "white",
+                  darkSquareStyle: { backgroundColor: '#4a5568' },
+                  lightSquareStyle: { backgroundColor: '#a0aec0' },
+                }}
               />
             </div>
             <div className="mt-4 flex justify-center gap-4">
@@ -206,7 +208,7 @@ export default function Engine() {
                         <strong className="text-amber-400">Engine unavailable</strong>
                       </p>
                       <p className="text-xs text-gray-400">
-                        Make sure the backend server is running and Stockfish is installed. 
+                        Make sure the backend server is running and Stockfish is installed.
                         See the README for setup instructions.
                       </p>
                       <div className="absolute left-3 -bottom-1 w-2 h-2 bg-gray-900 border-b border-r border-gray-600 transform rotate-45"></div>
@@ -244,7 +246,7 @@ export default function Engine() {
                       {formatEval(evaluation.eval)}
                     </span>
                   </div>
-                  
+
                   <div className="flex items-center justify-between p-3 bg-gray-700 rounded">
                     <span className="text-gray-400">Best Move:</span>
                     <div className="flex items-center gap-2">
