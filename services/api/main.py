@@ -1,16 +1,10 @@
-import sys
-from pathlib import Path
-
 from typing import Literal
 
 from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-# Add services directory to path for package imports
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-from ingest import (
+from services.ingest import (
     get_player_archives,
     fetch_games_from_archive,
     parse_game,
@@ -19,8 +13,14 @@ from ingest import (
     NetworkError,
     ImportError as ChessComImportError,
 )
-from storage import get_storage
-from openings import build_opening_tree
+from services.api.storage import get_storage
+from services.api.openings import build_opening_tree
+from services.api.engine import (
+    evaluate_position,
+    is_engine_available,
+    EngineNotAvailableError,
+    InvalidFenError,
+)
 
 app = FastAPI(title="KnightMind API", version="0.1.0")
 
@@ -184,3 +184,45 @@ async def get_openings(
     )
     
     return tree
+
+
+# Engine endpoints
+class EvalRequest(BaseModel):
+    fen: str
+
+
+class EvalResponse(BaseModel):
+    best_move_uci: str
+    eval: float
+
+
+class EngineStatusResponse(BaseModel):
+    available: bool
+    message: str
+
+
+@app.get("/engine/status", response_model=EngineStatusResponse)
+async def get_engine_status():
+    """Check if the Stockfish engine is available."""
+    available, message = is_engine_available()
+    return EngineStatusResponse(available=available, message=message)
+
+
+@app.post("/engine/eval", response_model=EvalResponse)
+async def evaluate_fen(request: EvalRequest):
+    """
+    Evaluate a chess position using Stockfish.
+    
+    Args:
+        request: Request with FEN string
+        
+    Returns:
+        Best move in UCI format and evaluation in pawns
+    """
+    try:
+        result = evaluate_position(request.fen)
+        return EvalResponse(best_move_uci=result.best_move_uci, eval=result.eval)
+    except EngineNotAvailableError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except InvalidFenError as e:
+        raise HTTPException(status_code=400, detail=str(e))

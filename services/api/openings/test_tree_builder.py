@@ -1,6 +1,5 @@
 """Tests for the opening tree builder module."""
 
-import pytest
 from .tree_builder import OpeningTreeBuilder, build_opening_tree, OpeningStats
 
 

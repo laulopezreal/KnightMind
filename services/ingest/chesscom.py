@@ -7,7 +7,6 @@ This module handles fetching and parsing games from the Chess.com API.
 import httpx
 from dataclasses import dataclass
 from typing import AsyncIterator
-from enum import Enum
 
 
 class ImportError(Exception):

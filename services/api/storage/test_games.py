@@ -3,9 +3,8 @@
 import pytest
 import tempfile
 import shutil
-from pathlib import Path
 
-from .games import GameStorage, GameMetadata
+from .games import GameStorage
 
 
 @pytest.fixture
