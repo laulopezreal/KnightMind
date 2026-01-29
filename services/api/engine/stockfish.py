@@ -7,6 +7,7 @@ returning the best move and evaluation in pawns from the side-to-move perspectiv
 
 import os
 from dataclasses import dataclass
+from typing import Optional
 
 try:
     from stockfish import Stockfish as StockfishEngine
@@ -40,7 +41,7 @@ def get_analysis_params() -> dict:
     """Get analysis parameters from environment."""
     depth = os.environ.get("STOCKFISH_DEPTH")
     movetime = os.environ.get("STOCKFISH_MOVETIME_MS")
-
+    
     if depth:
         return {"depth": int(depth)}
     elif movetime:
@@ -57,9 +58,9 @@ def _create_engine() -> "StockfishEngine":
             "The 'stockfish' Python package is not installed. "
             "Install it with: pip install stockfish"
         )
-
+    
     path = get_stockfish_path()
-
+    
     try:
         engine = StockfishEngine(path=path)
     except Exception as e:
@@ -73,7 +74,7 @@ def _create_engine() -> "StockfishEngine":
                 "On Ubuntu: apt install stockfish."
             )
         raise StockfishError(f"Failed to initialize Stockfish: {e}")
-
+    
     return engine
 
 
@@ -92,30 +93,33 @@ def evaluate_fen(fen: str) -> EvalResult:
         StockfishError: If evaluation fails
     """
     engine = _create_engine()
-
+    
     try:
         # Set position
         if not engine.is_fen_valid(fen):
             raise StockfishError(f"Invalid FEN: {fen}")
-
+        
         engine.set_fen_position(fen)
-
-        # Get analysis parameters
+        
+        # Get analysis parameters and configure engine
         params = get_analysis_params()
-
+        if "depth" in params:
+            engine.set_depth(params["depth"])
+        # Note: movetime is not directly supported by this library
+        
         # Get best move
-        best_move = engine.get_best_move(**params)
+        best_move = engine.get_best_move()
         if not best_move:
             raise StockfishError("No legal moves available")
-
+        
         # Get evaluation
         evaluation = engine.get_evaluation()
-
+        
         # Convert evaluation to pawns from side-to-move perspective
         eval_pawns = _convert_eval_to_pawns(evaluation)
-
+        
         return EvalResult(best_move_uci=best_move, eval=eval_pawns)
-
+        
     except (StockfishNotFoundError, StockfishError):
         raise
     except Exception as e:
@@ -138,7 +142,7 @@ def _convert_eval_to_pawns(evaluation: dict) -> float:
     """
     eval_type = evaluation.get("type")
     value = evaluation.get("value", 0)
-
+    
     if eval_type == "cp":
         # Centipawns to pawns
         return value / 100.0
