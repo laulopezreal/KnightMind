@@ -158,7 +158,7 @@ def test_save_puzzle_different_users_not_duplicate(temp_storage):
 
 
 def test_get_daily_puzzles_prefers_unused(temp_storage):
-    """Test that daily puzzle selection prefers unused puzzles."""
+    """Test that daily puzzle selection prefers unused puzzles (when none used today)."""
     # Create 3 unused puzzles
     for i in range(3):
         temp_storage.save_puzzle(
@@ -174,7 +174,8 @@ def test_get_daily_puzzles_prefers_unused(temp_storage):
             swing=2.0,
         )
 
-    # Create 2 used puzzles
+    # Create 2 used puzzles (from yesterday)
+    yesterday = date.today() - timedelta(days=1)
     for i in range(3, 5):
         _, puzzle_id = temp_storage.save_puzzle(
             username="testuser",
@@ -188,15 +189,15 @@ def test_get_daily_puzzles_prefers_unused(temp_storage):
             eval_after=-1.5,
             swing=2.0,
         )
-        temp_storage.mark_puzzles_used("testuser", [puzzle_id])
+        temp_storage.mark_puzzles_used("testuser", [puzzle_id], yesterday)
 
     # Request 5 puzzles
     daily = temp_storage.get_daily_puzzles("testuser", n=5)
 
     assert len(daily) == 5
-    # First 3 should be unused
+    # First 3 should be unused (no puzzles used today, so unused come first)
     assert all(p.used_on is None for p in daily[:3])
-    # Last 2 should be used
+    # Last 2 should be used from yesterday
     assert all(p.used_on is not None for p in daily[3:])
 
 

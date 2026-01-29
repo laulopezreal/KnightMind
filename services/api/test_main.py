@@ -235,3 +235,184 @@ def test_generate_puzzles_missing_username():
     response = client.post("/puzzles/generate")
     assert response.status_code == 422  # Validation error
 
+
+# --- Daily puzzles endpoint tests ---
+
+@pytest.fixture
+def temp_puzzle_storage():
+    """Create a temporary puzzle storage directory for tests."""
+    from services.api.storage import PuzzleStorage
+    temp_dir = tempfile.mkdtemp()
+    storage = PuzzleStorage(temp_dir)
+    yield storage
+    shutil.rmtree(temp_dir)
+
+
+@pytest.fixture
+def client_with_temp_puzzle_storage(temp_puzzle_storage):
+    """Create a test client with temporary puzzle storage."""
+    with patch("services.api.main.get_puzzle_storage", return_value=temp_puzzle_storage):
+        yield TestClient(app), temp_puzzle_storage
+
+
+def test_get_daily_puzzles_success(client_with_temp_puzzle_storage):
+    """Test successful retrieval of daily puzzles."""
+    from datetime import date
+    from services.api.storage import Puzzle
+    
+    client, puzzle_storage = client_with_temp_puzzle_storage
+    
+    # Create test puzzles
+    test_puzzles = [
+        Puzzle(
+            id=f"puzzle-{i}",
+            username="testuser",
+            source_game_id=f"game-{i}",
+            ply=10 + i,
+            fen="rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+            side_to_move="white",
+            played_move_uci="e2e4",
+            best_move_uci="d2d4",
+            eval_before=0.5,
+            eval_after=-1.5,
+            swing=2.0,
+            created_at=f"2024-01-0{i+1}T12:00:00Z",
+            used_on=None
+        )
+        for i in range(5)
+    ]
+    
+    # Save puzzles
+    for puzzle in test_puzzles:
+        puzzle_storage.save_puzzle(
+            username=puzzle.username,
+            source_game_id=puzzle.source_game_id,
+            ply=puzzle.ply,
+            fen=puzzle.fen,
+            side_to_move=puzzle.side_to_move,
+            played_move_uci=puzzle.played_move_uci,
+            best_move_uci=puzzle.best_move_uci,
+            eval_before=puzzle.eval_before,
+            eval_after=puzzle.eval_after,
+            swing=puzzle.swing
+        )
+    
+    # Get daily puzzles
+    response = client.get("/puzzles/daily?username=testuser&n=3")
+    
+    assert response.status_code == 200
+    data = response.json()
+    assert data["count"] == 3
+    assert len(data["puzzles"]) == 3
+    
+    # Verify all returned puzzles are marked with today's date
+    today_str = date.today().isoformat()
+    for puzzle_data in data["puzzles"]:
+        assert puzzle_data["used_on"] == today_str
+        assert puzzle_data["username"] == "testuser"
+
+
+def test_get_daily_puzzles_rotation(client_with_temp_puzzle_storage):
+    """Test that puzzles rotate correctly - unused first, then used."""
+    from datetime import date, timedelta
+    from services.api.storage import Puzzle
+    
+    client, puzzle_storage = client_with_temp_puzzle_storage
+    
+    # Create 3 unused and 2 used puzzles
+    yesterday = (date.today() - timedelta(days=1)).isoformat()
+    
+    for i in range(5):
+        used_on = yesterday if i < 2 else None  # First 2 are used
+        puzzle_storage.save_puzzle(
+            username="testuser",
+            source_game_id=f"game-{i}",
+            ply=10 + i,
+            fen="rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+            side_to_move="white",
+            played_move_uci="e2e4",
+            best_move_uci="d2d4",
+            eval_before=0.5,
+            eval_after=-1.5,
+            swing=2.0
+        )
+        
+        # Manually mark first 2 as used
+        if i < 2:
+            all_puzzles = puzzle_storage.get_all_puzzles("testuser")
+            puzzle_storage.mark_puzzles_used("testuser", [all_puzzles[i].id], date.today() - timedelta(days=1))
+    
+    # Request 4 puzzles - should get 3 unused + 1 used
+    response = client.get("/puzzles/daily?username=testuser&n=4")
+    
+    assert response.status_code == 200
+    data = response.json()
+    assert data["count"] == 4
+    
+    # All should now be marked with today
+    today_str = date.today().isoformat()
+    for puzzle_data in data["puzzles"]:
+        assert puzzle_data["used_on"] == today_str
+
+
+def test_get_daily_puzzles_no_puzzles(client_with_temp_puzzle_storage):
+    """Test 404 when user has no puzzles."""
+    client, _ = client_with_temp_puzzle_storage
+    
+    response = client.get("/puzzles/daily?username=unknownuser&n=5")
+    
+    assert response.status_code == 404
+    assert "no puzzles" in response.json()["detail"].lower()
+    assert "generate puzzles first" in response.json()["detail"].lower()
+
+
+def test_get_daily_puzzles_validation():
+    """Test parameter validation for daily puzzles endpoint."""
+    # Missing username
+    response = client.get("/puzzles/daily")
+    assert response.status_code == 422
+    
+    # n too small
+    response = client.get("/puzzles/daily?username=test&n=0")
+    assert response.status_code == 422
+    
+    # n too large
+    response = client.get("/puzzles/daily?username=test&n=21")
+    assert response.status_code == 422
+
+
+def test_get_daily_puzzles_idempotent(client_with_temp_puzzle_storage):
+    """Test that calling endpoint multiple times on same day returns same puzzles."""
+    from datetime import date
+    
+    client, puzzle_storage = client_with_temp_puzzle_storage
+    
+    # Create test puzzles
+    for i in range(5):
+        puzzle_storage.save_puzzle(
+            username="testuser",
+            source_game_id=f"game-{i}",
+            ply=10 + i,
+            fen="rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+            side_to_move="white",
+            played_move_uci="e2e4",
+            best_move_uci="d2d4",
+            eval_before=0.5,
+            eval_after=-1.5,
+            swing=2.0
+        )
+    
+    # First call
+    response1 = client.get("/puzzles/daily?username=testuser&n=3")
+    assert response1.status_code == 200
+    puzzle_ids_1 = {p["id"] for p in response1.json()["puzzles"]}
+    
+    # Second call - should return same puzzles (already marked for today)
+    response2 = client.get("/puzzles/daily?username=testuser&n=3")
+    assert response2.status_code == 200
+    puzzle_ids_2 = {p["id"] for p in response2.json()["puzzles"]}
+    
+    # Should be the same puzzles
+    assert puzzle_ids_1 == puzzle_ids_2
+
+

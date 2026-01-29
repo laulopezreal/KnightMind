@@ -12,7 +12,7 @@ from services.api.engine import (
 )
 from services.api.openings import build_opening_tree
 from services.api.puzzles import generate_puzzles
-from services.api.storage import get_storage
+from services.api.storage import get_puzzle_storage, get_storage
 from services.ingest import (
     ImportError as ChessComImportError,
 )
@@ -70,6 +70,11 @@ class PuzzleGenerationResponse(BaseModel):
     generated: int
     skipped: int
     analyzed_positions: int
+
+
+class DailyPuzzlesResponse(BaseModel):
+    puzzles: list[dict]
+    count: int
 
 
 @app.get("/")
@@ -264,3 +269,53 @@ async def generate_puzzles_endpoint(
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Generation failed: {str(e)}")
+
+
+@app.get("/puzzles/daily", response_model=DailyPuzzlesResponse)
+async def get_daily_puzzles(
+    username: str = Query(..., description="Username to get puzzles for"),
+    n: int = Query(5, ge=1, le=20, description="Number of puzzles to return"),
+):
+    """
+    Get daily puzzle set for a user.
+    
+    Returns n puzzles, preferring unused ones. Marks returned puzzles
+    with today's date to enable daily rotation.
+    
+    Args:
+        username: Username to get puzzles for
+        n: Number of puzzles (1-20, default 5)
+        
+    Returns:
+        List of puzzles with metadata
+    """
+    from datetime import date
+    from dataclasses import asdict
+    
+    puzzle_storage = get_puzzle_storage()
+    
+    # Get puzzles using the storage's selection logic
+    puzzles = puzzle_storage.get_daily_puzzles(username, n)
+    
+    if not puzzles:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No puzzles found for user '{username}'. Generate puzzles first using POST /puzzles/generate"
+        )
+    
+    # Mark puzzles as used today
+    puzzle_ids = [p.id for p in puzzles]
+    puzzle_storage.mark_puzzles_used(username, puzzle_ids, date.today())
+    
+    # Reload puzzles to get updated used_on field
+    all_puzzles = puzzle_storage.get_all_puzzles(username)
+    puzzle_id_set = set(puzzle_ids)
+    updated_puzzles = [p for p in all_puzzles if p.id in puzzle_id_set]
+    
+    # Convert to dict format for response
+    puzzles_dict = [asdict(p) for p in updated_puzzles]
+    
+    return DailyPuzzlesResponse(
+        puzzles=puzzles_dict,
+        count=len(puzzles_dict)
+    )
