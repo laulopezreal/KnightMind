@@ -192,3 +192,46 @@ def test_import_chesscom_no_games(mock_get_archives, client_with_temp_storage):
     data = response.json()
     assert data["games_count"] == 0
     assert data["new_games"] == 0
+
+
+# --- Puzzle generation endpoint tests ---
+
+@patch("services.api.main.generate_puzzles")
+def test_generate_puzzles_success(mock_generate, client_with_temp_storage):
+    """Test successful puzzle generation."""
+    from services.api.puzzles import GenerationResult
+    
+    mock_generate.return_value = GenerationResult(
+        generated=5,
+        skipped=2,
+        analyzed_positions=100
+    )
+    
+    response = client_with_temp_storage.post(
+        "/puzzles/generate?username=testuser&max_games=10&max_puzzles=10"
+    )
+    
+    assert response.status_code == 200
+    data = response.json()
+    assert data["generated"] == 5
+    assert data["skipped"] == 2
+    assert data["analyzed_positions"] == 100
+    assert "100" in data["message"]
+
+
+@patch("services.api.main.generate_puzzles")
+def test_generate_puzzles_no_games(mock_generate, client_with_temp_storage):
+    """Test puzzle generation when user has no games."""
+    mock_generate.side_effect = ValueError("No games found for user 'unknownuser'")
+    
+    response = client_with_temp_storage.post("/puzzles/generate?username=unknownuser")
+    
+    assert response.status_code == 404
+    assert "no games" in response.json()["detail"].lower()
+
+
+def test_generate_puzzles_missing_username():
+    """Test that /puzzles/generate requires username parameter."""
+    response = client.post("/puzzles/generate")
+    assert response.status_code == 422  # Validation error
+
