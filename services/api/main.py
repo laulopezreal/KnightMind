@@ -343,7 +343,7 @@ async def generate_puzzles_endpoint(
         # Check for active job
         stmt = select(Job).where(
             Job.username == username,
-            or_(Job.status == "queued", Job.status == "running")
+            or_(Job.status == JobStatus.QUEUED, Job.status == JobStatus.RUNNING)
         )
         existing_job = db.scalars(stmt).first()
         
