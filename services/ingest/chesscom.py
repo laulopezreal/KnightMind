@@ -6,8 +6,14 @@ This module handles fetching and parsing games from the Chess.com API.
 
 from dataclasses import dataclass
 from typing import AsyncIterator
+import ssl
 
 import httpx
+import truststore
+
+# Configure truststore to use system certificates
+truststore.inject_into_ssl()
+SSL_CONTEXT = truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
 
 
 class ImportError(Exception):
@@ -92,7 +98,7 @@ async def get_player_archives(username: str) -> list[str]:
         NetworkError: If a network error occurs
     """
     try:
-        async with httpx.AsyncClient(headers=DEFAULT_HEADERS, timeout=30.0) as client:
+        async with httpx.AsyncClient(headers=DEFAULT_HEADERS, timeout=30.0, verify=SSL_CONTEXT) as client:
             response = await client.get(
                 f"{CHESSCOM_API_BASE}/player/{username}/games/archives"
             )
@@ -122,7 +128,7 @@ async def fetch_games_from_archive(archive_url: str) -> list[dict]:
         NetworkError: If a network error occurs
     """
     try:
-        async with httpx.AsyncClient(headers=DEFAULT_HEADERS, timeout=60.0) as client:
+        async with httpx.AsyncClient(headers=DEFAULT_HEADERS, timeout=60.0, verify=SSL_CONTEXT) as client:
             response = await client.get(archive_url)
             if not response.is_success:
                 _handle_response_error(response)
