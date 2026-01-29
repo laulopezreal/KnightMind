@@ -167,6 +167,7 @@ data/
 | GET | `/openings?username=...&color=...` | Get opening tree data |
 | POST | `/engine/eval` | Evaluate position (body: `{fen: string}`) |
 | GET | `/engine/status` | Check Stockfish availability |
+| POST | `/puzzles/generate?username=...&max_games=30&max_puzzles=30` | Generate puzzles from user games |
 
 ## Tech Stack
 
