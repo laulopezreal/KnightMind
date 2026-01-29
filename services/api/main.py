@@ -63,6 +63,11 @@ class EvalResponse(BaseModel):
     eval: float  # In pawns, from side-to-move perspective
 
 
+class StatusResponse(BaseModel):
+    available: bool
+    message: str
+
+
 
 
 @app.get("/")
@@ -232,7 +237,7 @@ async def engine_eval(request: EvalRequest):
         )
 
 
-@app.get("/engine/status")
+@app.get("/engine/status", response_model=StatusResponse)
 async def engine_status():
     """
     Check if Stockfish engine is available.
@@ -243,9 +248,9 @@ async def engine_status():
     """
     available = is_stockfish_available()
     if available:
-        return {"available": True, "message": "Stockfish is ready"}
+        return StatusResponse(available=True, message="Stockfish is ready")
     else:
-        return {
-            "available": False, 
-            "message": "Stockfish not available. Check STOCKFISH_PATH or install Stockfish."
-        }
+        return StatusResponse(
+            available=False, 
+            message="Stockfish not available. Check STOCKFISH_PATH or install Stockfish."
+        )

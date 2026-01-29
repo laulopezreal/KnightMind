@@ -13,6 +13,7 @@ from .stockfish import (
     _convert_eval_to_pawns,
     get_stockfish_path,
     get_analysis_params,
+    MATE_EVALUATION,
 )
 
 
@@ -37,12 +38,12 @@ class TestConvertEvalToPawns:
     def test_mate_winning(self):
         """Mate in N (winning)."""
         result = _convert_eval_to_pawns({"type": "mate", "value": 5})
-        assert result == 100.0
+        assert result == MATE_EVALUATION
     
     def test_mate_losing(self):
         """Mate in N (losing)."""
         result = _convert_eval_to_pawns({"type": "mate", "value": -3})
-        assert result == -100.0
+        assert result == -MATE_EVALUATION
     
     def test_unknown_type(self):
         """Unknown evaluation type returns 0."""
@@ -81,13 +82,17 @@ class TestGetAnalysisParams:
         with patch.dict(os.environ, {"STOCKFISH_DEPTH": "15"}):
             assert get_analysis_params() == {"depth": 15}
     
-    def test_movetime(self):
-        """Movetime from env var takes precedence if depth not set."""
+    def test_movetime_when_depth_not_set(self):
+        """Movetime from env var is used when depth is not set."""
         with patch.dict(os.environ, {"STOCKFISH_MOVETIME_MS": "500"}, clear=True):
             os.environ.pop("STOCKFISH_DEPTH", None)
-            params = get_analysis_params()
-            # Depth takes precedence, but if only movetime is set
-            assert "movetime" in params or "depth" in params
+            assert get_analysis_params() == {"movetime": 500}
+
+    def test_depth_has_precedence_over_movetime(self):
+        """Depth from env var has precedence over movetime."""
+        env_vars = {"STOCKFISH_DEPTH": "10", "STOCKFISH_MOVETIME_MS": "500"}
+        with patch.dict(os.environ, env_vars):
+            assert get_analysis_params() == {"depth": 10}
 
 
 class TestEvaluateFen:
