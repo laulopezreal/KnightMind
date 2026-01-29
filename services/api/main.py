@@ -15,7 +15,7 @@ import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
 from services.api.db import SessionLocal
-from services.api.models import Job
+from services.api.models import Job, JobStatus
 from services.api.worker import worker
 from services.api.engine import (
     EngineNotAvailableError,
@@ -355,10 +355,9 @@ async def generate_puzzles_endpoint(
                 progress=existing_job.progress_current
             )
             
-        # Create new job
         new_job = Job(
             username=username,
-            status="queued",
+            status=JobStatus.QUEUED,
             message="Queued for generation"
         )
         db.add(new_job)

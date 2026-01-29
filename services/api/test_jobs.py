@@ -6,7 +6,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from services.api.db import Base, SessionLocal
 from services.api.main import app
-from services.api.models import Job
+from services.api.models import Job, JobStatus
 
 # Use a file-based DB for tests to ensure threading works if needed, 
 # but :memory: is usually fine for single thread tests. 
@@ -57,7 +57,7 @@ def test_generate_puzzles_enqueues_job(client, db_session):
     response = client.post("/puzzles/generate?username=jobtester")
     assert response.status_code == 200
     data = response.json()
-    assert data["status"] == "queued"
+    assert data["status"] == JobStatus.QUEUED
     assert "job_id" in data
     job_id = data["job_id"]
     
@@ -65,7 +65,7 @@ def test_generate_puzzles_enqueues_job(client, db_session):
     job = db_session.get(Job, job_id)
     assert job is not None
     assert job.username == "jobtester"
-    assert job.status == "queued"
+    assert job.status == JobStatus.QUEUED
 
 def test_generate_puzzles_idempotency(client, db_session):
     # 1. First Trigger
@@ -81,7 +81,7 @@ def test_generate_puzzles_idempotency(client, db_session):
 
 def test_get_job_status(client, db_session):
     # Create manual job
-    job = Job(username="statuschecker", status="running", progress_current=50)
+    job = Job(username="statuschecker", status=JobStatus.RUNNING, progress_current=50)
     db_session.add(job)
     db_session.commit()
     
@@ -89,7 +89,7 @@ def test_get_job_status(client, db_session):
     assert resp.status_code == 200
     data = resp.json()
     assert data["job_id"] == job.id
-    assert data["status"] == "running"
+    assert data["status"] == JobStatus.RUNNING
     assert data["progress"] == 50
 
 async def run_sync_in_thread(func, *args, **kwargs):
@@ -104,7 +104,7 @@ async def test_worker_execute_job(mock_to_thread, mock_generate, db_session):
     from services.api.puzzles.generator import GenerationResult
     
     # Create running job
-    job = Job(username="exectest", status="running")
+    job = Job(username="exectest", status=JobStatus.RUNNING)
     db_session.add(job)
     db_session.commit()
     db_session.refresh(job)
@@ -122,5 +122,5 @@ async def test_worker_execute_job(mock_to_thread, mock_generate, db_session):
     # Verify
     db_session.expire_all()
     updated_job = db_session.get(Job, job.id)
-    assert updated_job.status == "succeeded"
+    assert updated_job.status == JobStatus.SUCCEEDED
     assert updated_job.result_json["generated"] == 5

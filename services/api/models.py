@@ -2,7 +2,15 @@ import uuid
 from datetime import datetime, timezone
 from sqlalchemy import String, Integer, Text, JSON, DateTime
 from sqlalchemy.orm import Mapped, mapped_column
+from enum import Enum
 from services.api.db import Base
+
+class JobStatus(str, Enum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    CANCELED = "canceled"
 
 class Job(Base):
     __tablename__ = "jobs"
@@ -11,7 +19,7 @@ class Job(Base):
     type: Mapped[str] = mapped_column(String, default="puzzle_generation")
     username: Mapped[str] = mapped_column(String, index=True)
     params: Mapped[dict] = mapped_column(JSON, nullable=True)
-    status: Mapped[str] = mapped_column(String, default="queued")  # queued, running, succeeded, failed, canceled
+    status: Mapped[str] = mapped_column(String, default=JobStatus.QUEUED)  # Using Enum default
     progress_current: Mapped[int] = mapped_column(Integer, default=0)
     progress_total: Mapped[int] = mapped_column(Integer, default=0)
     message: Mapped[str] = mapped_column(Text, nullable=True)

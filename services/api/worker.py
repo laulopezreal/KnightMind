@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import select
 
 from services.api.db import SessionLocal
-from services.api.models import Job
+from services.api.models import Job, JobStatus
 from services.api.puzzles.generator import generate_puzzles, GenerationResult
 
 logger = logging.getLogger(__name__)
@@ -57,11 +57,11 @@ class JobWorker:
             # For simplicity, if a job is "running" but we just started, it's stuck.
             # In a multi-worker setup, we would check timestamp. 
             # Since we are single-worker/single-process as per req, any running job at startup IS stuck.
-            stmt = select(Job).where(Job.status == "running")
+            stmt = select(Job).where(Job.status == JobStatus.RUNNING)
             stuck_jobs = db.scalars(stmt).all()
             count = 0
             for job in stuck_jobs:
-                job.status = "queued"
+                job.status = JobStatus.QUEUED
                 job.message = "Recovered from crash"
                 job.updated_at = datetime.now(timezone.utc)
                 count += 1
@@ -87,7 +87,7 @@ class JobWorker:
             stmt = select(Job).where(Job.status == JobStatus.QUEUED).order_by(Job.created_at.asc()).limit(1)
             job = db.scalars(stmt).first()
             if job:
-                job.status = "running"
+                job.status = JobStatus.RUNNING
                 job.updated_at = datetime.now(timezone.utc)
                 db.commit()
                 db.refresh(job)
@@ -166,7 +166,7 @@ class JobWorker:
                 stmt = select(Job).where(Job.id == job_id)
                 job = db.scalars(stmt).first()
                 if job:
-                    job.status = "succeeded"
+                    job.status = JobStatus.SUCCEEDED
                     job.progress_current = 100
                     job.progress_total = 100
                     job.result_json = asdict(result)
@@ -183,7 +183,7 @@ class JobWorker:
                 stmt = select(Job).where(Job.id == job_id)
                 job = db.scalars(stmt).first()
                 if job:
-                    job.status = "failed"
+                    job.status = JobStatus.FAILED
                     job.error_message = str(e)
                     job.updated_at = datetime.now(timezone.utc)
                     db.commit()
