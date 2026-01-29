@@ -47,13 +47,26 @@ def test_get_openings_missing_username():
     assert response.status_code == 422  # Validation error
 
 
-@patch("services.api.main.fetch_games_from_archive")
-@patch("services.api.main.get_player_archives")
-def test_get_openings_with_games(mock_get_archives, mock_fetch_games, client_with_temp_storage):
+@patch("services.api.main.import_all_games")
+def test_get_openings_with_games(mock_import_games, client_with_temp_storage):
     """Test /openings endpoint with imported games."""
-    # First import some games
-    mock_get_archives.return_value = MOCK_ARCHIVES
-    mock_fetch_games.return_value = MOCK_GAMES
+    # Mock async generator
+    async def mock_generator(username):
+        from services.ingest import ChessGame
+        for game_data in MOCK_GAMES:
+            yield ChessGame(
+                url=game_data["url"],
+                pgn=game_data["pgn"],
+                time_control=game_data["time_control"],
+                end_time=game_data["end_time"],
+                rated=game_data["rated"],
+                white_username=game_data["white"]["username"],
+                black_username=game_data["black"]["username"],
+                white_result=game_data["white"]["result"],
+                black_result=game_data["black"]["result"],
+            )
+    
+    mock_import_games.side_effect = mock_generator
 
     import_response = client_with_temp_storage.post("/import/chesscom?username=testuser")
     assert import_response.status_code == 200
@@ -80,8 +93,25 @@ def test_get_openings_no_games(client_with_temp_storage):
     assert response.status_code == 404
     assert "no games" in response.json()["detail"].lower()
 
+    assert "no games" in response.json()["detail"].lower()
 
-# --- Import endpoint tests with mocking ---
+
+@patch("services.api.storage.GameStorage.get_users")
+def test_get_users_list(mock_get_users, client_with_temp_storage):
+    """Test retrieving list of users."""
+    mock_get_users.return_value = ["user1", "user2"]
+    
+    response = client_with_temp_storage.get("/users")
+    
+    assert response.status_code == 200
+    assert response.json() == {"users": ["user1", "user2"]}
+    mock_get_users.assert_called_once()
+    
+    # Test empty list
+    mock_get_users.return_value = []
+    response = client_with_temp_storage.get("/users")
+    assert response.status_code == 200
+    assert response.json() == {"users": []}
 
 MOCK_ARCHIVES = ["https://api.chess.com/pub/player/testuser/games/2024/01"]
 
@@ -107,12 +137,26 @@ MOCK_GAMES = [
 ]
 
 
-@patch("services.api.main.fetch_games_from_archive")
-@patch("services.api.main.get_player_archives")
-def test_import_chesscom_success(mock_get_archives, mock_fetch_games, client_with_temp_storage):
+@patch("services.api.main.import_all_games")
+def test_import_chesscom_success(mock_import_games, client_with_temp_storage):
     """Test successful import of games."""
-    mock_get_archives.return_value = MOCK_ARCHIVES
-    mock_fetch_games.return_value = MOCK_GAMES
+    # Mock async generator
+    async def mock_generator(username):
+        from services.ingest import ChessGame
+        for game_data in MOCK_GAMES:
+            yield ChessGame(
+                url=game_data["url"],
+                pgn=game_data["pgn"],
+                time_control=game_data["time_control"],
+                end_time=game_data["end_time"],
+                rated=game_data["rated"],
+                white_username=game_data["white"]["username"],
+                black_username=game_data["black"]["username"],
+                white_result=game_data["white"]["result"],
+                black_result=game_data["black"]["result"],
+            )
+            
+    mock_import_games.side_effect = mock_generator
 
     response = client_with_temp_storage.post("/import/chesscom?username=testuser")
 
@@ -124,12 +168,26 @@ def test_import_chesscom_success(mock_get_archives, mock_fetch_games, client_wit
     assert "testuser" in data["message"]
 
 
-@patch("services.api.main.fetch_games_from_archive")
-@patch("services.api.main.get_player_archives")
-def test_import_chesscom_deduplication(mock_get_archives, mock_fetch_games, client_with_temp_storage):
+@patch("services.api.main.import_all_games")
+def test_import_chesscom_deduplication(mock_import_games, client_with_temp_storage):
     """Test that duplicate games are not re-imported."""
-    mock_get_archives.return_value = MOCK_ARCHIVES
-    mock_fetch_games.return_value = MOCK_GAMES
+    # Mock async generator (reusable)
+    async def mock_generator(username):
+        from services.ingest import ChessGame
+        for game_data in MOCK_GAMES:
+            yield ChessGame(
+                url=game_data["url"],
+                pgn=game_data["pgn"],
+                time_control=game_data["time_control"],
+                end_time=game_data["end_time"],
+                rated=game_data["rated"],
+                white_username=game_data["white"]["username"],
+                black_username=game_data["black"]["username"],
+                white_result=game_data["white"]["result"],
+                black_result=game_data["black"]["result"],
+            )
+    
+    mock_import_games.side_effect = mock_generator
 
     # First import
     response1 = client_with_temp_storage.post("/import/chesscom?username=testuser")
@@ -137,19 +195,23 @@ def test_import_chesscom_deduplication(mock_get_archives, mock_fetch_games, clie
     assert response1.json()["new_games"] == 2
 
     # Second import should skip duplicates
+    # Need to reset side_effect or it works same way
+    mock_import_games.side_effect = mock_generator
+    
     response2 = client_with_temp_storage.post("/import/chesscom?username=testuser")
     assert response2.status_code == 200
     data = response2.json()
     assert data["new_games"] == 0
     assert data["skipped_duplicates"] == 2
-    assert data["games_count"] == 2  # Total still 2
+    assert data["games_count"] == 2  # Total processed this run
 
 
-@patch("services.api.main.get_player_archives")
-def test_import_chesscom_user_not_found(mock_get_archives, client_with_temp_storage):
+
+@patch("services.api.main.import_all_games")
+def test_import_chesscom_user_not_found(mock_import_games, client_with_temp_storage):
     """Test error handling for non-existent user."""
     from services.ingest import UserNotFoundError
-    mock_get_archives.side_effect = UserNotFoundError("nonexistent_user")
+    mock_import_games.side_effect = UserNotFoundError("nonexistent_user")
 
     response = client_with_temp_storage.post("/import/chesscom?username=nonexistent_user")
 
@@ -157,11 +219,11 @@ def test_import_chesscom_user_not_found(mock_get_archives, client_with_temp_stor
     assert "not found" in response.json()["detail"].lower()
 
 
-@patch("services.api.main.get_player_archives")
-def test_import_chesscom_rate_limit(mock_get_archives, client_with_temp_storage):
+@patch("services.api.main.import_all_games")
+def test_import_chesscom_rate_limit(mock_import_games, client_with_temp_storage):
     """Test error handling for rate limiting."""
     from services.ingest import RateLimitError
-    mock_get_archives.side_effect = RateLimitError(retry_after=60)
+    mock_import_games.side_effect = RateLimitError(retry_after=60)
 
     response = client_with_temp_storage.post("/import/chesscom?username=testuser")
 
@@ -169,11 +231,11 @@ def test_import_chesscom_rate_limit(mock_get_archives, client_with_temp_storage)
     assert "rate limit" in response.json()["detail"].lower()
 
 
-@patch("services.api.main.get_player_archives")
-def test_import_chesscom_network_error(mock_get_archives, client_with_temp_storage):
+@patch("services.api.main.import_all_games")
+def test_import_chesscom_network_error(mock_import_games, client_with_temp_storage):
     """Test error handling for network errors."""
     from services.ingest import NetworkError
-    mock_get_archives.side_effect = NetworkError("Connection refused")
+    mock_import_games.side_effect = NetworkError("Connection refused")
 
     response = client_with_temp_storage.post("/import/chesscom?username=testuser")
 
@@ -181,10 +243,14 @@ def test_import_chesscom_network_error(mock_get_archives, client_with_temp_stora
     assert "network" in response.json()["detail"].lower()
 
 
-@patch("services.api.main.get_player_archives")
-def test_import_chesscom_no_games(mock_get_archives, client_with_temp_storage):
+@patch("services.api.main.import_all_games")
+def test_import_chesscom_no_games(mock_import_games, client_with_temp_storage):
     """Test handling user with no games."""
-    mock_get_archives.return_value = []  # No archives
+    # Mock async generator that yields nothing
+    async def mock_generator(username):
+        if False: yield  # Empty generator
+            
+    mock_import_games.side_effect = mock_generator
 
     response = client_with_temp_storage.post("/import/chesscom?username=newuser")
 

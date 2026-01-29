@@ -19,15 +19,24 @@ export class ApiError extends Error {
   }
 }
 
+export async function getUsers(): Promise<string[]> {
+  const response = await fetch(`${API_BASE}/users`);
+  if (!response.ok) {
+    throw new ApiError('Failed to fetch users', response.status);
+  }
+  const data = await response.json();
+  return data.users;
+}
+
 export async function importChessComGames(username: string): Promise<ImportResult> {
   const response = await fetch(`${API_BASE}/import/chesscom?username=${encodeURIComponent(username)}`, {
     method: 'POST',
   });
-  
+
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({}));
     const detail = errorData.detail || response.statusText;
-    
+
     if (response.status === 404) {
       throw new ApiError('User not found', 404, detail);
     } else if (response.status === 429) {
@@ -38,7 +47,7 @@ export async function importChessComGames(username: string): Promise<ImportResul
       throw new ApiError(`Import failed: ${detail}`, response.status, detail);
     }
   }
-  
+
   return response.json();
 }
 
@@ -65,20 +74,20 @@ export async function getOpenings(
     color,
     max_ply: maxPly.toString(),
   });
-  
+
   const response = await fetch(`${API_BASE}/openings?${params}`);
-  
+
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({}));
     const detail = errorData.detail || response.statusText;
-    
+
     if (response.status === 404) {
       throw new ApiError('No games found', 404, detail);
     } else {
       throw new ApiError(`Failed to fetch openings: ${detail}`, response.status, detail);
     }
   }
-  
+
   return response.json();
 }
 
@@ -99,13 +108,13 @@ export async function evaluateFen(fen: string): Promise<EvalResult> {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ fen }),
   });
-  
+
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({}));
     const detail = errorData.detail || response.statusText;
     throw new ApiError(`Evaluation failed: ${detail}`, response.status, detail);
   }
-  
+
   return response.json();
 }
 
@@ -158,22 +167,22 @@ export async function generatePuzzles(
     max_games: maxGames.toString(),
     max_puzzles: maxPuzzles.toString(),
   });
-  
+
   const response = await fetch(`${API_BASE}/puzzles/generate?${params}`, {
     method: 'POST',
   });
-  
+
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({}));
     const detail = errorData.detail || response.statusText;
-    
+
     if (response.status === 404) {
       throw new ApiError('No games found for user', 404, detail);
     } else {
       throw new ApiError(`Puzzle generation failed: ${detail}`, response.status, detail);
     }
   }
-  
+
   return response.json();
 }
 
@@ -185,20 +194,20 @@ export async function getDailyPuzzles(
     username,
     n: n.toString(),
   });
-  
+
   const response = await fetch(`${API_BASE}/puzzles/daily?${params}`);
-  
+
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({}));
     const detail = errorData.detail || response.statusText;
-    
+
     if (response.status === 404) {
       throw new ApiError('No puzzles found', 404, detail);
     } else {
       throw new ApiError(`Failed to fetch puzzles: ${detail}`, response.status, detail);
     }
   }
-  
+
   return response.json();
 }
 

@@ -73,6 +73,13 @@ class GameStorage:
         with open(index_file, "w") as f:
             json.dump(list(game_ids), f)
 
+    def get_users(self) -> list[str]:
+        """Get list of users who have imported games."""
+        users = []
+        for index_file in self.index_path.glob("*.json"):
+            users.append(index_file.stem)
+        return sorted(users)
+
     def game_exists(self, username: str, url: str) -> bool:
         """Check if a game has already been imported."""
         game_id = self._game_id_from_url(url)
