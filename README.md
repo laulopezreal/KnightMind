@@ -167,7 +167,8 @@ data/
 | GET | `/openings?username=...&color=...` | Get opening tree data |
 | POST | `/engine/eval` | Evaluate position (body: `{fen: string}`) |
 | GET | `/engine/status` | Check Stockfish availability |
-| POST | `/puzzles/generate?username=...&max_games=30&max_puzzles=30` | Generate puzzles from user games |
+| POST | `/puzzles/generate?username=...&max_games=30&max_puzzles=30` | Start puzzle generation job (Async) |
+| GET | `/jobs/{job_id}` | Get job status (queued, running, succeeded, failed) |
 | GET | `/puzzles/daily?username=...&n=5` | Get daily puzzle set (rotates) |
 
 ## Tech Stack
