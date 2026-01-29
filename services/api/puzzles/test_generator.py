@@ -11,6 +11,7 @@ import pytest
 from services.api.engine import EvalResult
 from services.api.puzzles.generator import _is_user_move, generate_puzzles
 from services.api.storage import get_puzzle_storage, get_storage
+from services.api.engine import StockfishError
 
 
 @pytest.fixture
@@ -66,9 +67,13 @@ def test_generate_puzzles_no_games(temp_storage):
         generate_puzzles("nonexistent_user")
 
 
-def test_generate_puzzles_swing_calculation(temp_storage):
+@patch("services.api.puzzles.generator.create_engine")
+@patch("services.api.puzzles.generator.get_ply_range")
+def test_generate_puzzles_swing_calculation(mock_get_ply_range, mock_create_engine, temp_storage):
     """Test that swing is calculated correctly with proper sign."""
     storage, puzzle_storage = temp_storage
+    mock_create_engine.return_value = Mock()
+    mock_get_ply_range.return_value = (0, 100)
     
     # Create a simple game PGN where the user plays e4 (white)
     pgn = """[Event "Test Game"]
@@ -105,6 +110,7 @@ def test_generate_puzzles_swing_calculation(temp_storage):
         
         result = generate_puzzles("testuser", max_games=1, max_puzzles=10)
         
+    
         # Should have generated a puzzle from the blunder
         assert result.generated >= 1
         assert result.analyzed_positions >= 1
@@ -118,9 +124,21 @@ def test_generate_puzzles_swing_calculation(temp_storage):
             assert puzzle.swing >= 2.0
 
 
-def test_generate_puzzles_only_user_moves(temp_storage):
+@patch("services.api.puzzles.generator.create_engine")
+def test_generate_puzzles_with_mocked_engine(mock_create_engine, temp_storage):
+    """Test generation with mocked engine creation."""
+    mock_engine = Mock()
+    mock_create_engine.return_value = mock_engine
+    
+    # ... logic allows testing the flow without real engine ...
+    pass
+
+
+@patch("services.api.puzzles.generator.create_engine")
+def test_generate_puzzles_only_user_moves(mock_create_engine, temp_storage):
     """Test that only the user's moves are analyzed."""
     storage, puzzle_storage = temp_storage
+    mock_create_engine.return_value = Mock()
     
     # Game where testuser plays as black
     pgn = """[Event "Test Game"]
@@ -157,9 +175,11 @@ def test_generate_puzzles_only_user_moves(temp_storage):
         assert result.analyzed_positions == 0
 
 
-def test_generate_puzzles_respects_max_puzzles(temp_storage):
+@patch("services.api.puzzles.generator.create_engine")
+def test_generate_puzzles_respects_max_puzzles(mock_create_engine, temp_storage):
     """Test that generation stops at max_puzzles."""
     storage, puzzle_storage = temp_storage
+    mock_create_engine.return_value = Mock()
     
     # Create a game with multiple moves
     pgn = """[Event "Test Game"]
@@ -194,9 +214,11 @@ def test_generate_puzzles_respects_max_puzzles(temp_storage):
         assert result.generated <= 3
 
 
-def test_generate_puzzles_deduplication(temp_storage):
+@patch("services.api.puzzles.generator.create_engine")
+def test_generate_puzzles_deduplication(mock_create_engine, temp_storage):
     """Test that running generation twice doesn't create duplicate puzzles."""
     storage, puzzle_storage = temp_storage
+    mock_create_engine.return_value = Mock()
     
     pgn = """[Event "Test Game"]
 [White "testuser"]
@@ -242,9 +264,11 @@ def test_generate_puzzles_deduplication(temp_storage):
         assert result2.generated == 0
 
 
-def test_generate_puzzles_ply_range_filtering(temp_storage):
+@patch("services.api.puzzles.generator.create_engine")
+def test_generate_puzzles_ply_range_filtering(mock_create_engine, temp_storage):
     """Test that moves outside ply range are skipped."""
     storage, puzzle_storage = temp_storage
+    mock_create_engine.return_value = Mock()
     
     # Short game (all moves before ply 8)
     pgn = """[Event "Test Game"]

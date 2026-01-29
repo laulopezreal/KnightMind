@@ -150,7 +150,7 @@ class TestIsStockfishAvailable:
 
         assert is_stockfish_available() is True
 
-    @patch("services.api.engine.stockfish._create_engine")
+    @patch("services.api.engine.stockfish.create_engine")
     def test_not_available(self, mock_create):
         """Returns False when Stockfish not found."""
         mock_create.side_effect = StockfishNotFoundError("Not found")

@@ -8,6 +8,7 @@ from .stockfish import (
     EvalResult,
     StockfishError,
     StockfishNotFoundError,
+    create_engine,
     evaluate_fen,
     is_stockfish_available,
 )
@@ -39,4 +40,5 @@ __all__ = [
     "StockfishError",
     "evaluate_fen",
     "is_stockfish_available",
+    "create_engine",
 ]

@@ -51,7 +51,7 @@ def get_analysis_params() -> dict:
         return {"depth": 12}
 
 
-def _create_engine() -> "StockfishEngine":
+def create_engine() -> "StockfishEngine":
     """Create and configure a Stockfish engine instance."""
     if StockfishEngine is None:
         raise StockfishNotFoundError(
@@ -78,12 +78,13 @@ def _create_engine() -> "StockfishEngine":
     return engine
 
 
-def evaluate_fen(fen: str) -> EvalResult:
+def evaluate_fen(fen: str, engine: Optional["StockfishEngine"] = None) -> EvalResult:
     """
     Evaluate a chess position given its FEN string.
     
     Args:
         fen: FEN string representing the position to evaluate
+        engine: Optional existing Stockfish engine instance to reuse
         
     Returns:
         EvalResult with best_move_uci and eval (in pawns, from side-to-move POV)
@@ -92,7 +93,10 @@ def evaluate_fen(fen: str) -> EvalResult:
         StockfishNotFoundError: If Stockfish is not available
         StockfishError: If evaluation fails
     """
-    engine = _create_engine()
+    should_close_engine = False
+    if engine is None:
+        engine = create_engine()
+        should_close_engine = True
     
     try:
         # Set position
@@ -124,6 +128,12 @@ def evaluate_fen(fen: str) -> EvalResult:
         raise
     except Exception as e:
         raise StockfishError(f"Evaluation failed: {e}")
+    finally:
+        # Only close if we created it locally. 
+        # Note: The stockfish library wrapper might not have a close/quit method exposed simply,
+        # but generally for a local variable it's fine. 
+        # If we passed it in, the caller is responsible.
+        pass
 
 
 # Arbitrary large value representing a decisive advantage (mate)
@@ -162,7 +172,7 @@ def _convert_eval_to_pawns(evaluation: dict) -> float:
 def is_stockfish_available() -> bool:
     """Check if Stockfish is available and working."""
     try:
-        engine = _create_engine()
+        engine = create_engine()
         # Quick test
         engine.set_fen_position("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1")
         return True

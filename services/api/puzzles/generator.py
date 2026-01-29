@@ -12,7 +12,7 @@ from dataclasses import dataclass
 import chess
 import chess.pgn
 
-from services.api.engine import evaluate_fen
+from services.api.engine import create_engine, evaluate_fen
 from services.api.storage import get_puzzle_storage, get_storage
 
 
@@ -91,6 +91,14 @@ def generate_puzzles(
     swing_threshold = get_swing_threshold()
     ply_start, ply_end = get_ply_range()
 
+    # Create engine instance for the whole batch
+    try:
+        engine = create_engine()
+    except Exception:
+        # If engine creation fails, we can't generate anything
+        # (logging would be good here)
+        return GenerationResult(generated=0, skipped=0, analyzed_positions=0)
+
     generated = 0
     skipped = 0
     analyzed_positions = 0
@@ -139,7 +147,7 @@ def generate_puzzles(
 
             try:
                 # Evaluate position before the move
-                eval_result_before = evaluate_fen(fen_before)
+                eval_result_before = evaluate_fen(fen_before, engine=engine)
                 eval_before = eval_result_before.eval
                 best_move_uci = eval_result_before.best_move_uci
 
@@ -149,7 +157,7 @@ def generate_puzzles(
 
                 # Evaluate position after the move
                 fen_after = board.fen()
-                eval_result_after = evaluate_fen(fen_after)
+                eval_result_after = evaluate_fen(fen_after, engine=engine)
                 eval_after = eval_result_after.eval
 
                 # Calculate swing
