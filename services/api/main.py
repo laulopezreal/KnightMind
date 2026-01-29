@@ -233,3 +233,34 @@ async def evaluate_fen(request: EvalRequest):
         raise HTTPException(status_code=503, detail=str(e))
     except InvalidFenError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/puzzles/generate", response_model=PuzzleGenerationResponse)
+async def generate_puzzles_endpoint(
+    username: str = Query(..., description="Username to generate puzzles for"),
+    max_games: int = Query(30, description="Maximum number of recent games to analyze"),
+    max_puzzles: int = Query(30, description="Maximum number of puzzles to generate"),
+):
+    """
+    Generate puzzles from a user's games.
+    
+    analyzes recent games to find blunders and creates puzzles from them.
+    """
+    try:
+        result = generate_puzzles(
+            username=username,
+            max_games=max_games,
+            max_puzzles=max_puzzles,
+        )
+        
+        return PuzzleGenerationResponse(
+            message=f"Analyzed {result.analyzed_positions} positions",
+            generated=result.generated,
+            skipped=result.skipped,
+            analyzed_positions=result.analyzed_positions,
+        )
+    except ValueError as e:
+        # e.g. user has no games
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Generation failed: {str(e)}")
