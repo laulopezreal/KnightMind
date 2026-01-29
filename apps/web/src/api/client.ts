@@ -81,3 +81,40 @@ export async function getOpenings(
   
   return response.json();
 }
+
+// Engine evaluation
+export interface EvalResult {
+  best_move_uci: string;
+  eval: number;
+}
+
+export interface EngineStatus {
+  available: boolean;
+  message: string;
+}
+
+export async function evaluateFen(fen: string): Promise<EvalResult> {
+  const response = await fetch(`${API_BASE}/engine/eval`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ fen }),
+  });
+  
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    const detail = errorData.detail || response.statusText;
+    throw new ApiError(`Evaluation failed: ${detail}`, response.status, detail);
+  }
+  
+  return response.json();
+}
+
+export async function getEngineStatus(): Promise<EngineStatus> {
+  const response = await fetch(`${API_BASE}/engine/status`);
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    const detail = errorData.detail || response.statusText;
+    throw new ApiError(`Failed to get engine status: ${detail}`, response.status, detail);
+  }
+  return response.json();
+}
