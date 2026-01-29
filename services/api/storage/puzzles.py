@@ -181,8 +181,9 @@ class PuzzleStorage:
         Get n puzzles for daily practice.
 
         Selection strategy:
-        1. Prefer puzzles that haven't been used (used_on is None)
-        2. Fall back to puzzles that have been used, ordered by most recent creation
+        1. Prefer puzzles already used today (for idempotency)
+        2. Then prefer puzzles that haven't been used (used_on is None)
+        3. Fall back to puzzles that have been used on other days
 
         Args:
             username: Username to get puzzles for
@@ -191,22 +192,28 @@ class PuzzleStorage:
         Returns:
             List of up to n puzzles
         """
+        from datetime import date
+        
         all_puzzles = self.get_all_puzzles(username)
+        today_str = date.today().isoformat()
 
-        # Split into unused and used
+        # Split into three categories
+        used_today = [p for p in all_puzzles if p.used_on == today_str]
         unused = [p for p in all_puzzles if p.used_on is None]
-        used = [p for p in all_puzzles if p.used_on is not None]
+        used_other_days = [p for p in all_puzzles if p.used_on is not None and p.used_on != today_str]
 
         # Sort unused by creation time (oldest first for variety)
         unused.sort(key=lambda p: p.created_at)
 
-        # Sort used by creation time (newest first)
-        used.sort(key=lambda p: p.created_at, reverse=True)
+        # Sort used_other_days by creation time (newest first)
+        used_other_days.sort(key=lambda p: p.created_at, reverse=True)
 
-        # Take from unused first, then used
-        selected = unused[:n]
+        # Take from used_today first (idempotency), then unused, then used_other_days
+        selected = used_today[:n]
         if len(selected) < n:
-            selected.extend(used[: n - len(selected)])
+            selected.extend(unused[: n - len(selected)])
+        if len(selected) < n:
+            selected.extend(used_other_days[: n - len(selected)])
 
         return selected
 
