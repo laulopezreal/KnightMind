@@ -1,31 +1,27 @@
-import sys
-from pathlib import Path
-
 from typing import Literal
 
-from fastapi import FastAPI, Query, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-# Add services directory to path for package imports
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-from ingest import (
-    get_player_archives,
-    fetch_games_from_archive,
-    parse_game,
-    UserNotFoundError,
-    RateLimitError,
-    NetworkError,
+from services.api.engine import (
+    EngineNotAvailableError,
+    InvalidFenError,
+    evaluate_position,
+    is_engine_available,
+)
+from services.api.openings import build_opening_tree
+from services.api.storage import get_storage
+from services.ingest import (
     ImportError as ChessComImportError,
 )
-from storage import get_storage
-from openings import build_opening_tree
-from engine import (
-    evaluate_fen,
-    is_stockfish_available,
-    StockfishNotFoundError,
-    StockfishError,
+from services.ingest import (
+    NetworkError,
+    RateLimitError,
+    UserNotFoundError,
+    fetch_games_from_archive,
+    get_player_archives,
+    parse_game,
 )
 
 app = FastAPI(title="KnightMind API", version="0.1.0")
@@ -63,11 +59,9 @@ class EvalResponse(BaseModel):
     eval: float  # In pawns, from side-to-move perspective
 
 
-class StatusResponse(BaseModel):
+class EngineStatusResponse(BaseModel):
     available: bool
     message: str
-
-
 
 
 @app.get("/")
@@ -84,11 +78,11 @@ async def import_chesscom_games(username: str = Query(..., description="Chess.co
     Duplicate games are skipped automatically.
     """
     storage = get_storage()
-    
+
     try:
         # Get all archive URLs for the user
         archives = await get_player_archives(username)
-        
+
         if not archives:
             return ImportResponse(
                 message=f"No games found for {username}",
@@ -96,21 +90,21 @@ async def import_chesscom_games(username: str = Query(..., description="Chess.co
                 new_games=0,
                 skipped_duplicates=0,
             )
-        
+
         new_games = 0
         skipped = 0
-        
+
         # Process each monthly archive
         for archive_url in archives:
             games = await fetch_games_from_archive(archive_url)
-            
+
             for game_data in games:
                 game = parse_game(game_data)
-                
+
                 # Skip games without PGN
                 if not game.pgn:
                     continue
-                
+
                 is_new, _ = storage.store_game(
                     username=username,
                     url=game.url,
@@ -123,21 +117,21 @@ async def import_chesscom_games(username: str = Query(..., description="Chess.co
                     end_time=game.end_time,
                     rated=game.rated,
                 )
-                
+
                 if is_new:
                     new_games += 1
                 else:
                     skipped += 1
-        
+
         total_games = storage.get_game_count(username)
-        
+
         return ImportResponse(
             message=f"Successfully imported games for {username}",
             games_count=total_games,
             new_games=new_games,
             skipped_duplicates=skipped,
         )
-        
+
     except UserNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except RateLimitError as e:
@@ -178,15 +172,15 @@ async def get_openings(
         Opening tree as nested JSON structure
     """
     storage = get_storage()
-    
+
     # Check if user has any games
     game_count = storage.get_game_count(username)
     if game_count == 0:
         raise HTTPException(
-            status_code=404, 
+            status_code=404,
             detail=f"No games found for user '{username}'. Import games first using POST /import/chesscom"
         )
-    
+
     # Get all PGNs for the user
     pgn_texts = []
     metadata_list = storage.get_all_metadata(username)
@@ -194,7 +188,7 @@ async def get_openings(
         pgn = storage.get_pgn(username, meta.game_id)
         if pgn:
             pgn_texts.append(pgn)
-    
+
     # Build the opening tree
     tree = build_opening_tree(
         pgn_texts=pgn_texts,
@@ -202,55 +196,32 @@ async def get_openings(
         color_filter=color,
         max_ply=max_ply
     )
-    
+
     return tree
 
 
+@app.get("/engine/status", response_model=EngineStatusResponse)
+async def get_engine_status():
+    """Check if the Stockfish engine is available."""
+    available, message = is_engine_available()
+    return EngineStatusResponse(available=available, message=message)
+
+
 @app.post("/engine/eval", response_model=EvalResponse)
-async def engine_eval(request: EvalRequest):
+async def evaluate_fen(request: EvalRequest):
     """
     Evaluate a chess position using Stockfish.
     
     Args:
-        request: JSON body with 'fen' field containing the FEN string
+        request: Request with FEN string
         
     Returns:
-        best_move_uci: Best move in UCI format (e.g., "e2e4")
-        eval: Position evaluation in pawns from side-to-move perspective
-              Positive = advantage for side to move, negative = disadvantage
+        Best move in UCI format and evaluation in pawns
     """
     try:
-        result = evaluate_fen(request.fen)
-        return EvalResponse(
-            best_move_uci=result.best_move_uci,
-            eval=result.eval
-        )
-    except StockfishNotFoundError as e:
-        raise HTTPException(
-            status_code=503,
-            detail=str(e)
-        )
-    except StockfishError as e:
-        raise HTTPException(
-            status_code=400,
-            detail=str(e)
-        )
-
-
-@app.get("/engine/status", response_model=StatusResponse)
-async def engine_status():
-    """
-    Check if Stockfish engine is available.
-    
-    Returns:
-        available: Whether Stockfish is ready to use
-        message: Status message
-    """
-    available = is_stockfish_available()
-    if available:
-        return StatusResponse(available=True, message="Stockfish is ready")
-    else:
-        return StatusResponse(
-            available=False, 
-            message="Stockfish not available. Check STOCKFISH_PATH or install Stockfish."
-        )
+        result = evaluate_position(request.fen)
+        return EvalResponse(best_move_uci=result.best_move_uci, eval=result.eval)
+    except EngineNotAvailableError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except InvalidFenError as e:
+        raise HTTPException(status_code=400, detail=str(e))

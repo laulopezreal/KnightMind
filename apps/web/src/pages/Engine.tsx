@@ -52,14 +52,18 @@ export default function Engine() {
     }
   };
 
+  const resetAnalysis = () => {
+    setEvaluation(null);
+    setShowBestMove(false);
+    setError(null);
+  };
+
   const handleFenSubmit = () => {
     try {
       const newGame = new Chess(fenInput);
       setGame(newGame);
       setFen(fenInput);
-      setEvaluation(null);
-      setError(null);
-      setShowBestMove(false);
+      resetAnalysis();
     } catch {
       setError('Invalid FEN string');
     }
@@ -70,14 +74,13 @@ export default function Engine() {
     setGame(newGame);
     setFen(STARTING_FEN);
     setFenInput(STARTING_FEN);
-    setEvaluation(null);
-    setError(null);
-    setShowBestMove(false);
+    resetAnalysis();
   };
 
   const onDrop = (sourceSquare: string, targetSquare: string) => {
+    const gameCopy = new Chess(fen);
     try {
-      const move = game.move({
+      const move = gameCopy.move({
         from: sourceSquare,
         to: targetSquare,
         promotion: 'q', // Always promote to queen for simplicity
@@ -85,7 +88,8 @@ export default function Engine() {
 
       if (move === null) return false;
 
-      const newFen = game.fen();
+      const newFen = gameCopy.fen();
+      setGame(gameCopy);
       setFen(newFen);
       setFenInput(newFen);
       setEvaluation(null);
@@ -148,10 +152,9 @@ export default function Engine() {
               <Chessboard
                 options={{
                   position: fen,
-                  onPieceDrop: ({ sourceSquare, targetSquare }) => 
-                    targetSquare ? onDrop(sourceSquare, targetSquare) : false,
+                  onPieceDrop: ({ sourceSquare, targetSquare }) => onDrop(sourceSquare, targetSquare ?? ""),
                   arrows: getArrows(),
-                  boardOrientation: 'white',
+                  boardOrientation: "white",
                   darkSquareStyle: { backgroundColor: '#4a5568' },
                   lightSquareStyle: { backgroundColor: '#a0aec0' },
                 }}
@@ -205,7 +208,7 @@ export default function Engine() {
                         <strong className="text-amber-400">Engine unavailable</strong>
                       </p>
                       <p className="text-xs text-gray-400">
-                        Make sure the backend server is running and Stockfish is installed. 
+                        Make sure the backend server is running and Stockfish is installed.
                         See the README for setup instructions.
                       </p>
                       <div className="absolute left-3 -bottom-1 w-2 h-2 bg-gray-900 border-b border-r border-gray-600 transform rotate-45"></div>
@@ -243,7 +246,7 @@ export default function Engine() {
                       {formatEval(evaluation.eval)}
                     </span>
                   </div>
-                  
+
                   <div className="flex items-center justify-between p-3 bg-gray-700 rounded">
                     <span className="text-gray-400">Best Move:</span>
                     <div className="flex items-center gap-2">

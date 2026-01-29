@@ -111,5 +111,10 @@ export async function evaluateFen(fen: string): Promise<EvalResult> {
 
 export async function getEngineStatus(): Promise<EngineStatus> {
   const response = await fetch(`${API_BASE}/engine/status`);
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    const detail = errorData.detail || response.statusText;
+    throw new ApiError(`Failed to get engine status: ${detail}`, response.status, detail);
+  }
   return response.json();
 }
