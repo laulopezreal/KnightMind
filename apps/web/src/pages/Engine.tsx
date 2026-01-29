@@ -52,14 +52,18 @@ export default function Engine() {
     }
   };
 
+  const resetAnalysis = () => {
+    setEvaluation(null);
+    setShowBestMove(false);
+    setError(null);
+  };
+
   const handleFenSubmit = () => {
     try {
       const newGame = new Chess(fenInput);
       setGame(newGame);
       setFen(fenInput);
-      setEvaluation(null);
-      setError(null);
-      setShowBestMove(false);
+      resetAnalysis();
     } catch {
       setError('Invalid FEN string');
     }
@@ -70,14 +74,13 @@ export default function Engine() {
     setGame(newGame);
     setFen(STARTING_FEN);
     setFenInput(STARTING_FEN);
-    setEvaluation(null);
-    setError(null);
-    setShowBestMove(false);
+    resetAnalysis();
   };
 
   const onDrop = (sourceSquare: string, targetSquare: string) => {
+    const gameCopy = new Chess(fen);
     try {
-      const move = game.move({
+      const move = gameCopy.move({
         from: sourceSquare,
         to: targetSquare,
         promotion: 'q', // Always promote to queen for simplicity
@@ -85,7 +88,8 @@ export default function Engine() {
 
       if (move === null) return false;
 
-      const newFen = game.fen();
+      const newFen = gameCopy.fen();
+      setGame(gameCopy);
       setFen(newFen);
       setFenInput(newFen);
       setEvaluation(null);
@@ -97,11 +101,11 @@ export default function Engine() {
   };
 
   // Convert UCI move to arrow for visualization
-  const getArrows = () => {
+  const getArrows = (): [string, string, string][] => {
     if (!showBestMove || !evaluation?.bestMove) return [];
     const startSquare = evaluation.bestMove.slice(0, 2);
     const endSquare = evaluation.bestMove.slice(2, 4);
-    return [{ startSquare, endSquare, color: 'rgb(16, 185, 129)' }]; // Emerald color
+    return [[startSquare, endSquare, 'rgb(16, 185, 129)']]; // Emerald color
   };
 
   const formatEval = (evalValue: number): string => {
@@ -146,15 +150,12 @@ export default function Engine() {
           <div className="bg-gray-800 rounded-lg p-6">
             <div className="max-w-md mx-auto">
               <Chessboard
-                options={{
-                  position: fen,
-                  onPieceDrop: ({ sourceSquare, targetSquare }) => 
-                    targetSquare ? onDrop(sourceSquare, targetSquare) : false,
-                  arrows: getArrows(),
-                  boardOrientation: 'white',
-                  darkSquareStyle: { backgroundColor: '#4a5568' },
-                  lightSquareStyle: { backgroundColor: '#a0aec0' },
-                }}
+                position={fen}
+                onPieceDrop={onDrop}
+                customArrows={getArrows()}
+                boardOrientation="white"
+                customDarkSquareStyle={{ backgroundColor: '#4a5568' }}
+                customLightSquareStyle={{ backgroundColor: '#a0aec0' }}
               />
             </div>
             <div className="mt-4 flex justify-center gap-4">

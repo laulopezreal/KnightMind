@@ -1,25 +1,27 @@
 from typing import Literal
 
-from fastapi import FastAPI, Query, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from services.ingest import (
-    get_player_archives,
-    fetch_games_from_archive,
-    parse_game,
-    UserNotFoundError,
-    RateLimitError,
-    NetworkError,
-    ImportError as ChessComImportError,
-)
-from services.api.storage import get_storage
-from services.api.openings import build_opening_tree
 from services.api.engine import (
-    evaluate_position,
-    is_engine_available,
     EngineNotAvailableError,
     InvalidFenError,
+    evaluate_position,
+    is_engine_available,
+)
+from services.api.openings import build_opening_tree
+from services.api.storage import get_storage
+from services.ingest import (
+    ImportError as ChessComImportError,
+)
+from services.ingest import (
+    NetworkError,
+    RateLimitError,
+    UserNotFoundError,
+    fetch_games_from_archive,
+    get_player_archives,
+    parse_game,
 )
 
 app = FastAPI(title="KnightMind API", version="0.1.0")
@@ -76,11 +78,11 @@ async def import_chesscom_games(username: str = Query(..., description="Chess.co
     Duplicate games are skipped automatically.
     """
     storage = get_storage()
-    
+
     try:
         # Get all archive URLs for the user
         archives = await get_player_archives(username)
-        
+
         if not archives:
             return ImportResponse(
                 message=f"No games found for {username}",
@@ -88,21 +90,21 @@ async def import_chesscom_games(username: str = Query(..., description="Chess.co
                 new_games=0,
                 skipped_duplicates=0,
             )
-        
+
         new_games = 0
         skipped = 0
-        
+
         # Process each monthly archive
         for archive_url in archives:
             games = await fetch_games_from_archive(archive_url)
-            
+
             for game_data in games:
                 game = parse_game(game_data)
-                
+
                 # Skip games without PGN
                 if not game.pgn:
                     continue
-                
+
                 is_new, _ = storage.store_game(
                     username=username,
                     url=game.url,
@@ -115,21 +117,21 @@ async def import_chesscom_games(username: str = Query(..., description="Chess.co
                     end_time=game.end_time,
                     rated=game.rated,
                 )
-                
+
                 if is_new:
                     new_games += 1
                 else:
                     skipped += 1
-        
+
         total_games = storage.get_game_count(username)
-        
+
         return ImportResponse(
             message=f"Successfully imported games for {username}",
             games_count=total_games,
             new_games=new_games,
             skipped_duplicates=skipped,
         )
-        
+
     except UserNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except RateLimitError as e:
@@ -170,15 +172,15 @@ async def get_openings(
         Opening tree as nested JSON structure
     """
     storage = get_storage()
-    
+
     # Check if user has any games
     game_count = storage.get_game_count(username)
     if game_count == 0:
         raise HTTPException(
-            status_code=404, 
+            status_code=404,
             detail=f"No games found for user '{username}'. Import games first using POST /import/chesscom"
         )
-    
+
     # Get all PGNs for the user
     pgn_texts = []
     metadata_list = storage.get_all_metadata(username)
@@ -186,7 +188,7 @@ async def get_openings(
         pgn = storage.get_pgn(username, meta.game_id)
         if pgn:
             pgn_texts.append(pgn)
-    
+
     # Build the opening tree
     tree = build_opening_tree(
         pgn_texts=pgn_texts,
@@ -194,7 +196,7 @@ async def get_openings(
         color_filter=color,
         max_ply=max_ply
     )
-    
+
     return tree
 
 

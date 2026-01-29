@@ -1,9 +1,10 @@
-import pytest
-import tempfile
 import shutil
+import tempfile
 from unittest.mock import patch
 
+import pytest
 from fastapi.testclient import TestClient
+
 from services.api.main import app
 from services.api.storage import GameStorage
 
@@ -53,15 +54,15 @@ def test_get_openings_with_games(mock_get_archives, mock_fetch_games, client_wit
     # First import some games
     mock_get_archives.return_value = MOCK_ARCHIVES
     mock_fetch_games.return_value = MOCK_GAMES
-    
+
     import_response = client_with_temp_storage.post("/import/chesscom?username=testuser")
     assert import_response.status_code == 200
-    
+
     # Now fetch openings
     response = client_with_temp_storage.get("/openings?username=testuser")
     assert response.status_code == 200
     data = response.json()
-    
+
     # Verify structure
     assert "move_san" in data
     assert "ply" in data
@@ -112,9 +113,9 @@ def test_import_chesscom_success(mock_get_archives, mock_fetch_games, client_wit
     """Test successful import of games."""
     mock_get_archives.return_value = MOCK_ARCHIVES
     mock_fetch_games.return_value = MOCK_GAMES
-    
+
     response = client_with_temp_storage.post("/import/chesscom?username=testuser")
-    
+
     assert response.status_code == 200
     data = response.json()
     assert data["games_count"] == 2
@@ -129,12 +130,12 @@ def test_import_chesscom_deduplication(mock_get_archives, mock_fetch_games, clie
     """Test that duplicate games are not re-imported."""
     mock_get_archives.return_value = MOCK_ARCHIVES
     mock_fetch_games.return_value = MOCK_GAMES
-    
+
     # First import
     response1 = client_with_temp_storage.post("/import/chesscom?username=testuser")
     assert response1.status_code == 200
     assert response1.json()["new_games"] == 2
-    
+
     # Second import should skip duplicates
     response2 = client_with_temp_storage.post("/import/chesscom?username=testuser")
     assert response2.status_code == 200
@@ -149,9 +150,9 @@ def test_import_chesscom_user_not_found(mock_get_archives, client_with_temp_stor
     """Test error handling for non-existent user."""
     from services.ingest import UserNotFoundError
     mock_get_archives.side_effect = UserNotFoundError("nonexistent_user")
-    
+
     response = client_with_temp_storage.post("/import/chesscom?username=nonexistent_user")
-    
+
     assert response.status_code == 404
     assert "not found" in response.json()["detail"].lower()
 
@@ -161,9 +162,9 @@ def test_import_chesscom_rate_limit(mock_get_archives, client_with_temp_storage)
     """Test error handling for rate limiting."""
     from services.ingest import RateLimitError
     mock_get_archives.side_effect = RateLimitError(retry_after=60)
-    
+
     response = client_with_temp_storage.post("/import/chesscom?username=testuser")
-    
+
     assert response.status_code == 429
     assert "rate limit" in response.json()["detail"].lower()
 
@@ -173,9 +174,9 @@ def test_import_chesscom_network_error(mock_get_archives, client_with_temp_stora
     """Test error handling for network errors."""
     from services.ingest import NetworkError
     mock_get_archives.side_effect = NetworkError("Connection refused")
-    
+
     response = client_with_temp_storage.post("/import/chesscom?username=testuser")
-    
+
     assert response.status_code == 502
     assert "network" in response.json()["detail"].lower()
 
@@ -184,9 +185,9 @@ def test_import_chesscom_network_error(mock_get_archives, client_with_temp_stora
 def test_import_chesscom_no_games(mock_get_archives, client_with_temp_storage):
     """Test handling user with no games."""
     mock_get_archives.return_value = []  # No archives
-    
+
     response = client_with_temp_storage.post("/import/chesscom?username=newuser")
-    
+
     assert response.status_code == 200
     data = response.json()
     assert data["games_count"] == 0

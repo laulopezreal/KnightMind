@@ -4,9 +4,10 @@ Chess.com game import service.
 This module handles fetching and parsing games from the Chess.com API.
 """
 
-import httpx
 from dataclasses import dataclass
 from typing import AsyncIterator
+
+import httpx
 
 
 class ImportError(Exception):
@@ -99,11 +100,11 @@ async def get_player_archives(username: str) -> list[str]:
                 _handle_response_error(response, username)
             return response.json().get("archives", [])
     except httpx.TimeoutException as e:
-        raise NetworkError("Request timed out", e)
+        raise NetworkError("Request timed out", e) from e
     except httpx.ConnectError as e:
-        raise NetworkError("Failed to connect to Chess.com", e)
+        raise NetworkError("Failed to connect to Chess.com", e) from e
     except httpx.HTTPError as e:
-        raise NetworkError(str(e), e)
+        raise NetworkError(str(e), e) from e
 
 
 async def fetch_games_from_archive(archive_url: str) -> list[dict]:
@@ -127,11 +128,11 @@ async def fetch_games_from_archive(archive_url: str) -> list[dict]:
                 _handle_response_error(response)
             return response.json().get("games", [])
     except httpx.TimeoutException as e:
-        raise NetworkError("Request timed out", e)
+        raise NetworkError("Request timed out", e) from e
     except httpx.ConnectError as e:
-        raise NetworkError("Failed to connect to Chess.com", e)
+        raise NetworkError("Failed to connect to Chess.com", e) from e
     except httpx.HTTPError as e:
-        raise NetworkError(str(e), e)
+        raise NetworkError(str(e), e) from e
 
 
 def parse_game(game_data: dict) -> ChessGame:
@@ -182,19 +183,19 @@ async def import_all_games(username: str) -> AsyncIterator[ChessGame]:
 if __name__ == "__main__":
     import asyncio
     import sys
-    
+
     async def main():
         if len(sys.argv) < 2:
             print("Usage: python chesscom.py <username>")
             sys.exit(1)
-        
+
         username = sys.argv[1]
         print(f"Fetching games for {username}...")
-        
+
         try:
             archives = await get_player_archives(username)
             print(f"Found {len(archives)} monthly archives")
-            
+
             # Just fetch the most recent archive as a demo
             if archives:
                 games = await fetch_games_from_archive(archives[-1])
@@ -208,5 +209,5 @@ if __name__ == "__main__":
         except NetworkError as e:
             print(f"Error: {e}")
             sys.exit(1)
-    
+
     asyncio.run(main())
