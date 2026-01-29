@@ -1,1 +1,117 @@
 @import "tailwindcss";
+
+@theme {
+  --font-serif: "Cormorant Garamond", serif;
+  --font-sans: "Inter", sans-serif;
+
+  --color-chess-brown-900: #1A120B;
+  /* Deep Espresso */
+  --color-chess-brown-800: #2B2118;
+  --color-chess-brown-700: #3E2C20;
+
+  --color-chess-cream-50: #FDFBF7;
+  /* Paper */
+  --color-chess-cream-100: #F4F1EA;
+  --color-chess-cream-200: #F5F5DC;
+  /* Classic Cream */
+  --color-chess-cream-300: #E6DCC8;
+
+  --animate-switchedin: switchedin 3s ease-in-out forwards;
+  --animate-switchedout: switchedout 3s ease-in-out forwards;
+  --animate-teedin: teedin 4s ease-in-out forwards;
+  --animate-teedout: teedout 4s ease-in-out forwards;
+}
+
+/* Custom Utilities for the slow vibe */
+@utility transition-slow {
+  transition: background-color 3s ease-in-out, color 2s ease-in-out, border-color 3s ease-in-out;
+}
+
+:root {
+  /* Day Mode (White Pieces) */
+  --bg-primary: var(--color-chess-cream-100);
+  --text-primary: var(--color-chess-brown-900);
+  --border-primary: var(--color-chess-brown-700);
+  --color-toggle-bg: var(--color-chess-brown-700);
+  --color-toggle-knob: var(--color-chess-cream-100);
+}
+
+body.night {
+  /* Night Mode (Black Pieces) */
+  --bg-primary: var(--color-chess-brown-900);
+  --text-primary: var(--color-chess-cream-200);
+  --border-primary: var(--color-chess-cream-300);
+  --color-toggle-bg: var(--color-chess-cream-200);
+  --color-toggle-knob: var(--color-chess-brown-900);
+}
+
+body {
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--font-serif);
+  /* The Secret Sauce: 5s viscous transition */
+  transition: background-color 3s ease-in-out, color 2s ease-in-out;
+  min-height: 100vh;
+  margin: 0;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Animations from Portfolio */
+@keyframes switchedin {
+  from {
+    background-color: var(--color-chess-brown-700);
+  }
+
+  to {
+    background-color: var(--color-chess-cream-200);
+  }
+}
+
+@keyframes switchedout {
+  from {
+    background-color: var(--color-chess-cream-200);
+  }
+
+  to {
+    background-color: var(--color-chess-brown-700);
+  }
+}
+
+@keyframes teedin {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-family: var(--font-serif);
+  font-weight: 500;
+}
+
+
+button {
+  font-family: var(--font-serif);
+  font-weight: 500;
+  letter-spacing: 0.05em;
+}
+
+nav,
+.ui-text {
+  font-family: var(--font-sans);
+}
+
+.brand-text {
+  font-family: var(--font-serif);
+}
