@@ -17,6 +17,7 @@ KnightMind/
 - Node.js 18+
 - Python 3.11+
 - npm or yarn
+- Stockfish (for puzzle generation)
 
 ## Setup
 
@@ -34,6 +35,35 @@ cd services/api
 python -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
+```
+
+### Stockfish Engine
+
+Stockfish is required for position evaluation and puzzle generation.
+
+**macOS:**
+```bash
+brew install stockfish
+```
+
+**Ubuntu/Debian:**
+```bash
+sudo apt install stockfish
+```
+
+**Windows:**
+Download from https://stockfishchess.org/download/ and add to PATH.
+
+**Verify installation:**
+```bash
+stockfish --version
+```
+
+**Configuration (optional):**
+```bash
+export STOCKFISH_PATH=/path/to/stockfish  # Custom binary path
+export STOCKFISH_DEPTH=12                  # Analysis depth (default: 12)
+export STOCKFISH_MOVETIME_MS=200           # Or use movetime instead of depth
 ```
 
 ## Running Locally
@@ -83,13 +113,16 @@ pytest            # Run tests
 |--------|----------|-------------|
 | GET | `/` | API info |
 | POST | `/import/chesscom?username=...` | Import games from Chess.com |
-| GET | `/openings` | Get opening tree data |
+| GET | `/openings?username=...&color=...` | Get opening tree data |
+| POST | `/engine/eval` | Evaluate position (body: `{fen: string}`) |
+| GET | `/engine/status` | Check Stockfish availability |
 
 ## Tech Stack
 
 - **Frontend**: React, Vite, TypeScript, Tailwind CSS, D3.js
-- **Backend**: FastAPI, Pydantic
-- **Future**: Postgres, Neo4j, Stockfish
+- **Backend**: FastAPI, Pydantic, python-chess
+- **Engine**: Stockfish (via `stockfish` PyPI package)
+- **Future**: Postgres, Neo4j
 
 ## License
 

@@ -21,6 +21,12 @@ from ingest import (
 )
 from storage import get_storage
 from openings import build_opening_tree
+from engine import (
+    evaluate_fen,
+    is_stockfish_available,
+    StockfishNotFoundError,
+    StockfishError,
+)
 
 app = FastAPI(title="KnightMind API", version="0.1.0")
 
@@ -46,6 +52,20 @@ class ImportResponse(BaseModel):
     games_count: int
     new_games: int
     skipped_duplicates: int
+
+
+class EvalRequest(BaseModel):
+    fen: str
+
+
+class EvalResponse(BaseModel):
+    best_move_uci: str
+    eval: float  # In pawns, from side-to-move perspective
+
+
+class StatusResponse(BaseModel):
+    available: bool
+    message: str
 
 
 
@@ -184,3 +204,53 @@ async def get_openings(
     )
     
     return tree
+
+
+@app.post("/engine/eval", response_model=EvalResponse)
+async def engine_eval(request: EvalRequest):
+    """
+    Evaluate a chess position using Stockfish.
+    
+    Args:
+        request: JSON body with 'fen' field containing the FEN string
+        
+    Returns:
+        best_move_uci: Best move in UCI format (e.g., "e2e4")
+        eval: Position evaluation in pawns from side-to-move perspective
+              Positive = advantage for side to move, negative = disadvantage
+    """
+    try:
+        result = evaluate_fen(request.fen)
+        return EvalResponse(
+            best_move_uci=result.best_move_uci,
+            eval=result.eval
+        )
+    except StockfishNotFoundError as e:
+        raise HTTPException(
+            status_code=503,
+            detail=str(e)
+        )
+    except StockfishError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=str(e)
+        )
+
+
+@app.get("/engine/status", response_model=StatusResponse)
+async def engine_status():
+    """
+    Check if Stockfish engine is available.
+    
+    Returns:
+        available: Whether Stockfish is ready to use
+        message: Status message
+    """
+    available = is_stockfish_available()
+    if available:
+        return StatusResponse(available=True, message="Stockfish is ready")
+    else:
+        return StatusResponse(
+            available=False, 
+            message="Stockfish not available. Check STOCKFISH_PATH or install Stockfish."
+        )
