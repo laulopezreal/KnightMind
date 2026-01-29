@@ -11,6 +11,7 @@ from services.api.engine import (
     is_engine_available,
 )
 from services.api.openings import build_opening_tree
+from services.api.puzzles import generate_puzzles
 from services.api.storage import get_storage
 from services.ingest import (
     ImportError as ChessComImportError,
@@ -62,6 +63,13 @@ class EvalResponse(BaseModel):
 class EngineStatusResponse(BaseModel):
     available: bool
     message: str
+
+
+class PuzzleGenerationResponse(BaseModel):
+    message: str
+    generated: int
+    skipped: int
+    analyzed_positions: int
 
 
 @app.get("/")
