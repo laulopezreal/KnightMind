@@ -14,6 +14,9 @@ import chess.pgn
 
 from services.api.engine import create_engine, evaluate_fen
 from services.api.storage import get_puzzle_storage, get_storage
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def get_swing_threshold() -> float:
@@ -191,6 +194,7 @@ def generate_puzzles(
             except Exception as e:
                 # Skip positions that fail to evaluate
                 # (e.g., checkmate, stalemate, engine errors)
+                logger.warning(f"Failed to generate puzzle for FEN {fen_before}", exc_info=e)
                 continue
 
     return GenerationResult(
