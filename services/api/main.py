@@ -25,6 +25,7 @@ from services.ingest import (
     fetch_games_from_archive,
     get_player_archives,
     parse_game,
+    import_all_games,
 )
 
 app = FastAPI(title="KnightMind API", version="0.1.0")
@@ -51,6 +52,72 @@ class ImportResponse(BaseModel):
     games_count: int
     new_games: int
     skipped_duplicates: int
+
+
+@app.get("/users")
+async def get_users():
+    """Get list of users who have imported games."""
+    storage = get_storage()
+    users = storage.get_users()
+    return {"users": users}
+
+
+@app.post("/import/chesscom", response_model=ImportResponse)
+async def import_chesscom_games(username: str):
+    """
+    Import games from Chess.com for a specific user.
+    """
+    try:
+        count = 0
+        new_games = 0
+        skipped = 0
+        
+        storage = get_storage()
+        
+        # Create generator
+        games_generator = import_all_games(username)
+        
+        async for game in games_generator:
+            count += 1
+            is_new, _ = storage.store_game(
+                username=username,
+                url=game.url,
+                pgn=game.pgn,
+                white_username=game.white_username,
+                black_username=game.black_username,
+                white_result=game.white_result,
+                black_result=game.black_result,
+                time_control=game.time_control,
+                end_time=game.end_time,
+                rated=game.rated,
+            )
+            
+            if is_new:
+                new_games += 1
+            else:
+                skipped += 1
+                
+        return ImportResponse(
+            message=f"Successfully processed {count} games for {username}",
+            games_count=count,
+            new_games=new_games,
+            skipped_duplicates=skipped
+        )
+        
+    except UserNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except RateLimitError as e:
+        raise HTTPException(
+            status_code=429, 
+            detail=str(e),
+            headers={"Retry-After": str(e.retry_after)} if e.retry_after else None
+        )
+    except NetworkError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    except ChessComImportError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
 class EvalRequest(BaseModel):

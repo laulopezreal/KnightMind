@@ -189,3 +189,42 @@ class TestGameStorage:
         assert storage.get_game_count("testuser") == 1
         assert storage.get_game_count("TESTUSER") == 1
         assert storage.get_game_count("TestUser") == 1
+
+    def test_get_users(self, storage):
+        """Test retrieving the list of users."""
+        # Initial state: no users
+        assert storage.get_users() == []
+
+        # Add user 1
+        storage.store_game(
+            username="user1",
+            url="https://chess.com/game/1",
+            pgn='[Event "Test"]\n1. e4 e5 *',
+            white_username="user1",
+            black_username="opponent",
+            white_result="win",
+            black_result="lose",
+            time_control="600",
+            end_time=1704067200,
+            rated=True,
+        )
+
+        # Add user 2
+        storage.store_game(
+            username="user2",
+            url="https://chess.com/game/2",
+            pgn='[Event "Test"]\n1. e4 e5 *',
+            white_username="user2",
+            black_username="opponent",
+            white_result="win",
+            black_result="lose",
+            time_control="600",
+            end_time=1704067200,
+            rated=True,
+        )
+
+        users = storage.get_users()
+        assert len(users) == 2
+        assert "user1" in users
+        assert "user2" in users
+        assert users == sorted(users)
