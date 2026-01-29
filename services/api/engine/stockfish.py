@@ -101,11 +101,14 @@ def evaluate_fen(fen: str) -> EvalResult:
         
         engine.set_fen_position(fen)
         
-        # Get analysis parameters
+        # Get analysis parameters and configure engine
         params = get_analysis_params()
+        if "depth" in params:
+            engine.set_depth(params["depth"])
+        # Note: movetime is not directly supported by this library
         
         # Get best move
-        best_move = engine.get_best_move(**params)
+        best_move = engine.get_best_move()
         if not best_move:
             raise StockfishError("No legal moves available")
         
