@@ -15,26 +15,17 @@ export default function Home() {
       return;
     }
     setLoading(true);
-    setStatus('Fetching games from Chess.com... This may take a moment.');
+    setStatus('Fetching games...');
     setIsError(false);
 
     try {
       const result = await importChessComGames(username);
-
       if (result.games_count === 0) {
-        setStatus('No games found for this user.');
-        setIsError(false);
-      } else if (result.new_games === 0) {
-        setStatus(`All ${result.games_count} games already imported.`);
-        setIsError(false);
+        setStatus('No games found.');
       } else {
-        setStatus(
-          `Imported ${result.new_games} new games. ` +
-          `Total: ${result.games_count} games` +
-          (result.skipped_duplicates > 0 ? ` (${result.skipped_duplicates} duplicates skipped)` : '')
-        );
-        setIsError(false);
+        setStatus(`Imported ${result.new_games} new games.`);
       }
+      setIsError(false);
     } catch (error) {
       if (error instanceof ApiError) {
         setStatus(error.detail || error.message);
@@ -48,88 +39,65 @@ export default function Home() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900">
-      <nav className="bg-black/30 backdrop-blur-md p-4 border-b border-white/10">
-        <div className="container mx-auto flex gap-6">
-          <Link to="/" className="text-xl font-bold text-purple-400">KnightMind</Link>
-          <Link to="/openings" className="hover:text-purple-300 text-gray-300">Openings</Link>
-          <Link to="/puzzles" className="hover:text-purple-300 text-gray-300">Puzzles</Link>
-          <Link to="/engine" className="hover:text-purple-300 text-gray-300">Engine</Link>
-        </div>
-      </nav>
+    <div className="space-y-20 animate-teedin">
+      <section className="space-y-6">
+        <h1 className="text-6xl md:text-8xl font-serif text-primary tracking-tight">
+          KnightMind
+        </h1>
+        <p className="text-xl md:text-2xl font-light text-primary/60 max-w-2xl leading-relaxed">
+          Your personal chess intelligence platform. <br />
+          Analyze your games, find patterns, and master your intuition.
+        </p>
+      </section>
 
-      <main className="container mx-auto p-8">
-        <h1 className="text-5xl font-bold mb-4 text-white">Welcome to KnightMind</h1>
-        <p className="text-gray-300 mb-12 text-lg">Your personal chess intelligence platform</p>
+      <section className="grid grid-cols-1 md:grid-cols-2 gap-16">
+        <div className="space-y-8">
+          <div className="prose">
+            <h3 className="text-2xl font-serif text-primary">Begin Analysis</h3>
+            <p className="font-sans text-primary/60">Import your games from Chess.com to generate personalized puzzles and insights.</p>
+          </div>
 
-        <div className="grid md:grid-cols-2 gap-6 mb-8">
-          {/* Import Games Card */}
-          <div className="bg-white/10 backdrop-blur-md rounded-lg p-6 border border-white/20">
-            <h2 className="text-2xl font-semibold mb-4 text-white">Import Games from Chess.com</h2>
-            <p className="text-gray-300 mb-4">Get started by importing your games</p>
-            <div className="flex gap-2 mb-4">
+          <div className="space-y-4">
+            <div className="flex gap-4 border-b border-primary/20 pb-2 focus-within:border-primary/80 transition-colors">
               <input
                 type="text"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
                 placeholder="Chess.com username"
-                className="flex-1 px-4 py-2 rounded bg-white/20 border border-white/30 text-white placeholder-gray-400 focus:border-purple-400 focus:outline-none focus:ring-2 focus:ring-purple-500"
+                className="flex-1 bg-transparent border-none outline-none text-primary placeholder-primary/30 font-sans text-lg"
                 onKeyPress={(e) => e.key === 'Enter' && handleImport()}
               />
               <button
                 onClick={handleImport}
                 disabled={loading}
-                className="px-6 py-2 bg-purple-600 hover:bg-purple-700 disabled:bg-gray-600 rounded font-medium transition-colors text-white"
+                className="text-primary font-medium hover:opacity-70 transition-opacity disabled:opacity-30 uppercase tracking-widest text-sm"
               >
-                {loading ? 'Importing...' : 'Import'}
+                {loading ? '...' : 'Import'}
               </button>
             </div>
+
             {status && (
-              <p className={`text-sm ${isError ? 'text-red-300' : 'text-green-300'}`}>
+              <p className={`text-sm font-sans tracking-wide ${isError ? 'text-red-500/80' : 'text-primary/60'}`}>
                 {status}
               </p>
             )}
           </div>
-
-          {/* Puzzles Card */}
-          <Link to="/puzzles" className="bg-white/10 backdrop-blur-md rounded-lg p-6 border border-white/20 hover:border-purple-400 transition-all group">
-            <div className="flex items-start justify-between mb-4">
-              <h2 className="text-2xl font-semibold text-white group-hover:text-purple-300 transition-colors">Daily Puzzles</h2>
-              <span className="text-4xl">🧩</span>
-            </div>
-            <p className="text-gray-300 mb-4">Solve tactical puzzles from your games</p>
-            <div className="text-purple-400 group-hover:text-purple-300 font-medium">
-              Start solving →
-            </div>
-          </Link>
         </div>
 
-        <div className="grid md:grid-cols-2 gap-6">
-          {/* Openings Card */}
-          <Link to="/openings" className="bg-white/10 backdrop-blur-md rounded-lg p-6 border border-white/20 hover:border-purple-400 transition-all group">
-            <div className="flex items-start justify-between mb-4">
-              <h2 className="text-2xl font-semibold text-white group-hover:text-purple-300 transition-colors">Opening Explorer</h2>
-              <span className="text-4xl">📊</span>
-            </div>
-            <p className="text-gray-300 mb-4">Analyze your opening repertoire</p>
-            <div className="text-purple-400 group-hover:text-purple-300 font-medium">
-              Explore openings →
-            </div>
-          </Link>
-
-          {/* Engine Card */}
-          <Link to="/engine" className="bg-white/10 backdrop-blur-md rounded-lg p-6 border border-white/20 hover:border-purple-400 transition-all group">
-            <div className="flex items-start justify-between mb-4">
-              <h2 className="text-2xl font-semibold text-white group-hover:text-purple-300 transition-colors">Engine Analysis</h2>
-              <span className="text-4xl">⚙️</span>
-            </div>
-            <p className="text-gray-300 mb-4">Analyze positions with Stockfish</p>
-            <div className="text-purple-400 group-hover:text-purple-300 font-medium">
-              Analyze positions →
-            </div>
-          </Link>
+        <div className="space-y-8">
+          <h3 className="text-2xl font-serif text-primary">Explore</h3>
+          <div className="flex flex-col gap-6 font-sans text-lg">
+            <Link to="/puzzles" className="group flex items-center justify-between border-b border-primary/10 py-4 hover:border-primary/40 transition-colors">
+              <span className="group-hover:translate-x-2 transition-transform duration-500">Daily Puzzles</span>
+              <span className="opacity-0 group-hover:opacity-100 transition-opacity">→</span>
+            </Link>
+            <Link to="/openings" className="group flex items-center justify-between border-b border-primary/10 py-4 hover:border-primary/40 transition-colors">
+              <span className="group-hover:translate-x-2 transition-transform duration-500">Opening Explorer</span>
+              <span className="opacity-0 group-hover:opacity-100 transition-opacity">→</span>
+            </Link>
+          </div>
         </div>
-      </main>
+      </section>
     </div>
   );
 }
