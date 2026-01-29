@@ -1,19 +1,25 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { Chessboard } from 'react-chessboard';
-import { generatePuzzles, getDailyPuzzles, ApiError, type Puzzle } from '../api/client';
+import { generatePuzzles, getDailyPuzzles, getUsers, ApiError, type Puzzle } from '../api/client';
 
 type PuzzleStatus = 'solving' | 'correct' | 'incorrect' | 'revealed';
 
 export default function Puzzles() {
     const [username, setUsername] = useState('');
+    const [availableUsers, setAvailableUsers] = useState<string[]>([]);
     const [puzzles, setPuzzles] = useState<Puzzle[]>([]);
     const [currentIndex, setCurrentIndex] = useState(0);
     const [userMove, setUserMove] = useState('');
+    const [showSuggestions, setShowSuggestions] = useState(false);
     const [status, setStatus] = useState<PuzzleStatus>('solving');
     const [isGenerating, setIsGenerating] = useState(false);
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
+
+    useEffect(() => {
+        getUsers().then(setAvailableUsers).catch(console.error);
+    }, []);
 
     const currentPuzzle = puzzles[currentIndex];
 
@@ -113,6 +119,14 @@ export default function Puzzles() {
         return evalScore > 0 ? `+${evalScore.toFixed(2)}` : evalScore.toFixed(2);
     };
 
+    // Filter users based on input
+    const filteredUsers = availableUsers.filter(user =>
+        user.toLowerCase().includes(username.toLowerCase()) &&
+        user.toLowerCase() !== username.toLowerCase()
+    );
+
+    console.log('State:', { availableUsers, username, showSuggestions, filteredUsers });
+
     return (
         <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900">
             <div className="container mx-auto px-4 py-8">
@@ -127,15 +141,39 @@ export default function Puzzles() {
 
                 {/* Username Input & Controls */}
                 <div className="bg-white/10 backdrop-blur-md rounded-lg p-6 mb-6">
-                    <div className="flex flex-col sm:flex-row gap-4">
-                        <input
-                            type="text"
-                            placeholder="Enter username"
-                            value={username}
-                            onChange={(e) => setUsername(e.target.value)}
-                            className="flex-1 px-4 py-2 bg-white/20 border border-white/30 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500"
-                            onKeyPress={(e) => e.key === 'Enter' && handleLoadPuzzles()}
-                        />
+                    <div className="flex flex-col sm:flex-row gap-4 relative">
+                        <div className="flex-1 relative">
+                            <input
+                                type="text"
+                                placeholder="Enter username"
+                                value={username}
+                                onChange={(e) => {
+                                    setUsername(e.target.value);
+                                    setShowSuggestions(true);
+                                }}
+                                onFocus={() => setShowSuggestions(true)}
+                                onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
+                                className="w-full px-4 py-2 bg-white/20 border border-white/30 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500"
+                                onKeyPress={(e) => e.key === 'Enter' && handleLoadPuzzles()}
+                            />
+                            {/* Custom Autocomplete Dropdown */}
+                            {showSuggestions && username && filteredUsers.length > 0 && (
+                                <div className="absolute z-10 w-full mt-1 bg-slate-800 border border-purple-500/30 rounded-lg shadow-xl overflow-hidden backdrop-blur-xl">
+                                    {filteredUsers.map(user => (
+                                        <div
+                                            key={user}
+                                            onClick={() => {
+                                                setUsername(user);
+                                                setShowSuggestions(false);
+                                            }}
+                                            className="px-4 py-2 text-gray-200 hover:bg-purple-600/50 cursor-pointer transition-colors"
+                                        >
+                                            {user}
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
                         <button
                             onClick={handleLoadPuzzles}
                             disabled={isLoading || isGenerating}
@@ -300,6 +338,6 @@ export default function Puzzles() {
                     </div>
                 )}
             </div>
-        </div>
+        </div >
     );
 }
