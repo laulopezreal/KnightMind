@@ -84,7 +84,7 @@ class JobWorker:
         def _claim_job(db: Session):
             # Simple atomic claim: select for update (if supported) or just basic transaction
             # SQLite doesn't strictly support FOR UPDATE the same way, but single writer wins.
-            stmt = select(Job).where(Job.status == "queued").order_by(Job.created_at.asc()).limit(1)
+            stmt = select(Job).where(Job.status == JobStatus.QUEUED).order_by(Job.created_at.asc()).limit(1)
             job = db.scalars(stmt).first()
             if job:
                 job.status = "running"
