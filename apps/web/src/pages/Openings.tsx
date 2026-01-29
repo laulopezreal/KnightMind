@@ -203,6 +203,17 @@ export default function Openings() {
         </button>
       </section>
 
+      {/* Legend */}
+      <section className="flex gap-4 items-center justify-center text-xs font-sans text-primary/60">
+        <span className="uppercase tracking-widest mr-2">Win Rate:</span>
+        <div className="flex items-center gap-1"><div className="w-3 h-3 rounded-full bg-emerald-600"></div> 60%+</div>
+        <div className="flex items-center gap-1"><div className="w-3 h-3 rounded-full bg-emerald-500"></div> 50%+</div>
+        <div className="flex items-center gap-1"><div className="w-3 h-3 rounded-full bg-lime-500"></div> 45%+</div>
+        <div className="flex items-center gap-1"><div className="w-3 h-3 rounded-full bg-yellow-500"></div> 40%+</div>
+        <div className="flex items-center gap-1"><div className="w-3 h-3 rounded-full bg-orange-500"></div> 30%+</div>
+        <div className="flex items-center gap-1"><div className="w-3 h-3 rounded-full bg-red-500"></div> &lt;30%</div>
+      </section>
+
       {error && <p className="text-red-500/80 font-sans">{error}</p>}
 
       {/* Visualization */}
@@ -245,6 +256,6 @@ export default function Openings() {
           </div>
         )}
       </section>
-    </div>
+    </div >
   );
 }
