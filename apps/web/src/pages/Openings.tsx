@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { Link } from 'react-router-dom';
 import * as d3 from 'd3';
 import { getOpenings, ApiError, type OpeningNode, type ColorFilter } from '../api/client';
 
@@ -18,10 +17,10 @@ export default function Openings() {
       setError('Please enter a username');
       return;
     }
-    
+
     setLoading(true);
     setError(null);
-    
+
     try {
       const data = await getOpenings(user, color);
       setTreeData(data);
@@ -41,7 +40,6 @@ export default function Openings() {
     fetchOpenings(username, colorFilter);
   };
 
-  // Re-render tree when data changes
   useEffect(() => {
     if (treeData && svgRef.current) {
       renderTree(treeData);
@@ -49,7 +47,6 @@ export default function Openings() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [treeData]);
 
-  // Refetch when color filter changes (if we have data)
   useEffect(() => {
     if (username.trim() && treeData) {
       fetchOpenings(username, colorFilter);
@@ -59,18 +56,15 @@ export default function Openings() {
 
   const renderTree = (data: OpeningNode) => {
     if (!svgRef.current) return;
-
-    // Calculate dynamic dimensions based on tree size
     const leafCount = countLeaves(data);
     const maxDepth = getMaxDepth(data);
-    const nodeSpacing = 35; // Vertical spacing between nodes
-    const levelWidth = 180; // Horizontal spacing between levels
-    
+    const nodeSpacing = 35;
+    const levelWidth = 180;
+
     const width = Math.max(800, (maxDepth + 1) * levelWidth + 100);
     const height = Math.max(400, leafCount * nodeSpacing + 60);
     const margin = { top: 30, right: 150, bottom: 30, left: 60 };
 
-    // Clear previous content
     d3.select(svgRef.current).selectAll('*').remove();
 
     const svg = d3.select(svgRef.current)
@@ -87,16 +81,16 @@ export default function Openings() {
 
     const treeDataLayout = treeLayout(root);
 
-    // Links with curved paths
+    // Links
     g.selectAll('.link')
       .data(treeDataLayout.links())
       .enter()
       .append('path')
       .attr('class', 'link')
       .attr('fill', 'none')
-      .attr('stroke', '#4b5563')
-      .attr('stroke-width', 2)
-      .attr('stroke-opacity', 0.6)
+      .attr('stroke', 'currentColor') // Use current text color
+      .attr('stroke-width', 1.5)
+      .attr('stroke-opacity', 0.2)
       .attr('d', d3.linkHorizontal<d3.HierarchyPointLink<OpeningNode>, d3.HierarchyPointNode<OpeningNode>>()
         .x(d => d.y)
         .y(d => d.x)
@@ -111,13 +105,12 @@ export default function Openings() {
       .attr('transform', d => `translate(${d.y},${d.x})`)
       .style('cursor', 'pointer');
 
-    // Node circles - size based on game count
     nodes.append('circle')
       .attr('r', d => Math.max(6, Math.min(16, Math.sqrt(d.data.games_count) * 1.5 + 4)))
       .attr('fill', d => getWinRateColor(d.data.win_rate))
-      .attr('stroke', '#fff')
+      .attr('stroke', 'var(--bg-primary)')
       .attr('stroke-width', 2)
-      .on('mouseenter', function(event, d) {
+      .on('mouseenter', function (event, d) {
         d3.select(this).attr('stroke-width', 3);
         const rect = containerRef.current?.getBoundingClientRect();
         if (rect) {
@@ -128,28 +121,21 @@ export default function Openings() {
           });
         }
       })
-      .on('mouseleave', function() {
+      .on('mouseleave', function () {
         d3.select(this).attr('stroke-width', 2);
         setTooltip(null);
       });
 
-    // Move labels - show only the move, not all stats
+    // Labels
     nodes.append('text')
       .attr('dy', 5)
       .attr('x', d => d.children ? -20 : 20)
       .attr('text-anchor', d => d.children ? 'end' : 'start')
-      .attr('fill', '#f3f4f6')
+      .attr('fill', 'currentColor')
       .attr('font-size', '13px')
+      .attr('font-family', 'Inter, sans-serif')
       .attr('font-weight', '500')
       .text(d => d.data.move_san === 'Start' ? '●' : d.data.move_san);
-
-    // Game count badge
-    nodes.append('text')
-      .attr('dy', -12)
-      .attr('text-anchor', 'middle')
-      .attr('fill', '#9ca3af')
-      .attr('font-size', '10px')
-      .text(d => d.data.games_count > 1 ? d.data.games_count.toString() : '');
   };
 
   const countLeaves = (node: OpeningNode): number => {
@@ -163,130 +149,102 @@ export default function Openings() {
   };
 
   const getWinRateColor = (winRate: number): string => {
-    // Green for high win rate, red for low, yellow for ~50%
-    if (winRate >= 60) return '#10b981'; // Emerald
-    if (winRate >= 50) return '#22c55e'; // Green
-    if (winRate >= 45) return '#84cc16'; // Lime
-    if (winRate >= 40) return '#eab308'; // Yellow
-    if (winRate >= 30) return '#f97316'; // Orange
-    return '#ef4444'; // Red
+    // Elegant Muted Palette for stats
+    if (winRate >= 60) return '#059669'; // Emerald 600
+    if (winRate >= 50) return '#10B981'; // Emerald 500
+    if (winRate >= 45) return '#84CC16'; // Lime 500
+    if (winRate >= 40) return '#EAB308'; // Yellow 500
+    if (winRate >= 30) return '#F97316'; // Orange 500
+    return '#EF4444'; // Red 500
   };
 
   return (
-    <div className="min-h-screen bg-gray-900 text-white">
-      <nav className="bg-gray-800 p-4">
-        <div className="container mx-auto flex gap-6">
-          <Link to="/" className="text-xl font-bold text-emerald-400">KnightMind</Link>
-          <Link to="/openings" className="hover:text-emerald-400 text-emerald-400">Openings</Link>
-        </div>
-      </nav>
+    <div className="space-y-12 animate-teedin">
+      <section>
+        <h1 className="text-4xl md:text-5xl font-serif text-primary mb-4">Opening Tree</h1>
+        <p className="text-lg text-primary/60 font-sans max-w-2xl">
+          Visualize your repertoire. Discover where you win, where you lose, and where you can improve.
+        </p>
+      </section>
 
-      <main className="container mx-auto p-8">
-        <h1 className="text-4xl font-bold mb-4">Opening Tree</h1>
-        <p className="text-gray-400 mb-6">Visualize your most played openings with win/loss statistics</p>
-
-        {/* Controls */}
-        <div className="bg-gray-800 rounded-lg p-4 mb-6">
-          <div className="flex flex-wrap gap-4 items-end">
-            <div>
-              <label className="block text-sm text-gray-400 mb-1">Username</label>
-              <input
-                type="text"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleFetchClick()}
-                placeholder="Chess.com username"
-                className="px-4 py-2 rounded bg-gray-700 border border-gray-600 focus:border-emerald-400 focus:outline-none"
-              />
-            </div>
-            <div>
-              <label className="block text-sm text-gray-400 mb-1">Color</label>
-              <select
-                value={colorFilter}
-                onChange={(e) => setColorFilter(e.target.value as ColorFilter)}
-                className="px-4 py-2 rounded bg-gray-700 border border-gray-600 focus:border-emerald-400 focus:outline-none"
-              >
-                <option value="both">Both</option>
-                <option value="white">White</option>
-                <option value="black">Black</option>
-              </select>
-            </div>
-            <button
-              onClick={handleFetchClick}
-              disabled={loading}
-              className="px-6 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:bg-gray-600 rounded font-medium transition-colors"
-            >
-              {loading ? 'Loading...' : 'Load Openings'}
-            </button>
-          </div>
-          {error && <p className="text-red-400 mt-3 text-sm">{error}</p>}
+      {/* Controls */}
+      <section className="flex flex-wrap gap-6 items-end p-6 border border-primary/10 rounded-lg bg-primary/5 backdrop-blur-sm">
+        <div className="flex-1 min-w-[200px]">
+          <label className="block text-xs font-sans uppercase tracking-widest text-primary/40 mb-2">Username</label>
+          <input
+            type="text"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && handleFetchClick()}
+            placeholder="Chess.com username"
+            className="w-full bg-transparent border-b border-primary/20 py-2 text-primary placeholder-primary/30 focus:outline-none focus:border-primary/60 transition-colors font-serif text-xl"
+          />
         </div>
 
-        {/* Legend */}
-        {treeData && (
-          <div className="flex flex-wrap gap-4 mb-4 text-sm">
-            <span className="flex items-center gap-1">
-              <span className="w-3 h-3 rounded-full bg-emerald-500"></span> &ge;60%
-            </span>
-            <span className="flex items-center gap-1">
-              <span className="w-3 h-3 rounded-full bg-green-500"></span> 50-60%
-            </span>
-            <span className="flex items-center gap-1">
-              <span className="w-3 h-3 rounded-full bg-lime-500"></span> 45-50%
-            </span>
-            <span className="flex items-center gap-1">
-              <span className="w-3 h-3 rounded-full bg-yellow-500"></span> 40-45%
-            </span>
-            <span className="flex items-center gap-1">
-              <span className="w-3 h-3 rounded-full bg-orange-500"></span> 30-40%
-            </span>
-            <span className="flex items-center gap-1">
-              <span className="w-3 h-3 rounded-full bg-red-500"></span> &lt;30%
-            </span>
+        <div className="w-40">
+          <label className="block text-xs font-sans uppercase tracking-widest text-primary/40 mb-2">Color</label>
+          <select
+            value={colorFilter}
+            onChange={(e) => setColorFilter(e.target.value as ColorFilter)}
+            className="w-full bg-transparent border-b border-primary/20 py-2 text-primary focus:outline-none focus:border-primary/60 transition-colors font-serif text-xl cursor-pointer"
+          >
+            <option value="both">Both</option>
+            <option value="white">White</option>
+            <option value="black">Black</option>
+          </select>
+        </div>
+
+        <button
+          onClick={handleFetchClick}
+          disabled={loading}
+          className="px-8 py-3 bg-primary text-bg-primary hover:opacity-90 disabled:opacity-50 rounded-sm font-serif text-lg transition-all"
+        >
+          {loading ? 'Analyzing...' : 'Load Openings'}
+        </button>
+      </section>
+
+      {error && <p className="text-red-500/80 font-sans">{error}</p>}
+
+      {/* Visualization */}
+      <section ref={containerRef} className="relative overflow-hidden min-h-[500px] border-t border-primary/10 pt-8">
+        {!treeData && !loading && (
+          <div className="absolute inset-0 flex items-center justify-center opacity-20 pointer-events-none">
+            <span className="text-9xl font-serif">♔</span>
           </div>
         )}
 
-        {/* Tree visualization */}
-        <div ref={containerRef} className="bg-gray-800 rounded-lg p-6 overflow-x-auto relative">
-          {!treeData && !loading && (
-            <p className="text-gray-400">Enter a username and click "Load Openings" to visualize your opening repertoire.</p>
-          )}
-          {loading && <p className="text-gray-400">Building opening tree...</p>}
-          <svg ref={svgRef}></svg>
-          
-          {/* Tooltip */}
-          {tooltip && (
-            <div 
-              className="absolute bg-gray-900 border border-gray-600 rounded-lg p-3 shadow-xl z-10 pointer-events-none"
-              style={{ left: tooltip.x, top: tooltip.y }}
-            >
-              <div className="font-bold text-white mb-1">
-                {tooltip.data.move_san === 'Start' ? 'Starting Position' : tooltip.data.move_san}
-              </div>
-              <div className="text-sm text-gray-300 space-y-1">
-                <div>Games: <span className="text-white font-medium">{tooltip.data.games_count}</span></div>
-                <div className="flex gap-3">
-                  <span className="text-green-400">W: {tooltip.data.wins}</span>
-                  <span className="text-gray-400">D: {tooltip.data.draws}</span>
-                  <span className="text-red-400">L: {tooltip.data.losses}</span>
-                </div>
-                <div>Win rate: <span className="font-medium" style={{ color: getWinRateColor(tooltip.data.win_rate) }}>{tooltip.data.win_rate}%</span></div>
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Stats summary */}
-        {treeData && (
-          <div className="mt-4 text-sm text-gray-400">
-            Total games: {treeData.games_count} | 
-            Wins: {treeData.wins} | 
-            Draws: {treeData.draws} | 
-            Losses: {treeData.losses} | 
-            Win rate: {treeData.win_rate}%
+        {loading && (
+          <div className="absolute inset-0 flex items-center justify-center">
+            <p className="font-serif text-xl animate-pulse text-primary/60">Tracing paths...</p>
           </div>
         )}
-      </main>
+
+        <div className="overflow-x-auto">
+          <svg ref={svgRef} className="text-primary block mx-auto"></svg>
+        </div>
+
+        {/* Custom Tooltip */}
+        {tooltip && (
+          <div
+            className="absolute z-50 bg-bg-primary border border-primary/20 p-4 shadow-2xl rounded-sm pointer-events-none min-w-[200px]"
+            style={{ left: tooltip.x, top: tooltip.y }}
+          >
+            <div className="font-serif text-xl text-primary mb-2 border-b border-primary/10 pb-2">
+              {tooltip.data.move_san === 'Start' ? 'Start' : tooltip.data.move_san}
+            </div>
+            <div className="space-y-1 font-sans text-sm text-primary/80">
+              <div className="flex justify-between"><span>Games</span> <span>{tooltip.data.games_count}</span></div>
+              <div className="flex justify-between text-green-600"><span>Won</span> <span>{tooltip.data.wins}</span></div>
+              <div className="flex justify-between text-gray-500"><span>Draw</span> <span>{tooltip.data.draws}</span></div>
+              <div className="flex justify-between text-red-500"><span>Lost</span> <span>{tooltip.data.losses}</span></div>
+              <div className="pt-2 border-t border-primary/10 flex justify-between font-medium">
+                <span>Win Rate</span>
+                <span style={{ color: getWinRateColor(tooltip.data.win_rate) }}>{tooltip.data.win_rate}%</span>
+              </div>
+            </div>
+          </div>
+        )}
+      </section>
     </div>
   );
 }
