@@ -118,3 +118,87 @@ export async function getEngineStatus(): Promise<EngineStatus> {
   }
   return response.json();
 }
+
+// Puzzles
+export interface Puzzle {
+  id: string;
+  username: string;
+  source_game_id: string;
+  ply: number;
+  fen: string;
+  side_to_move: string;
+  played_move_uci: string;
+  best_move_uci: string;
+  eval_before: number;
+  eval_after: number;
+  swing: number;
+  created_at: string;
+  used_on: string | null;
+}
+
+export interface PuzzleGenerationResult {
+  message: string;
+  generated: number;
+  skipped: number;
+  analyzed_positions: number;
+}
+
+export interface DailyPuzzlesResponse {
+  puzzles: Puzzle[];
+  count: number;
+}
+
+export async function generatePuzzles(
+  username: string,
+  maxGames: number = 30,
+  maxPuzzles: number = 30
+): Promise<PuzzleGenerationResult> {
+  const params = new URLSearchParams({
+    username,
+    max_games: maxGames.toString(),
+    max_puzzles: maxPuzzles.toString(),
+  });
+  
+  const response = await fetch(`${API_BASE}/puzzles/generate?${params}`, {
+    method: 'POST',
+  });
+  
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    const detail = errorData.detail || response.statusText;
+    
+    if (response.status === 404) {
+      throw new ApiError('No games found for user', 404, detail);
+    } else {
+      throw new ApiError(`Puzzle generation failed: ${detail}`, response.status, detail);
+    }
+  }
+  
+  return response.json();
+}
+
+export async function getDailyPuzzles(
+  username: string,
+  n: number = 5
+): Promise<DailyPuzzlesResponse> {
+  const params = new URLSearchParams({
+    username,
+    n: n.toString(),
+  });
+  
+  const response = await fetch(`${API_BASE}/puzzles/daily?${params}`);
+  
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    const detail = errorData.detail || response.statusText;
+    
+    if (response.status === 404) {
+      throw new ApiError('No puzzles found', 404, detail);
+    } else {
+      throw new ApiError(`Failed to fetch puzzles: ${detail}`, response.status, detail);
+    }
+  }
+  
+  return response.json();
+}
+
