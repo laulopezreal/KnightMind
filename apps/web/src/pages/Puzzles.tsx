@@ -17,6 +17,7 @@ export default function Puzzles() {
     const [isGenerating, setIsGenerating] = useState(false);
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [showUciInput, setShowUciInput] = useState(false);
 
     useEffect(() => {
         getUsers().then(setAvailableUsers).catch(console.error);
@@ -105,7 +106,21 @@ export default function Puzzles() {
 
     const handleRevealSolution = () => {
         setStatus('revealed');
-        setUserMove(currentPuzzle?.best_move_uci || '');
+        const bestMove = currentPuzzle?.best_move_uci?.toLowerCase();
+        setUserMove(bestMove || '');
+
+        if (currentPuzzle && bestMove) {
+            // Create game instance from puzzle start
+            const solutionGame = new Chess(currentPuzzle.fen);
+
+            // Make the move programmatically to update state
+            const from = bestMove.slice(0, 2);
+            const to = bestMove.slice(2, 4);
+            const promotion = bestMove.slice(4, 5);
+
+            solutionGame.move({ from, to, promotion: promotion || undefined });
+            setGame(solutionGame);
+        }
     };
 
     const [game, setGame] = useState(new Chess());
@@ -286,22 +301,32 @@ export default function Puzzles() {
 
                         {/* Controls */}
                         <div className="bg-white/10 backdrop-blur-md rounded-lg p-6">
-                            <h3 className="text-lg font-semibold text-white mb-4">Your Move</h3>
-
-                            <div className="mb-6">
-                                <label className="block text-sm text-gray-300 mb-2">
-                                    Enter move in UCI format (e.g., e2e4, g1f3)
-                                </label>
-                                <input
-                                    type="text"
-                                    placeholder="e2e4"
-                                    value={userMove}
-                                    onChange={(e) => setUserMove(e.target.value)}
-                                    disabled={status === 'correct' || status === 'revealed'}
-                                    className="w-full px-4 py-3 bg-white/20 border border-white/30 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500 disabled:opacity-50 font-mono"
-                                    onKeyPress={(e) => e.key === 'Enter' && status === 'solving' && handleCheckAnswer()}
-                                />
+                            <div className="flex justify-between items-center mb-4">
+                                <h3 className="text-lg font-semibold text-white">Your Move</h3>
+                                <button
+                                    onClick={() => setShowUciInput(!showUciInput)}
+                                    className="text-xs text-purple-400 hover:text-purple-300 transition-colors"
+                                >
+                                    {showUciInput ? 'Hide Input' : 'Type Move'}
+                                </button>
                             </div>
+
+                            {showUciInput && (
+                                <div className="mb-6">
+                                    <label className="block text-sm text-gray-300 mb-2">
+                                        Enter move in UCI format (e.g., e2e4, g1f3)
+                                    </label>
+                                    <input
+                                        type="text"
+                                        placeholder="e2e4"
+                                        value={userMove}
+                                        onChange={(e) => setUserMove(e.target.value)}
+                                        disabled={status === 'correct' || status === 'revealed'}
+                                        className="w-full px-4 py-3 bg-white/20 border border-white/30 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500 disabled:opacity-50 font-mono"
+                                        onKeyPress={(e) => e.key === 'Enter' && status === 'solving' && handleCheckAnswer()}
+                                    />
+                                </div>
+                            )}
 
                             {/* Status Messages */}
                             {status === 'correct' && (
