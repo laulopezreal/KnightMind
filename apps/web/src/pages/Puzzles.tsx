@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { Chessboard } from 'react-chessboard';
+import { Chess } from 'chess.js';
 import { generatePuzzles, getDailyPuzzles, getUsers, ApiError, type Puzzle } from '../api/client';
 
 type PuzzleStatus = 'solving' | 'correct' | 'incorrect' | 'revealed';
@@ -107,11 +108,59 @@ export default function Puzzles() {
         setUserMove(currentPuzzle?.best_move_uci || '');
     };
 
+    const [game, setGame] = useState(new Chess());
+
+    useEffect(() => {
+        if (currentPuzzle) {
+            setGame(new Chess(currentPuzzle.fen));
+        }
+    }, [currentPuzzle]);
+
+    const onPieceDrop = (sourceSquare: string, targetSquare: string) => {
+        if (!currentPuzzle || status === 'correct' || status === 'revealed') return false;
+
+        try {
+            const move = game.move({
+                from: sourceSquare,
+                to: targetSquare,
+                promotion: 'q',
+            });
+
+            if (move === null) return false;
+
+            setGame(new Chess(game.fen()));
+            const uciMove = `${move.from}${move.to}${move.promotion || ''}`;
+            setUserMove(uciMove);
+
+            // Auto-check answer for drag-and-drop
+            const normalizedBestMove = currentPuzzle.best_move_uci.toLowerCase();
+            if (uciMove === normalizedBestMove) {
+                setStatus('correct');
+            } else {
+                setStatus('incorrect');
+                // Optional: Reset board after short delay or keep incorrect move? 
+                // Usually puzzles strictly reject incorrect moves or show them as red.
+                // Let's keep it simple: update status, user can try again.
+                // To allow retry from current position, we might need to undo if incorrect?
+                // Standard puzzle behavior: if incorrect, piece snaps back or stays with distinct error.
+                // 'react-chessboard' snaps back if we access `return false` on drop, but we returned true (valid chess move).
+                // If incorrect puzzle move, we might want to undo it in the game state so they can try again from the puzzle start?
+                // For now, let's leave the piece there so they see what they played.
+            }
+            return true;
+        } catch {
+            return false;
+        }
+    };
+
+
+
     const handleNextPuzzle = () => {
         if (currentIndex < puzzles.length - 1) {
             setCurrentIndex(currentIndex + 1);
             setStatus('solving');
             setUserMove('');
+            // game state will update via useEffect
         }
     };
 
@@ -214,7 +263,8 @@ export default function Puzzles() {
                             <div className="mb-4">
                                 <Chessboard
                                     options={{
-                                        position: currentPuzzle.fen,
+                                        position: game.fen(),
+                                        onPieceDrop: ({ sourceSquare, targetSquare }) => onPieceDrop(sourceSquare, targetSquare || ""),
                                         boardOrientation: currentPuzzle.side_to_move === 'white' ? 'white' : 'black',
                                         darkSquareStyle: { backgroundColor: '#4a5568' },
                                         lightSquareStyle: { backgroundColor: '#a0aec0' },
@@ -308,6 +358,9 @@ export default function Puzzles() {
                                         onClick={() => {
                                             setStatus('solving');
                                             setUserMove('');
+                                            if (currentPuzzle) {
+                                                setGame(new Chess(currentPuzzle.fen));
+                                            }
                                         }}
                                         className="w-full px-6 py-3 bg-purple-600 hover:bg-purple-700 text-white rounded-lg font-medium transition-colors"
                                     >
