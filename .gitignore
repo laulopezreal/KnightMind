@@ -33,5 +33,10 @@ Thumbs.db
 # Local preferences
 WARP.md
 
+# Database
+*.db
+*.sqlite3
+services/api/knightmind.dba/
+
 # Data storage
 data/

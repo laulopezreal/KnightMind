@@ -148,10 +148,10 @@ class JobWorker:
                 if not job:
                     return # Should not happen
                 username = job.username
-                # Read params from job, with fallbacks for safety
-                job_params = job.params or {}
-                max_games = job_params.get("max_games", 30)
-                max_puzzles = job_params.get("max_puzzles", 30)
+                # Use params from job if available, otherwise defaults
+                params = job.params or {}
+                max_games = params.get("max_games", 30)
+                max_puzzles = params.get("max_puzzles", 30)
             
             # Run generation (CPU bound)
             result = await asyncio.to_thread(
