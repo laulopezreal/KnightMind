@@ -12,6 +12,10 @@ class JobStatus(str, Enum):
     FAILED = "failed"
     CANCELED = "canceled"
 
+class PuzzleResult(str, Enum):
+    PASS = "pass"
+    FAIL = "fail"
+
 class Job(Base):
     __tablename__ = "jobs"
     __table_args__ = (
@@ -22,6 +26,7 @@ class Job(Base):
             postgresql_where=text("status IN ('queued', 'running')"),
             sqlite_where=text("status IN ('queued', 'running')")
         ),
+        {"extend_existing": True},
     )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
@@ -44,6 +49,7 @@ class Job(Base):
 
 class FenEvalCache(Base):
     __tablename__ = "fen_eval_cache"
+    __table_args__ = {"extend_existing": True}
 
     key: Mapped[str] = mapped_column(String, primary_key=True)
     fen: Mapped[str] = mapped_column(Text, nullable=False)
@@ -54,3 +60,31 @@ class FenEvalCache(Base):
     engine_name: Mapped[str] = mapped_column(Text, nullable=True)
     engine_version: Mapped[str] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
+class PuzzleStats(Base):
+    __tablename__ = "puzzle_stats"
+    __table_args__ = {"extend_existing": True}
+
+    puzzle_id: Mapped[str] = mapped_column(String, primary_key=True)
+    username: Mapped[str] = mapped_column(String, index=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    pass_count: Mapped[int] = mapped_column(Integer, default=0)
+    fail_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_reviewed_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+    last_result: Mapped[str] = mapped_column(String, nullable=True)
+    next_due_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+    interval_days: Mapped[int] = mapped_column(Integer, nullable=True)
+    ease_factor: Mapped[float] = mapped_column(Float, default=2.0)
+
+
+class PuzzleReview(Base):
+    __tablename__ = "puzzle_reviews"
+    __table_args__ = {"extend_existing": True}
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    puzzle_id: Mapped[str] = mapped_column(String, index=True)
+    username: Mapped[str] = mapped_column(String, index=True)
+    reviewed_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+    result: Mapped[PuzzleResult] = mapped_column(String)
+    time_spent_ms: Mapped[int] = mapped_column(Integer, nullable=True)
