@@ -4,7 +4,10 @@ import { Chessboard } from 'react-chessboard';
 import { Chess } from 'chess.js';
 import { generatePuzzles, getDailyPuzzles, getUsers, ApiError, type Puzzle } from '../api/client';
 import { JobStatusCard } from '../components/JobStatusCard';
+<<<<<<< HEAD
 import { useJobPolling } from '../hooks/useJobPolling';
+=======
+>>>>>>> bbecb5d (feat: Async UI & Visual Regression (#18))
 
 type PuzzleStatus = 'solving' | 'correct' | 'incorrect' | 'revealed';
 
@@ -23,6 +26,10 @@ export default function Puzzles() {
 
     // Mock progress for now until we hook up real polling
     // const mockProgress = 0; 
+
+    // Mock progress for now until we hook up real polling
+    const mockProgress = 0;
+
 
     useEffect(() => {
         getUsers().then(setAvailableUsers).catch(console.error);
@@ -246,6 +253,7 @@ export default function Puzzles() {
                     {error && !isGenerating && (
                         <JobStatusCard status="failed" error={error} />
                     )}
+<<<<<<< HEAD
                     {job && (job.status === 'queued' || job.status === 'running' || job.status === 'succeeded' || job.status === 'failed') && (
                         <JobStatusCard
                             status={job.status}
@@ -256,6 +264,10 @@ export default function Puzzles() {
                     )}
                     {isLoading && !isGenerating && (
                         <JobStatusCard status="running" message="Loading puzzles..." />
+=======
+                    {isGenerating && (
+                        <JobStatusCard status="running" message="Analyzing your games..." progress={mockProgress} />
+>>>>>>> bbecb5d (feat: Async UI & Visual Regression (#18))
                     )}
                 </div>
             </section>
