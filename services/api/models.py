@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import String, Integer, Text, JSON, DateTime, Index, text
+from sqlalchemy import String, Integer, Text, JSON, DateTime, Index, text, Float
 from sqlalchemy.orm import Mapped, mapped_column
 from enum import Enum
 from services.api.db import Base
@@ -40,3 +40,17 @@ class Job(Base):
         default=lambda: datetime.now(timezone.utc), 
         onupdate=lambda: datetime.now(timezone.utc)
     )
+
+
+class FenEvalCache(Base):
+    __tablename__ = "fen_eval_cache"
+
+    key: Mapped[str] = mapped_column(String, primary_key=True)
+    fen: Mapped[str] = mapped_column(Text, nullable=False)
+    best_move_uci: Mapped[str] = mapped_column(Text, nullable=False)
+    eval_pawns: Mapped[float] = mapped_column(Float, nullable=False)
+    depth: Mapped[int] = mapped_column(Integer, nullable=True)
+    movetime_ms: Mapped[int] = mapped_column(Integer, nullable=True)
+    engine_name: Mapped[str] = mapped_column(Text, nullable=True)
+    engine_version: Mapped[str] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
