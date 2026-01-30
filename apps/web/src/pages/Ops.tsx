@@ -49,7 +49,7 @@ export default function Ops() {
 
     const activeJob = opsStatus?.active_job;
     const recentJobs = opsStatus?.recent_jobs || [];
-    const metrics = opsStatus?.metrics.last_24h;
+    const metrics = opsStatus?.metrics?.last_24h;
 
     return (
         <div className="w-full font-sans text-primary/80 space-y-12 pb-20">
@@ -80,7 +80,7 @@ export default function Ops() {
                         </span>
                     </div>
                     <span className="opacity-40 text-[10px]">
-                        {new Date(opsStatus.last_recovery.last_recovery_at!).toLocaleTimeString()}
+                        {opsStatus.last_recovery.last_recovery_at && new Date(opsStatus.last_recovery.last_recovery_at).toLocaleTimeString()}
                     </span>
                 </div>
             )}
@@ -96,10 +96,10 @@ export default function Ops() {
             {/* Version Info (Pinned to bottom or side, now more subtle) */}
             <div className="flex gap-8 text-[10px] opacity-40 uppercase tracking-tighter border-t border-primary/10 pt-4">
                 <div>
-                    SHA: <span className="font-mono text-primary/60">{health?.version.sha.substring(0, 7) || 'unknown'}</span>
+                    SHA: <span className="font-mono text-primary/60">{health?.version?.sha.substring(0, 7) || 'unknown'}</span>
                 </div>
                 <div>
-                    BUILT: <span className="text-primary/60">{health?.version.built_at ? new Date(health.version.built_at).toLocaleString() : '-'}</span>
+                    BUILT: <span className="text-primary/60">{health?.version?.built_at ? new Date(health.version.built_at).toLocaleString() : '-'}</span>
                 </div>
                 {opsStatus?.now && (
                     <div>

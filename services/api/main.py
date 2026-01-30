@@ -596,14 +596,13 @@ async def get_due_puzzles_endpoint(
         result_puzzles.append(p_dict)
         
     # 4. Total due count for metadata
+    # 4. Total due count for metadata
+    # We can calculate this from all_stats since it contains all stats for the user's puzzles
     now = datetime.now(timezone.utc)
-    due_count = db.scalar(
-        select(func.count(PuzzleStats.puzzle_id))
-        .where(
-            PuzzleStats.username == username,
-            PuzzleStats.next_due_at <= now
-        )
-    ) or 0
+    due_count = sum(
+        1 for s in all_stats.values() 
+        if s.next_due_at and s.next_due_at.replace(tzinfo=timezone.utc) <= now
+    )
     
     return {
         "due_count": due_count,
