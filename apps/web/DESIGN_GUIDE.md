@@ -59,8 +59,8 @@ All UI changes must follow this guide to maintain the "Chess Intelligence" aesth
 ## States
 
 -   **Loading**: Use `...` text or `animate-pulse` on a skeleton div.
--   **Error**: `text-red-500/80 font-sans`
--   **Success**: `text-green-600 font-serif`
+-   **Error**: `text-error font-sans`
+-   **Success**: `text-success font-serif`
 
 ## Tone
 
