@@ -314,3 +314,91 @@ export async function getOpsStatus(): Promise<OpsStatusResponse> {
   }
   return response.json();
 }
+
+// Training Sessions
+export interface SessionSummary {
+  session_id: string;
+  requested_n: number;
+  pass_count: number;
+  fail_count: number;
+  total_time_ms: number;
+  created_at: string;
+  completed_at: string | null;
+}
+
+export async function startSession(username: string, n: number = 5): Promise<{ session_id: string; requested_n: number }> {
+  const response = await fetch(`${API_BASE}/sessions/start`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, n }),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    const detail = errorData.detail || response.statusText;
+    throw new ApiError(`Failed to start session: ${detail}`, response.status, detail);
+  }
+
+  return response.json();
+}
+
+export async function completeSession(sessionId: string, username: string): Promise<SessionSummary> {
+  const response = await fetch(`${API_BASE}/sessions/${sessionId}/complete`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username }),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    const detail = errorData.detail || response.statusText;
+    throw new ApiError(`Failed to complete session: ${detail}`, response.status, detail);
+  }
+
+  return response.json();
+}
+
+export async function getRecentSessions(username: string, limit: number = 10): Promise<SessionSummary[]> {
+  const params = new URLSearchParams({
+    username,
+    limit: limit.toString(),
+  });
+
+  const response = await fetch(`${API_BASE}/sessions/recent?${params}`);
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    const detail = errorData.detail || response.statusText;
+    throw new ApiError(`Failed to get recent sessions: ${detail}`, response.status, detail);
+  }
+
+  return response.json();
+}
+
+// Update review puzzle to include optional session_id
+export async function reviewPuzzle(
+  puzzleId: string,
+  username: string,
+  result: 'pass' | 'fail',
+  timeSpentMs?: number,
+  sessionId?: string
+): Promise<any> {
+  const response = await fetch(`${API_BASE}/puzzles/${puzzleId}/review`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      username,
+      result,
+      time_spent_ms: timeSpentMs,
+      session_id: sessionId,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    const detail = errorData.detail || response.statusText;
+    throw new ApiError(`Failed to review puzzle: ${detail}`, response.status, detail);
+  }
+
+  return response.json();
+}

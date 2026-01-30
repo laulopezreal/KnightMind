@@ -68,6 +68,9 @@ app = FastAPI(title="KnightMind API", version="0.1.0", lifespan=lifespan)
 from services.api.ops import router as ops_router
 app.include_router(ops_router)
 
+from services.api.sessions import router as sessions_router
+app.include_router(sessions_router)
+
 # CORS configuration
 app.add_middleware(
     CORSMiddleware,
@@ -197,6 +200,7 @@ class ReviewRequest(BaseModel):
     username: str
     result: PuzzleResult
     time_spent_ms: int | None = None
+    session_id: str | None = None
 
 
 @app.get("/")
@@ -621,18 +625,49 @@ async def review_puzzle(
 ):
     """
     Record a puzzle review and update scheduling.
+    
+    Optionally tracks the review in a training session.
     """
     puzzle_storage = get_puzzle_storage()
     if not puzzle_storage.get_puzzle(request.username, puzzle_id):
         raise HTTPException(status_code=404, detail="Puzzle not found")
+    
+    # If session_id provided, validate session
+    if request.session_id:
+        from services.api.models import TrainingSession, PuzzleResult as PR
         
-    # 1. Record individual review
+        stmt = select(TrainingSession).where(TrainingSession.id == request.session_id)
+        session = db.scalars(stmt).first()
+        
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+        
+        if session.username != request.username:
+            raise HTTPException(status_code=403, detail="Session belongs to different user")
+        
+        if session.completed_at is not None:
+            raise HTTPException(status_code=400, detail="Session already completed")
+        
+        # Increment session counters
+        if request.result == PR.PASS:
+            session.pass_count += 1
+        else:
+            session.fail_count += 1
+        
+        # Add time if provided
+        if request.time_spent_ms:
+            session.total_time_ms += request.time_spent_ms
+        
+        db.commit()
+        
+    # 1. Record individual review (with optional session_id)
     insert_puzzle_review(
         db, 
         puzzle_id, 
         request.username, 
         request.result, 
-        request.time_spent_ms
+        request.time_spent_ms,
+        session_id=request.session_id
     )
     
     # 2. Update aggregate stats (triggers scheduling logic)
