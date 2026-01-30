@@ -47,11 +47,18 @@ from services.ingest import (
     import_all_games,
 )
 
+from services.api.puzzles.identity import backfill_puzzle_identity
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Prevent worker startup in tests or if explicitly disabled
     if os.environ.get("KNIGHTMIND_WORKER_DISABLED") != "true":
         worker.start()
+        
+    # Run one-time/startup backfills
+    with SessionLocal() as db:
+        backfill_puzzle_identity(db)
+        
     yield
     await worker.stop()
 
@@ -568,7 +575,9 @@ async def get_due_puzzles_endpoint(
                 "pass_count": stats.pass_count,
                 "fail_count": stats.fail_count,
                 "last_reviewed_at": stats.last_reviewed_at,
-                "last_result": stats.last_result
+                "last_result": stats.last_result,
+                "title": stats.title,
+                "primary_motif": stats.primary_motif
             })
         else:
             # Default values for new puzzles
@@ -580,7 +589,9 @@ async def get_due_puzzles_endpoint(
                 "pass_count": 0,
                 "fail_count": 0,
                 "last_reviewed_at": None,
-                "last_result": None
+                "last_result": None,
+                "title": None,
+                "primary_motif": None
             })
         result_puzzles.append(p_dict)
         
