@@ -26,6 +26,7 @@ A platform for analyzing chess games, tracking progress, and gaining insights us
 2. **Don't refactor unrelated code** – Only change what's necessary for the task
 3. **Prefer simple solutions** – Choose straightforward approaches over complex ones
 4. **Explain decisions briefly** – Document why, not just what
+5. **UI Consistency** – All UI changes must follow `apps/web/DESIGN_GUIDE.md` and reuse existing patterns.
 
 ## Commands to Run
 
