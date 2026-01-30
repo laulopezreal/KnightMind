@@ -4,6 +4,7 @@ import { Chessboard } from 'react-chessboard';
 import { Chess } from 'chess.js';
 import { generatePuzzles, getDailyPuzzles, getUsers, ApiError, type Puzzle } from '../api/client';
 import { JobStatusCard } from '../components/JobStatusCard';
+import { useJobPolling } from '../hooks/useJobPolling';
 
 type PuzzleStatus = 'solving' | 'correct' | 'incorrect' | 'revealed';
 
@@ -15,20 +16,60 @@ export default function Puzzles() {
     const [userMove, setUserMove] = useState('');
     const [showSuggestions, setShowSuggestions] = useState(false);
     const [status, setStatus] = useState<PuzzleStatus>('solving');
-    const [isGenerating, setIsGenerating] = useState(false);
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [showUciInput, setShowUciInput] = useState(false);
+    const [activeJobId, setActiveJobId] = useState<string | null>(null);
 
     // Mock progress for now until we hook up real polling
-    const mockProgress = 0;
-
+    // const mockProgress = 0; 
 
     useEffect(() => {
         getUsers().then(setAvailableUsers).catch(console.error);
     }, []);
 
     const currentPuzzle = puzzles[currentIndex];
+
+    // Load persisted job from local storage on mount or username change
+    useEffect(() => {
+        if (!username) return;
+        const savedJobId = localStorage.getItem(`knightmind:lastJob:${username}`);
+        if (savedJobId) {
+            setActiveJobId(savedJobId);
+        } else {
+            setActiveJobId(null);
+        }
+    }, [username]);
+
+    const { job, isPolling: isJobPolling } = useJobPolling(activeJobId, {
+        enabled: !!activeJobId,
+        onSuccess: () => {
+            // Clear local storage on success so we don't start polling old finished jobs next time?
+            // Or keep it to show "Success" state persistently until user generates new?
+            // Prompt says: "If succeeded/failed, show final state and clear stored job_id (optional)"
+            // Let's keep it to show the success card, but maybe trigger auto-refresh.
+
+            // Auto-refresh puzzles
+            getDailyPuzzles(username, 5).then((res) => {
+                setPuzzles(res.puzzles);
+                setCurrentIndex(0);
+                setStatus('solving');
+                setUserMove('');
+            }).catch(console.error);
+
+            // Clear job ID after a delay or let user clear it?
+            // If we clear it immediately, the card disappears. We probably want the card to stay "Success".
+            // We can clear localStorage but keep activeJobId in state for this session.
+            localStorage.removeItem(`knightmind:lastJob:${username}`);
+        },
+        onError: () => {
+            // Similarly clear storage on hard failure so we don't get stuck
+            localStorage.removeItem(`knightmind:lastJob:${username}`);
+        }
+    });
+
+    // Sync job status to local isGenerating for backwards compat with other UI if needed, 
+    // but better to rely on 'job' object.
 
     // ... (keep logic same as original, just updating UI)
     // ... (keep logic same as original, just updating UI)
@@ -37,17 +78,13 @@ export default function Puzzles() {
             setError('Please enter a username');
             return;
         }
-        setIsGenerating(true);
         setError(null);
 
         try {
-            await generatePuzzles(username.trim());
-            const dailyPuzzles = await getDailyPuzzles(username.trim(), 5);
-            setPuzzles(dailyPuzzles.puzzles);
-            setCurrentIndex(0);
-            setStatus('solving');
-            setUserMove('');
-            setError(null);
+            const { job_id } = await generatePuzzles(username.trim());
+            setActiveJobId(job_id);
+            localStorage.setItem(`knightmind:lastJob:${username.trim()}`, job_id);
+            // Polling will auto-start
         } catch (err) {
             if (err instanceof ApiError) {
                 if (err.statusCode === 404) {
@@ -58,8 +95,6 @@ export default function Puzzles() {
             } else {
                 setError(err instanceof Error ? err.message : 'Failed to generate puzzles');
             }
-        } finally {
-            setIsGenerating(false);
         }
     };
 
@@ -68,6 +103,7 @@ export default function Puzzles() {
             setError('Please enter a username');
             return;
         }
+        // Check if we already have a running job? Maybe not needed.
         setIsLoading(true);
         setError(null);
 
@@ -92,6 +128,10 @@ export default function Puzzles() {
             setIsLoading(false);
         }
     };
+
+    // Helper to determine active state
+    const isGenerating = isJobPolling || (job?.status === 'queued' || job?.status === 'running');
+
 
     const handleCheckAnswer = () => {
         if (!currentPuzzle) return;
@@ -206,13 +246,21 @@ export default function Puzzles() {
                     {error && !isGenerating && (
                         <JobStatusCard status="failed" error={error} />
                     )}
-                    {isGenerating && (
-                        <JobStatusCard status="running" message="Analyzing your games..." progress={mockProgress} />
+                    {job && (job.status === 'queued' || job.status === 'running' || job.status === 'succeeded' || job.status === 'failed') && (
+                        <JobStatusCard
+                            status={job.status}
+                            message={job.message}
+                            progress={job.progress}
+                            error={job.status === 'failed' ? job.message : undefined}
+                        />
+                    )}
+                    {isLoading && !isGenerating && (
+                        <JobStatusCard status="running" message="Loading puzzles..." />
                     )}
                 </div>
             </section>
 
-            {currentPuzzle && (
+            {currentPuzzle && ( // Make sure currentPuzzle is defined or access checked
                 <section className="grid lg:grid-cols-2 gap-12 lg:gap-24">
                     {/* Chessboard */}
                     <div className="order-2 lg:order-1">
