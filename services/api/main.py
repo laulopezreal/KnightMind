@@ -1,6 +1,6 @@
 from contextlib import asynccontextmanager
 from dataclasses import asdict
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Query
@@ -446,7 +446,6 @@ async def cancel_job(job_id: str):
         # Update job status to canceled
         job.status = JobStatus.CANCELED
         job.message = "Canceled by user"
-        from datetime import datetime, timezone
         job.updated_at = datetime.now(timezone.utc)
         db.commit()
         
