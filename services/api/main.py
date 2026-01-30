@@ -23,6 +23,7 @@ from services.api.engine import (
     InvalidFenError,
     evaluate_position,
     is_engine_available,
+    get_or_compute_eval,
 )
 from services.api.openings import build_opening_tree
 from services.api.puzzles import generate_puzzles
@@ -316,6 +317,8 @@ async def evaluate_fen(request: EvalRequest):
     """
     Evaluate a chess position using Stockfish.
     
+    Uses cached evaluations when available for better performance.
+    
     Args:
         request: Request with FEN string
         
@@ -323,7 +326,7 @@ async def evaluate_fen(request: EvalRequest):
         Best move in UCI format and evaluation in pawns
     """
     try:
-        result = evaluate_position(request.fen)
+        result = get_or_compute_eval(request.fen)
         return EvalResponse(best_move_uci=result.best_move_uci, eval=result.eval)
     except EngineNotAvailableError as e:
         raise HTTPException(status_code=503, detail=str(e))
