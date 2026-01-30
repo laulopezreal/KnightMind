@@ -1,12 +1,8 @@
-"""
-Background job to auto-complete abandoned training sessions.
-"""
 from datetime import datetime, timezone, timedelta
-from sqlalchemy import select
+from sqlalchemy import update
 from sqlalchemy.orm import Session
 
 from services.api.models import TrainingSession
-
 
 def cleanup_abandoned_sessions(db: Session, hours_threshold: int = 24) -> int:
     """
@@ -21,9 +17,7 @@ def cleanup_abandoned_sessions(db: Session, hours_threshold: int = 24) -> int:
     """
     cutoff_time = datetime.now(timezone.utc) - timedelta(hours=hours_threshold)
     
-    # Find and update abandoned sessions in a single query for efficiency
-    cutoff_time = datetime.now(timezone.utc) - timedelta(hours=hours_threshold)
-
+    # Use bulk update for efficiency
     stmt = (
         update(TrainingSession)
         .where(
@@ -32,10 +26,10 @@ def cleanup_abandoned_sessions(db: Session, hours_threshold: int = 24) -> int:
         )
         .values(completed_at=datetime.now(timezone.utc))
     )
-
+    
     result = db.execute(stmt)
     count = result.rowcount
-
+    
     if count > 0:
         db.commit()
         print(f"Auto-completed {count} abandoned session(s)")

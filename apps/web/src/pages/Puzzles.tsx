@@ -47,48 +47,58 @@ export default function Puzzles() {
             setActiveJobId(null);
         }
 
-        // Load active session
         const savedSessionId = localStorage.getItem(`knightmind:session:${username}`);
-        if (savedSessionId) {
-            // Validate session with backend
-            setIsResumingSession(true);
-            getSession(savedSessionId)
-                .then(session => {
-                    if (session.completed_at) {
-                        // Session already completed, clear it
-                        localStorage.removeItem(`knightmind:session:${username}`);
-                        setActiveSessionId(null);
-                    } else {
-                        // Session valid and active
-                        setActiveSessionId(session.session_id);
-                        setSessionSummary(session);
-                        // Convert pass/fail count to reviewed count
-                        setReviewedCount(session.pass_count + session.fail_count);
 
-                        // We need to load puzzles if we're resuming
-                        // Start a new generation job to get puzzles
-                        setIsLoading(true);
-                        generatePuzzles(username, session.requested_n)
-                            .then(response => {
-                                setActiveJobId(response.job_id);
-                            })
-                            .catch(err => setError(err instanceof Error ? err.message : 'Failed to load puzzles'))
-                            .finally(() => setIsLoading(false));
-                    }
-                })
-                .catch(err => {
-                    // Session not found or error, clear it
-                    console.error("Failed to resume session:", err);
+        const loadSessionAndPuzzles = async () => {
+            if (!savedSessionId) return;
+
+            try {
+                setIsResumingSession(true);
+                const session = await getSession(savedSessionId);
+
+                if (session.completed_at) {
+                    // Session already completed, clear it
                     localStorage.removeItem(`knightmind:session:${username}`);
                     setActiveSessionId(null);
-                })
-                .finally(() => setIsResumingSession(false));
-        }
+                    return;
+                }
 
-        // Load recent sessions
-        getRecentSessions(username, 5)
-            .then(setRecentSessions)
-            .catch(err => setError(err instanceof Error ? err.message : 'Failed to load recent sessions'));
+                // Session valid and active
+                setActiveSessionId(session.session_id);
+                setSessionSummary(session);
+                setReviewedCount(session.pass_count + session.fail_count);
+
+                // Start a new generation job to get puzzles
+                setIsLoading(true);
+                try {
+                    const response = await generatePuzzles(username, session.requested_n);
+                    setActiveJobId(response.job_id);
+                } catch (err) {
+                    setError(err instanceof Error ? err.message : 'Failed to load puzzles');
+                } finally {
+                    setIsLoading(false);
+                }
+            } catch (err) {
+                // Session not found or error, clear it
+                console.error("Failed to resume session:", err);
+                localStorage.removeItem(`knightmind:session:${username}`);
+                setActiveSessionId(null);
+            } finally {
+                setIsResumingSession(false);
+            }
+        };
+
+        const loadRecent = async () => {
+            try {
+                const sessions = await getRecentSessions(username, 5);
+                setRecentSessions(sessions);
+            } catch (err) {
+                setError(err instanceof Error ? err.message : 'Failed to load recent sessions');
+            }
+        };
+
+        loadSessionAndPuzzles();
+        loadRecent();
     }, [username]);
 
     const { job, isPolling: isJobPolling } = useJobPolling(activeJobId, {
