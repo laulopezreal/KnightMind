@@ -71,6 +71,33 @@ async def start_session(
     )
 
 
+@router.get("/{session_id}", response_model=SessionSummary)
+async def get_session(
+    session_id: str,
+    db: Session = Depends(get_db)
+):
+    """
+    Get session details by ID.
+    
+    Used for validating sessions on page load.
+    """
+    stmt = select(TrainingSession).where(TrainingSession.id == session_id)
+    session = db.scalars(stmt).first()
+    
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    return SessionSummary(
+        session_id=session.id,
+        requested_n=session.requested_n,
+        pass_count=session.pass_count,
+        fail_count=session.fail_count,
+        total_time_ms=session.total_time_ms,
+        created_at=session.created_at,
+        completed_at=session.completed_at
+    )
+
+
 @router.post("/{session_id}/complete", response_model=SessionSummary)
 async def complete_session(
     session_id: str,
