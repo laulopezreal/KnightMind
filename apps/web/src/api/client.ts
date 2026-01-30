@@ -151,6 +151,8 @@ export interface Puzzle {
   swing: number;
   created_at: string;
   used_on: string | null;
+  title?: string;
+  primary_motif?: string;
 }
 
 export interface PuzzleGenerationResult {
