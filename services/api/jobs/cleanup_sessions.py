@@ -21,21 +21,23 @@ def cleanup_abandoned_sessions(db: Session, hours_threshold: int = 24) -> int:
     """
     cutoff_time = datetime.now(timezone.utc) - timedelta(hours=hours_threshold)
     
-    # Find abandoned sessions
-    stmt = select(TrainingSession).where(
-        TrainingSession.completed_at.is_(None),
-        TrainingSession.created_at < cutoff_time
+    # Find and update abandoned sessions in a single query for efficiency
+    cutoff_time = datetime.now(timezone.utc) - timedelta(hours=hours_threshold)
+
+    stmt = (
+        update(TrainingSession)
+        .where(
+            TrainingSession.completed_at.is_(None),
+            TrainingSession.created_at < cutoff_time
+        )
+        .values(completed_at=datetime.now(timezone.utc))
     )
-    abandoned_sessions = db.scalars(stmt).all()
-    
-    # Mark them as completed
-    count = 0
-    for session in abandoned_sessions:
-        session.completed_at = datetime.now(timezone.utc)
-        count += 1
-    
+
+    result = db.execute(stmt)
+    count = result.rowcount
+
     if count > 0:
         db.commit()
         print(f"Auto-completed {count} abandoned session(s)")
-    
+
     return count
