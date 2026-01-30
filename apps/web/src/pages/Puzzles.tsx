@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { Chessboard } from 'react-chessboard';
 import { Chess } from 'chess.js';
 import { generatePuzzles, getDailyPuzzles, getUsers, ApiError, type Puzzle } from '../api/client';
+import { JobStatusCard } from '../components/JobStatusCard';
 
 type PuzzleStatus = 'solving' | 'correct' | 'incorrect' | 'revealed';
 
@@ -18,6 +19,10 @@ export default function Puzzles() {
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [showUciInput, setShowUciInput] = useState(false);
+
+    // Mock progress for now until we hook up real polling
+    const mockProgress = 0;
+
 
     useEffect(() => {
         getUsers().then(setAvailableUsers).catch(console.error);
@@ -195,7 +200,16 @@ export default function Puzzles() {
                         </button>
                     </div>
                 </div>
-                {error && <div className="mt-4 text-red-500/80 font-sans">{error}</div>}
+
+                {/* Job Status / Error Area */}
+                <div className="mt-6">
+                    {error && !isGenerating && (
+                        <JobStatusCard status="failed" error={error} />
+                    )}
+                    {isGenerating && (
+                        <JobStatusCard status="running" message="Analyzing your games..." progress={mockProgress} />
+                    )}
+                </div>
             </section>
 
             {currentPuzzle && (
