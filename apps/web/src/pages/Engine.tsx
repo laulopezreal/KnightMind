@@ -108,7 +108,7 @@ export default function Engine() {
             <Chessboard
               options={{
                 position: fen,
-                onPieceDrop: ({ sourceSquare, targetSquare }) => onDrop(sourceSquare, targetSquare || ""),
+                onPieceDrop: (sourceSquare, targetSquare) => onDrop(sourceSquare, targetSquare),
                 arrows: showBestMove && evaluation ? [{ startSquare: evaluation.bestMove.slice(0, 2), endSquare: evaluation.bestMove.slice(2, 4), color: 'rgba(16, 185, 129, 0.8)' }] : [],
                 boardOrientation: "white",
                 darkSquareStyle: { backgroundColor: 'var(--color-chess-brown-700)' },
