@@ -55,9 +55,10 @@ async def lifespan(app: FastAPI):
     if os.environ.get("KNIGHTMIND_WORKER_DISABLED") != "true":
         worker.start()
         
-    # Run one-time/startup backfills
-    with SessionLocal() as db:
-        backfill_puzzle_identity(db)
+    # NOTE: Backfill should be run manually or via a migration script
+    # Running it on startup can block the server if there are many puzzles
+    # with SessionLocal() as db:
+    #     backfill_puzzle_identity(db)
         
     yield
     await worker.stop()
