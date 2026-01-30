@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { Chessboard } from 'react-chessboard';
 import { Chess } from 'chess.js';
-import { generatePuzzles, getDailyPuzzles, getUsers, cancelJob, ApiError, type Puzzle } from '../api/client';
+import { generatePuzzles, getDailyPuzzles, getUsers, cancelJob, ApiError, type Puzzle, startSession, completeSession, getRecentSessions, reviewPuzzle, type SessionSummary } from '../api/client';
 import { JobStatusCard } from '../components/JobStatusCard';
 import { useJobPolling } from '../hooks/useJobPolling';
 
@@ -21,6 +21,12 @@ export default function Puzzles() {
     const [showUciInput, setShowUciInput] = useState(false);
     const [activeJobId, setActiveJobId] = useState<string | null>(null);
 
+    // Session state
+    const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+    const [sessionSummary, setSessionSummary] = useState<SessionSummary | null>(null);
+    const [recentSessions, setRecentSessions] = useState<SessionSummary[]>([]);
+    const [reviewedCount, setReviewedCount] = useState(0);
+
     // Mock progress for now until we hook up real polling
     // const mockProgress = 0; 
 
@@ -30,7 +36,7 @@ export default function Puzzles() {
 
     const currentPuzzle = puzzles[currentIndex];
 
-    // Load persisted job from local storage on mount or username change
+    // Load persisted job and session from local storage on mount or username change
     useEffect(() => {
         if (!username) return;
         const savedJobId = localStorage.getItem(`knightmind:lastJob:${username}`);
@@ -39,6 +45,15 @@ export default function Puzzles() {
         } else {
             setActiveJobId(null);
         }
+
+        // Load active session
+        const savedSessionId = localStorage.getItem(`knightmind:session:${username}`);
+        if (savedSessionId) {
+            setActiveSessionId(savedSessionId);
+        }
+
+        // Load recent sessions
+        getRecentSessions(username, 5).then(setRecentSessions).catch(console.error);
     }, [username]);
 
     const { job, isPolling: isJobPolling } = useJobPolling(activeJobId, {
@@ -114,6 +129,7 @@ export default function Puzzles() {
             setStatus('solving');
             setUserMove('');
             setError(null);
+            setReviewedCount(0); // Reset reviewed count
         } catch (err) {
             if (err instanceof ApiError) {
                 if (err.statusCode === 404) {
@@ -138,6 +154,71 @@ export default function Puzzles() {
         } catch (err) {
             console.error('Failed to cancel job:', err);
             setError(err instanceof Error ? err.message : 'Failed to cancel job');
+        }
+    };
+
+    // Session handlers
+    const handleStartSession = async () => {
+        if (!username.trim()) {
+            setError('Please enter a username');
+            return;
+        }
+
+        try {
+            const { session_id } = await startSession(username.trim(), 5);
+            setActiveSessionId(session_id);
+            localStorage.setItem(`knightmind:session:${username.trim()}`, session_id);
+            setSessionSummary(null);
+            setReviewedCount(0);
+
+            // Load puzzles
+            await handleLoadPuzzles();
+        } catch (err) {
+            setError(err instanceof Error ? err.message : 'Failed to start session');
+        }
+    };
+
+    const handleCompleteSession = async () => {
+        if (!activeSessionId || !username.trim()) return;
+
+        try {
+            const summary = await completeSession(activeSessionId, username.trim());
+            setSessionSummary(summary);
+            setActiveSessionId(null);
+            localStorage.removeItem(`knightmind:session:${username.trim()}`);
+
+            // Refresh recent sessions
+            const recent = await getRecentSessions(username.trim(), 5);
+            setRecentSessions(recent);
+        } catch (err) {
+            console.error('Failed to complete session:', err);
+            setError(err instanceof Error ? err.message : 'Failed to complete session');
+        }
+    };
+
+    const handleReviewPuzzle = async (result: 'pass' | 'fail', timeMs?: number) => {
+        if (!currentPuzzle || !username.trim()) return;
+
+        try {
+            await reviewPuzzle(
+                currentPuzzle.id,
+                username.trim(),
+                result,
+                timeMs,
+                activeSessionId || undefined
+            );
+
+            // Increment reviewed count
+            const newCount = reviewedCount + 1;
+            setReviewedCount(newCount);
+
+            // Check if session is complete
+            if (activeSessionId && newCount >= puzzles.length) {
+                await handleCompleteSession();
+            }
+        } catch (err) {
+            console.error('Failed to review puzzle:', err);
+            setError(err instanceof Error ? err.message : 'Failed to review puzzle');
         }
     };
 
@@ -242,6 +323,12 @@ export default function Puzzles() {
                         )}
                     </div>
                     <div className="flex gap-4">
+                        {!activeSessionId && (
+                            <button onClick={handleStartSession} disabled={isLoading || isGenerating}
+                                className="px-6 py-2 bg-accent text-bg-primary hover:opacity-90 rounded-sm font-serif transition-colors disabled:opacity-50">
+                                Start Session
+                            </button>
+                        )}
                         <button onClick={handleLoadPuzzles} disabled={isLoading || isGenerating}
                             className="px-6 py-2 border border-primary/20 text-primary hover:bg-primary hover:text-bg-primary hover:border-transparent rounded-sm font-serif transition-all disabled:opacity-50">
                             {isLoading ? 'Loading...' : 'Load Puzzles'}
@@ -363,20 +450,97 @@ export default function Puzzles() {
                             )}
                             {(status === 'correct' || status === 'revealed') && (
                                 <button
-                                    onClick={handleNextPuzzle}
+                                    onClick={async () => {
+                                        // Record review if correct
+                                        if (status === 'correct') {
+                                            await handleReviewPuzzle('pass');
+                                        }
+                                        handleNextPuzzle();
+                                    }}
                                     disabled={currentIndex >= puzzles.length - 1}
                                     className="w-full px-6 py-4 bg-green-600 text-white hover:bg-green-700 rounded-sm font-serif text-lg transition-all shadow-lg shadow-green-900/20">
                                     {currentIndex >= puzzles.length - 1 ? 'All Done' : 'Next Puzzle →'}
                                 </button>
                             )}
                             {status === 'incorrect' && (
-                                <button
-                                    onClick={() => { setStatus('solving'); setUserMove(''); setGame(new Chess(currentPuzzle.fen)); }}
-                                    className="w-full px-6 py-4 border border-primary/20 text-primary hover:bg-primary hover:text-bg-primary rounded-sm font-serif text-lg transition-all">
-                                    Try Again
-                                </button>
+                                <div className="space-y-4">
+                                    <button
+                                        onClick={async () => {
+                                            await handleReviewPuzzle('fail');
+                                            setStatus('solving');
+                                            setUserMove('');
+                                            setGame(new Chess(currentPuzzle.fen));
+                                        }}
+                                        className="w-full px-6 py-4 border border-primary/20 text-primary hover:bg-primary hover:text-bg-primary rounded-sm font-serif text-lg transition-all">
+                                        Mark as Failed & Try Again
+                                    </button>
+                                </div>
                             )}
                         </div>
+                    </div>
+                </section>
+            )}
+
+            {/* Session Summary */}
+            {sessionSummary && (
+                <section className="bg-primary/5 border border-primary/10 rounded-sm p-8 backdrop-blur-sm animate-teedin">
+                    <h2 className="text-2xl font-serif text-primary mb-6">Session Complete!</h2>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-6 mb-6">
+                        <div className="text-center">
+                            <div className="text-3xl font-serif text-green-600">{sessionSummary.pass_count}</div>
+                            <div className="text-xs uppercase tracking-widest text-primary/40 mt-1">Passed</div>
+                        </div>
+                        <div className="text-center">
+                            <div className="text-3xl font-serif text-red-500">{sessionSummary.fail_count}</div>
+                            <div className="text-xs uppercase tracking-widest text-primary/40 mt-1">Failed</div>
+                        </div>
+                        <div className="text-center">
+                            <div className="text-3xl font-serif text-primary">
+                                {sessionSummary.pass_count + sessionSummary.fail_count > 0
+                                    ? Math.round((sessionSummary.pass_count / (sessionSummary.pass_count + sessionSummary.fail_count)) * 100)
+                                    : 0}%
+                            </div>
+                            <div className="text-xs uppercase tracking-widest text-primary/40 mt-1">Accuracy</div>
+                        </div>
+                        <div className="text-center">
+                            <div className="text-3xl font-serif text-primary">
+                                {Math.floor(sessionSummary.total_time_ms / 60000)}m {Math.floor((sessionSummary.total_time_ms % 60000) / 1000)}s
+                            </div>
+                            <div className="text-xs uppercase tracking-widest text-primary/40 mt-1">Total Time</div>
+                        </div>
+                    </div>
+                    <button
+                        onClick={() => {
+                            setSessionSummary(null);
+                            handleStartSession();
+                        }}
+                        className="w-full px-6 py-3 bg-primary text-bg-primary hover:opacity-90 rounded-sm font-serif transition-colors">
+                        Start New Session
+                    </button>
+                </section>
+            )}
+
+            {/* Recent Sessions */}
+            {recentSessions.length > 0 && (
+                <section className="bg-primary/5 border border-primary/10 rounded-sm p-6 backdrop-blur-sm">
+                    <h3 className="text-lg font-serif text-primary mb-4">Recent Sessions</h3>
+                    <div className="space-y-2">
+                        {recentSessions.map((session) => (
+                            <div key={session.session_id} className="flex justify-between items-center p-3 bg-primary/5 rounded-sm text-sm">
+                                <div className="flex gap-4">
+                                    <span className="text-green-600">{session.pass_count}P</span>
+                                    <span className="text-red-500">{session.fail_count}F</span>
+                                    <span className="text-primary/60">
+                                        {session.pass_count + session.fail_count > 0
+                                            ? Math.round((session.pass_count / (session.pass_count + session.fail_count)) * 100)
+                                            : 0}%
+                                    </span>
+                                </div>
+                                <span className="text-primary/40 text-xs">
+                                    {new Date(session.created_at).toLocaleDateString()}
+                                </span>
+                            </div>
+                        ))}
                     </div>
                 </section>
             )}
