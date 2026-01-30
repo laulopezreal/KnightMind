@@ -44,7 +44,7 @@ export function JobStatusCard({ status, progress = 0, message, error }: JobStatu
             )}
 
             {isSuccess && (
-                <div className="flex items-center gap-2 text-green-600 font-sans text-sm">
+                <div className="flex items-center gap-2 text-green-600 font-serif text-sm">
                     <span>✓</span>
                     <span>Ready to solve!</span>
                 </div>
