@@ -158,6 +158,34 @@ data/
 
 **Unique constraint:** `(username, source_game_id, ply)` prevents duplicate puzzles.
 
+### Spaced Repetition Data
+
+Spaced repetition statistics and review history are stored in the database for persistence and efficient querying:
+
+#### `puzzle_stats` Table
+
+Tracks aggregate performance and scheduling info for each puzzle.
+- `puzzle_id`: Links to the JSON file ID
+- `username`: Owner of the puzzle
+- `attempts`: Total sessions
+- `pass_count`: Sessions marked 'pass'
+- `fail_count`: Sessions marked 'fail'
+- `last_reviewed_at`: Timestamp of most recent attempt
+- `last_result`: Result of most recent attempt ('pass' | 'fail')
+- `next_due_at`: When the puzzle should be reviewed next
+- `interval_days`: Current interval length
+- `ease_factor`: SMT-style multiplier for interval calculation
+
+#### `puzzle_reviews` Table
+
+Audit log of every review session.
+- `id`: Unique session ID
+- `puzzle_id`: Links to `puzzle_stats`
+- `username`: User who performed the review
+- `reviewed_at`: Timestamp of the session
+- `result`: Outcome ('pass' | 'fail')
+- `time_spent_ms`: Duration of the session
+
 ## Operations & Deployment
  
  ### Database Migrations
