@@ -51,6 +51,8 @@ from services.api.puzzles.identity import backfill_puzzle_identity
 from services.api.jobs.cleanup_sessions import cleanup_abandoned_sessions
 import asyncio
 
+CLEANUP_INTERVAL_SECONDS = 3600
+
 async def run_session_cleanup():
     """Background task to cleanup abandoned sessions periodically."""
     while True:
@@ -61,8 +63,8 @@ async def run_session_cleanup():
         except Exception as e:
             print(f"Error in session cleanup: {e}")
             
-        # Sleep for 1 hour
-        await asyncio.sleep(3600)
+        # Sleep for defined interval
+        await asyncio.sleep(CLEANUP_INTERVAL_SECONDS)
 
 
 @asynccontextmanager
