@@ -5,10 +5,11 @@ import uuid
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
+from sqlalchemy.pool import NullPool
 
 # Add project root to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
+
 
 @pytest.fixture(scope="function")
 def test_db_instance(monkeypatch):
@@ -20,7 +21,8 @@ def test_db_instance(monkeypatch):
     db_url = f"sqlite:///./{db_filename}"
     
     # Create engine for this specific test
-    engine = create_engine(db_url, connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    # Use NullPool to ensure connections are closed promptly, avoiding file locks
+    engine = create_engine(db_url, connect_args={"check_same_thread": False}, poolclass=NullPool)
     TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
     
     # CRITICAL: Monkeypatch EVERYTHING to use this specific engine/session

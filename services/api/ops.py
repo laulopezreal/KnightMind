@@ -46,7 +46,7 @@ def get_ops_status(db: Session = Depends(get_db)):
     now = datetime.now(timezone.utc)
     
     # 1. Active job
-    stmt_active = select(Job).where(Job.status.in_([JobStatus.QUEUED, JobStatus.RUNNING])).order_by(Job.created_at.desc()).limit(1)
+    stmt_active = select(Job).where(Job.status.in_([JobStatus.QUEUED.value, JobStatus.RUNNING.value])).order_by(Job.created_at.desc()).limit(1)
     active_job = db.scalars(stmt_active).first()
 
     # 2. Recent jobs (last 20)
