@@ -8,7 +8,7 @@ interface JobStatusCardProps {
     onCancel?: () => void;
 }
 
-export function JobStatusCard({ status, progress = 0, message, error }: JobStatusCardProps) {
+export function JobStatusCard({ status, progress = 0, message, error, onCancel }: JobStatusCardProps) {
     if (!status) return null;
 
     const isProcessing = status === 'queued' || status === 'running';
@@ -35,12 +35,22 @@ export function JobStatusCard({ status, progress = 0, message, error }: JobStatu
             )}
 
             {isProcessing && (
-                <div className="w-full bg-primary/10 rounded-full h-1.5 overflow-hidden">
-                    <div
-                        className="bg-primary h-full transition-all duration-500 ease-out"
-                        style={{ width: `${Math.max(5, progress)}%` }} // Minimum 5% visibility
-                    />
-                </div>
+                <>
+                    <div className="w-full bg-primary/10 rounded-full h-1.5 overflow-hidden">
+                        <div
+                            className="bg-primary h-full transition-all duration-500 ease-out"
+                            style={{ width: `${Math.max(5, progress)}%` }} // Minimum 5% visibility
+                        />
+                    </div>
+                    {onCancel && (
+                        <button
+                            onClick={onCancel}
+                            className="px-4 py-2 text-sm border border-red-500/30 text-red-500 hover:bg-red-500/10 rounded-sm font-serif transition-all"
+                        >
+                            Cancel
+                        </button>
+                    )}
+                </>
             )}
 
             {isSuccess && (

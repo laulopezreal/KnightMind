@@ -420,6 +420,42 @@ async def get_job_status(job_id: str):
         )
 
 
+@app.post("/jobs/{job_id}/cancel", response_model=JobStatusResponse)
+async def cancel_job(job_id: str):
+    """
+    Cancel a running or queued job.
+    
+    Sets the job status to 'canceled' if it's currently queued or running.
+    The worker will detect this and stop processing.
+    """
+    with SessionLocal() as db:
+        job = db.get(Job, job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+        
+        # Only allow cancellation of queued or running jobs
+        if job.status not in [JobStatus.QUEUED, JobStatus.RUNNING]:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Cannot cancel job with status '{job.status}'"
+            )
+        
+        # Update job status to canceled
+        job.status = JobStatus.CANCELED
+        job.message = "Canceled by user"
+        from datetime import datetime, timezone
+        job.updated_at = datetime.now(timezone.utc)
+        db.commit()
+        
+        return JobStatusResponse(
+            job_id=job.id,
+            status=job.status,
+            message=job.message,
+            progress=job.progress_current,
+            result=job.result_json
+        )
+
+
 @app.get("/puzzles/daily", response_model=DailyPuzzlesResponse)
 async def get_daily_puzzles(
     username: str = Query(..., description="Username to get puzzles for"),

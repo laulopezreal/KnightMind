@@ -229,3 +229,16 @@ export async function getJobStatus(jobId: string): Promise<JobStatusResponse> {
   return response.json();
 }
 
+export async function cancelJob(jobId: string): Promise<JobStatusResponse> {
+  const response = await fetch(`${API_BASE}/jobs/${jobId}/cancel`, {
+    method: 'POST',
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    const detail = errorData.detail || response.statusText;
+    throw new ApiError(`Failed to cancel job: ${detail}`, response.status, detail);
+  }
+
+  return response.json();
+}
