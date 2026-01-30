@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { getJobStatus, type JobStatusResponse } from '../api/client';
 
 interface JobPollingOptions {
@@ -17,83 +17,61 @@ export function useJobPolling(jobId: string | null, options: JobPollingOptions =
     } = options;
 
     const [job, setJob] = useState<JobStatusResponse | null>(null);
-    const [isPolling, setIsPolling] = useState(false);
-    const [error, setError] = useState<Error | null>(null);
-    const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-    const isMounted = useRef(true);
 
-    // Keep track of backoff
-    const [backoff, setBackoff] = useState(pollInterval);
-
-    const stopPolling = useCallback(() => {
-        setIsPolling(false);
-        if (timeoutRef.current) {
-            clearTimeout(timeoutRef.current);
-            timeoutRef.current = null;
-        }
-    }, []);
-
-    const poll = useCallback(async () => {
-        if (!jobId || !enabled) return;
-
-        try {
-            const status = await getJobStatus(jobId);
-
-            if (isMounted.current) {
-                setJob(status);
-                // Reset backoff on successful call
-                setBackoff(pollInterval);
-            }
-
-            if (status.status === 'succeeded') {
-                stopPolling();
-                onSuccess?.(status);
-            } else if (status.status === 'failed' || status.status === 'canceled') {
-                stopPolling();
-                // Job-level error (logic fail, not network fail)
-                if (status.status === 'failed') {
-                    // Only treat as error hook callback if it's a "failure" state
-                    onError?.(new Error(status.message || 'Job failed'));
-                }
-            } else {
-                // Queued or running, continue polling
-                if (isMounted.current) {
-                    timeoutRef.current = setTimeout(poll, pollInterval);
-                }
-            }
-        } catch (err) {
-
-            if (isMounted.current) {
-                // Keep the old job state (don't wipe it out on transient network error)
-                // but maybe update error state
-                // setError(errorObj); // Optional: do we want to show error immediately?
-
-                // Exponential backoff
-                const nextBackoff = Math.min(backoff * 2, 10000); // multiple of interval, cap at 10s
-                setBackoff(nextBackoff);
-
-                // Retry
-                timeoutRef.current = setTimeout(poll, nextBackoff);
-            }
-        }
-    }, [jobId, enabled, pollInterval, backoff, onSuccess, onError, stopPolling]);
+    // Store callbacks in refs to avoid effect re-runs
+    const callbacksRef = useRef({ onSuccess, onError });
+    useEffect(() => {
+        callbacksRef.current = { onSuccess, onError };
+    }, [onSuccess, onError]);
 
     useEffect(() => {
-        isMounted.current = true;
-
-        if (jobId && enabled) {
-            setIsPolling(true);
-            setError(null);
-            poll();
-        } else {
-            setIsPolling(false);
+        if (!jobId || !enabled) {
+            return;
         }
 
-        return () => {
-            isMounted.current = false;
-            if (timeoutRef.current) clearTimeout(timeoutRef.current);
-        };
-    }, [jobId, enabled]); // Intentionally exclude 'poll' to avoid loop if poll changes (useCallback handles deps)
+        let timeoutId: ReturnType<typeof setTimeout>;
+        let isMounted = true;
+        let currentBackoff = pollInterval;
 
-    return { job, isPolling, error, stopPolling };
+        const poll = async () => {
+            try {
+                const status = await getJobStatus(jobId);
+
+                if (!isMounted) return;
+
+                setJob(status);
+
+                if (status.status === 'succeeded') {
+                    callbacksRef.current.onSuccess?.(status);
+                } else if (status.status === 'failed' || status.status === 'canceled') {
+                    if (status.status === 'failed') {
+                        const err = new Error(status.message || 'Job failed');
+                        callbacksRef.current.onError?.(err);
+                    }
+                } else {
+                    // Running/Queued - continue polling
+                    currentBackoff = pollInterval; // Reset backoff
+                    timeoutId = setTimeout(poll, pollInterval);
+                }
+            } catch {
+                if (!isMounted) return;
+
+                // Exponential backoff
+                currentBackoff = Math.min(currentBackoff * 2, 10000);
+                timeoutId = setTimeout(poll, currentBackoff);
+            }
+        };
+
+        poll();
+
+        return () => {
+            isMounted = false;
+            clearTimeout(timeoutId);
+        };
+    }, [jobId, enabled, pollInterval]);
+
+    // Derive isPolling from job state
+    const isPolling = !!jobId && !!enabled && !!job && (job.status === 'queued' || job.status === 'running');
+
+    return { job, isPolling };
 }
