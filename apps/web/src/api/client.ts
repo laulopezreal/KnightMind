@@ -1,5 +1,13 @@
 const API_BASE = '/api';
 
+export interface JobStatusResponse {
+  job_id: string;
+  status: 'queued' | 'running' | 'succeeded' | 'failed' | 'canceled';
+  message?: string;
+  progress?: number;
+  result?: unknown;
+}
+
 export interface ImportResult {
   message: string;
   games_count: number;
