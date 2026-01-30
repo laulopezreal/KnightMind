@@ -186,6 +186,21 @@ Audit log of every review session.
 - `result`: Outcome ('pass' | 'fail')
 - `time_spent_ms`: Duration of the session
 
+### Spaced Repetition Logic
+
+The system uses a simple deterministic scheduling algorithm:
+
+- **On FAIL**:
+  - `interval_days = 1`
+  - `ease_factor = max(1.3, ease_factor - 0.2)`
+  - `next_due_at = now + 1 day`
+- **On PASS**:
+  - If new (no interval): `interval_days = 1`
+  - If `interval_days == 1`: `interval_days = 3`
+  - Otherwise: `interval_days = round(interval_days * ease_factor)`
+  - `ease_factor = min(2.8, ease_factor + 0.05)`
+  - `next_due_at = now + interval_days`
+
 ## Operations & Deployment
  
  ### Database Migrations
@@ -216,7 +231,9 @@ Audit log of every review session.
 | GET | `/engine/status` | Check Stockfish availability |
 | POST | `/puzzles/generate?username=...&max_games=30&max_puzzles=30` | Start puzzle generation job (Async) |
 | GET | `/jobs/{job_id}` | Get job status (queued, running, succeeded, failed) |
-| GET | `/puzzles/daily?username=...&n=5` | Get daily puzzle set (rotates) |
+| GET | `/puzzles/daily?username=...&n=5` | Get daily puzzle set (legacy selection) |
+| GET | `/puzzles/due?username=...&n=5` | Get puzzles prioritized by SR (due first, then new) |
+| POST | `/puzzles/{puzzle_id}/review` | Record review result and update SR scheduling |
 
 ## Tech Stack
 
