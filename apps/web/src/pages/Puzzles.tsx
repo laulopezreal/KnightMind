@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { Chessboard } from 'react-chessboard';
 import { Chess } from 'chess.js';
-import { generatePuzzles, getDailyPuzzles, getUsers, cancelJob, ApiError, type Puzzle, startSession, completeSession, getRecentSessions, reviewPuzzle, type SessionSummary } from '../api/client';
+import { generatePuzzles, getDailyPuzzles, getUsers, cancelJob, ApiError, type Puzzle, startSession, completeSession, getRecentSessions, reviewPuzzle, getSession, type SessionSummary } from '../api/client';
 import { JobStatusCard } from '../components/JobStatusCard';
 <<<<<<< HEAD
 import { useJobPolling } from '../hooks/useJobPolling';
@@ -29,6 +29,7 @@ export default function Puzzles() {
     const [sessionSummary, setSessionSummary] = useState<SessionSummary | null>(null);
     const [recentSessions, setRecentSessions] = useState<SessionSummary[]>([]);
     const [reviewedCount, setReviewedCount] = useState(0);
+    const [isResumingSession, setIsResumingSession] = useState(false);
 
     // Mock progress for now until we hook up real polling
     // const mockProgress = 0; 
@@ -56,7 +57,39 @@ export default function Puzzles() {
         // Load active session
         const savedSessionId = localStorage.getItem(`knightmind:session:${username}`);
         if (savedSessionId) {
-            setActiveSessionId(savedSessionId);
+            // Validate session with backend
+            setIsResumingSession(true);
+            getSession(savedSessionId)
+                .then(session => {
+                    if (session.completed_at) {
+                        // Session already completed, clear it
+                        localStorage.removeItem(`knightmind:session:${username}`);
+                        setActiveSessionId(null);
+                    } else {
+                        // Session valid and active
+                        setActiveSessionId(session.session_id);
+                        setSessionSummary(session);
+                        // Convert pass/fail count to reviewed count
+                        setReviewedCount(session.pass_count + session.fail_count);
+
+                        // We need to load puzzles if we're resuming
+                        // Start a new generation job to get puzzles
+                        setIsLoading(true);
+                        generatePuzzles(username, session.requested_n)
+                            .then(response => {
+                                setActiveJobId(response.job_id);
+                            })
+                            .catch(err => setError(err instanceof Error ? err.message : 'Failed to load puzzles'))
+                            .finally(() => setIsLoading(false));
+                    }
+                })
+                .catch(err => {
+                    // Session not found or error, clear it
+                    console.error("Failed to resume session:", err);
+                    localStorage.removeItem(`knightmind:session:${username}`);
+                    setActiveSessionId(null);
+                })
+                .finally(() => setIsResumingSession(false));
         }
 
         // Load recent sessions
@@ -401,13 +434,40 @@ export default function Puzzles() {
                     <div className="order-1 lg:order-2 space-y-8 flex flex-col justify-center">
                         <div className="space-y-2">
                             <div className="flex justify-between items-center bg-primary/5 p-4 rounded-sm border-l-2 border-primary">
-                                <div className="flex flex-col">
-                                    <span className="font-serif text-xl text-primary">
-                                        {currentPuzzle.title || "Puzzle"}
-                                        <span className="text-base font-normal opacity-50 ml-2 font-sans">
-                                            {currentIndex + 1} / {puzzles.length}
+                                <div className="flex flex-col w-full">
+                                    {activeSessionId && sessionSummary && (
+                                        <div className="bg-primary/5 border border-primary/20 rounded-lg p-4 mb-4 w-full">
+                                            <div className="flex justify-between items-center mb-2">
+                                                <span className="font-serif text-primary font-medium">Session in Progress</span>
+                                                <span className="text-sm font-mono text-primary/60">
+                                                    {reviewedCount} / {sessionSummary.requested_n}
+                                                </span>
+                                            </div>
+
+                                            {/* Progress Bar */}
+                                            <div className="h-2 bg-primary/10 rounded-full overflow-hidden">
+                                                <div
+                                                    className="h-full bg-primary transition-all duration-500 ease-out"
+                                                    style={{ width: `${Math.min(100, (reviewedCount / sessionSummary.requested_n) * 100)}%` }}
+                                                />
+                                            </div>
+
+                                            {isResumingSession && (
+                                                <div className="text-xs text-center mt-2 text-primary/60 animate-pulse">
+                                                    Resuming previous session...
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
+
+                                    <div className="flex justify-between items-center">
+                                        <span className="font-serif text-xl text-primary">
+                                            {currentPuzzle.title || "Puzzle"}
+                                            <span className="text-base font-normal opacity-50 ml-2 font-sans">
+                                                {currentIndex + 1} / {puzzles.length}
+                                            </span>
                                         </span>
-                                    </span>
+                                    </div>
                                 </div>
                                 <span className="font-sans text-sm tracking-wide uppercase text-primary/60">
                                     {currentPuzzle.side_to_move === 'white' ? 'White to Move' : 'Black to Move'}

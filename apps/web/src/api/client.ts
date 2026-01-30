@@ -339,6 +339,18 @@ export interface ReviewPuzzleResponse {
   };
 }
 
+export async function getSession(sessionId: string): Promise<SessionSummary> {
+  const response = await fetch(`${API_BASE}/sessions/${sessionId}`);
+
+  if (!response.ok) {
+    const errorData: { detail?: string } = await response.json().catch(() => ({}));
+    const detail = errorData.detail || response.statusText;
+    throw new ApiError(`Failed to get session: ${detail}`, response.status, detail);
+  }
+
+  return response.json();
+}
+
 export async function startSession(username: string, n: number = 5): Promise<{ session_id: string; requested_n: number }> {
   const response = await fetch(`${API_BASE}/sessions/start`, {
     method: 'POST',
