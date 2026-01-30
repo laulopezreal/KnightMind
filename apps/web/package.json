@@ -7,7 +7,10 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "playwright test",
+    "test:ui": "playwright test --ui",
+    "test:visual": "playwright test e2e/visual.spec.ts"
   },
   "dependencies": {
     "@types/d3": "^7.4.3",
