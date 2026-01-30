@@ -306,7 +306,14 @@ export default function Puzzles() {
                     <div className="order-1 lg:order-2 space-y-8 flex flex-col justify-center">
                         <div className="space-y-2">
                             <div className="flex justify-between items-center bg-primary/5 p-4 rounded-sm border-l-2 border-primary">
-                                <span className="font-serif text-xl text-primary">Puzzle {currentIndex + 1} / {puzzles.length}</span>
+                                <div className="flex flex-col">
+                                    <span className="font-serif text-xl text-primary">
+                                        {currentPuzzle.title || "Puzzle"}
+                                        <span className="text-base font-normal opacity-50 ml-2 font-sans">
+                                            {currentIndex + 1} / {puzzles.length}
+                                        </span>
+                                    </span>
+                                </div>
                                 <span className="font-sans text-sm tracking-wide uppercase text-primary/60">
                                     {currentPuzzle.side_to_move === 'white' ? 'White to Move' : 'Black to Move'}
                                 </span>

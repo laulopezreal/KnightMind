@@ -68,6 +68,8 @@ class PuzzleStats(Base):
 
     puzzle_id: Mapped[str] = mapped_column(String, primary_key=True)
     username: Mapped[str] = mapped_column(String, index=True)
+    title: Mapped[str] = mapped_column(String, nullable=True)
+    primary_motif: Mapped[str] = mapped_column(String, nullable=True)
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     pass_count: Mapped[int] = mapped_column(Integer, default=0)
     fail_count: Mapped[int] = mapped_column(Integer, default=0)
