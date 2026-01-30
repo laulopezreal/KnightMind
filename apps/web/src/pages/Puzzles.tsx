@@ -60,7 +60,7 @@ export default function Puzzles() {
         }
 
         // Load recent sessions
-        getRecentSessions(username, 5).then(setRecentSessions).catch(console.error);
+        getRecentSessions(username, 5).then(setRecentSessions).catch(err => setError(err instanceof Error ? err.message : 'Failed to load recent sessions'));
     }, [username]);
 
     const { job, isPolling: isJobPolling } = useJobPolling(activeJobId, {
