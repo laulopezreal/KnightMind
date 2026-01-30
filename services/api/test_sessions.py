@@ -14,6 +14,7 @@ from services.api.sessions import (
     start_session,
     complete_session,
     get_recent_sessions,
+    get_session,
     StartSessionRequest,
     CompleteSessionRequest
 )
@@ -239,3 +240,30 @@ def test_review_without_session_backward_compatible(db_session):
     assert review.session_id is None
     assert review.puzzle_id == "puzzle1"
     assert review.result == "pass"
+
+@pytest.mark.asyncio
+async def test_get_session(db_session):
+    """Test getting a session by ID."""
+    request = StartSessionRequest(username="testuser", n=5)
+    start_response = await start_session(request, db_session)
+    session_id = start_response.session_id
+    
+    session = await get_session(session_id, db_session)
+    
+    assert session.session_id == session_id
+    assert session.requested_n == 5
+    # session summary does not return username
+    
+    assert session.pass_count == 0
+    assert session.fail_count == 0
+
+
+@pytest.mark.asyncio
+async def test_get_session_not_found(db_session):
+    """Test getting a non-existent session."""
+    from fastapi import HTTPException
+    
+    with pytest.raises(HTTPException) as exc_info:
+        await get_session("nonexistent", db_session)
+    
+    assert exc_info.value.status_code == 404

@@ -48,6 +48,22 @@ from services.ingest import (
 )
 
 from services.api.puzzles.identity import backfill_puzzle_identity
+from services.api.jobs.cleanup_sessions import cleanup_abandoned_sessions
+import asyncio
+
+async def run_session_cleanup():
+    """Background task to cleanup abandoned sessions periodically."""
+    while True:
+        try:
+            # Run cleanup
+            with SessionLocal() as db:
+                await asyncio.to_thread(cleanup_abandoned_sessions, db)
+        except Exception as e:
+            print(f"Error in session cleanup: {e}")
+            
+        # Sleep for 1 hour
+        await asyncio.sleep(3600)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -60,7 +76,18 @@ async def lifespan(app: FastAPI):
     # with SessionLocal() as db:
     #     backfill_puzzle_identity(db)
         
+    # Start session cleanup background task
+    cleanup_task = asyncio.create_task(run_session_cleanup())
+        
     yield
+    
+    # Cancel cleanup task on shutdown
+    cleanup_task.cancel()
+    try:
+        await cleanup_task
+    except asyncio.CancelledError:
+        pass
+        
     await worker.stop()
 
 app = FastAPI(title="KnightMind API", version="0.1.0", lifespan=lifespan)
