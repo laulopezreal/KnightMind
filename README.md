@@ -158,7 +158,26 @@ data/
 
 **Unique constraint:** `(username, source_game_id, ply)` prevents duplicate puzzles.
 
-## API Endpoints
+## Operations & Deployment
+ 
+ ### Database Migrations
+ 
+ Operations on the database (like creating tables) are managed by Alembic. When deploying to Render or running locally after an update, ensure you run:
+ 
+ ```bash
+ alembic upgrade head
+ ```
+ 
+ This should be part of your Build Command or Run (Start) Command script.
+ 
+ ### Background Worker
+ 
+ The API process runs a background worker to generate puzzles.
+ 
+ - **Single Instance**: Ensure you run only **one** instance of the API service (WEB_CONCURRENCY=1) to prevent double-processing/locking issues, as the worker runs in-process.
+ - **Crash Recovery**: If the service restarts, the worker automatically resets any "running" jobs to "queued" to prevent stuck jobs.
+ 
+ ## API Endpoints
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
