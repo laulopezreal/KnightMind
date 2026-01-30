@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { getHealth, getOpsStatus } from '../api/client';
+import { getHealth, getOpsStatus, ApiError } from '../api/client';
 import type { HealthResponse, OpsStatusResponse, RecentJob } from '../api/client';
 
 export default function Ops() {
@@ -14,10 +14,17 @@ export default function Ops() {
             setHealth(h);
             setOpsStatus(s);
             setError(null);
-        } catch (err: any) {
+        } catch (err) {
             console.error('Failed to fetch ops data:', err);
-            // More verbose error
-            setError(`Failed to load operational data: ${err.message || err.detail || 'Check if API is running and proxy is correctly configured.'}`);
+            let msg = 'Check if API is running and proxy is correctly configured.';
+
+            if (err instanceof ApiError) {
+                msg = err.detail || err.message;
+            } else if (err instanceof Error) {
+                msg = err.message;
+            }
+
+            setError(`Failed to load operational data: ${msg}`);
         } finally {
             setLoading(false);
         }
@@ -209,7 +216,7 @@ export default function Ops() {
                                                     <div className="flex flex-col items-end opacity-70">
                                                         <span className="font-serif italic">{job.result_json.generated} results</span>
                                                         <span className="text-[9px] opacity-40 font-mono tracking-tighter">
-                                                            {calculateCacheRate(job.result_json.cache_hits, job.result_json.cache_misses)}% hit rate
+                                                            {calculateCacheRate(job.result_json.cache_hits ?? 0, job.result_json.cache_misses ?? 0)}% hit rate
                                                         </span>
                                                     </div>
                                                 ) : (
