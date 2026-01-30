@@ -27,9 +27,9 @@ def upgrade() -> None:
     sa.Column('created_at', sa.DateTime(), nullable=False),
     sa.Column('completed_at', sa.DateTime(), nullable=True),
     sa.Column('requested_n', sa.Integer(), nullable=False),
-    sa.Column('pass_count', sa.Integer(), nullable=False),
-    sa.Column('fail_count', sa.Integer(), nullable=False),
-    sa.Column('total_time_ms', sa.Integer(), nullable=False),
+    sa.Column('pass_count', sa.Integer(), nullable=False, server_default='0'),
+    sa.Column('fail_count', sa.Integer(), nullable=False, server_default='0'),
+    sa.Column('total_time_ms', sa.Integer(), nullable=False, server_default='0'),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_training_sessions_created_at'), 'training_sessions', ['created_at'], unique=False)
