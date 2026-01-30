@@ -7,6 +7,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy import select, or_
+from sqlalchemy.exc import IntegrityError
 
 import os
 import sys
@@ -41,7 +42,9 @@ from services.ingest import (
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    worker.start()
+    # Prevent worker startup in tests or if explicitly disabled
+    if os.environ.get("KNIGHTMIND_WORKER_DISABLED") != "true":
+        worker.start()
     yield
     await worker.stop()
 
@@ -340,36 +343,63 @@ async def generate_puzzles_endpoint(
     If a job is already running/queued for this user, returns the existing job status.
     """
     with SessionLocal() as db:
-        # Check for active job
-        stmt = select(Job).where(
-            Job.username == username,
-            or_(Job.status == JobStatus.QUEUED, Job.status == JobStatus.RUNNING)
-        )
-        existing_job = db.scalars(stmt).first()
+        # Optimistic locking: Try to create new job first
+        # The unique partial index on (username) WHERE status IN ('queued', 'running')
+        # ensures only one active job exists.
         
-        if existing_job:
+        try:
+            new_job = Job(
+                username=username,
+                status=JobStatus.QUEUED,
+                message="Queued for generation",
+                params={"max_games": max_games, "max_puzzles": max_puzzles}
+            )
+            db.add(new_job)
+            db.commit()
+            db.refresh(new_job)
+            
             return JobStatusResponse(
-                job_id=existing_job.id,
-                status=existing_job.status,
-                message="Job already in progress",
-                progress=existing_job.progress_current
+                job_id=new_job.id,
+                status=new_job.status,
+                message="Job queued",
+                progress=0
             )
             
-        new_job = Job(
-            username=username,
-            status=JobStatus.QUEUED,
-            message="Queued for generation"
-        )
-        db.add(new_job)
-        db.commit()
-        db.refresh(new_job)
-        
-        return JobStatusResponse(
-            job_id=new_job.id,
-            status=new_job.status,
-            message="Job queued",
-            progress=0
-        )
+        except IntegrityError:
+            db.rollback()
+            # Job already exists, fetch and return it
+            stmt = select(Job).where(
+                Job.username == username,
+                or_(Job.status == JobStatus.QUEUED, Job.status == JobStatus.RUNNING)
+            )
+            existing_job = db.scalars(stmt).first()
+            
+            if existing_job:
+                return JobStatusResponse(
+                    job_id=existing_job.id,
+                    status=existing_job.status,
+                    message="Job already in progress",
+                    progress=existing_job.progress_current
+                )
+            else:
+                # Should be rare: job finished right between insert failure and select
+                # Retry or return 500? Use recursion simplistically or just assume queued.
+                # If it finished, we can return the finished job if we query for it?
+                # But our index is only on active jobs. 
+                # If we are here, it means we collided, so it WAS active.
+                # If we don't find it now, it means it finished. 
+                # Let's find the latest job for user.
+                stmt = select(Job).where(Job.username == username).order_by(Job.created_at.desc())
+                latest_job = db.scalars(stmt).first()
+                if latest_job:
+                     return JobStatusResponse(
+                        job_id=latest_job.id,
+                        status=latest_job.status,
+                        message="Job completed recently",
+                        progress=latest_job.progress_current,
+                        result=latest_job.result_json
+                    )
+                raise HTTPException(status_code=500, detail="Could not create job or find existing one")
 
 
 @app.get("/jobs/{job_id}", response_model=JobStatusResponse)

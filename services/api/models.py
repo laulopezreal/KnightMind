@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import String, Integer, Text, JSON, DateTime
+from sqlalchemy import String, Integer, Text, JSON, DateTime, Index, text
 from sqlalchemy.orm import Mapped, mapped_column
 from enum import Enum
 from services.api.db import Base
@@ -14,6 +14,15 @@ class JobStatus(str, Enum):
 
 class Job(Base):
     __tablename__ = "jobs"
+    __table_args__ = (
+        Index(
+            'ix_jobs_active_username',
+            'username',
+            unique=True,
+            postgresql_where=text("status IN ('queued', 'running')"),
+            sqlite_where=text("status IN ('queued', 'running')")
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     type: Mapped[str] = mapped_column(String, default="puzzle_generation")
