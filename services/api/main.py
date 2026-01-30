@@ -3,11 +3,12 @@ from dataclasses import asdict
 from datetime import date, datetime, timezone
 from typing import Literal
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from sqlalchemy import select, or_
+from sqlalchemy import select, or_, func
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
 
 import os
 import sys
@@ -15,8 +16,8 @@ import sys
 # Add project root to path to verify imports work even if CWD is services/api
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
-from services.api.db import SessionLocal
-from services.api.models import Job, JobStatus
+from services.api.db import SessionLocal, get_db
+from services.api.models import Job, JobStatus, PuzzleStats, PuzzleReview
 from services.api.worker import worker
 from services.api.engine import (
     EngineNotAvailableError,
@@ -28,6 +29,11 @@ from services.api.engine import (
 from services.api.openings import build_opening_tree
 from services.api.puzzles import generate_puzzles
 from services.api.storage import get_puzzle_storage, get_storage
+from services.api.storage.spaced_repetition import (
+    get_due_puzzles,
+    insert_puzzle_review,
+    update_puzzle_stats
+)
 from services.ingest import (
     ImportError as ChessComImportError,
 )
@@ -50,6 +56,9 @@ async def lifespan(app: FastAPI):
     await worker.stop()
 
 app = FastAPI(title="KnightMind API", version="0.1.0", lifespan=lifespan)
+
+from services.api.ops import router as ops_router
+app.include_router(ops_router)
 
 # CORS configuration
 app.add_middleware(
@@ -167,6 +176,19 @@ class JobStatusResponse(BaseModel):
 class DailyPuzzlesResponse(BaseModel):
     puzzles: list[dict]
     count: int
+
+
+class DuePuzzlesResponse(BaseModel):
+    due_count: int
+    returned_count: int
+    now: datetime
+    puzzles: list[dict]
+
+
+class ReviewRequest(BaseModel):
+    username: str
+    result: Literal["pass", "fail"]
+    time_spent_ms: int | None = None
 
 
 @app.get("/")
@@ -502,3 +524,118 @@ async def get_daily_puzzles(
         puzzles=puzzles_dict,
         count=len(puzzles_dict)
     )
+
+
+@app.get("/puzzles/due", response_model=DuePuzzlesResponse)
+async def get_due_puzzles_endpoint(
+    username: str = Query(..., description="Username to get puzzles for"),
+    n: int = Query(5, ge=1, le=20, description="Number of puzzles to return"),
+    db: Session = Depends(get_db)
+):
+    """
+    Get puzzles due for review, followed by new puzzles.
+    """
+    puzzle_storage = get_puzzle_storage()
+    
+    # 1. Load index to get all candidate IDs
+    index = puzzle_storage._get_user_index(username)
+    puzzle_ids = list(index.values())
+    
+    if not puzzle_ids:
+        raise HTTPException(
+            status_code=404, 
+            detail=f"No puzzles found for user '{username}'. Generate puzzles first."
+        )
+    
+    # 2. Get prioritized IDs and their stats
+    due_ids, all_stats = get_due_puzzles(db, username, puzzle_ids, n)
+    
+    # 3. Load content and merge with stats
+    result_puzzles = []
+    for pid in due_ids:
+        puzzle = puzzle_storage.get_puzzle(username, pid)
+        if not puzzle:
+            continue
+        
+        p_dict = asdict(puzzle)
+        stats = all_stats.get(pid)
+        if stats:
+            p_dict.update({
+                "next_due_at": stats.next_due_at,
+                "interval_days": stats.interval_days,
+                "ease_factor": stats.ease_factor,
+                "attempts": stats.attempts,
+                "pass_count": stats.pass_count,
+                "fail_count": stats.fail_count,
+                "last_reviewed_at": stats.last_reviewed_at,
+                "last_result": stats.last_result
+            })
+        else:
+            # Default values for new puzzles
+            p_dict.update({
+                "next_due_at": None,
+                "interval_days": None,
+                "ease_factor": 2.0,
+                "attempts": 0,
+                "pass_count": 0,
+                "fail_count": 0,
+                "last_reviewed_at": None,
+                "last_result": None
+            })
+        result_puzzles.append(p_dict)
+        
+    # 4. Total due count for metadata
+    now = datetime.now(timezone.utc)
+    due_count = db.scalar(
+        select(func.count(PuzzleStats.puzzle_id))
+        .where(
+            PuzzleStats.username == username,
+            PuzzleStats.next_due_at <= now
+        )
+    ) or 0
+    
+    return {
+        "due_count": due_count,
+        "returned_count": len(result_puzzles),
+        "now": now,
+        "puzzles": result_puzzles
+    }
+
+
+@app.post("/puzzles/{puzzle_id}/review")
+async def review_puzzle(
+    puzzle_id: str,
+    request: ReviewRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Record a puzzle review and update scheduling.
+    """
+    puzzle_storage = get_puzzle_storage()
+    if not puzzle_storage.get_puzzle(request.username, puzzle_id):
+        raise HTTPException(status_code=404, detail="Puzzle not found")
+        
+    # 1. Record individual review
+    insert_puzzle_review(
+        db, 
+        puzzle_id, 
+        request.username, 
+        request.result, 
+        request.time_spent_ms
+    )
+    
+    # 2. Update aggregate stats (triggers scheduling logic)
+    stats = update_puzzle_stats(db, puzzle_id, request.username, request.result)
+    
+    return {
+        "next_due_at": stats.next_due_at,
+        "interval_days": stats.interval_days,
+        "ease_factor": stats.ease_factor,
+        "stats": {
+            "attempts": stats.attempts,
+            "pass_count": stats.pass_count,
+            "fail_count": stats.fail_count,
+            "last_reviewed_at": stats.last_reviewed_at,
+            "last_result": stats.last_result
+        }
+    }
