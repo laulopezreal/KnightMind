@@ -162,7 +162,7 @@ def get_due_puzzles(
     username: str,
     puzzle_ids: list[str],
     n: int = 5
-) -> list[PuzzleStats]:
+) -> tuple[list[str], dict[str, PuzzleStats]]:
     """
     Get puzzles for the user from the candidate list, ordered by SR priority.
     
