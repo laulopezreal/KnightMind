@@ -6,13 +6,21 @@ returning the best move and evaluation in pawns from the side-to-move perspectiv
 """
 
 import os
+import hashlib
+import logging
 from dataclasses import dataclass
 from typing import Optional
+from datetime import datetime, timezone
 
 try:
     from stockfish import Stockfish as StockfishEngine
 except ImportError:
     StockfishEngine = None
+
+from services.api.db import SessionLocal
+from services.api.models import FenEvalCache
+
+logger = logging.getLogger(__name__)
 
 
 class StockfishNotFoundError(Exception):
@@ -182,3 +190,121 @@ def is_stockfish_available() -> bool:
         return True
     except (StockfishNotFoundError, StockfishError):
         return False
+
+
+def _compute_cache_key(fen: str, depth: int, movetime_ms: Optional[int], engine_name: str) -> str:
+    """
+    Compute deterministic cache key for a FEN + engine settings.
+    
+    Args:
+        fen: FEN string
+        depth: Search depth
+        movetime_ms: Move time in milliseconds (if used instead of depth)
+        engine_name: Engine identifier
+        
+    Returns:
+        SHA256 hash as hex string
+    """
+    # Build key components
+    key_parts = [
+        f"fen={fen}",
+        f"depth={depth}",
+        f"movetime={movetime_ms}" if movetime_ms else "",
+        f"engine={engine_name}"
+    ]
+    key_string = "|".join(p for p in key_parts if p)
+    
+    # Hash for consistent key length
+    return hashlib.sha256(key_string.encode()).hexdigest()
+
+
+def get_or_compute_eval(
+    fen: str, 
+    engine: Optional["StockfishEngine"] = None,
+    cache_stats: Optional[dict] = None
+) -> EvalResult:
+    """
+    Get evaluation from cache or compute with Stockfish.
+    
+    This is the main entry point for all evaluations - it checks the cache first,
+    and only calls Stockfish if there's a cache miss.
+    
+    Args:
+        fen: FEN string to evaluate
+        engine: Optional existing Stockfish engine instance
+        cache_stats: Optional dict to track cache hits/misses (will be updated in-place)
+        
+    Returns:
+        EvalResult with best_move_uci and eval
+        
+    Raises:
+        StockfishNotFoundError: If Stockfish is not available
+        StockfishError: If evaluation fails
+    """
+    # Get engine settings for cache key
+    depth = get_search_depth()
+    movetime_ms = None  # We're using depth-based search
+    engine_name = get_stockfish_path()
+    
+    # Compute cache key
+    cache_key = _compute_cache_key(fen, depth, movetime_ms, engine_name)
+    
+    # Try cache lookup
+    try:
+        with SessionLocal() as db:
+            cached = db.get(FenEvalCache, cache_key)
+            if cached:
+                # Cache hit!
+                if cache_stats is not None:
+                    cache_stats['hits'] = cache_stats.get('hits', 0) + 1
+                logger.debug(f"Cache hit for FEN: {fen[:50]}...")
+                return EvalResult(
+                    best_move_uci=cached.best_move_uci,
+                    eval=cached.eval_pawns
+                )
+    except Exception as e:
+        # Cache lookup failed, log but continue to compute
+        logger.warning(f"Cache lookup failed: {e}")
+    
+    # Cache miss - compute evaluation
+    if cache_stats is not None:
+        cache_stats['misses'] = cache_stats.get('misses', 0) + 1
+    
+    logger.debug(f"Cache miss for FEN: {fen[:50]}...")
+    result = evaluate_fen(fen, engine=engine)
+    
+    # Store in cache
+    try:
+        with SessionLocal() as db:
+            cache_entry = FenEvalCache(
+                key=cache_key,
+                fen=fen,
+                best_move_uci=result.best_move_uci,
+                eval_pawns=result.eval,
+                depth=depth,
+                movetime_ms=movetime_ms,
+                engine_name=engine_name,
+                engine_version=None,  # Could extract from engine if available
+                created_at=datetime.now(timezone.utc)
+            )
+            db.add(cache_entry)
+            try:
+                db.commit()
+            except Exception as commit_error:
+                # Handle concurrent insert (unique constraint violation)
+                db.rollback()
+                # Re-select to get the value inserted by another process
+                cached = db.get(FenEvalCache, cache_key)
+                if cached:
+                    logger.debug(f"Concurrent insert detected, using existing cache entry")
+                    return EvalResult(
+                        best_move_uci=cached.best_move_uci,
+                        eval=cached.eval_pawns
+                    )
+                # If still not found, something else went wrong
+                logger.error(f"Failed to cache evaluation: {commit_error}")
+    except Exception as e:
+        # Cache insert failed, log but return the computed result
+        logger.error(f"Failed to cache evaluation: {e}")
+    
+    return result

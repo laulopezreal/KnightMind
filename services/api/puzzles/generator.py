@@ -12,7 +12,7 @@ from dataclasses import dataclass
 import chess
 import chess.pgn
 
-from services.api.engine import create_engine, evaluate_fen
+from services.api.engine import create_engine, get_or_compute_eval
 from services.api.storage import get_puzzle_storage, get_storage
 import logging
 
@@ -38,6 +38,8 @@ class GenerationResult:
     generated: int  # Number of new puzzles created
     skipped: int  # Number of duplicates skipped
     analyzed_positions: int  # Total positions analyzed
+    cache_hits: int = 0  # Number of cache hits
+    cache_misses: int = 0  # Number of cache misses
 
 
 def _is_user_move(board: chess.Board, username: str, white_username: str, black_username: str) -> bool:
@@ -106,6 +108,7 @@ def generate_puzzles(
     generated = 0
     skipped = 0
     analyzed_positions = 0
+    cache_stats = {'hits': 0, 'misses': 0}  # Track cache performance
 
     for game_meta in recent_games:
         # Check for cancellation before processing each game
@@ -155,8 +158,8 @@ def generate_puzzles(
             side_to_move = "white" if board.turn == chess.WHITE else "black"
 
             try:
-                # Evaluate position before the move
-                eval_result_before = evaluate_fen(fen_before, engine=engine)
+                # Evaluate position before the move (with cache)
+                eval_result_before = get_or_compute_eval(fen_before, engine=engine, cache_stats=cache_stats)
                 eval_before = eval_result_before.eval
                 best_move_uci = eval_result_before.best_move_uci
 
@@ -164,9 +167,9 @@ def generate_puzzles(
                 played_move_uci = move.uci()
                 board.push(move)
 
-                # Evaluate position after the move
+                # Evaluate position after the move (with cache)
                 fen_after = board.fen()
-                eval_result_after = evaluate_fen(fen_after, engine=engine)
+                eval_result_after = get_or_compute_eval(fen_after, engine=engine, cache_stats=cache_stats)
                 eval_after = eval_result_after.eval
 
                 # Calculate swing
@@ -207,4 +210,7 @@ def generate_puzzles(
         generated=generated,
         skipped=skipped,
         analyzed_positions=analyzed_positions,
+        cache_hits=cache_stats['hits'],
+        cache_misses=cache_stats['misses'],
     )
+
