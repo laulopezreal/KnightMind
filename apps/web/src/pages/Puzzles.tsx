@@ -268,7 +268,7 @@ export default function Puzzles() {
                             <Chessboard
                                 options={{
                                     position: game.fen(),
-                                    onPieceDrop: (sourceSquare, targetSquare) => onPieceDrop(sourceSquare, targetSquare),
+                                    onPieceDrop: ({ sourceSquare, targetSquare }) => targetSquare ? onPieceDrop(sourceSquare, targetSquare) : false,
                                     boardOrientation: currentPuzzle.side_to_move === 'white' ? 'white' : 'black',
                                     darkSquareStyle: { backgroundColor: 'var(--color-chess-brown-700)' },
                                     lightSquareStyle: { backgroundColor: 'var(--color-chess-cream-300)' },
