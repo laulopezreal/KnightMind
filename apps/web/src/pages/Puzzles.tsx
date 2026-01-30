@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { Chessboard } from 'react-chessboard';
 import { Chess } from 'chess.js';
-import { generatePuzzles, getDailyPuzzles, getUsers, ApiError, type Puzzle } from '../api/client';
+import { generatePuzzles, getDailyPuzzles, getUsers, cancelJob, ApiError, type Puzzle } from '../api/client';
 import { JobStatusCard } from '../components/JobStatusCard';
 import { useJobPolling } from '../hooks/useJobPolling';
 
@@ -129,6 +129,18 @@ export default function Puzzles() {
         }
     };
 
+    const handleCancelJob = async () => {
+        if (!activeJobId) return;
+
+        try {
+            await cancelJob(activeJobId);
+            // Job status will be updated via polling
+        } catch (err) {
+            console.error('Failed to cancel job:', err);
+            setError(err instanceof Error ? err.message : 'Failed to cancel job');
+        }
+    };
+
     // Helper to determine active state
     const isGenerating = isJobPolling || (job?.status === 'queued' || job?.status === 'running');
 
@@ -252,6 +264,7 @@ export default function Puzzles() {
                             message={job.message}
                             progress={job.progress}
                             error={job.status === 'failed' ? job.message : undefined}
+                            onCancel={handleCancelJob}
                         />
                     )}
                     {isLoading && !isGenerating && (

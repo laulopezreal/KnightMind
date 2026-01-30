@@ -153,13 +153,33 @@ class JobWorker:
                 max_games = params.get("max_games", 30)
                 max_puzzles = params.get("max_puzzles", 30)
             
-            # Run generation (CPU bound)
+            # Create a cancellation check function
+            def check_cancellation() -> bool:
+                """Check if the job has been canceled."""
+                with SessionLocal() as db:
+                    stmt = select(Job).where(Job.id == job_id)
+                    job = db.scalars(stmt).first()
+                    if job and job.status == JobStatus.CANCELED:
+                        return True
+                return False
+            
+            # Run generation (CPU bound) with cancellation check
             result = await asyncio.to_thread(
                 generate_puzzles, 
                 username=username, 
                 max_games=max_games, 
-                max_puzzles=max_puzzles
+                max_puzzles=max_puzzles,
+                cancellation_check=check_cancellation
             )
+
+            # Check if job was canceled during execution
+            with SessionLocal() as db:
+                stmt = select(Job).where(Job.id == job_id)
+                job = db.scalars(stmt).first()
+                if job and job.status == JobStatus.CANCELED:
+                    logger.info(f"Job {job_id} was canceled during execution")
+                    # Job already marked as canceled, just return
+                    return
 
             # Update success
             with SessionLocal() as db:
@@ -183,9 +203,11 @@ class JobWorker:
                 stmt = select(Job).where(Job.id == job_id)
                 job = db.scalars(stmt).first()
                 if job:
-                    job.status = JobStatus.FAILED
-                    job.error_message = str(e)
-                    job.updated_at = datetime.now(timezone.utc)
+                    # Don't overwrite canceled status
+                    if job.status != JobStatus.CANCELED:
+                        job.status = JobStatus.FAILED
+                        job.error_message = str(e)
+                        job.updated_at = datetime.now(timezone.utc)
                     db.commit()
 
 worker = JobWorker()
