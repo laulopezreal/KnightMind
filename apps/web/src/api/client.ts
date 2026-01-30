@@ -5,7 +5,7 @@ export interface JobStatusResponse {
   status: 'queued' | 'running' | 'succeeded' | 'failed' | 'canceled';
   message?: string;
   progress?: number;
-  result?: any;
+  result?: unknown;
 }
 
 export interface ImportResult {
