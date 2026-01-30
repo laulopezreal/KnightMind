@@ -64,6 +64,7 @@ def generate_puzzles(
     username: str,
     max_games: int = 30,
     max_puzzles: int = 30,
+    cancellation_check: callable = None,
 ) -> GenerationResult:
     """
     Generate puzzles from a user's imported games by detecting blunders.
@@ -107,6 +108,11 @@ def generate_puzzles(
     analyzed_positions = 0
 
     for game_meta in recent_games:
+        # Check for cancellation before processing each game
+        if cancellation_check and cancellation_check():
+            logger.info(f"Puzzle generation canceled for {username}")
+            break
+            
         if generated >= max_puzzles:
             break
 
