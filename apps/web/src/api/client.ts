@@ -326,6 +326,19 @@ export interface SessionSummary {
   completed_at: string | null;
 }
 
+export interface ReviewPuzzleResponse {
+  next_due_at: string;
+  interval_days: number;
+  ease_factor: number;
+  stats: {
+    attempts: number;
+    pass_count: number;
+    fail_count: number;
+    last_reviewed_at: string;
+    last_result: string;
+  };
+}
+
 export async function startSession(username: string, n: number = 5): Promise<{ session_id: string; requested_n: number }> {
   const response = await fetch(`${API_BASE}/sessions/start`, {
     method: 'POST',
@@ -367,7 +380,7 @@ export async function getRecentSessions(username: string, limit: number = 10): P
   const response = await fetch(`${API_BASE}/sessions/recent?${params}`);
 
   if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
+    const errorData: { detail?: string } = await response.json().catch(() => ({}));
     const detail = errorData.detail || response.statusText;
     throw new ApiError(`Failed to get recent sessions: ${detail}`, response.status, detail);
   }
@@ -382,7 +395,7 @@ export async function reviewPuzzle(
   result: 'pass' | 'fail',
   timeSpentMs?: number,
   sessionId?: string
-): Promise<any> {
+): Promise<ReviewPuzzleResponse> {
   const response = await fetch(`${API_BASE}/puzzles/${puzzleId}/review`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

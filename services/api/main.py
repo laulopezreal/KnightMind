@@ -632,7 +632,7 @@ async def review_puzzle(
     if not puzzle_storage.get_puzzle(request.username, puzzle_id):
         raise HTTPException(status_code=404, detail="Puzzle not found")
     
-    # If session_id provided, validate session
+    # If session_id provided, validate session and update counters
     if request.session_id:
         from services.api.models import TrainingSession, PuzzleResult as PR
         
@@ -648,7 +648,7 @@ async def review_puzzle(
         if session.completed_at is not None:
             raise HTTPException(status_code=400, detail="Session already completed")
         
-        # Increment session counters
+        # Increment session counters (will be committed with review)
         if request.result == PR.PASS:
             session.pass_count += 1
         else:
@@ -657,8 +657,6 @@ async def review_puzzle(
         # Add time if provided
         if request.time_spent_ms:
             session.total_time_ms += request.time_spent_ms
-        
-        db.commit()
         
     # 1. Record individual review (with optional session_id)
     insert_puzzle_review(
@@ -672,6 +670,9 @@ async def review_puzzle(
     
     # 2. Update aggregate stats (triggers scheduling logic)
     stats = update_puzzle_stats(db, puzzle_id, request.username, request.result)
+    
+    # 3. Commit all changes atomically
+    db.commit()
     
     return {
         "next_due_at": stats.next_due_at,
