@@ -53,8 +53,11 @@ export function useJobPolling(jobId: string | null, options: JobPollingOptions =
                     currentBackoff = pollInterval; // Reset backoff
                     timeoutId = setTimeout(poll, pollInterval);
                 }
-            } catch {
+            } catch (error) {
                 if (!isMounted) return;
+
+                // Log error for debugging
+                console.error('Job polling request failed, retrying with backoff:', error);
 
                 // Exponential backoff
                 currentBackoff = Math.min(currentBackoff * 2, 10000);
