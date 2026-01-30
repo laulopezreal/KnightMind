@@ -53,7 +53,9 @@ export default function Puzzles() {
         }
 
         // Load recent sessions
-        getRecentSessions(username, 5).then(setRecentSessions).catch(err => setError(err instanceof Error ? err.message : 'Failed to load recent sessions'));
+        getRecentSessions(username, 5)
+            .then(setRecentSessions)
+            .catch(err => setError(err instanceof Error ? err.message : 'Failed to load recent sessions'));
     }, [username]);
 
     const { job, isPolling: isJobPolling } = useJobPolling(activeJobId, {
@@ -282,6 +284,12 @@ export default function Puzzles() {
         user.toLowerCase() !== username.toLowerCase()
     );
 
+    // Helper function to calculate accuracy percentage
+    const calculateAccuracy = (passCount: number, failCount: number): number => {
+        const total = passCount + failCount;
+        return total > 0 ? Math.round((passCount / total) * 100) : 0;
+    };
+
     return (
         <div className="space-y-12 animate-teedin">
             <section>
@@ -496,9 +504,7 @@ export default function Puzzles() {
                         </div>
                         <div className="text-center">
                             <div className="text-3xl font-serif text-primary">
-                                {sessionSummary.pass_count + sessionSummary.fail_count > 0
-                                    ? Math.round((sessionSummary.pass_count / (sessionSummary.pass_count + sessionSummary.fail_count)) * 100)
-                                    : 0}%
+                                {calculateAccuracy(sessionSummary.pass_count, sessionSummary.fail_count)}%
                             </div>
                             <div className="text-xs uppercase tracking-widest text-primary/40 mt-1">Accuracy</div>
                         </div>
@@ -531,9 +537,7 @@ export default function Puzzles() {
                                     <span className="text-green-600">{session.pass_count}P</span>
                                     <span className="text-red-500">{session.fail_count}F</span>
                                     <span className="text-primary/60">
-                                        {session.pass_count + session.fail_count > 0
-                                            ? Math.round((session.pass_count / (session.pass_count + session.fail_count)) * 100)
-                                            : 0}%
+                                        {calculateAccuracy(session.pass_count, session.fail_count)}%
                                     </span>
                                 </div>
                                 <span className="text-primary/40 text-xs">
