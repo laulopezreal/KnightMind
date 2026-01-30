@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import traceback
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from dataclasses import asdict
 
 from sqlalchemy.orm import Session
@@ -17,6 +17,10 @@ class JobWorker:
     def __init__(self):
         self.is_running = False
         self._task = None
+        self.recovery_stats = {
+            "recovered_count": 0,
+            "last_recovery_at": None
+        }
 
     def start(self):
         """Start the worker background task."""
@@ -54,10 +58,13 @@ class JobWorker:
     async def cleanup_stuck_jobs(self):
         """Reset jobs that have been 'running' for too long (e.g. crash recovery)."""
         def _cleanup(db: Session):
-            # For simplicity, if a job is "running" but we just started, it's stuck.
-            # In a multi-worker setup, we would check timestamp. 
-            # Since we are single-worker/single-process as per req, any running job at startup IS stuck.
-            stmt = select(Job).where(Job.status == JobStatus.RUNNING)
+            # Cleanup jobs that have been RUNNING for more than 15 minutes.
+            # This is a safe threshold for crash recovery.
+            limit = datetime.now(timezone.utc) - timedelta(minutes=15)
+            stmt = select(Job).where(
+                Job.status == JobStatus.RUNNING,
+                Job.updated_at < limit
+            )
             stuck_jobs = db.scalars(stmt).all()
             count = 0
             for job in stuck_jobs:
@@ -72,6 +79,8 @@ class JobWorker:
             with SessionLocal() as db:
                 count = await asyncio.to_thread(_cleanup, db)
                 if count > 0:
+                    self.recovery_stats["recovered_count"] += count
+                    self.recovery_stats["last_recovery_at"] = datetime.now(timezone.utc).isoformat()
                     logger.warning(f"Recovered {count} stuck jobs")
         except Exception as e:
             logger.error(f"Failed to cleanup stuck jobs: {e}")
