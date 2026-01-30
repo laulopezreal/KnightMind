@@ -11,6 +11,7 @@ from .stockfish import (
     create_engine,
     evaluate_fen,
     is_stockfish_available,
+    get_or_compute_eval,
 )
 
 # Aliases for backward compatibility/main.py usage
@@ -41,4 +42,5 @@ __all__ = [
     "evaluate_fen",
     "is_stockfish_available",
     "create_engine",
+    "get_or_compute_eval",
 ]

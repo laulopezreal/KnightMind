@@ -100,7 +100,7 @@ def test_generate_puzzles_swing_calculation(mock_get_ply_range, mock_create_engi
     # First call (before move): position is good for white (+0.5)
     # Second call (after move): position is now good for black (+1.5 from black's perspective)
     # So white went from +0.5 to -1.5, a swing of 2.0
-    with patch("services.api.puzzles.generator.evaluate_fen") as mock_eval:
+    with patch("services.api.puzzles.generator.get_or_compute_eval") as mock_eval:
         mock_eval.side_effect = [
             EvalResult(best_move_uci="d2d4", eval=0.5),    # Before white's move
             EvalResult(best_move_uci="e7e5", eval=1.5),    # After (from black's perspective)
@@ -167,7 +167,7 @@ def test_generate_puzzles_only_user_moves(mock_create_engine, temp_storage):
         analyzed_positions.append(fen)
         return EvalResult(best_move_uci="e2e4", eval=0.3)
     
-    with patch("services.api.puzzles.generator.evaluate_fen", side_effect=mock_evaluate):
+    with patch("services.api.puzzles.generator.get_or_compute_eval", side_effect=mock_evaluate):
         result = generate_puzzles("testuser", max_games=1, max_puzzles=10)
         
         # Should only analyze black's moves (ply 2, 4, etc.)
@@ -202,7 +202,7 @@ def test_generate_puzzles_respects_max_puzzles(mock_create_engine, temp_storage)
     )
     
     # Mock all moves as blunders
-    with patch("services.api.puzzles.generator.evaluate_fen") as mock_eval:
+    with patch("services.api.puzzles.generator.get_or_compute_eval") as mock_eval:
         mock_eval.side_effect = [
             EvalResult(best_move_uci="d2d4", eval=2.0),
             EvalResult(best_move_uci="e7e5", eval=2.0),
@@ -240,7 +240,7 @@ def test_generate_puzzles_deduplication(mock_create_engine, temp_storage):
     )
     
     # Mock as blunders
-    with patch("services.api.puzzles.generator.evaluate_fen") as mock_eval:
+    with patch("services.api.puzzles.generator.get_or_compute_eval") as mock_eval:
         mock_eval.side_effect = [
             EvalResult(best_move_uci="d2d4", eval=2.0),
             EvalResult(best_move_uci="e7e5", eval=2.0),
@@ -251,7 +251,7 @@ def test_generate_puzzles_deduplication(mock_create_engine, temp_storage):
         generated_first = result1.generated
         
     # Run again with same mock
-    with patch("services.api.puzzles.generator.evaluate_fen") as mock_eval:
+    with patch("services.api.puzzles.generator.get_or_compute_eval") as mock_eval:
         mock_eval.side_effect = [
             EvalResult(best_move_uci="d2d4", eval=2.0),
             EvalResult(best_move_uci="e7e5", eval=2.0),
@@ -290,7 +290,7 @@ def test_generate_puzzles_ply_range_filtering(mock_create_engine, temp_storage):
         rated=True,
     )
     
-    with patch("services.api.puzzles.generator.evaluate_fen") as mock_eval:
+    with patch("services.api.puzzles.generator.get_or_compute_eval") as mock_eval:
         mock_eval.return_value = EvalResult(best_move_uci="e2e4", eval=3.0)
         
         result = generate_puzzles("testuser", max_games=1, max_puzzles=10)
