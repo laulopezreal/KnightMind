@@ -59,7 +59,8 @@ def insert_puzzle_review(
     username: str,
     result: PuzzleResult | str,
     time_spent_ms: int | None = None,
-    reviewed_at: datetime | None = None
+    reviewed_at: datetime | None = None,
+    session_id: str | None = None
 ) -> PuzzleReview:
     """
     Record a puzzle review in the database.
@@ -71,6 +72,7 @@ def insert_puzzle_review(
         result: 'pass' or 'fail' (or PuzzleResult enum)
         time_spent_ms: Time spent on the puzzle in milliseconds
         reviewed_at: Timestamp of the review (defaults to current time)
+        session_id: Optional training session ID
         
     Returns:
         The created PuzzleReview object
@@ -86,7 +88,8 @@ def insert_puzzle_review(
         username=username,
         reviewed_at=reviewed_at,
         result=result_val,
-        time_spent_ms=time_spent_ms
+        time_spent_ms=time_spent_ms,
+        session_id=session_id
     )
     db.add(review)
     db.commit()

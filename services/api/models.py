@@ -90,3 +90,18 @@ class PuzzleReview(Base):
     reviewed_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
     result: Mapped[PuzzleResult] = mapped_column(String)
     time_spent_ms: Mapped[int] = mapped_column(Integer, nullable=True)
+    session_id: Mapped[str] = mapped_column(String, nullable=True, index=True)
+
+
+class TrainingSession(Base):
+    __tablename__ = "training_sessions"
+    __table_args__ = {"extend_existing": True}
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    username: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+    completed_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+    requested_n: Mapped[int] = mapped_column(Integer, nullable=False)
+    pass_count: Mapped[int] = mapped_column(Integer, default=0)
+    fail_count: Mapped[int] = mapped_column(Integer, default=0)
+    total_time_ms: Mapped[int] = mapped_column(Integer, default=0)
