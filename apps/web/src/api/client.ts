@@ -169,7 +169,7 @@ export async function generatePuzzles(
   username: string,
   maxGames: number = 30,
   maxPuzzles: number = 30
-): Promise<PuzzleGenerationResult> {
+): Promise<{ job_id: string }> {
   const params = new URLSearchParams({
     username,
     max_games: maxGames.toString(),
@@ -216,6 +216,16 @@ export async function getDailyPuzzles(
     }
   }
 
+  return response.json();
+}
+
+export async function getJobStatus(jobId: string): Promise<JobStatusResponse> {
+  const response = await fetch(`${API_BASE}/jobs/${jobId}`);
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    const detail = errorData.detail || response.statusText;
+    throw new ApiError(`Failed to get job status: ${detail}`, response.status, detail);
+  }
   return response.json();
 }
 
