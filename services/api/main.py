@@ -17,7 +17,7 @@ import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
 from services.api.db import SessionLocal, get_db
-from services.api.models import Job, JobStatus, PuzzleStats, PuzzleReview
+from services.api.models import Job, JobStatus, PuzzleStats, PuzzleReview, PuzzleResult
 from services.api.worker import worker
 from services.api.engine import (
     EngineNotAvailableError,
@@ -187,7 +187,7 @@ class DuePuzzlesResponse(BaseModel):
 
 class ReviewRequest(BaseModel):
     username: str
-    result: Literal["pass", "fail"]
+    result: PuzzleResult
     time_spent_ms: int | None = None
 
 

@@ -26,12 +26,12 @@ def calculate_next_interval(
         - else: interval = round(interval * ease)
         - ease = min(2.8, ease+0.05)
     """
-    res = result.value if isinstance(result, PuzzleResult) else result
+    res = result if isinstance(result, PuzzleResult) else PuzzleResult(result)
     
-    if res == "fail":
+    if res == PuzzleResult.FAIL:
         new_interval = 1
         new_ease = max(1.3, ease_factor - 0.2)
-    else:  # pass
+    else:  # PASS
         if current_interval is None:
             new_interval = 1
         elif current_interval == 1:
@@ -119,7 +119,7 @@ def update_puzzle_stats(
         reviewed_at = datetime.now(timezone.utc)
         
     stats = get_puzzle_stats(db, puzzle_id, username)
-    result_val = result.value if isinstance(result, PuzzleResult) else result
+    res_enum = result if isinstance(result, PuzzleResult) else PuzzleResult(result)
     
     if not stats:
         stats = PuzzleStats(
@@ -133,7 +133,7 @@ def update_puzzle_stats(
         db.add(stats)
     
     stats.attempts += 1
-    if result_val == 'pass':
+    if res_enum == PuzzleResult.PASS:
         stats.pass_count += 1
     else:
         stats.fail_count += 1
@@ -142,7 +142,7 @@ def update_puzzle_stats(
     new_interval, new_ease = calculate_next_interval(
         stats.interval_days,
         stats.ease_factor,
-        result_val
+        res_enum
     )
     
     stats.interval_days = new_interval
@@ -150,7 +150,7 @@ def update_puzzle_stats(
     stats.next_due_at = reviewed_at + timedelta(days=new_interval)
     
     stats.last_reviewed_at = reviewed_at
-    stats.last_result = result_val
+    stats.last_result = res_enum.value
     
     db.commit()
     db.refresh(stats)
