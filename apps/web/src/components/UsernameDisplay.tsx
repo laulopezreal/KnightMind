@@ -26,15 +26,12 @@ export default function UsernameDisplay() {
         }
         document.addEventListener('mousedown', handleClickOutside);
         return () => document.removeEventListener('mousedown', handleClickOutside);
-    }, []);
+    }, [setEditorOpen]);
 
     const handleSave = async () => {
         const trimmed = inputValue.trim();
         if (!trimmed) {
             if (username) {
-                // If clearing text, do we allow removing the username? 
-                // The requirements imply "Single source of truth" and "Set it intentionally".
-                // Let's assume empty string = remove.
                 setUsername('');
                 setEditorOpen(false);
                 return;
@@ -64,7 +61,7 @@ export default function UsernameDisplay() {
 
             setUsername(trimmed);
             setEditorOpen(false);
-        } catch (err) {
+        } catch {
             setError('Could not validate username');
         } finally {
             setIsValidating(false);
