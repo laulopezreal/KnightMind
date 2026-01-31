@@ -18,6 +18,16 @@ gh pr view <PR_NUMBER> --json state,reviews,comments,mergeable
 gh pr view <PR_NUMBER> --comments
 ```
 
+### 1.1. Check CI/CD Status
+
+```bash
+# Check the status of GitHub Actions/Checks
+gh pr checks <PR_NUMBER>
+
+# If failures exist, view logs for the failed run
+# gh run view <RUN_ID> --log
+```
+
 ### 2. Check for Merge Conflicts
 
 ```bash
@@ -139,6 +149,7 @@ gh pr edit <PR_NUMBER> --add-reviewer <reviewer-username>
 ## Checklist
 
 - [ ] Fetched latest PR status and comments
+- [ ] Checked CI/CD status and fixed any failures
 - [ ] Checked for merge conflicts
 - [ ] Addressed all review comments
 - [ ] Ran full test suite (all passing)
