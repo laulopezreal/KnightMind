@@ -28,7 +28,7 @@ from services.api.models import Job
 target_metadata = Base.metadata
 
 database_url = os.getenv("DATABASE_URL")
-if database_url:
+if database_url is not None:
     config.set_main_option("sqlalchemy.url", database_url)
 
 # other values from the config, defined by the needs of env.py,
