@@ -114,8 +114,6 @@ app.include_router(sessions_router)
 
 def get_allowed_origins() -> list[str]:
     origins = os.environ.get("KNIGHTMIND_CORS_ORIGINS", "")
-    if not origins:
-        return []
     return [origin.strip() for origin in origins.split(",") if origin.strip()]
 
 
