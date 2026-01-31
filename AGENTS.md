@@ -27,6 +27,8 @@ A platform for analyzing chess games, tracking progress, and gaining insights us
 3. **Prefer simple solutions** – Choose straightforward approaches over complex ones
 4. **Explain decisions briefly** – Document why, not just what
 5. **UI Consistency** – All UI changes must follow `apps/web/DESIGN_GUIDE.md` and reuse existing patterns.
+6. **Pull Requests** – All Pull Requests must target the `dev` branch, not `main`.
+7. **Post-PR Checks** – When running the `postpr` workflow, you must also check for and fix any CI/CD failures.
 
 ## Commands to Run
 

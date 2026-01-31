@@ -1,3 +1,5 @@
+// Use the Vite dev proxy `/api` base so all frontend requests share the same origin.
+// If you need a different base in the future, adjust it here rather than calling raw URLs.
 export const API_BASE = '/api';
 
 export class ApiError extends Error {

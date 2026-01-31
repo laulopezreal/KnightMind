@@ -1,7 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { useChessUsername } from '../context/ChessUsernameContext';
-import { validateUser } from '../api/users';
-import { ApiError } from '../api/core';
+import { validateChessComUser } from '../api';
 
 export default function UsernameDisplay() {
     const { username, setUsername, isEditorOpen, setEditorOpen } = useChessUsername();
@@ -50,21 +49,19 @@ export default function UsernameDisplay() {
         setError(null);
 
         try {
-            const data = await validateUser(trimmed);
+            // Use the shared API helper to keep /api proxy usage consistent across the app.
+            const data = await validateChessComUser(trimmed);
 
             if (!data.valid) {
                 setError(data.error || 'User not found on Chess.com');
+                setIsValidating(false);
                 return;
             }
 
             setUsername(data.username || trimmed);
             setEditorOpen(false);
-        } catch (err) {
-            if (err instanceof ApiError) {
-                setError(err.detail || 'Could not validate username');
-            } else {
-                setError('Could not validate username');
-            }
+        } catch {
+            setError('Could not validate username');
         } finally {
             setIsValidating(false);
         }
