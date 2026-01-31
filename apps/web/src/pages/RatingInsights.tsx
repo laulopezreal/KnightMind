@@ -47,7 +47,7 @@ export default function RatingInsights() {
         try {
             const sessions = await getRecentSessions(username, 1);
             setHasSessions(sessions.length > 0);
-        } catch (err) {
+        } catch {
             // If sessions check fails, assume no sessions exist
             setHasSessions(false);
         } finally {
