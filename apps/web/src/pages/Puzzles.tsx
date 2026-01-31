@@ -2,19 +2,18 @@ import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { Chessboard } from 'react-chessboard';
 import { Chess } from 'chess.js';
-import { generatePuzzles, getDailyPuzzles, getUsers, cancelJob, ApiError, type Puzzle, startSession, completeSession, getRecentSessions, reviewPuzzle, getSession, type SessionSummary } from '../api/client';
+import { generatePuzzles, getDailyPuzzles, cancelJob, ApiError, type Puzzle, startSession, completeSession, getRecentSessions, reviewPuzzle, getSession, type SessionSummary } from '../api/client';
 import { JobStatusCard } from '../components/JobStatusCard';
 import { useJobPolling } from '../hooks/useJobPolling';
+import { useChessUsername } from '../context/ChessUsernameContext';
 
 type PuzzleStatus = 'solving' | 'correct' | 'incorrect' | 'revealed';
 
 export default function Puzzles() {
-    const [username, setUsername] = useState('');
-    const [availableUsers, setAvailableUsers] = useState<string[]>([]);
+    const { username, setEditorOpen } = useChessUsername();
     const [puzzles, setPuzzles] = useState<Puzzle[]>([]);
     const [currentIndex, setCurrentIndex] = useState(0);
     const [userMove, setUserMove] = useState('');
-    const [showSuggestions, setShowSuggestions] = useState(false);
     const [status, setStatus] = useState<PuzzleStatus>('solving');
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -31,9 +30,6 @@ export default function Puzzles() {
     // Mock progress for now until we hook up real polling
     // const mockProgress = 0; 
 
-    useEffect(() => {
-        getUsers().then(setAvailableUsers).catch(console.error);
-    }, []);
 
     const currentPuzzle = puzzles[currentIndex];
 
@@ -322,10 +318,6 @@ export default function Puzzles() {
         }
     };
 
-    const filteredUsers = availableUsers.filter(user =>
-        user.toLowerCase().includes(username.toLowerCase()) &&
-        user.toLowerCase() !== username.toLowerCase()
-    );
 
     // Helper function to calculate accuracy percentage
     const calculateAccuracy = (passCount: number, failCount: number): number => {
@@ -351,25 +343,19 @@ export default function Puzzles() {
             <section className="bg-primary/5 border border-primary/10 rounded-sm p-6 backdrop-blur-sm">
                 <div className="flex flex-col md:flex-row gap-6 relative items-end">
                     <div className="flex-1 relative min-w-[300px]">
-                        <label className="block text-xs font-sans uppercase tracking-widest text-primary/40 mb-2">Username</label>
-                        <input
-                            type="text"
-                            placeholder="Enter username"
-                            value={username}
-                            onChange={(e) => { setUsername(e.target.value); setShowSuggestions(true); }}
-                            onFocus={() => setShowSuggestions(true)}
-                            onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
-                            className="w-full bg-transparent border-b border-primary/20 py-2 text-primary placeholder-primary/30 focus:outline-none focus:border-primary/60 transition-colors font-serif text-xl"
-                            onKeyPress={(e) => e.key === 'Enter' && handleLoadPuzzles()}
-                        />
-                        {showSuggestions && username && filteredUsers.length > 0 && (
-                            <div className="absolute z-10 w-full mt-1 bg-bg-primary border border-primary/20 rounded-sm shadow-xl max-h-48 overflow-y-auto">
-                                {filteredUsers.map(user => (
-                                    <div key={user} onClick={() => { setUsername(user); setShowSuggestions(false); }}
-                                        className="px-4 py-2 text-primary hover:bg-primary/5 cursor-pointer transition-colors font-sans">
-                                        {user}
-                                    </div>
-                                ))}
+                        {!username ? (
+                            <div className="h-full flex items-center">
+                                <span className="text-primary/60 font-sans mr-2">Set your Chess.com username to continue.</span>
+                                <button
+                                    onClick={() => setEditorOpen(true)}
+                                    className="text-primary underline hover:text-primary/80"
+                                >
+                                    Set Username
+                                </button>
+                            </div>
+                        ) : (
+                            <div className="text-xl font-serif text-primary py-2 border-b border-primary/20">
+                                {username}
                             </div>
                         )}
                     </div>

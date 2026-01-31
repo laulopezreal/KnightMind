@@ -1,9 +1,11 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { importChessComGames, ApiError } from '../api/client';
+import { useChessUsername } from '../context/ChessUsernameContext';
+
 
 export default function Home() {
-  const [username, setUsername] = useState('');
+  const { username } = useChessUsername();
   const [status, setStatus] = useState<string | null>(null);
   const [isError, setIsError] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -59,17 +61,19 @@ export default function Home() {
 
           <div className="space-y-4">
             <div className="flex gap-4 border-b border-primary/20 pb-2 focus-within:border-primary/80 transition-colors">
-              <input
-                type="text"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                placeholder="Chess.com username"
-                className="flex-1 bg-transparent border-none outline-none text-primary placeholder-primary/30 font-sans text-lg"
-                onKeyPress={(e) => e.key === 'Enter' && handleImport()}
-              />
+              {username ? (
+                <div className="flex-1 flex items-center text-lg font-sans text-primary">
+                  <span className="opacity-60 mr-2">Chess.com:</span>
+                  <span className="font-medium">{username}</span>
+                </div>
+              ) : (
+                <div className="flex-1 flex items-center text-lg font-sans text-primary/40 italic">
+                  Set your Chess.com username to import games
+                </div>
+              )}
               <button
                 onClick={handleImport}
-                disabled={loading}
+                disabled={loading || !username}
                 className="text-primary font-medium hover:opacity-70 transition-opacity disabled:opacity-30 uppercase tracking-widest text-sm"
               >
                 {loading ? '...' : 'Import'}
