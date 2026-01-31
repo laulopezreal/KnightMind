@@ -1,8 +1,11 @@
 import { useEffect, useState, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useChessUsername } from '../context/ChessUsernameContext';
 import { createSnapshot, getRatingExplain, type ExplainResponse, type HighlightGame, type SnapshotResponse } from '../api/ratings';
+import { getRecentSessions } from '../api/sessions';
 
 export default function RatingInsights() {
+    const navigate = useNavigate();
     const { username, setEditorOpen } = useChessUsername();
     const [data, setData] = useState<ExplainResponse | null>(null);
     const [loading, setLoading] = useState(false);
@@ -13,6 +16,8 @@ export default function RatingInsights() {
     const [error, setError] = useState<string | null>(null);
     const [timeControl, setTimeControl] = useState<'rapid' | 'blitz'>('rapid');
     const [windowSource, setWindowSource] = useState<'session' | 'fallback_7d'>('session');
+    const [hasSessions, setHasSessions] = useState<boolean | null>(null);
+    const [sessionsLoading, setSessionsLoading] = useState(false);
 
     const fetchData = useCallback(async () => {
         if (!username) return;
@@ -36,11 +41,33 @@ export default function RatingInsights() {
         }
     }, [username, timeControl, windowSource]);
 
+    const checkSessions = useCallback(async () => {
+        if (!username) return;
+        setSessionsLoading(true);
+        try {
+            const sessions = await getRecentSessions(username, 1);
+            setHasSessions(sessions.length > 0);
+        } catch (err) {
+            // If sessions check fails, assume no sessions exist
+            setHasSessions(false);
+        } finally {
+            setSessionsLoading(false);
+        }
+    }, [username]);
+
     useEffect(() => {
         if (username) {
             fetchData();
+            checkSessions();
         }
-    }, [username, timeControl, windowSource, fetchData]);
+    }, [username, timeControl, windowSource, fetchData, checkSessions]);
+
+    // Auto-switch to "Last 7 Days" when no sessions exist
+    useEffect(() => {
+        if (hasSessions === false && windowSource === 'session') {
+            setWindowSource('fallback_7d');
+        }
+    }, [hasSessions, windowSource]);
 
     const handleSnapshot = async () => {
         if (!username) return;
@@ -114,7 +141,8 @@ export default function RatingInsights() {
                         <div className="flex bg-primary/5 rounded-sm p-1">
                             <button
                                 onClick={() => setWindowSource('session')}
-                                className={`px-3 py-2 text-sm font-sans transition-all ${windowSource === 'session' ? 'bg-primary text-bg-primary shadow-sm' : 'text-primary/60 hover:text-primary'}`}
+                                disabled={hasSessions === false}
+                                className={`px-3 py-2 text-sm font-sans transition-all ${windowSource === 'session' ? 'bg-primary text-bg-primary shadow-sm' : 'text-primary/60 hover:text-primary'} disabled:opacity-50 disabled:cursor-not-allowed`}
                             >
                                 Since Session
                             </button>
@@ -125,25 +153,55 @@ export default function RatingInsights() {
                                 Last 7 Days
                             </button>
                         </div>
-                        <p className="text-[10px] text-primary/40 font-sans ml-1 uppercase tracking-wider">
-                            Choose the time window used to explain rating changes.
-                        </p>
+                        {hasSessions === false && !sessionsLoading && (
+                            <p className="text-[10px] text-primary/40 font-sans ml-1">
+                                No sessions yet. Start a puzzle session to use session-based insights.{' '}
+                                <button
+                                    onClick={() => navigate('/puzzles')}
+                                    className="text-primary underline hover:text-primary/80 text-[10px] font-medium"
+                                >
+                                    Start a session
+                                </button>
+                            </p>
+                        )}
+                        {sessionsLoading && (
+                            <p className="text-[10px] text-primary/40 font-sans ml-1 uppercase tracking-wider">
+                                Loading sessions...
+                            </p>
+                        )}
+                        {hasSessions === true && (
+                            <p className="text-[10px] text-primary/40 font-sans ml-1 uppercase tracking-wider">
+                                Choose the time window used to explain rating changes.
+                            </p>
+                        )}
                     </div>
 
                     {/* Time Control Selector */}
-                    <div className="flex bg-primary/5 rounded-sm p-1">
-                        <button
-                            onClick={() => setTimeControl('rapid')}
-                            className={`px-3 py-2 text-sm font-sans transition-all ${timeControl === 'rapid' ? 'bg-primary text-bg-primary shadow-sm' : 'text-primary/60 hover:text-primary'}`}
-                        >
-                            Rapid
-                        </button>
-                        <button
-                            onClick={() => setTimeControl('blitz')}
-                            className={`px-3 py-2 text-sm font-sans transition-all ${timeControl === 'blitz' ? 'bg-primary text-bg-primary shadow-sm' : 'text-primary/60 hover:text-primary'}`}
-                        >
-                            Blitz
-                        </button>
+                    <div className="flex flex-col gap-1.5">
+                        <div className="flex bg-primary/5 rounded-sm p-1">
+                            <button
+                                onClick={() => setTimeControl('rapid')}
+                                className={`px-3 py-2 text-sm font-sans transition-all ${timeControl === 'rapid' ? 'bg-primary text-bg-primary shadow-sm' : 'text-primary/60 hover:text-primary'}`}
+                            >
+                                Rapid
+                            </button>
+                            <button
+                                onClick={() => setTimeControl('blitz')}
+                                className={`px-3 py-2 text-sm font-sans transition-all ${timeControl === 'blitz' ? 'bg-primary text-bg-primary shadow-sm' : 'text-primary/60 hover:text-primary'}`}
+                            >
+                                Blitz
+                            </button>
+                        </div>
+                        {data && (
+                            <div className="text-[10px] text-primary/40 font-sans ml-1">
+                                {timeControl === 'rapid' && data.stats.games === 0 && (!data.rating.end || data.rating.net_change === null) && (
+                                    <span>No data yet for Rapid.</span>
+                                )}
+                                {timeControl === 'blitz' && data.stats.games === 0 && (!data.rating.end || data.rating.net_change === null) && (
+                                    <span>No data yet for Blitz.</span>
+                                )}
+                            </div>
+                        )}
                     </div>
 
                     <div className="flex flex-col gap-1">
