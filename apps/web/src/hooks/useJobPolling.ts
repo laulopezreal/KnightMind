@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { getJobStatus, type JobStatusResponse } from '../api/client';
+import { getJobStatus, type JobStatusResponse } from '../api';
 
 interface JobPollingOptions {
     pollInterval?: number;

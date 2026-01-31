@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import * as d3 from 'd3';
-import { getOpenings, ApiError, type OpeningNode, type ColorFilter } from '../api/client';
+import { getOpenings, ApiError, type OpeningNode, type ColorFilter } from '../api';
 import { useChessUsername } from '../context/ChessUsernameContext';
 
 export default function Openings() {

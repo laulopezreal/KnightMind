@@ -132,6 +132,31 @@ async def get_users():
     return {"users": users}
 
 
+@app.get("/users/validate")
+async def validate_user(username: str):
+    """
+    Validate if a user exists on Chess.com.
+    Proxies the request to avoid CORS issues and expose internal APIs.
+    """
+    import httpx
+    
+    if not username:
+        raise HTTPException(status_code=400, detail="Username is required")
+        
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(f"https://api.chess.com/pub/player/{username}", follow_redirects=True)
+            
+            if resp.status_code == 200:
+                return {"valid": True, "username": username}
+            elif resp.status_code == 404:
+                return {"valid": False, "error": "User not found"}
+            else:
+                raise HTTPException(status_code=502, detail="Chess.com API error")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/import/chesscom", response_model=ImportResponse)
 async def import_chesscom_games(username: str):
     """

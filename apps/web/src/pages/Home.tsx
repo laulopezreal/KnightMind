@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { importChessComGames, ApiError } from '../api/client';
+import { importChessComGames, ApiError } from '../api';
 import { useChessUsername } from '../context/ChessUsernameContext';
 
 

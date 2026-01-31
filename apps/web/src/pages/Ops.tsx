@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
-import { getHealth, getOpsStatus, ApiError } from '../api/client';
-import type { HealthResponse, OpsStatusResponse, RecentJob } from '../api/client';
+import { getHealth, getOpsStatus, ApiError } from '../api';
+import type { HealthResponse, OpsStatusResponse, RecentJob } from '../api';
 
 export default function Ops() {
     const [health, setHealth] = useState<HealthResponse | null>(null);
