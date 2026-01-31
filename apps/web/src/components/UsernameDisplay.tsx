@@ -1,5 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { useChessUsername } from '../context/ChessUsernameContext';
+import { validateUser } from '../api/users';
+import { ApiError } from '../api/core';
 
 export default function UsernameDisplay() {
     const { username, setUsername, isEditorOpen, setEditorOpen } = useChessUsername();
@@ -48,20 +50,21 @@ export default function UsernameDisplay() {
         setError(null);
 
         try {
-            // Validation check via backend proxy
-            const res = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/users/validate?username=${trimmed}`);
-            const data = await res.json();
+            const data = await validateUser(trimmed);
 
             if (!data.valid) {
                 setError(data.error || 'User not found on Chess.com');
-                setIsValidating(false);
                 return;
             }
 
             setUsername(data.username || trimmed);
             setEditorOpen(false);
-        } catch {
-            setError('Could not validate username');
+        } catch (err) {
+            if (err instanceof ApiError) {
+                setError(err.detail || 'Could not validate username');
+            } else {
+                setError('Could not validate username');
+            }
         } finally {
             setIsValidating(false);
         }

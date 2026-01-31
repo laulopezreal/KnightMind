@@ -26,3 +26,7 @@ export async function importChessComGames(username: string): Promise<ImportResul
         throw err;
     }
 }
+
+export async function validateUser(username: string): Promise<{ valid: boolean; username: string; error?: string }> {
+    return request<{ valid: boolean; username: string; error?: string }>(`/users/validate?username=${encodeURIComponent(username)}`);
+}
