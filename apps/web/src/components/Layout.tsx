@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import Sidebar from './Sidebar';
+import UsernameDisplay from './UsernameDisplay';
 import ThemeToggle from './ThemeToggle';
 
 interface LayoutProps {
@@ -11,7 +12,8 @@ export default function Layout({ children }: LayoutProps) {
         <div className="min-h-screen font-serif selection:bg-chess-brown-700 selection:text-chess-cream-100">
             <Sidebar />
 
-            <div className="absolute top-8 right-8 z-50">
+            <div className="absolute top-8 right-8 z-50 flex items-center gap-4">
+                <UsernameDisplay />
                 <ThemeToggle />
             </div>
 
