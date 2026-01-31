@@ -6,8 +6,10 @@ import { generatePuzzles, getDailyPuzzles, getDuePuzzles, cancelJob, ApiError, t
 import { JobStatusCard } from '../components/JobStatusCard';
 import { useJobPolling } from '../hooks/useJobPolling';
 import { useChessUsername } from '../context/ChessUsernameContext';
+import { parseBestMoveUci, getPieceNameAtSquare } from '../utils/puzzle-clue';
 
 type PuzzleStatus = 'solving' | 'correct' | 'incorrect' | 'revealed';
+type ClueStage = 0 | 1 | 2;
 
 export default function Puzzles() {
     const { username, setEditorOpen } = useChessUsername();
@@ -26,6 +28,7 @@ export default function Puzzles() {
     const [recentSessions, setRecentSessions] = useState<SessionSummary[]>([]);
     const [reviewedCount, setReviewedCount] = useState(0);
     const [isResumingSession, setIsResumingSession] = useState(false);
+    const [clueStage, setClueStage] = useState<ClueStage>(0);
 
     // Mock progress for now until we hook up real polling
     // const mockProgress = 0; 
@@ -303,10 +306,33 @@ export default function Puzzles() {
         }
     };
 
+    const handleClue = () => {
+        if (!currentPuzzle?.best_move_uci) return;
+        if (clueStage === 0) {
+            setClueStage(1);
+        } else if (clueStage === 1) {
+            setClueStage(2);
+            handleRevealSolution();
+        }
+    };
+
     const [game, setGame] = useState(new Chess());
 
+    const clueSquareStyles: Record<string, { backgroundColor: string }> =
+        currentPuzzle?.best_move_uci && clueStage >= 1
+            ? (() => {
+                const { from, to } = parseBestMoveUci(currentPuzzle.best_move_uci);
+                const highlight = { backgroundColor: 'rgba(255, 235, 59, 0.45)' };
+                if (clueStage === 2 && to) return { [from]: highlight, [to]: highlight };
+                return from ? { [from]: highlight } : {};
+            })()
+            : {};
+
     useEffect(() => {
-        if (currentPuzzle) setGame(new Chess(currentPuzzle.fen));
+        if (currentPuzzle) {
+            setGame(new Chess(currentPuzzle.fen));
+            setClueStage(0);
+        }
     }, [currentPuzzle]);
 
     const onPieceDrop = (sourceSquare: string, targetSquare: string) => {
@@ -314,6 +340,7 @@ export default function Puzzles() {
         try {
             const move = game.move({ from: sourceSquare, to: targetSquare, promotion: 'q' });
             if (move === null) return false;
+            setClueStage(0);
             setGame(new Chess(game.fen()));
             const uciMove = `${move.from}${move.to}${move.promotion || ''}`;
             setUserMove(uciMove);
@@ -329,6 +356,7 @@ export default function Puzzles() {
             setCurrentIndex(currentIndex + 1);
             setStatus('solving');
             setUserMove('');
+            setClueStage(0);
         }
     };
 
@@ -424,6 +452,7 @@ export default function Puzzles() {
                                     boardOrientation: currentPuzzle.side_to_move === 'white' ? 'white' : 'black',
                                     darkSquareStyle: { backgroundColor: 'var(--color-chess-brown-700)' },
                                     lightSquareStyle: { backgroundColor: 'var(--color-chess-cream-300)' },
+                                    squareStyles: clueSquareStyles,
                                 }}
                             />
                         </div>
@@ -476,7 +505,14 @@ export default function Puzzles() {
 
                         {/* Status Area */}
                         <div className="min-h-[100px] flex items-center justify-center text-center p-6 border border-primary/10 rounded-sm relative overflow-hidden">
-                            {status === 'solving' && <p className="text-primary/60 font-serif text-lg italic">Find the best move...</p>}
+                            {status === 'solving' && clueStage === 0 && <p className="text-primary/60 font-serif text-lg italic">Find the best move...</p>}
+                            {status === 'solving' && clueStage === 1 && (
+                                <p className="text-primary/80 font-sans text-sm">
+                                    {currentPuzzle?.best_move_uci
+                                        ? getPieceNameAtSquare(currentPuzzle.fen, parseBestMoveUci(currentPuzzle.best_move_uci).from)
+                                        : 'Move the correct piece'}
+                                </p>
+                            )}
                             {status === 'correct' && <p className="text-green-600 font-serif text-2xl animate-teedin">Correct! Excellent.</p>}
                             {status === 'incorrect' && <p className="text-red-500 font-serif text-2xl animate-teedin">Incorrect.</p>}
                             {status === 'revealed' && (
@@ -514,13 +550,20 @@ export default function Puzzles() {
                             )}
 
                             {status === 'solving' && (
-                                <div className="grid grid-cols-2 gap-4">
+                                <div className="grid grid-cols-3 gap-4">
                                     <button
                                         type="button"
                                         onClick={handleCheckAnswer}
                                         disabled={!userMove}
                                         className={`px-6 py-4 bg-primary text-bg-primary rounded-sm font-serif text-lg transition-all shadow-lg shadow-primary/5 km-focus-visible disabled:opacity-50 ${!userMove ? 'km-interactive-disabled' : 'km-interactive'}`}>
                                         Check Move
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={handleClue}
+                                        disabled={!currentPuzzle?.best_move_uci || clueStage === 2}
+                                        className="px-6 py-4 border border-primary/20 text-primary rounded-sm font-serif text-lg transition-all km-interactive km-focus-visible disabled:opacity-50 disabled:cursor-default">
+                                        Clue
                                     </button>
                                     <button
                                         type="button"
@@ -553,6 +596,7 @@ export default function Puzzles() {
                                             setStatus('solving');
                                             setUserMove('');
                                             setGame(new Chess(currentPuzzle.fen));
+                                            setClueStage(0);
                                         }}
                                         className="w-full px-6 py-4 border border-primary/20 text-primary rounded-sm font-serif text-lg transition-all km-interactive km-focus-visible">
                                         Mark as Failed & Try Again
