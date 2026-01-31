@@ -1,3 +1,13 @@
+---
+description: 
+alwaysApply: true
+---
+
+---
+description: 
+alwaysApply: true
+---
+
 # AGENTS.md
 
 You are Codex working in this repo.
@@ -45,6 +55,38 @@ pytest            # Run tests
 ruff              # Lint (if configured)
 black             # Format (if configured)
 ```
+
+## Creating Pull Requests
+
+When creating PRs, use the following approach:
+
+### Standard PR Creation
+```bash
+# Use --base dev (all PRs target dev branch)
+# Use required_permissions: ["all"] to bypass sandbox restrictions
+gh pr create --title "feat(scope): description" --base dev --body "PR description here"
+```
+
+### If `gh pr create` fails with network/TLS errors:
+1. **Try with `["all"]` permissions** – This bypasses sandbox restrictions
+2. **Use `--web` flag** – Opens browser instead of API calls: `gh pr create --web`
+3. **Push to existing PR branch** – If PR exists, just push commits and use `gh pr edit <PR_NUMBER>`
+
+### Common Issues & Solutions:
+- **TLS certificate errors**: Use `required_permissions: ["all"]`
+- **credential-gh not found**: Ignore warning, command usually still works
+- **"Device not configured"**: Push may still succeed despite error message
+
+### Example Working Command:
+```bash
+gh pr create --title "feat(web): add feature" --base dev --body "Summary of changes"
+# With permissions: required_permissions: ["all"]
+```
+
+### After PR Creation:
+1. Run `gh pr list` to confirm PR was created
+2. Run `gh pr checks <PR_NUMBER>` to monitor CI status
+3. Use `gh pr edit <PR_NUMBER> --body "..."` to update description
 
 ## Output Rule
 
