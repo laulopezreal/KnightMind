@@ -361,8 +361,9 @@ export default function Puzzles() {
                             <div className="h-full flex items-center">
                                 <span className="text-primary/60 font-sans mr-2">Set your Chess.com username to continue.</span>
                                 <button
+                                    type="button"
                                     onClick={() => setEditorOpen(true)}
-                                    className="text-primary underline hover:text-primary/80"
+                                    className="km-interactive km-focus-visible km-inline-link text-primary"
                                 >
                                     Set Username
                                 </button>
@@ -375,17 +376,17 @@ export default function Puzzles() {
                     </div>
                     <div className="flex gap-4">
                         {!activeSessionId && (
-                            <button onClick={handleStartSession} disabled={isLoading || isGenerating}
-                                className="px-6 py-2 bg-accent text-bg-primary hover:opacity-90 rounded-sm font-serif transition-colors disabled:opacity-50">
+                            <button type="button" onClick={handleStartSession} disabled={isLoading || isGenerating}
+                                className={`px-6 py-2 bg-accent text-bg-primary rounded-sm font-serif transition-colors km-focus-visible ${isLoading || isGenerating ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'}`}>
                                 Start Session
                             </button>
                         )}
-                        <button onClick={handleLoadPuzzles} disabled={isLoading || isGenerating}
-                            className="px-6 py-2 border border-primary/20 text-primary hover:bg-primary hover:text-bg-primary hover:border-transparent rounded-sm font-serif transition-all disabled:opacity-50">
+                        <button type="button" onClick={handleLoadPuzzles} disabled={isLoading || isGenerating}
+                            className={`px-6 py-2 border border-primary/20 text-primary rounded-sm font-serif transition-all km-focus-visible ${isLoading || isGenerating ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'}`}>
                             {isLoading ? 'Loading...' : 'Load Puzzles'}
                         </button>
-                        <button onClick={handleGeneratePuzzles} disabled={isGenerating || isLoading}
-                            className="px-6 py-2 bg-primary text-bg-primary hover:opacity-90 rounded-sm font-serif transition-colors disabled:opacity-50">
+                        <button type="button" onClick={handleGeneratePuzzles} disabled={isGenerating || isLoading}
+                            className={`px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-colors km-focus-visible ${isGenerating || isLoading ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'}`}>
                             {isGenerating ? 'Generating...' : 'Generate New'}
                         </button>
                     </div>
@@ -492,8 +493,9 @@ export default function Puzzles() {
                             <div className="flex justify-between items-center px-2">
                                 <span className="text-xs text-primary/40 uppercase tracking-widest font-sans">Input Method</span>
                                 <button
+                                    type="button"
                                     onClick={() => setShowUciInput(!showUciInput)}
-                                    className="text-primary hover:text-primary/60 text-xs font-serif underline decoration-primary/30 underline-offset-4 transition-colors">
+                                    className="km-interactive km-focus-visible km-inline-link text-primary text-xs font-serif underline decoration-primary/30 underline-offset-4 transition-colors">
                                     {showUciInput ? 'Switch to Drag & Drop' : 'Type Move Manually'}
                                 </button>
                             </div>
@@ -514,42 +516,45 @@ export default function Puzzles() {
                             {status === 'solving' && (
                                 <div className="grid grid-cols-2 gap-4">
                                     <button
+                                        type="button"
                                         onClick={handleCheckAnswer}
                                         disabled={!userMove}
-                                        className="px-6 py-4 bg-primary text-bg-primary hover:opacity-90 rounded-sm font-serif text-lg transition-all disabled:opacity-50 shadow-lg shadow-primary/5">
+                                        className={`px-6 py-4 bg-primary text-bg-primary rounded-sm font-serif text-lg transition-all shadow-lg shadow-primary/5 km-focus-visible disabled:opacity-50 ${!userMove ? 'km-interactive-disabled' : 'km-interactive'}`}>
                                         Check Move
                                     </button>
                                     <button
+                                        type="button"
                                         onClick={handleRevealSolution}
-                                        className="px-6 py-4 border border-primary/20 text-primary hover:bg-primary/5 rounded-sm font-serif text-lg transition-all">
+                                        className="px-6 py-4 border border-primary/20 text-primary rounded-sm font-serif text-lg transition-all km-interactive km-focus-visible">
                                         Reveal
                                     </button>
                                 </div>
                             )}
                             {(status === 'correct' || status === 'revealed') && (
                                 <button
+                                    type="button"
                                     onClick={async () => {
-                                        // Record review if correct
                                         if (status === 'correct') {
                                             await handleReviewPuzzle('pass');
                                         }
                                         handleNextPuzzle();
                                     }}
                                     disabled={currentIndex >= puzzles.length - 1}
-                                    className="w-full px-6 py-4 bg-green-600 text-white hover:bg-green-700 rounded-sm font-serif text-lg transition-all shadow-lg shadow-green-900/20">
+                                    className={`w-full px-6 py-4 bg-green-600 text-white rounded-sm font-serif text-lg transition-all shadow-lg shadow-green-900/20 km-focus-visible ${currentIndex >= puzzles.length - 1 ? 'km-interactive-disabled' : 'km-interactive'}`}>
                                     {currentIndex >= puzzles.length - 1 ? 'All Done' : 'Next Puzzle →'}
                                 </button>
                             )}
                             {status === 'incorrect' && (
                                 <div className="space-y-4">
                                     <button
+                                        type="button"
                                         onClick={async () => {
                                             await handleReviewPuzzle('fail');
                                             setStatus('solving');
                                             setUserMove('');
                                             setGame(new Chess(currentPuzzle.fen));
                                         }}
-                                        className="w-full px-6 py-4 border border-primary/20 text-primary hover:bg-primary hover:text-bg-primary rounded-sm font-serif text-lg transition-all">
+                                        className="w-full px-6 py-4 border border-primary/20 text-primary rounded-sm font-serif text-lg transition-all km-interactive km-focus-visible">
                                         Mark as Failed & Try Again
                                     </button>
                                 </div>
@@ -586,11 +591,12 @@ export default function Puzzles() {
                         </div>
                     </div>
                     <button
+                        type="button"
                         onClick={() => {
                             setSessionSummary(null);
                             handleStartSession();
                         }}
-                        className="w-full px-6 py-3 bg-primary text-bg-primary hover:opacity-90 rounded-sm font-serif transition-colors">
+                        className="w-full px-6 py-3 bg-primary text-bg-primary rounded-sm font-serif transition-colors km-interactive km-focus-visible">
                         Start New Session
                     </button>
                 </section>

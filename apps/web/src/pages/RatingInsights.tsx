@@ -14,8 +14,22 @@ export default function RatingInsights() {
     const [snapshotError, setSnapshotError] = useState<string | null>(null);
     const [latestSnapshot, setLatestSnapshot] = useState<SnapshotResponse | null>(null);
     const [error, setError] = useState<string | null>(null);
-    const [timeControl, setTimeControl] = useState<'rapid' | 'blitz'>('rapid');
-    const [windowSource, setWindowSource] = useState<'session' | 'fallback_7d'>('session');
+    const [timeControl, setTimeControlState] = useState<'rapid' | 'blitz'>(() => {
+        const stored = localStorage.getItem('knightmind:ratings:time_control');
+        return stored === 'blitz' || stored === 'rapid' ? stored : 'rapid';
+    });
+    const [windowSource, setWindowSourceState] = useState<'session' | 'fallback_7d'>(() => {
+        const stored = localStorage.getItem('knightmind:ratings:window');
+        return stored === 'last_7_days' ? 'fallback_7d' : 'session';
+    });
+    const setTimeControl = useCallback((value: 'rapid' | 'blitz') => {
+        setTimeControlState(value);
+        localStorage.setItem('knightmind:ratings:time_control', value);
+    }, []);
+    const setWindowSource = useCallback((value: 'session' | 'fallback_7d') => {
+        setWindowSourceState(value);
+        localStorage.setItem('knightmind:ratings:window', value === 'session' ? 'since_session' : 'last_7_days');
+    }, []);
     const [hasSessions, setHasSessions] = useState<boolean | null>(null);
     const [sessionsLoading, setSessionsLoading] = useState(false);
 
@@ -67,10 +81,11 @@ export default function RatingInsights() {
         }
     }, [username, checkSessions]);
 
-    // Auto-switch to "Last 7 Days" when no sessions exist
+    // Auto-switch to "Last 7 Days" when no sessions exist; persist corrected value
     useEffect(() => {
         if (hasSessions === false && windowSource === 'session') {
-            setWindowSource('fallback_7d');
+            setWindowSourceState('fallback_7d');
+            localStorage.setItem('knightmind:ratings:window', 'last_7_days');
         }
     }, [hasSessions, windowSource]);
 
@@ -145,15 +160,17 @@ export default function RatingInsights() {
                     <div className="flex flex-col gap-1.5">
                         <div className="flex bg-primary/5 rounded-sm p-1">
                             <button
+                                type="button"
                                 onClick={() => setWindowSource('session')}
                                 disabled={hasSessions === false}
-                                className={`px-3 py-2 text-sm font-sans transition-all ${windowSource === 'session' ? 'bg-primary text-bg-primary shadow-sm' : 'text-primary/60 hover:text-primary'} disabled:opacity-50 disabled:cursor-not-allowed`}
+                                className={`km-toggle-option km-focus-visible px-3 py-2 text-sm font-sans transition-all rounded-sm ${windowSource === 'session' ? 'km-toggle-selected bg-primary text-bg-primary shadow-sm' : 'text-primary/60'} ${hasSessions === false ? 'km-interactive-disabled' : ''}`}
                             >
                                 Since Session
                             </button>
                             <button
+                                type="button"
                                 onClick={() => setWindowSource('fallback_7d')}
-                                className={`px-3 py-2 text-sm font-sans transition-all ${windowSource === 'fallback_7d' ? 'bg-primary text-bg-primary shadow-sm' : 'text-primary/60 hover:text-primary'}`}
+                                className={`km-toggle-option km-focus-visible px-3 py-2 text-sm font-sans transition-all rounded-sm ${windowSource === 'fallback_7d' ? 'km-toggle-selected bg-primary text-bg-primary shadow-sm' : 'text-primary/60'}`}
                             >
                                 Last 7 Days
                             </button>
@@ -162,8 +179,9 @@ export default function RatingInsights() {
                             <p className="text-[10px] text-primary/40 font-sans ml-1">
                                 No sessions yet. Start a puzzle session to use session-based insights.{' '}
                                 <button
+                                    type="button"
                                     onClick={() => navigate('/puzzles')}
-                                    className="text-primary underline hover:text-primary/80 text-[10px] font-medium"
+                                    className="km-interactive km-focus-visible km-inline-link text-primary text-[10px] font-medium"
                                 >
                                     Start a session
                                 </button>
@@ -185,14 +203,16 @@ export default function RatingInsights() {
                     <div className="flex flex-col gap-1.5">
                         <div className="flex bg-primary/5 rounded-sm p-1">
                             <button
+                                type="button"
                                 onClick={() => setTimeControl('rapid')}
-                                className={`px-3 py-2 text-sm font-sans transition-all ${timeControl === 'rapid' ? 'bg-primary text-bg-primary shadow-sm' : 'text-primary/60 hover:text-primary'}`}
+                                className={`km-toggle-option km-focus-visible px-3 py-2 text-sm font-sans transition-all rounded-sm ${timeControl === 'rapid' ? 'km-toggle-selected bg-primary text-bg-primary shadow-sm' : 'text-primary/60'}`}
                             >
                                 Rapid
                             </button>
                             <button
+                                type="button"
                                 onClick={() => setTimeControl('blitz')}
-                                className={`px-3 py-2 text-sm font-sans transition-all ${timeControl === 'blitz' ? 'bg-primary text-bg-primary shadow-sm' : 'text-primary/60 hover:text-primary'}`}
+                                className={`km-toggle-option km-focus-visible px-3 py-2 text-sm font-sans transition-all rounded-sm ${timeControl === 'blitz' ? 'km-toggle-selected bg-primary text-bg-primary shadow-sm' : 'text-primary/60'}`}
                             >
                                 Blitz
                             </button>
@@ -205,11 +225,12 @@ export default function RatingInsights() {
                     </div>
 
                     <div className="flex flex-col gap-1">
-                        <button
-                            onClick={handleSnapshot}
-                            disabled={snapshotLoading}
-                            className="px-5 py-2 border border-primary/20 hover:bg-primary/5 text-primary text-sm font-sans transition-all disabled:opacity-50"
-                        >
+<button
+                        type="button"
+                        onClick={handleSnapshot}
+                        disabled={snapshotLoading}
+                        className={`km-focus-visible px-5 py-2 border border-primary/20 text-primary text-sm font-sans transition-all rounded-sm ${snapshotLoading ? 'km-interactive-disabled' : 'km-interactive'} disabled:opacity-50`}
+                    >
                             {snapshotSuccess ? '✓ Snapshot recorded' : snapshotLoading ? 'Recording...' : 'Record Snapshot'}
                         </button>
                         {snapshotError && (
@@ -262,9 +283,10 @@ export default function RatingInsights() {
                                         This saves your current Chess.com rating so we can compare future progress.
                                     </p>
                                     <button
+                                        type="button"
                                         onClick={handleSnapshot}
                                         disabled={snapshotLoading}
-                                        className="mt-2 px-6 py-2 bg-primary text-bg-primary text-sm font-sans hover:bg-primary/90 transition-all disabled:opacity-50"
+                                        className={`mt-2 px-6 py-2 bg-primary text-bg-primary text-sm font-sans transition-all rounded-sm km-focus-visible ${snapshotLoading ? 'km-interactive-disabled' : 'km-interactive'} disabled:opacity-50`}
                                     >
                                         {snapshotLoading ? 'Recording...' : 'Record Snapshot'}
                                     </button>

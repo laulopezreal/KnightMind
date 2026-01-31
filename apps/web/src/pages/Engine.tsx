@@ -87,7 +87,7 @@ export default function Engine() {
     <div className="space-y-12 animate-teedin">
       <section className="flex justify-between items-end">
         <div>
-          <Link to="/" className="text-primary/40 hover:text-primary mb-4 inline-block font-sans text-sm tracking-widest uppercase transition-colors">
+          <Link to="/" className="km-interactive km-focus-visible km-inline-link text-primary/40 mb-4 inline-block font-sans text-sm tracking-widest uppercase transition-colors">
             ← Return Home
           </Link>
           <h1 className="text-4xl md:text-5xl font-serif text-primary mb-2">Engine Analysis</h1>
@@ -117,7 +117,7 @@ export default function Engine() {
             />
           </div>
           <div className="mt-8 flex justify-center">
-            <button onClick={handleReset} className="px-6 py-2 text-primary/60 hover:text-primary font-sans text-sm uppercase tracking-widest transition-colors">
+            <button type="button" onClick={handleReset} className="km-interactive km-focus-visible px-6 py-2 text-primary/60 font-sans text-sm uppercase tracking-widest transition-colors rounded-sm">
               Reset Position
             </button>
           </div>
@@ -133,7 +133,7 @@ export default function Engine() {
               <input type="text" value={fenInput} onChange={(e) => setFenInput(e.target.value)}
                 className="flex-1 bg-transparent border-none outline-none text-primary font-mono text-sm placeholder-primary/30"
               />
-              <button onClick={handleFenSubmit} className="text-xs font-sans uppercase tracking-widest text-primary hover:text-primary/60 transition-colors">
+              <button type="button" onClick={handleFenSubmit} className="km-interactive km-focus-visible text-xs font-sans uppercase tracking-widest text-primary transition-colors">
                 Load
               </button>
             </div>
@@ -162,15 +162,15 @@ export default function Engine() {
                   ) : (
                     <span className="text-primary/40 italic text-sm">Hidden</span>
                   )}
-                  <button onClick={() => setShowBestMove(!showBestMove)} className="text-primary hover:text-primary/60 text-xs uppercase tracking-widest border border-primary/20 px-3 py-1 rounded-sm transition-colors">
+                  <button type="button" onClick={() => setShowBestMove(!showBestMove)} className="km-interactive km-focus-visible text-primary text-xs uppercase tracking-widest border border-primary/20 px-3 py-1 rounded-sm transition-colors">
                     {showBestMove ? 'Hide' : 'Show'}
                   </button>
                 </div>
               </div>
             )}
 
-            <button onClick={handleEvaluate} disabled={loading || !engineAvailable}
-              className="w-full py-4 mt-4 bg-primary text-bg-primary hover:opacity-90 disabled:opacity-50 rounded-sm font-serif text-lg transition-all">
+            <button type="button" onClick={handleEvaluate} disabled={loading || !engineAvailable}
+              className={`w-full py-4 mt-4 bg-primary text-bg-primary rounded-sm font-serif text-lg transition-all km-focus-visible ${loading || !engineAvailable ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'}`}>
               {loading ? 'Analyzing...' : 'Evaluate Position'}
             </button>
           </div>
