@@ -1,4 +1,4 @@
-import { API_BASE } from './core';
+import { request } from './core';
 
 export interface SnapshotResponse {
     rating: number;
@@ -55,17 +55,15 @@ export interface ExplainResponse {
     highlights: Highlights;
 }
 
-export const createSnapshot = async (username: string, timeControl: string): Promise<SnapshotResponse> => {
-    const response = await fetch(`${API_BASE}/ratings/snapshot`, {
+export const createSnapshot = (username: string, timeControl: string): Promise<SnapshotResponse> => {
+    return request<SnapshotResponse>('/ratings/snapshot', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, time_control: timeControl }),
     });
-    if (!response.ok) throw new Error('Failed to create snapshot');
-    return response.json();
 };
 
-export const getRatingExplain = async (
+export const getRatingExplain = (
     username: string,
     timeControl: string = 'rapid',
     sinceSessionId?: string,
@@ -83,7 +81,5 @@ export const getRatingExplain = async (
         params.append('since', since);
     }
 
-    const response = await fetch(`${API_BASE}/ratings/explain?${params.toString()}`);
-    if (!response.ok) throw new Error('Failed to fetch rating explainer');
-    return response.json();
+    return request<ExplainResponse>(`/ratings/explain?${params.toString()}`);
 };

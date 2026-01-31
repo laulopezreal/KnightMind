@@ -779,11 +779,7 @@ async def create_rating_snapshot(request: SnapshotRequest, db: Session = Depends
         
         # Parse rating: { "chess_rapid": { "last": { "rating": ... } } }
         tc_key = f"chess_{request.time_control}"
-        if tc_key not in stats:
-            # Try fallback or detailed error?
-            pass # Raises error below if key missing
-            
-        if tc_key not in stats or "last" not in stats[tc_key] or "rating" not in stats[tc_key]["last"]:
+        if not (rating := stats.get(tc_key, {}).get("last", {}).get("rating")):
              raise HTTPException(status_code=502, detail=f"Could not find rating for {request.time_control} in Chess.com response")
         
         rating = stats[tc_key]["last"]["rating"]
@@ -1066,8 +1062,7 @@ async def explain_rating_changes(
     
     net_change = None
     if start_rating_val and end_rating_val:
-        if latest_any.recorded_at >= (earliest_snapshot.recorded_at if earliest_snapshot else window_start):
-             net_change = end_rating_val - start_rating_val
+        net_change = end_rating_val - start_rating_val
 
     return ExplainResponse(
         time_control=time_control,
