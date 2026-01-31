@@ -35,6 +35,12 @@ export default function Puzzles() {
 
 
     const currentPuzzle = puzzles[currentIndex];
+    const puzzlesAvailable = puzzles.length > 0;
+    const isFinalPuzzle = puzzlesAvailable && currentIndex >= puzzles.length - 1;
+    const hasAttemptSubmission = status === 'correct' || status === 'revealed';
+    const canFinishPuzzle = puzzlesAvailable && isFinalPuzzle && hasAttemptSubmission;
+    const finishButtonDisabled = isFinalPuzzle && !canFinishPuzzle;
+    const finishButtonDisabled = isFinalPuzzle && !canFinishPuzzle;
 
     // Load persisted job and session from local storage on mount or username change
     useEffect(() => {
@@ -282,6 +288,12 @@ export default function Puzzles() {
 
     // Helper to determine active state
     const isGenerating = isJobPolling || (job?.status === 'queued' || job?.status === 'running');
+    const shouldShowJobStatusCard =
+        !!job &&
+        (job.status === 'queued' ||
+            job.status === 'running' ||
+            (!puzzlesAvailable && (job.status === 'succeeded' || job.status === 'failed')));
+    const shouldShowErrorCard = !!error && !isGenerating && !puzzlesAvailable;
 
 
     const handleCheckAnswer = () => {
@@ -365,6 +377,16 @@ export default function Puzzles() {
         }
     };
 
+    const handleAdvancePuzzle = async () => {
+        if (status === 'correct') {
+            await handleReviewPuzzle('pass');
+        }
+
+        if (!isFinalPuzzle) {
+            handleNextPuzzle();
+        }
+    };
+
 
     // Helper function to calculate accuracy percentage
     const calculateAccuracy = (passCount: number, failCount: number): number => {
@@ -427,10 +449,10 @@ export default function Puzzles() {
 
                 {/* Job Status / Error Area */}
                 <div className="mt-6">
-                    {error && !isGenerating && (
-                        <JobStatusCard status="failed" error={error} />
+                    {shouldShowErrorCard && (
+                        <JobStatusCard status="failed" error={error ?? 'Failed to generate puzzles'} />
                     )}
-                    {job && (job.status === 'queued' || job.status === 'running' || job.status === 'succeeded' || job.status === 'failed') && (
+                    {shouldShowJobStatusCard && job && (
                         <JobStatusCard
                             status={job.status}
                             message={job.message}
@@ -581,15 +603,10 @@ export default function Puzzles() {
                             {(status === 'correct' || status === 'revealed') && (
                                 <button
                                     type="button"
-                                    onClick={async () => {
-                                        if (status === 'correct') {
-                                            await handleReviewPuzzle('pass');
-                                        }
-                                        handleNextPuzzle();
-                                    }}
-                                    disabled={currentIndex >= puzzles.length - 1}
-                                    className={`w-full px-6 py-4 bg-green-600 text-white rounded-sm font-serif text-lg transition-all shadow-lg shadow-green-900/20 km-focus-visible ${currentIndex >= puzzles.length - 1 ? 'km-interactive-disabled' : 'km-interactive'}`}>
-                                    {currentIndex >= puzzles.length - 1 ? 'All Done' : 'Next Puzzle →'}
+                                    onClick={handleAdvancePuzzle}
+                                    disabled={finishButtonDisabled}
+                                    className={`w-full px-6 py-4 bg-green-600 text-white rounded-sm font-serif text-lg transition-all shadow-lg shadow-green-900/20 km-focus-visible ${finishButtonDisabled ? 'km-interactive-disabled' : 'km-interactive'}`}>
+                                    {isFinalPuzzle ? 'All Done' : 'Next Puzzle →'}
                                 </button>
                             )}
                             {status === 'incorrect' && (
