@@ -17,7 +17,7 @@ export default function RatingInsights() {
         setError(null);
         try {
             let sinceStr: string | undefined = undefined;
-            let sinceSessionId: string | undefined = undefined;
+            const sinceSessionId: string | undefined = undefined;
 
             if (windowSource === 'fallback_7d') {
                 const d = new Date();
