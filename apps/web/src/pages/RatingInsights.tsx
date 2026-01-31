@@ -51,16 +51,32 @@ export default function RatingInsights() {
             setLatestSnapshot(snapshotData);
             setSnapshotSuccess(true);
             fetchData(); // Refresh data
-            // Show success for 2 seconds, then revert
-            setTimeout(() => {
-                setSnapshotSuccess(false);
-            }, 2000);
         } catch (err) {
             setSnapshotError(err instanceof Error ? err.message : 'Failed to create snapshot');
         } finally {
             setSnapshotLoading(false);
         }
     };
+
+    // Clear snapshotSuccess after 2 seconds (with cleanup to prevent memory leaks)
+    useEffect(() => {
+        if (snapshotSuccess) {
+            const timer = setTimeout(() => {
+                setSnapshotSuccess(false);
+            }, 2000);
+            return () => clearTimeout(timer);
+        }
+    }, [snapshotSuccess]);
+
+    // Clear latestSnapshot card after 8 seconds (with cleanup)
+    useEffect(() => {
+        if (latestSnapshot) {
+            const timer = setTimeout(() => {
+                setLatestSnapshot(null);
+            }, 8000);
+            return () => clearTimeout(timer);
+        }
+    }, [latestSnapshot]);
 
     if (!username) {
         return (
