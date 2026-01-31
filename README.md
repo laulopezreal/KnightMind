@@ -78,6 +78,15 @@ uvicorn main:app --reload --port 8000
 
 API will be available at http://localhost:8000
 
+### CORS configuration
+
+The API reads allowed CORS origins from `KNIGHTMIND_CORS_ORIGINS` as a comma-separated list. If this value is unset or empty, the API does not allow cross-origin browser requests (same-origin is still allowed).
+
+Example (local frontend + staging):
+```bash
+export KNIGHTMIND_CORS_ORIGINS="http://localhost:5173,https://staging.example.com"
+```
+
 ### Start the web app
 
 ```bash
