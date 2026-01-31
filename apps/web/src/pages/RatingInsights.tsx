@@ -238,16 +238,17 @@ export default function RatingInsights() {
                                     sub={`${data.stats.games} games analyzed`}
                                 />
                                 <Card
-                                    label="Exp. vs Actual"
+                                    label="Performance vs Expectation"
                                     value={hasGames && data.stats.expected_minus_actual !== null
                                         ? (data.stats.expected_minus_actual > 0 ? `+${(data.stats.expected_minus_actual || 0).toFixed(1)}` : `${(data.stats.expected_minus_actual || 0).toFixed(1)}`)
                                         : "—"}
-                                    sub="Score points diff"
+                                    sub="Expectation gap"
+                                    helper="Positive means you outperformed expectations. Negative means you underperformed."
                                 />
                                 <Card
-                                    label="Avg Opponent"
+                                    label="Opponent Strength"
                                     value={hasGames ? (data.stats.avg_opponent_rating?.toString() || "—") : "—"}
-                                    sub={data.rating.reference_is_approx ? "(Approx reference)" : "vs Reference Rating"}
+                                    sub="Average opponent rating vs your reference rating."
                                 />
                             </section>
 
@@ -266,7 +267,7 @@ export default function RatingInsights() {
                                                 ))}
                                             </ul>
                                         ) : (
-                                            <p className="text-primary/50 font-sans italic">Not enough data to identify clear drivers.</p>
+                                            <p className="text-primary/50 font-sans italic">No clear drivers yet. Play a few games and this will explain what influenced your rating most.</p>
                                         )}
                                     </>
                                 ) : (
@@ -322,13 +323,14 @@ export default function RatingInsights() {
     );
 }
 
-const Card = ({ label, value, sub, highlight, positive }: { label: string, value: string, sub?: string, highlight?: boolean, positive?: boolean }) => (
+const Card = ({ label, value, sub, helper, highlight, positive }: { label: string, value: string, sub?: string, helper?: string, highlight?: boolean, positive?: boolean }) => (
     <div className="p-6 bg-primary/5 rounded-sm border border-primary/10">
         <div className="text-xs font-sans uppercase tracking-widest text-primary/40 mb-2">{label}</div>
         <div className={`text-3xl font-serif mb-1 ${highlight ? (positive ? 'text-emerald-600' : 'text-red-500') : 'text-primary'}`}>
             {value}
         </div>
-        {sub && <div className="text-xs font-sans text-primary/50">{sub}</div>}
+        {sub && <div className="text-xs font-sans text-primary/50 mb-1">{sub}</div>}
+        {helper && <div className="text-xs font-sans text-primary/40 italic">{helper}</div>}
     </div>
 );
 
