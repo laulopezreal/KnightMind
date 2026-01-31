@@ -1,6 +1,6 @@
 from datetime import datetime, timezone, timedelta
 from unittest.mock import Mock, patch
-from services.api.main import app, get_opponent_rating_from_pgn
+from services.api.main import app, get_opponent_rating_from_pgn, calculate_expected_score
 from fastapi.testclient import TestClient
 
 client = TestClient(app)
@@ -18,18 +18,13 @@ def test_pgn_parsing():
     pgn_missing = '[Event "Live Chess"]\n[White "player1"]'
     assert get_opponent_rating_from_pgn(pgn_missing, user_is_white=True) is None
 
-# Logic for Expected Score:
-# 1 / (1 + 10^((opp - ref)/400))
-# If opp=1400, ref=1400 -> 1 / (1 + 1) = 0.5
-# If opp=1800, ref=1400 -> diff=400 -> 1 / (1 + 10^1) = 1/11 = 0.09
-# If opp=1000, ref=1400 -> diff=-400 -> 1 / (1 + 10^-1) = 1/1.1 = 0.909
+def test_expected_score_logic():
+    # If opp=1400, ref=1400 -> 1 / (1 + 1) = 0.5
+    assert calculate_expected_score(1400, 1400) == 0.5
+    
+    # If opp=1800, ref=1400 -> diff=400 -> 1 / (1 + 10^1) = 1/11 = 0.09
+    assert round(calculate_expected_score(1400, 1800), 2) == 0.09
+    
+    # If opp=1000, ref=1400 -> diff=-400 -> 1 / (1 + 10^-1) = 1/1.1 = 0.909
+    assert round(calculate_expected_score(1400, 1000), 3) == 0.909
 
-def test_expected_score_logic_impl():
-    # This logic is embedded in main.py, hard to unit test without extracting function.
-    # But we can test via integration test if we mock the DB and storage.
-    pass
-
-# Mock tests via endpoint would need complex mocking of DB and Storage.
-# Given "Minimal tests", I will focus on the helper and maybe a simple endpoint test if possible,
-# but main.py has heavy dependencies.
-# I'll rely on the PGN parsing test which is critical.

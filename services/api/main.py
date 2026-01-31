@@ -57,6 +57,14 @@ import asyncio
 
 CLEANUP_INTERVAL_SECONDS = 3600
 
+# Rating explain thresholds
+PERFORMANCE_DIFF_THRESHOLD = 0.5
+RATING_DIFFERENCE_THRESHOLD = 100
+SIGNIFICANT_WINS_VS_HIGHER_THRESHOLD = 2
+SIGNIFICANT_LOSSES_VS_LOWER_THRESHOLD = 2
+OPPONENT_RATING_STD_DEV_THRESHOLD = 150
+
+
 async def run_session_cleanup():
     """Background task to cleanup abandoned sessions periodically."""
     while True:
@@ -761,6 +769,11 @@ def get_opponent_rating_from_pgn(pgn: str, user_is_white: bool) -> int | None:
     return None
 
 
+def calculate_expected_score(player_rating: int, opponent_rating: int) -> float:
+    """Calculates the expected score for a player based on Elo ratings."""
+    return 1 / (1 + 10 ** ((opponent_rating - player_rating) / 400))
+
+
 class SnapshotRequest(BaseModel):
     username: str
     time_control: Literal["rapid", "blitz", "bullet"]
@@ -781,8 +794,6 @@ async def create_rating_snapshot(request: SnapshotRequest, db: Session = Depends
         tc_key = f"chess_{request.time_control}"
         if not (rating := stats.get(tc_key, {}).get("last", {}).get("rating")):
              raise HTTPException(status_code=502, detail=f"Could not find rating for {request.time_control} in Chess.com response")
-        
-        rating = stats[tc_key]["last"]["rating"]
         
         snapshot = RatingSnapshot(
             username=request.username,
@@ -1002,7 +1013,7 @@ async def explain_rating_changes(
     for item in game_details:
         if item["opp_rating"] is not None:
             r_opp = item["opp_rating"]
-            expected = 1 / (1 + 10 ** ((r_opp - reference_rating) / 400))
+            expected = calculate_expected_score(reference_rating, r_opp)
             item["expected"] = expected
             
             expected_total += expected
@@ -1023,23 +1034,23 @@ async def explain_rating_changes(
     drivers = []
     diff = actual_total_rated - expected_total
     
-    if diff > 0.5:
+    if diff > PERFORMANCE_DIFF_THRESHOLD:
         drivers.append("You outperformed expectations overall (upward pressure).")
-    elif diff < -0.5:
+    elif diff < -PERFORMANCE_DIFF_THRESHOLD:
         drivers.append("You underperformed expectations overall (downward pressure).")
         
-    wins_vs_higher = sum(1 for g in game_details if g["opp_rating"] and g["opp_rating"] >= reference_rating + 100 and g["actual"] == 1.0)
-    if wins_vs_higher >= 2:
+    wins_vs_higher = sum(1 for g in game_details if g["opp_rating"] and g["opp_rating"] >= reference_rating + RATING_DIFFERENCE_THRESHOLD and g["actual"] == 1.0)
+    if wins_vs_higher >= SIGNIFICANT_WINS_VS_HIGHER_THRESHOLD:
         drivers.append("Wins against higher-rated opponents likely offset losses.")
         
-    losses_vs_lower = sum(1 for g in game_details if g["opp_rating"] and g["opp_rating"] <= reference_rating - 100 and g["actual"] == 0.0)
-    if losses_vs_lower >= 2:
+    losses_vs_lower = sum(1 for g in game_details if g["opp_rating"] and g["opp_rating"] <= reference_rating - RATING_DIFFERENCE_THRESHOLD and g["actual"] == 0.0)
+    if losses_vs_lower >= SIGNIFICANT_LOSSES_VS_LOWER_THRESHOLD:
         drivers.append("Losses against lower-rated opponents likely drove most of the drop.")
         
     if len(opp_ratings) >= 5:
         variance = sum((x - avg_opp) ** 2 for x in opp_ratings) / len(opp_ratings)
         std_dev = variance ** 0.5
-        if std_dev > 150:
+        if std_dev > OPPONENT_RATING_STD_DEV_THRESHOLD:
             drivers.append("Wide opponent rating range increased volatility.")
 
     def get_surprise_val(h: HighlightGame):
