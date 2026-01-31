@@ -40,7 +40,6 @@ export default function Puzzles() {
     const hasAttemptSubmission = status === 'correct' || status === 'revealed';
     const canFinishPuzzle = puzzlesAvailable && isFinalPuzzle && hasAttemptSubmission;
     const finishButtonDisabled = isFinalPuzzle && !canFinishPuzzle;
-    const finishButtonDisabled = isFinalPuzzle && !canFinishPuzzle;
 
     // Load persisted job and session from local storage on mount or username change
     useEffect(() => {
