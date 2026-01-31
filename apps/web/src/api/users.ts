@@ -27,6 +27,13 @@ export async function importChessComGames(username: string): Promise<ImportResul
     }
 }
 
-export async function validateUser(username: string): Promise<{ valid: boolean; username: string; error?: string }> {
-    return request<{ valid: boolean; username: string; error?: string }>(`/users/validate?username=${encodeURIComponent(username)}`);
+export interface ValidateUserResponse {
+    valid: boolean;
+    username?: string;
+    error?: string;
+}
+
+export async function validateChessComUser(username: string): Promise<ValidateUserResponse> {
+    // Keep validation requests routed through the same /api proxy for local/prod parity.
+    return request<ValidateUserResponse>(`/users/validate?username=${encodeURIComponent(username)}`);
 }

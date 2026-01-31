@@ -88,6 +88,8 @@ npm run dev
 Web app will be available at http://localhost:5173
 
 The frontend proxies `/api/*` requests to the backend automatically.
+For consistency (and to avoid CORS issues), frontend API calls should use the shared `/api` base in `apps/web/src/api/core.ts` rather than reaching directly for a raw backend URL.
+If an environment ever needs a different base, update `API_BASE` in `apps/web/src/api/core.ts` so every consumer stays aligned.
 
 ## Testing
 

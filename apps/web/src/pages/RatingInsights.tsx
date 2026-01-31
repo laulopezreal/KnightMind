@@ -17,7 +17,6 @@ export default function RatingInsights() {
         setError(null);
         try {
             let sinceStr: string | undefined = undefined;
-            const sinceSessionId: string | undefined = undefined;
 
             if (windowSource === 'fallback_7d') {
                 const d = new Date();
@@ -25,7 +24,7 @@ export default function RatingInsights() {
                 sinceStr = d.toISOString();
             }
 
-            const resp = await getRatingExplain(username, timeControl, sinceSessionId, sinceStr);
+            const resp = await getRatingExplain(username, timeControl, undefined, sinceStr);
             setData(resp);
         } catch (err) {
             setError(err instanceof Error ? err.message : 'Failed to load insights');

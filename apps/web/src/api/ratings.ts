@@ -67,12 +67,13 @@ export const getRatingExplain = (
     username: string,
     timeControl: string = 'rapid',
     sinceSessionId?: string,
-    since?: string
+    since?: string,
+    limitGames: number = 200
 ): Promise<ExplainResponse> => {
     const params = new URLSearchParams({
         username,
         time_control: timeControl,
-        limit_games: '200'
+        limit_games: limitGames.toString()
     });
     if (sinceSessionId) {
         params.append('since_session_id', sinceSessionId);
