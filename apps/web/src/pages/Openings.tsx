@@ -176,8 +176,9 @@ export default function Openings() {
               <div className="flex items-center gap-2">
                 <span className="text-primary/60 font-sans text-sm">Set username to analyze</span>
                 <button
+                  type="button"
                   onClick={() => setEditorOpen(true)}
-                  className="text-primary underline hover:text-primary/80 text-sm font-medium"
+                  className="km-interactive km-focus-visible km-inline-link text-primary text-sm font-medium"
                 >
                   Set
                 </button>
@@ -207,9 +208,10 @@ export default function Openings() {
         </div>
 
         <button
+          type="button"
           onClick={handleFetchClick}
           disabled={loading || !username}
-          className="px-8 py-3 bg-primary text-bg-primary hover:opacity-90 disabled:opacity-50 rounded-sm font-serif text-lg transition-all"
+          className={`px-8 py-3 bg-primary text-bg-primary rounded-sm font-serif text-lg transition-all km-focus-visible ${loading || !username ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'}`}
         >
           {loading ? 'Analyzing...' : 'Load Openings'}
         </button>
