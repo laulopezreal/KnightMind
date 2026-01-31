@@ -40,6 +40,13 @@ A platform for analyzing chess games, tracking progress, and gaining insights us
 6. **Pull Requests** – All Pull Requests must target the `dev` branch, not `main`.
 7. **Post-PR Checks** – When running the `postpr` workflow, you must also check for and fix any CI/CD failures.
 
+## File Scope Discovery Rule
+
+- When file scope is unclear:
+  - First run a discovery-only step.
+  - Do not implement or edit files during discovery.
+  - Wait for explicit approval of the file list before modifying code.
+
 ## Commands to Run
 
 ### Frontend
