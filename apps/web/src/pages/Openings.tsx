@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import * as d3 from 'd3';
 import { getOpenings, ApiError, type OpeningNode, type ColorFilter } from '../api/client';
+import { useChessUsername } from '../context/ChessUsernameContext';
 
 export default function Openings() {
   const svgRef = useRef<SVGSVGElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [username, setUsername] = useState('');
+  const { username, setEditorOpen } = useChessUsername();
   const [colorFilter, setColorFilter] = useState<ColorFilter>('both');
   const [treeData, setTreeData] = useState<OpeningNode | null>(null);
   const [tooltip, setTooltip] = useState<{ x: number; y: number; data: OpeningNode } | null>(null);
@@ -170,15 +171,26 @@ export default function Openings() {
       {/* Controls */}
       <section className="flex flex-wrap gap-6 items-end p-6 border border-primary/10 rounded-lg bg-primary/5 backdrop-blur-sm">
         <div className="flex-1 min-w-[200px]">
-          <label className="block text-xs font-sans uppercase tracking-widest text-primary/40 mb-2">Username</label>
-          <input
-            type="text"
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && handleFetchClick()}
-            placeholder="Chess.com username"
-            className="w-full bg-transparent border-b border-primary/20 py-2 text-primary placeholder-primary/30 focus:outline-none focus:border-primary/60 transition-colors font-serif text-xl"
-          />
+          {!username ? (
+            <div className="h-full flex flex-col justify-center">
+              <div className="flex items-center gap-2">
+                <span className="text-primary/60 font-sans text-sm">Set username to analyze</span>
+                <button
+                  onClick={() => setEditorOpen(true)}
+                  className="text-primary underline hover:text-primary/80 text-sm font-medium"
+                >
+                  Set
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div>
+              <label className="block text-xs font-sans uppercase tracking-widest text-primary/40 mb-2">Username</label>
+              <div className="font-serif text-xl text-primary border-b border-primary/20 py-2">
+                {username}
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="w-40">
@@ -196,7 +208,7 @@ export default function Openings() {
 
         <button
           onClick={handleFetchClick}
-          disabled={loading}
+          disabled={loading || !username}
           className="px-8 py-3 bg-primary text-bg-primary hover:opacity-90 disabled:opacity-50 rounded-sm font-serif text-lg transition-all"
         >
           {loading ? 'Analyzing...' : 'Load Openings'}
