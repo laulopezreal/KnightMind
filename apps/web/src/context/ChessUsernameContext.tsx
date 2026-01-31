@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, type ReactNode } from 'react';
+import { createContext, useContext, useState, type ReactNode } from 'react';
 
 interface ChessUsernameContextType {
     username: string;
@@ -11,17 +11,15 @@ interface ChessUsernameContextType {
 const ChessUsernameContext = createContext<ChessUsernameContextType | undefined>(undefined);
 
 export function ChessUsernameProvider({ children }: { children: ReactNode }) {
-    const [username, setUsernameState] = useState('');
-    const [isLoading, setIsLoading] = useState(true);
+    const [username, setUsernameState] = useState(() => {
+        if (typeof window !== 'undefined') {
+            return localStorage.getItem('knightmind:chesscom_username') || '';
+        }
+        return '';
+    });
+    const [isLoading] = useState(false); // No longer async
     const [isEditorOpen, setEditorOpen] = useState(false);
 
-    useEffect(() => {
-        const stored = localStorage.getItem('knightmind:chesscom_username');
-        if (stored) {
-            setUsernameState(stored);
-        }
-        setIsLoading(false);
-    }, []);
 
     const setUsername = (newUsername: string) => {
         if (newUsername) {
@@ -40,6 +38,7 @@ export function ChessUsernameProvider({ children }: { children: ReactNode }) {
 }
 
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function useChessUsername() {
     const context = useContext(ChessUsernameContext);
     if (context === undefined) {
