@@ -186,6 +186,37 @@ async def import_all_games(username: str) -> AsyncIterator[ChessGame]:
             yield parse_game(game_data)
 
 
+async def get_player_stats(username: str) -> dict:
+    """
+    Get player stats including current ratings.
+    
+    Args:
+        username: Chess.com username
+        
+    Returns:
+        Dict containing stats from Chess.com API
+        
+    Raises:
+        UserNotFoundError: If the user doesn't exist
+        RateLimitError: If rate limited by Chess.com
+        NetworkError: If a network error occurs
+    """
+    try:
+        async with httpx.AsyncClient(headers=DEFAULT_HEADERS, timeout=30.0, verify=SSL_CONTEXT) as client:
+            response = await client.get(
+                f"{CHESSCOM_API_BASE}/player/{username}/stats"
+            )
+            if not response.is_success:
+                _handle_response_error(response, username)
+            return response.json()
+    except httpx.TimeoutException as e:
+        raise NetworkError("Request timed out", e) from e
+    except httpx.ConnectError as e:
+        raise NetworkError("Failed to connect to Chess.com", e) from e
+    except httpx.HTTPError as e:
+        raise NetworkError(str(e), e) from e
+
+
 if __name__ == "__main__":
     import asyncio
     import sys

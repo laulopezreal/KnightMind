@@ -1,6 +1,6 @@
 from contextlib import asynccontextmanager
 from dataclasses import asdict
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timezone, timedelta
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Query, Depends
@@ -11,6 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 import os
+import re
 import sys
 
 # Add project root to path to verify imports work even if CWD is services/api
@@ -43,9 +44,12 @@ from services.ingest import (
     UserNotFoundError,
     fetch_games_from_archive,
     get_player_archives,
+    get_player_stats,
     parse_game,
     import_all_games,
 )
+
+from services.api.models import Job, JobStatus, PuzzleStats, PuzzleReview, PuzzleResult, RatingSnapshot
 
 from services.api.puzzles.identity import backfill_puzzle_identity
 from services.api.jobs.cleanup_sessions import cleanup_abandoned_sessions
@@ -109,6 +113,7 @@ app.add_middleware(
         "http://localhost:5175",
         "http://127.0.0.1:5173",
         "http://127.0.0.1:5174",
+        "http://127.0.0.1:5175",
         # Add your Netlify domain here when deployed
     ],
     allow_credentials=True,
@@ -740,3 +745,351 @@ async def review_puzzle(
             "last_result": stats.last_result
         }
     }
+
+
+# --- Rating Drivers Explainer Support ---
+
+def get_opponent_rating_from_pgn(pgn: str, user_is_white: bool) -> int | None:
+    """Extract opponent rating from PGN headers."""
+    tag = "BlackElo" if user_is_white else "WhiteElo"
+    match = re.search(f'\\[{tag} "(\\d+)"\\]', pgn)
+    if match:
+        try:
+            return int(match.group(1))
+        except ValueError:
+            return None
+    return None
+
+
+class SnapshotRequest(BaseModel):
+    username: str
+    time_control: Literal["rapid", "blitz", "bullet"]
+
+
+class SnapshotResponse(BaseModel):
+    rating: int
+    recorded_at: datetime
+
+
+@app.post("/ratings/snapshot", response_model=SnapshotResponse)
+async def create_rating_snapshot(request: SnapshotRequest, db: Session = Depends(get_db)):
+    """Fetch current rating from Chess.com and store a snapshot."""
+    try:
+        stats = await get_player_stats(request.username)
+        
+        # Parse rating: { "chess_rapid": { "last": { "rating": ... } } }
+        tc_key = f"chess_{request.time_control}"
+        if tc_key not in stats:
+            # Try fallback or detailed error?
+            pass # Raises error below if key missing
+            
+        if tc_key not in stats or "last" not in stats[tc_key] or "rating" not in stats[tc_key]["last"]:
+             raise HTTPException(status_code=502, detail=f"Could not find rating for {request.time_control} in Chess.com response")
+        
+        rating = stats[tc_key]["last"]["rating"]
+        
+        snapshot = RatingSnapshot(
+            username=request.username,
+            source="chesscom",
+            time_control=request.time_control,
+            rating=rating,
+            recorded_at=datetime.now(timezone.utc)
+        )
+        db.add(snapshot)
+        db.commit()
+        db.refresh(snapshot)
+        
+        return SnapshotResponse(rating=snapshot.rating, recorded_at=snapshot.recorded_at)
+        
+    except (UserNotFoundError, NetworkError) as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    except Exception as e:
+        if isinstance(e, HTTPException): raise e
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class HighlightGame(BaseModel):
+    opponent_rating: int | None
+    result: str
+    expected_score: float
+    rating_diff: int | None
+    game_id: str
+    played_at: datetime
+    url: str
+
+
+class Highlights(BaseModel):
+    best_surprises: list[HighlightGame]
+    worst_surprises: list[HighlightGame]
+
+
+class RatingWindow(BaseModel):
+    start: datetime
+    end: datetime
+    source: str
+
+
+class RatingInfo(BaseModel):
+    start: int | None
+    end: int | None
+    net_change: int | None
+    reference_rating: int
+    reference_is_approx: bool
+
+
+class DriverStats(BaseModel):
+    games: int
+    wins: int
+    draws: int
+    losses: int
+    avg_opponent_rating: int | None
+    expected_total: float | None
+    actual_total: float | None
+    expected_minus_actual: float | None
+    missing_opponent_rating_games: int
+
+
+class ExplainResponse(BaseModel):
+    time_control: str
+    window: RatingWindow
+    rating: RatingInfo
+    stats: DriverStats
+    drivers: list[str]
+    highlights: Highlights
+
+
+@app.get("/ratings/explain", response_model=ExplainResponse)
+async def explain_rating_changes(
+    username: str,
+    time_control: str = "rapid",
+    since_session_id: str | None = None,
+    since: datetime | None = None,
+    limit_games: int = 200,
+    db: Session = Depends(get_db)
+):
+    """Explain rating drivers based on recent games."""
+    from services.api.models import TrainingSession
+    
+    # 1. Determine Window
+    now = datetime.now(timezone.utc)
+    window_start: datetime
+    source_type: str
+    
+    if since_session_id:
+        session = db.get(TrainingSession, since_session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+        window_start = session.created_at.replace(tzinfo=timezone.utc)
+        source_type = "session"
+    elif since:
+        window_start = since
+        source_type = "since"
+    else:
+        # Fallback: Last session or 7 days
+        stmt = select(TrainingSession).where(TrainingSession.username == username).order_by(TrainingSession.created_at.desc())
+        last_session = db.scalars(stmt).first()
+        if last_session:
+            window_start = last_session.created_at.replace(tzinfo=timezone.utc)
+            source_type = "last_session"
+        else:
+            window_start = now - timedelta(days=7)
+            source_type = "fallback_7d"
+
+    if window_start.tzinfo is None:
+        window_start = window_start.replace(tzinfo=timezone.utc)
+
+    # 2. Load Games
+    storage = get_storage()
+    all_metadata = storage.get_all_metadata(username)
+    
+    start_ts = int(window_start.timestamp())
+    relevant_games = []
+    
+    count = 0
+    for meta in all_metadata:
+        if count >= limit_games:
+            break
+        if meta.time_control.lower() != time_control.lower():
+            continue
+        if meta.end_time < start_ts:
+            break
+            
+        relevant_games.append(meta)
+        count += 1
+        
+    relevant_games.reverse()
+    
+    # 3. Process Games
+    wins = 0
+    draws = 0
+    losses = 0
+    total_opp_rating = 0
+    opp_rating_count = 0
+    missing_ratings = 0
+    
+    game_details = [] 
+    opp_ratings = []
+    
+    stmt = select(RatingSnapshot).where(
+        RatingSnapshot.username == username, 
+        RatingSnapshot.time_control == time_control,
+        RatingSnapshot.recorded_at >= window_start
+    ).order_by(RatingSnapshot.recorded_at.asc())
+    earliest_snapshot = db.scalars(stmt).first()
+    
+    stmt = select(RatingSnapshot).where(
+         RatingSnapshot.username == username, 
+         RatingSnapshot.time_control == time_control,
+         RatingSnapshot.recorded_at < now
+    ).order_by(RatingSnapshot.recorded_at.desc())
+    latest_snapshot = db.scalars(stmt).first()
+
+    reference_rating = 0
+    reference_is_approx = False
+    
+    if earliest_snapshot:
+        reference_rating = earliest_snapshot.rating
+    elif latest_snapshot:
+        reference_rating = latest_snapshot.rating
+    
+    for meta in relevant_games:
+        pgn = storage.get_pgn(username, meta.game_id)
+        if not pgn:
+             continue
+             
+        user_is_white = (meta.white_username.lower() == username.lower())
+        
+        result_score = 0.0
+        if user_is_white:
+             if meta.white_result == "win": result_score = 1.0
+             elif meta.white_result in ["repetition", "agreed", "timevsinsufficient", "stalemate", "insufficient"]: result_score = 0.5
+        else:
+             if meta.black_result == "win": result_score = 1.0
+             elif meta.black_result in ["repetition", "agreed", "timevsinsufficient", "stalemate", "insufficient"]: result_score = 0.5
+
+        if result_score == 1.0: wins += 1
+        elif result_score == 0.5: draws += 1
+        else: losses += 1
+        
+        opp_rating = get_opponent_rating_from_pgn(pgn, user_is_white)
+        
+        if opp_rating is None:
+            missing_ratings += 1
+            game_details.append({
+                "meta": meta,
+                "opp_rating": None,
+                "actual": result_score,
+                "expected": None
+            })
+        else:
+            total_opp_rating += opp_rating
+            opp_rating_count += 1
+            opp_ratings.append(opp_rating)
+            game_details.append({
+                "meta": meta,
+                "opp_rating": opp_rating,
+                "actual": result_score,
+                "expected": None 
+            })
+
+    if reference_rating == 0:
+        if opp_rating_count > 0:
+            reference_rating = int(total_opp_rating / opp_rating_count)
+        else:
+            reference_rating = 1200
+        reference_is_approx = True
+            
+    expected_total = 0.0
+    actual_total_rated = 0.0
+    surprises = []
+    
+    for item in game_details:
+        if item["opp_rating"] is not None:
+            r_opp = item["opp_rating"]
+            expected = 1 / (1 + 10 ** ((r_opp - reference_rating) / 400))
+            item["expected"] = expected
+            
+            expected_total += expected
+            actual_total_rated += item["actual"]
+            
+            surprises.append(HighlightGame(
+                opponent_rating=r_opp,
+                result="Win" if item["actual"]==1.0 else "Draw" if item["actual"]==0.5 else "Loss",
+                expected_score=round(expected, 2),
+                rating_diff=r_opp - reference_rating,
+                game_id=item["meta"].game_id,
+                played_at=datetime.fromtimestamp(item["meta"].end_time, tz=timezone.utc),
+                url=item["meta"].url
+            ))
+            
+    avg_opp = int(total_opp_rating / opp_rating_count) if opp_rating_count > 0 else None
+    
+    drivers = []
+    diff = actual_total_rated - expected_total
+    
+    if diff > 0.5:
+        drivers.append("You outperformed expectations overall (upward pressure).")
+    elif diff < -0.5:
+        drivers.append("You underperformed expectations overall (downward pressure).")
+        
+    wins_vs_higher = sum(1 for g in game_details if g["opp_rating"] and g["opp_rating"] >= reference_rating + 100 and g["actual"] == 1.0)
+    if wins_vs_higher >= 2:
+        drivers.append("Wins against higher-rated opponents likely offset losses.")
+        
+    losses_vs_lower = sum(1 for g in game_details if g["opp_rating"] and g["opp_rating"] <= reference_rating - 100 and g["actual"] == 0.0)
+    if losses_vs_lower >= 2:
+        drivers.append("Losses against lower-rated opponents likely drove most of the drop.")
+        
+    if len(opp_ratings) >= 5:
+        variance = sum((x - avg_opp) ** 2 for x in opp_ratings) / len(opp_ratings)
+        std_dev = variance ** 0.5
+        if std_dev > 150:
+            drivers.append("Wide opponent rating range increased volatility.")
+
+    def get_surprise_val(h: HighlightGame):
+        act = 1.0 if h.result == "Win" else 0.5 if h.result == "Draw" else 0.0
+        return act - h.expected_score
+        
+    surprises.sort(key=get_surprise_val, reverse=True)
+    best_surprises = surprises[:3]
+    worst_surprises = surprises[-3:]
+    worst_surprises.reverse()
+    
+    start_rating_val = earliest_snapshot.rating if earliest_snapshot else None
+    
+    stmt = select(RatingSnapshot).where(
+        RatingSnapshot.username == username,
+        RatingSnapshot.time_control == time_control
+    ).order_by(RatingSnapshot.recorded_at.desc())
+    latest_any = db.scalars(stmt).first()
+    end_rating_val = latest_any.rating if latest_any else None
+    
+    net_change = None
+    if start_rating_val and end_rating_val:
+        if latest_any.recorded_at >= (earliest_snapshot.recorded_at if earliest_snapshot else window_start):
+             net_change = end_rating_val - start_rating_val
+
+    return ExplainResponse(
+        time_control=time_control,
+        window=RatingWindow(start=window_start, end=now, source=source_type),
+        rating=RatingInfo(
+            start=start_rating_val,
+            end=end_rating_val,
+            net_change=net_change,
+            reference_rating=reference_rating,
+            reference_is_approx=reference_is_approx
+        ),
+        stats=DriverStats(
+            games=len(relevant_games),
+            wins=wins,
+            draws=draws,
+            losses=losses,
+            avg_opponent_rating=avg_opp,
+            expected_total=expected_total if opp_rating_count > 0 else None,
+            actual_total=actual_total_rated if opp_rating_count > 0 else None,
+            expected_minus_actual=diff if opp_rating_count > 0 else None,
+            missing_opponent_rating_games=missing_ratings
+        ),
+        drivers=drivers,
+        highlights=Highlights(best_surprises=best_surprises, worst_surprises=worst_surprises)
+    )
