@@ -63,8 +63,9 @@ export default function Ops() {
                     <span className="font-bold uppercase tracking-widest text-[10px]">Error Detected</span>
                     <span>{error}</span>
                     <button
+                        type="button"
                         onClick={() => { setLoading(true); fetchData(); }}
-                        className="w-fit mt-2 text-[10px] uppercase border border-red-500/30 px-3 py-1 hover:bg-red-500/10 transition-colors"
+                        className="km-interactive km-focus-visible w-fit mt-2 text-[10px] uppercase border border-red-500/30 px-3 py-1 rounded-sm transition-colors"
                     >
                         Retry Connection
                     </button>

@@ -72,9 +72,10 @@ export default function Home() {
                 </div>
               )}
               <button
+                type="button"
                 onClick={handleImport}
                 disabled={loading || !username}
-                className="text-primary font-medium hover:opacity-70 transition-opacity disabled:opacity-30 uppercase tracking-widest text-sm"
+                className={`text-primary font-medium transition-opacity uppercase tracking-widest text-sm km-focus-visible rounded-sm px-2 py-1 ${loading || !username ? 'km-interactive-disabled disabled:opacity-30' : 'km-interactive'}`}
               >
                 {loading ? '...' : 'Import'}
               </button>

@@ -78,12 +78,13 @@ export default function UsernameDisplay() {
     return (
         <div ref={containerRef} className="relative font-sans">
             <button
+                type="button"
                 onClick={() => setEditorOpen(!isEditorOpen)}
                 className={`
-                    flex items-center gap-2 px-3 py-1.5 rounded-sm transition-all duration-300
+                    km-interactive km-focus-visible flex items-center gap-2 px-3 py-1.5 rounded-sm transition-all duration-300
                     ${username
-                        ? 'text-primary/60 hover:text-primary'
-                        : 'text-accent hover:text-accent/80 border border-accent/20 bg-accent/5'
+                        ? 'text-primary/60'
+                        : 'text-accent border border-accent/20 bg-accent/5'
                     }
                     ${isEditorOpen ? 'bg-primary/5 text-primary' : ''}
                 `}
@@ -115,9 +116,10 @@ export default function UsernameDisplay() {
                             className="flex-1 bg-primary/5 border border-primary/10 px-3 py-2 text-primary focus:outline-none focus:border-primary/40 rounded-sm transition-colors"
                         />
                         <button
+                            type="button"
                             onClick={handleSave}
                             disabled={isValidating}
-                            className="px-4 py-2 bg-primary text-bg-primary font-medium hover:opacity-90 rounded-sm disabled:opacity-50 transition-opacity"
+                            className={`px-4 py-2 bg-primary text-bg-primary font-medium rounded-sm transition-opacity km-focus-visible ${isValidating ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'}`}
                         >
                             {isValidating ? '...' : 'Save'}
                         </button>

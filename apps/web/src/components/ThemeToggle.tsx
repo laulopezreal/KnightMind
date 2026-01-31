@@ -11,11 +11,11 @@ export default function ThemeToggle() {
 
     return (
         <div
-            className={`
-        w-[130px] h-[50px] flex justify-center items-center scale-85 origin-center cursor-pointer select-none
-        transition-transform duration-300 hover:scale-95
-      `}
+            role="button"
+            tabIndex={0}
             onClick={toggleTheme}
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleTheme(); } }}
+            className="w-[130px] h-[50px] flex justify-center items-center scale-85 origin-center select-none km-interactive km-focus-visible rounded-full"
         >
             <div className={`
         relative h-10 w-28 rounded-full border-2 border-primary

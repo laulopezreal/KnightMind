@@ -115,3 +115,45 @@ nav,
 .brand-text {
   font-family: var(--font-serif);
 }
+
+/* Global interaction affordance (cursor + hover + focus-visible) */
+.km-interactive {
+  cursor: pointer;
+}
+.km-interactive:hover {
+  background-color: color-mix(in srgb, var(--color-chess-brown-700) 8%, transparent);
+}
+body.night .km-interactive:hover {
+  background-color: color-mix(in srgb, var(--color-chess-cream-200) 12%, transparent);
+}
+.km-interactive:focus-visible,
+.km-focus-visible:focus-visible {
+  outline: 2px solid var(--border-primary);
+  outline-offset: 2px;
+}
+.km-interactive-disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+.km-interactive-disabled:hover {
+  background-color: transparent;
+}
+.km-toggle-option {
+  cursor: pointer;
+}
+.km-toggle-option:hover:not(.km-interactive-disabled) {
+  background-color: color-mix(in srgb, var(--color-chess-brown-700) 8%, transparent);
+}
+body.night .km-toggle-option:hover:not(.km-interactive-disabled) {
+  background-color: color-mix(in srgb, var(--color-chess-cream-200) 12%, transparent);
+}
+.km-toggle-option:focus-visible {
+  outline: 2px solid var(--border-primary);
+  outline-offset: 2px;
+}
+.km-toggle-selected {
+  font-weight: 500;
+}
+.km-inline-link:hover {
+  text-decoration: underline;
+}
