@@ -1,12 +1,15 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useChessUsername } from '../context/ChessUsernameContext';
-import { createSnapshot, getRatingExplain, type ExplainResponse, type HighlightGame } from '../api/ratings';
+import { createSnapshot, getRatingExplain, type ExplainResponse, type HighlightGame, type SnapshotResponse } from '../api/ratings';
 
 export default function RatingInsights() {
     const { username, setEditorOpen } = useChessUsername();
     const [data, setData] = useState<ExplainResponse | null>(null);
     const [loading, setLoading] = useState(false);
     const [snapshotLoading, setSnapshotLoading] = useState(false);
+    const [snapshotSuccess, setSnapshotSuccess] = useState(false);
+    const [snapshotError, setSnapshotError] = useState<string | null>(null);
+    const [latestSnapshot, setLatestSnapshot] = useState<SnapshotResponse | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [timeControl, setTimeControl] = useState<'rapid' | 'blitz'>('rapid');
     const [windowSource, setWindowSource] = useState<'session' | 'fallback_7d'>('session');
@@ -42,11 +45,18 @@ export default function RatingInsights() {
     const handleSnapshot = async () => {
         if (!username) return;
         setSnapshotLoading(true);
+        setSnapshotError(null);
         try {
-            await createSnapshot(username, timeControl);
+            const snapshotData = await createSnapshot(username, timeControl);
+            setLatestSnapshot(snapshotData);
+            setSnapshotSuccess(true);
             fetchData(); // Refresh data
+            // Show success for 2 seconds, then revert
+            setTimeout(() => {
+                setSnapshotSuccess(false);
+            }, 2000);
         } catch (err) {
-            setError(err instanceof Error ? err.message : 'Failed to create snapshot');
+            setSnapshotError(err instanceof Error ? err.message : 'Failed to create snapshot');
         } finally {
             setSnapshotLoading(false);
         }
@@ -120,13 +130,20 @@ export default function RatingInsights() {
                         </button>
                     </div>
 
-                    <button
-                        onClick={handleSnapshot}
-                        disabled={snapshotLoading}
-                        className="px-5 py-2 border border-primary/20 hover:bg-primary/5 text-primary text-sm font-sans transition-all disabled:opacity-50"
-                    >
-                        {snapshotLoading ? 'Recording...' : 'Record Snapshot'}
-                    </button>
+                    <div className="flex flex-col gap-1">
+                        <button
+                            onClick={handleSnapshot}
+                            disabled={snapshotLoading}
+                            className="px-5 py-2 border border-primary/20 hover:bg-primary/5 text-primary text-sm font-sans transition-all disabled:opacity-50"
+                        >
+                            {snapshotSuccess ? '✓ Snapshot recorded' : snapshotLoading ? 'Recording...' : 'Record Snapshot'}
+                        </button>
+                        {snapshotError && (
+                            <p className="text-xs text-red-500/80 font-sans">
+                                Could not record snapshot. Try again.
+                            </p>
+                        )}
+                    </div>
                 </div>
             </section>
 
@@ -135,6 +152,22 @@ export default function RatingInsights() {
             {loading && !data && (
                 <div className="py-20 text-center text-primary/40 font-serif animate-pulse">
                     Analyzing games...
+                </div>
+            )}
+
+            {/* Latest Snapshot Confirmation Card */}
+            {latestSnapshot && (
+                <div className="p-4 border border-primary/10 bg-primary/5 rounded-sm max-w-md">
+                    <h3 className="text-lg font-serif text-primary mb-1">Latest Snapshot</h3>
+                    <p className="text-primary/80 font-sans text-sm">
+                        {timeControl.charAt(0).toUpperCase() + timeControl.slice(1)} · {latestSnapshot.rating}
+                    </p>
+                    <p className="text-primary/50 font-sans text-xs">
+                        Recorded just now
+                    </p>
+                    <p className="text-primary/60 font-sans text-sm mt-2">
+                        Play a few {timeControl} games on Chess.com to unlock insights.
+                    </p>
                 </div>
             )}
 
