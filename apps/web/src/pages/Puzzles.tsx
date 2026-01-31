@@ -10,6 +10,7 @@ import { parseBestMoveUci, getPieceNameAtSquare } from '../utils/puzzle-clue';
 
 type PuzzleStatus = 'solving' | 'correct' | 'incorrect' | 'revealed';
 type ClueStage = 0 | 1 | 2;
+type SessionState = 'idle' | 'loading' | 'active' | 'completing' | 'completed' | 'error';
 
 export default function Puzzles() {
     const { username, setEditorOpen } = useChessUsername();
@@ -28,6 +29,7 @@ export default function Puzzles() {
     const [recentSessions, setRecentSessions] = useState<SessionSummary[]>([]);
     const [reviewedCount, setReviewedCount] = useState(0);
     const [isResumingSession, setIsResumingSession] = useState(false);
+    const [sessionState, setSessionState] = useState<SessionState>('idle');
     const [clueStage, setClueStage] = useState<ClueStage>(0);
 
     // Mock progress for now until we hook up real polling
@@ -37,9 +39,11 @@ export default function Puzzles() {
     const currentPuzzle = puzzles[currentIndex];
     const puzzlesAvailable = puzzles.length > 0;
     const isFinalPuzzle = puzzlesAvailable && currentIndex >= puzzles.length - 1;
-    const hasAttemptSubmission = status === 'correct' || status === 'revealed';
-    const canFinishPuzzle = puzzlesAvailable && isFinalPuzzle && hasAttemptSubmission;
-    const finishButtonDisabled = isFinalPuzzle && !canFinishPuzzle;
+    const showPuzzleBoard = (sessionState === 'active' || sessionState === 'completing') && !!currentPuzzle;
+    const isAdvanceVisible = status === 'correct' || status === 'revealed';
+    const finishButtonDisabled = isFinalPuzzle ? sessionState !== 'active' : false;
+    const controlsEnabled = sessionState === 'idle' || sessionState === 'error';
+    const controlsDisabled = !controlsEnabled || isLoading || isGenerating;
 
     // Load persisted job and session from local storage on mount or username change
     useEffect(() => {
@@ -72,16 +76,24 @@ export default function Puzzles() {
                 setSessionSummary(session);
                 setReviewedCount(session.pass_count + session.fail_count);
 
-                // Start a new generation job to get puzzles
-                // FIX: Use getDuePuzzles to fetch puzzles for the session instead of regenerating
+                setSessionState('loading');
+                setError(null);
                 setIsLoading(true);
                 try {
                     const response = await getDuePuzzles(username, session.requested_n);
                     setPuzzles(response.puzzles);
                     setCurrentIndex(0);
                     setStatus('solving');
+                    if (response.puzzles.length > 0) {
+                        setSessionState('active');
+                        setError(null);
+                    } else {
+                        setSessionState('error');
+                    }
                 } catch (err) {
-                    setError(err instanceof Error ? err.message : 'Failed to load puzzles');
+                    const message = err instanceof Error ? err.message : 'Failed to load puzzles';
+                    setError(message);
+                    setSessionState(puzzles.length > 0 ? 'active' : 'error');
                 } finally {
                     setIsLoading(false);
                 }
@@ -90,6 +102,7 @@ export default function Puzzles() {
                 console.error("Failed to resume session:", err);
                 localStorage.removeItem(`knightmind:session:${username}`);
                 setActiveSessionId(null);
+                setSessionState('idle');
             } finally {
                 setIsResumingSession(false);
             }
@@ -110,28 +123,48 @@ export default function Puzzles() {
 
     const { job, isPolling: isJobPolling } = useJobPolling(activeJobId, {
         enabled: !!activeJobId,
-        onSuccess: () => {
+        onSuccess: async () => {
             // Clear local storage on success so we don't start polling old finished jobs next time?
             // Or keep it to show "Success" state persistently until user generates new?
             // Prompt says: "If succeeded/failed, show final state and clear stored job_id (optional)"
             // Let's keep it to show the success card, but maybe trigger auto-refresh.
 
             // Auto-refresh puzzles
-            getDailyPuzzles(username, 5).then((res) => {
+            try {
+                const res = await getDailyPuzzles(username, 5);
                 setPuzzles(res.puzzles);
                 setCurrentIndex(0);
                 setStatus('solving');
                 setUserMove('');
-            }).catch(console.error);
+                if (res.puzzles.length > 0) {
+                    setSessionState('active');
+                    setError(null);
+                } else {
+                    setSessionState('error');
+                    setError('No puzzles returned from generation');
+                }
+            } catch (err) {
+                console.error('Failed to refresh puzzles after generation:', err);
+                const message = err instanceof Error ? err.message : 'Failed to refresh puzzles';
+                setError(message);
+            }
 
             // Clear job ID after a delay or let user clear it?
             // If we clear it immediately, the card disappears. We probably want the card to stay "Success".
             // We can clear localStorage but keep activeJobId in state for this session.
             localStorage.removeItem(`knightmind:lastJob:${username}`);
         },
-        onError: () => {
+        onError: (err) => {
             // Similarly clear storage on hard failure so we don't get stuck
             localStorage.removeItem(`knightmind:lastJob:${username}`);
+            const message = err instanceof Error ? err.message : 'Failed to generate puzzles';
+            if (puzzles.length > 0) {
+                setSessionState('active');
+                setError(null);
+            } else {
+                setSessionState('error');
+                setError(message);
+            }
         }
     });
 
@@ -145,6 +178,7 @@ export default function Puzzles() {
             setError('Please enter a username');
             return;
         }
+        setSessionState('loading');
         setError(null);
 
         try {
@@ -162,6 +196,12 @@ export default function Puzzles() {
             } else {
                 setError(err instanceof Error ? err.message : 'Failed to generate puzzles');
             }
+            if (puzzles.length > 0) {
+                setSessionState('active');
+                setError(null);
+            } else {
+                setSessionState('error');
+            }
         }
     };
 
@@ -171,6 +211,7 @@ export default function Puzzles() {
             return;
         }
         // Check if we already have a running job? Maybe not needed.
+        setSessionState('loading');
         setIsLoading(true);
         setError(null);
 
@@ -182,6 +223,11 @@ export default function Puzzles() {
             setUserMove('');
             setError(null);
             setReviewedCount(0); // Reset reviewed count
+            if (dailyPuzzles.puzzles.length > 0) {
+                setSessionState('active');
+            } else {
+                setSessionState('error');
+            }
         } catch (err) {
             if (err instanceof ApiError) {
                 if (err.statusCode === 404) {
@@ -191,6 +237,12 @@ export default function Puzzles() {
                 }
             } else {
                 setError(err instanceof Error ? err.message : 'Failed to load puzzles');
+            }
+            if (puzzles.length > 0) {
+                setSessionState('active');
+                setError(null);
+            } else {
+                setSessionState('error');
             }
         } finally {
             setIsLoading(false);
@@ -216,6 +268,9 @@ export default function Puzzles() {
             return;
         }
 
+        setSessionState('loading');
+        setError(null);
+
         try {
             const { session_id } = await startSession(username.trim(), 5);
             setActiveSessionId(session_id);
@@ -231,24 +286,47 @@ export default function Puzzles() {
                 setPuzzles(response.puzzles);
                 setCurrentIndex(0);
                 setStatus('solving');
+                if (response.puzzles.length > 0) {
+                    setSessionState('active');
+                    setError(null);
+                } else {
+                    setSessionState('error');
+                }
             } catch (puzErr) {
-                setError(puzErr instanceof Error ? puzErr.message : 'Failed to load session puzzles');
+                const message = puzErr instanceof Error ? puzErr.message : 'Failed to load session puzzles';
+                if (puzzles.length > 0) {
+                    setSessionState('active');
+                    setError(null);
+                } else {
+                    setSessionState('error');
+                    setError(message);
+                }
             } finally {
                 setIsLoading(false);
             }
         } catch (err) {
-            setError(err instanceof Error ? err.message : 'Failed to start session');
+            const message = err instanceof Error ? err.message : 'Failed to start session';
+            if (puzzles.length > 0) {
+                setSessionState('active');
+                setError(null);
+            } else {
+                setSessionState('error');
+                setError(message);
+            }
         }
     };
 
     const handleCompleteSession = async () => {
         if (!activeSessionId || !username.trim()) return;
 
+        setSessionState('completing');
+
         try {
             const summary = await completeSession(activeSessionId, username.trim());
             setSessionSummary(summary);
             setActiveSessionId(null);
             localStorage.removeItem(`knightmind:session:${username.trim()}`);
+            setSessionState('completed');
 
             // Refresh recent sessions
             const recent = await getRecentSessions(username.trim(), 5);
@@ -256,6 +334,7 @@ export default function Puzzles() {
         } catch (err) {
             console.error('Failed to complete session:', err);
             setError(err instanceof Error ? err.message : 'Failed to complete session');
+            setSessionState('active');
         }
     };
 
@@ -292,7 +371,7 @@ export default function Puzzles() {
         (job.status === 'queued' ||
             job.status === 'running' ||
             (!puzzlesAvailable && (job.status === 'succeeded' || job.status === 'failed')));
-    const shouldShowErrorCard = !!error && !isGenerating && !puzzlesAvailable;
+    const shouldShowErrorCard = sessionState === 'error' && !!error;
 
 
     const handleCheckAnswer = () => {
@@ -430,17 +509,17 @@ export default function Puzzles() {
                     </div>
                     <div className="flex gap-4">
                         {!activeSessionId && (
-                            <button type="button" onClick={handleStartSession} disabled={isLoading || isGenerating}
-                                className={`px-6 py-2 bg-accent text-bg-primary rounded-sm font-serif transition-colors km-focus-visible ${isLoading || isGenerating ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'}`}>
+                            <button type="button" onClick={handleStartSession} disabled={controlsDisabled}
+                                className={`px-6 py-2 bg-accent text-bg-primary rounded-sm font-serif transition-colors km-focus-visible ${controlsDisabled ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'}`}>
                                 Start Session
                             </button>
                         )}
-                        <button type="button" onClick={handleLoadPuzzles} disabled={isLoading || isGenerating}
-                            className={`px-6 py-2 border border-primary/20 text-primary rounded-sm font-serif transition-all km-focus-visible ${isLoading || isGenerating ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'}`}>
+                        <button type="button" onClick={handleLoadPuzzles} disabled={controlsDisabled}
+                            className={`px-6 py-2 border border-primary/20 text-primary rounded-sm font-serif transition-all km-focus-visible ${controlsDisabled ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'}`}>
                             {isLoading ? 'Loading...' : 'Load Puzzles'}
                         </button>
-                        <button type="button" onClick={handleGeneratePuzzles} disabled={isGenerating || isLoading}
-                            className={`px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-colors km-focus-visible ${isGenerating || isLoading ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'}`}>
+                        <button type="button" onClick={handleGeneratePuzzles} disabled={controlsDisabled}
+                            className={`px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-colors km-focus-visible ${controlsDisabled ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'}`}>
                             {isGenerating ? 'Generating...' : 'Generate New'}
                         </button>
                     </div>
