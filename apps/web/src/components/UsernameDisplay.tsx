@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { useChessUsername } from '../context/ChessUsernameContext';
-import { validateChessComUser } from '../api';
+import { validateChessComUser, ApiError } from '../api';
 
 export default function UsernameDisplay() {
     const { username, setUsername, isEditorOpen, setEditorOpen } = useChessUsername();
@@ -54,14 +54,17 @@ export default function UsernameDisplay() {
 
             if (!data.valid) {
                 setError(data.error || 'User not found on Chess.com');
-                setIsValidating(false);
                 return;
             }
 
             setUsername(data.username || trimmed);
             setEditorOpen(false);
-        } catch {
-            setError('Could not validate username');
+        } catch (err) {
+            if (err instanceof ApiError) {
+                setError(err.detail || 'Could not validate username');
+            } else {
+                setError('Could not validate username');
+            }
         } finally {
             setIsValidating(false);
         }
