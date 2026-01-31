@@ -120,14 +120,17 @@ nav,
 .km-interactive {
   cursor: pointer;
 }
-.km-interactive:hover {
+.km-interactive:hover,
+.km-toggle-option:hover:not(.km-interactive-disabled) {
   background-color: color-mix(in srgb, var(--color-chess-brown-700) 8%, transparent);
 }
-body.night .km-interactive:hover {
+body.night .km-interactive:hover,
+body.night .km-toggle-option:hover:not(.km-interactive-disabled) {
   background-color: color-mix(in srgb, var(--color-chess-cream-200) 12%, transparent);
 }
 .km-interactive:focus-visible,
-.km-focus-visible:focus-visible {
+.km-focus-visible:focus-visible,
+.km-toggle-option:focus-visible {
   outline: 2px solid var(--border-primary);
   outline-offset: 2px;
 }
@@ -140,16 +143,6 @@ body.night .km-interactive:hover {
 }
 .km-toggle-option {
   cursor: pointer;
-}
-.km-toggle-option:hover:not(.km-interactive-disabled) {
-  background-color: color-mix(in srgb, var(--color-chess-brown-700) 8%, transparent);
-}
-body.night .km-toggle-option:hover:not(.km-interactive-disabled) {
-  background-color: color-mix(in srgb, var(--color-chess-cream-200) 12%, transparent);
-}
-.km-toggle-option:focus-visible {
-  outline: 2px solid var(--border-primary);
-  outline-offset: 2px;
 }
 .km-toggle-selected {
   font-weight: 500;

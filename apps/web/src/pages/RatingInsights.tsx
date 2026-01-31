@@ -4,6 +4,11 @@ import { useChessUsername } from '../context/ChessUsernameContext';
 import { createSnapshot, getRatingExplain, type ExplainResponse, type HighlightGame, type SnapshotResponse } from '../api/ratings';
 import { getRecentSessions } from '../api/sessions';
 
+const LS_KEYS = {
+    RATINGS_TIME_CONTROL: 'knightmind:ratings:time_control',
+    RATINGS_WINDOW: 'knightmind:ratings:window',
+} as const;
+
 export default function RatingInsights() {
     const navigate = useNavigate();
     const { username, setEditorOpen } = useChessUsername();
@@ -15,20 +20,20 @@ export default function RatingInsights() {
     const [latestSnapshot, setLatestSnapshot] = useState<SnapshotResponse | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [timeControl, setTimeControlState] = useState<'rapid' | 'blitz'>(() => {
-        const stored = localStorage.getItem('knightmind:ratings:time_control');
+        const stored = localStorage.getItem(LS_KEYS.RATINGS_TIME_CONTROL);
         return stored === 'blitz' || stored === 'rapid' ? stored : 'rapid';
     });
     const [windowSource, setWindowSourceState] = useState<'session' | 'fallback_7d'>(() => {
-        const stored = localStorage.getItem('knightmind:ratings:window');
+        const stored = localStorage.getItem(LS_KEYS.RATINGS_WINDOW);
         return stored === 'last_7_days' ? 'fallback_7d' : 'session';
     });
     const setTimeControl = useCallback((value: 'rapid' | 'blitz') => {
         setTimeControlState(value);
-        localStorage.setItem('knightmind:ratings:time_control', value);
+        localStorage.setItem(LS_KEYS.RATINGS_TIME_CONTROL, value);
     }, []);
     const setWindowSource = useCallback((value: 'session' | 'fallback_7d') => {
         setWindowSourceState(value);
-        localStorage.setItem('knightmind:ratings:window', value === 'session' ? 'since_session' : 'last_7_days');
+        localStorage.setItem(LS_KEYS.RATINGS_WINDOW, value === 'session' ? 'since_session' : 'last_7_days');
     }, []);
     const [hasSessions, setHasSessions] = useState<boolean | null>(null);
     const [sessionsLoading, setSessionsLoading] = useState(false);
@@ -84,10 +89,9 @@ export default function RatingInsights() {
     // Auto-switch to "Last 7 Days" when no sessions exist; persist corrected value
     useEffect(() => {
         if (hasSessions === false && windowSource === 'session') {
-            setWindowSourceState('fallback_7d');
-            localStorage.setItem('knightmind:ratings:window', 'last_7_days');
+            setWindowSource('fallback_7d');
         }
-    }, [hasSessions, windowSource]);
+    }, [hasSessions, windowSource, setWindowSource]);
 
     const handleSnapshot = async () => {
         if (!username) return;
@@ -226,11 +230,11 @@ export default function RatingInsights() {
 
                     <div className="flex flex-col gap-1">
 <button
-                        type="button"
-                        onClick={handleSnapshot}
-                        disabled={snapshotLoading}
-                        className={`km-focus-visible px-5 py-2 border border-primary/20 text-primary text-sm font-sans transition-all rounded-sm ${snapshotLoading ? 'km-interactive-disabled' : 'km-interactive'} disabled:opacity-50`}
-                    >
+                            type="button"
+                            onClick={handleSnapshot}
+                            disabled={snapshotLoading}
+                            className={`km-focus-visible px-5 py-2 border border-primary/20 text-primary text-sm font-sans transition-all rounded-sm ${snapshotLoading ? 'km-interactive-disabled' : 'km-interactive'}`}
+                        >
                             {snapshotSuccess ? '✓ Snapshot recorded' : snapshotLoading ? 'Recording...' : 'Record Snapshot'}
                         </button>
                         {snapshotError && (
@@ -286,7 +290,7 @@ export default function RatingInsights() {
                                         type="button"
                                         onClick={handleSnapshot}
                                         disabled={snapshotLoading}
-                                        className={`mt-2 px-6 py-2 bg-primary text-bg-primary text-sm font-sans transition-all rounded-sm km-focus-visible ${snapshotLoading ? 'km-interactive-disabled' : 'km-interactive'} disabled:opacity-50`}
+                                        className={`mt-2 px-6 py-2 bg-primary text-bg-primary text-sm font-sans transition-all rounded-sm km-focus-visible ${snapshotLoading ? 'km-interactive-disabled' : 'km-interactive'}`}
                                     >
                                         {snapshotLoading ? 'Recording...' : 'Record Snapshot'}
                                     </button>

@@ -65,7 +65,7 @@ export default function Ops() {
                     <button
                         type="button"
                         onClick={() => { setLoading(true); fetchData(); }}
-                        className="km-interactive km-focus-visible w-fit mt-2 text-[10px] uppercase border border-red-500/30 px-3 py-1 rounded-sm transition-colors"
+                        className="km-interactive km-focus-visible w-fit mt-2 text-[10px] uppercase border border-red-500/30 px-3 py-1 rounded-sm transition-colors hover:bg-red-500/10"
                     >
                         Retry Connection
                     </button>
