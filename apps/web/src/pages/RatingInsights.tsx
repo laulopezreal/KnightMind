@@ -66,6 +66,12 @@ export default function RatingInsights() {
         );
     }
 
+    const hasSnapshots = data?.rating.end !== null;
+    const hasGames = (data?.stats.games || 0) > 0;
+    const isState0 = data && !hasSnapshots;
+    const isState1 = data && hasSnapshots && !hasGames;
+    const isState2 = data && hasSnapshots && hasGames;
+
     return (
         <div className="space-y-12 animate-teedin pb-20">
             <section className="flex flex-col md:flex-row justify-between items-end gap-6">
@@ -76,21 +82,26 @@ export default function RatingInsights() {
                     </p>
                 </div>
 
-                <div className="flex flex-wrap gap-4 items-center">
+                <div className="flex flex-wrap gap-4 items-start">
                     {/* Window Selector */}
-                    <div className="flex bg-primary/5 rounded-sm p-1">
-                        <button
-                            onClick={() => setWindowSource('session')}
-                            className={`px-3 py-2 text-sm font-sans transition-all ${windowSource === 'session' ? 'bg-primary text-bg-primary shadow-sm' : 'text-primary/60 hover:text-primary'}`}
-                        >
-                            Since Session
-                        </button>
-                        <button
-                            onClick={() => setWindowSource('fallback_7d')}
-                            className={`px-3 py-2 text-sm font-sans transition-all ${windowSource === 'fallback_7d' ? 'bg-primary text-bg-primary shadow-sm' : 'text-primary/60 hover:text-primary'}`}
-                        >
-                            Last 7 Days
-                        </button>
+                    <div className="flex flex-col gap-1.5">
+                        <div className="flex bg-primary/5 rounded-sm p-1">
+                            <button
+                                onClick={() => setWindowSource('session')}
+                                className={`px-3 py-2 text-sm font-sans transition-all ${windowSource === 'session' ? 'bg-primary text-bg-primary shadow-sm' : 'text-primary/60 hover:text-primary'}`}
+                            >
+                                Since Session
+                            </button>
+                            <button
+                                onClick={() => setWindowSource('fallback_7d')}
+                                className={`px-3 py-2 text-sm font-sans transition-all ${windowSource === 'fallback_7d' ? 'bg-primary text-bg-primary shadow-sm' : 'text-primary/60 hover:text-primary'}`}
+                            >
+                                Last 7 Days
+                            </button>
+                        </div>
+                        <p className="text-[10px] text-primary/40 font-sans ml-1 uppercase tracking-wider">
+                            Choose the time window used to explain rating changes.
+                        </p>
                     </div>
 
                     {/* Time Control Selector */}
@@ -112,7 +123,7 @@ export default function RatingInsights() {
                     <button
                         onClick={handleSnapshot}
                         disabled={snapshotLoading}
-                        className="px-5 py-2 border border-primary/20 hover:bg-primary/5 text-primary text-sm font-sans transition-all disabled:opacity-50 ml-2"
+                        className="px-5 py-2 border border-primary/20 hover:bg-primary/5 text-primary text-sm font-sans transition-all disabled:opacity-50"
                     >
                         {snapshotLoading ? 'Recording...' : 'Record Snapshot'}
                     </button>
@@ -129,80 +140,149 @@ export default function RatingInsights() {
 
             {data && (
                 <>
-                    {/* Summary Cards */}
-                    <section className="grid grid-cols-1 md:grid-cols-4 gap-6">
-                        <Card
-                            label="Net Change"
-                            value={data.rating.net_change !== null ? (data.rating.net_change > 0 ? `+${data.rating.net_change}` : `${data.rating.net_change}`) : "No snapshots"}
-                            sub={data.window.source === 'session' ? "Since last session" : "In selected window"}
-                            highlight={data.rating.net_change !== null && data.rating.net_change !== 0}
-                            positive={data.rating.net_change !== null && (data.rating.net_change || 0) > 0}
-                        />
-                        <Card
-                            label="Performance"
-                            value={`${data.stats.wins}W - ${data.stats.draws}D - ${data.stats.losses}L`}
-                            sub={`${data.stats.games} games analyzed`}
-                        />
-                        <Card
-                            label="Exp. vs Actual"
-                            value={data.stats.expected_minus_actual !== null ? (data.stats.expected_minus_actual > 0 ? `+${(data.stats.expected_minus_actual || 0).toFixed(1)}` : `${(data.stats.expected_minus_actual || 0).toFixed(1)}`) : "-"}
-                            sub="Score points diff"
-                        />
-                        <Card
-                            label="Avg Opponent"
-                            value={data.stats.avg_opponent_rating?.toString() || "-"}
-                            sub={data.rating.reference_is_approx ? "(Approx reference)" : "vs Reference Rating"}
-                        />
-                    </section>
+                    {/* STATE 0: No snapshots */}
+                    {isState0 && (
+                        <div className="max-w-xl mx-auto bg-primary/5 border border-primary/10 p-12 rounded-sm space-y-10">
+                            <div>
+                                <h2 className="text-2xl font-serif text-primary mb-2">Rating Insights</h2>
+                                <p className="text-primary/60 font-sans">See what influenced your rating changes over time.</p>
+                            </div>
 
-                    {/* Drivers */}
-                    <section className="border-t border-primary/10 pt-8">
-                        <h2 className="text-2xl font-serif text-primary mb-6">Primary Drivers</h2>
-                        {data.drivers.length > 0 ? (
-                            <ul className="space-y-4">
-                                {data.drivers.map((driver, i) => (
-                                    <li key={i} className="flex items-start gap-3 text-lg font-sans text-primary/80">
-                                        <span className="mt-2 w-1.5 h-1.5 rounded-full bg-primary/40" />
-                                        {driver}
-                                    </li>
-                                ))}
-                            </ul>
-                        ) : (
-                            <p className="text-primary/50 font-sans italic">Not enough data to identify clear drivers.</p>
-                        )}
-                        <p className="mt-8 text-xs text-primary/40 font-sans italic">
-                            * Drivers are based on results vs expectation; Chess.com uses internal factors, so this is directional.
-                        </p>
-                    </section>
+                            <div className="space-y-8">
+                                <div className="space-y-2">
+                                    <h3 className="font-serif text-lg text-primary">Step 1 — Record your first snapshot</h3>
+                                    <p className="text-sm text-primary/60 font-sans leading-relaxed">
+                                        This saves your current Chess.com rating so we can compare future progress.
+                                    </p>
+                                    <button
+                                        onClick={handleSnapshot}
+                                        disabled={snapshotLoading}
+                                        className="mt-2 px-6 py-2 bg-primary text-bg-primary text-sm font-sans hover:bg-primary/90 transition-all disabled:opacity-50"
+                                    >
+                                        {snapshotLoading ? 'Recording...' : 'Record Snapshot'}
+                                    </button>
+                                </div>
 
-                    {/* Highlights */}
-                    <section className="grid grid-cols-1 md:grid-cols-2 gap-12 border-t border-primary/10 pt-8">
-                        <div>
-                            <h3 className="text-xl font-serif text-primary mb-6 flex items-center gap-2">
-                                <span>Most Costly Games</span>
-                                <span className="text-xs font-sans bg-red-500/10 text-red-600 px-2 py-1 rounded-full">Negative Surprise</span>
-                            </h3>
-                            <div className="space-y-2">
-                                {data.highlights.worst_surprises.map(game => (
-                                    <GameRow key={game.game_id} game={game} type="bad" />
-                                ))}
-                                {data.highlights.worst_surprises.length === 0 && <p className="text-primary/40 text-sm">No significant negative surprises.</p>}
+                                <div className="space-y-2">
+                                    <h3 className="font-serif text-lg text-primary">Step 2 — Play a few games</h3>
+                                    <p className="text-sm text-primary/60 font-sans leading-relaxed">
+                                        After you’ve played a few games, come back here to see what drove changes.
+                                    </p>
+                                </div>
                             </div>
                         </div>
+                    )}
 
-                        <div>
-                            <h3 className="text-xl font-serif text-primary mb-6 flex items-center gap-2">
-                                <span>Most Helpful Games</span>
-                                <span className="text-xs font-sans bg-emerald-500/10 text-emerald-600 px-2 py-1 rounded-full">Positive Surprise</span>
-                            </h3>
-                            <div className="space-y-2">
-                                {data.highlights.best_surprises.map(game => (
-                                    <GameRow key={game.game_id} game={game} type="good" />
-                                ))}
-                                {data.highlights.best_surprises.length === 0 && <p className="text-primary/40 text-sm">No significant positive surprises.</p>}
-                            </div>
-                        </div>
-                    </section>
+                    {/* STATE 1 & 2: Snapshots exist */}
+                    {hasSnapshots && (
+                        <>
+                            {/* STATE 1 Callout */}
+                            {isState1 && (
+                                <div className="p-6 border border-primary/10 bg-primary/5 rounded-sm mb-12">
+                                    <h3 className="text-lg font-serif text-primary mb-1">No games found in this window</h3>
+                                    <p className="text-sm text-primary/60 font-sans">
+                                        Play a few games on Chess.com, then return to see drivers and highlights.
+                                    </p>
+                                </div>
+                            )}
+
+                            {/* Summary Cards */}
+                            <section className="grid grid-cols-1 md:grid-cols-4 gap-6">
+                                <Card
+                                    label="Net Change"
+                                    value={hasGames && data.rating.net_change !== null
+                                        ? (data.rating.net_change > 0 ? `+${data.rating.net_change}` : `${data.rating.net_change}`)
+                                        : "—"}
+                                    sub={data.window.source === 'session' ? "Since last session" : "In selected window"}
+                                    highlight={hasGames && data.rating.net_change !== null && data.rating.net_change !== 0}
+                                    positive={hasGames && data.rating.net_change !== null && (data.rating.net_change || 0) > 0}
+                                />
+                                <Card
+                                    label="Performance"
+                                    value={hasGames
+                                        ? `${data.stats.wins}W - ${data.stats.draws}D - ${data.stats.losses}L`
+                                        : "—"}
+                                    sub={`${data.stats.games} games analyzed`}
+                                />
+                                <Card
+                                    label="Exp. vs Actual"
+                                    value={hasGames && data.stats.expected_minus_actual !== null
+                                        ? (data.stats.expected_minus_actual > 0 ? `+${(data.stats.expected_minus_actual || 0).toFixed(1)}` : `${(data.stats.expected_minus_actual || 0).toFixed(1)}`)
+                                        : "—"}
+                                    sub="Score points diff"
+                                />
+                                <Card
+                                    label="Avg Opponent"
+                                    value={hasGames ? (data.stats.avg_opponent_rating?.toString() || "—") : "—"}
+                                    sub={data.rating.reference_is_approx ? "(Approx reference)" : "vs Reference Rating"}
+                                />
+                            </section>
+
+                            {/* Drivers */}
+                            <section className="border-t border-primary/10 pt-8">
+                                <h2 className="text-2xl font-serif text-primary mb-6">Primary Drivers</h2>
+                                {hasGames ? (
+                                    <>
+                                        {data.drivers.length > 0 ? (
+                                            <ul className="space-y-4">
+                                                {data.drivers.map((driver, i) => (
+                                                    <li key={i} className="flex items-start gap-3 text-lg font-sans text-primary/80">
+                                                        <span className="mt-2 w-1.5 h-1.5 rounded-full bg-primary/40" />
+                                                        {driver}
+                                                    </li>
+                                                ))}
+                                            </ul>
+                                        ) : (
+                                            <p className="text-primary/50 font-sans italic">Not enough data to identify clear drivers.</p>
+                                        )}
+                                    </>
+                                ) : (
+                                    <div className="space-y-2">
+                                        <p className="text-primary/80 font-sans text-lg">No clear drivers yet.</p>
+                                        <p className="text-primary/50 font-sans">Once you’ve played a few games, this section will explain what influenced your rating most.</p>
+                                    </div>
+                                )}
+                                {hasGames && (
+                                    <p className="mt-8 text-xs text-primary/40 font-sans italic">
+                                        * Drivers are based on results vs expectation; Chess.com uses internal factors, so this is directional.
+                                    </p>
+                                )}
+                            </section>
+
+                            {/* Highlights - Only show if insights available and items exist */}
+                            {isState2 && (data.highlights.worst_surprises.length > 0 || data.highlights.best_surprises.length > 0) && (
+                                <section className="grid grid-cols-1 md:grid-cols-2 gap-12 border-t border-primary/10 pt-8">
+                                    {data.highlights.worst_surprises.length > 0 && (
+                                        <div>
+                                            <h3 className="text-xl font-serif text-primary mb-6 flex items-center gap-2">
+                                                <span>Most Costly Games</span>
+                                                <span className="text-xs font-sans bg-red-500/10 text-red-600 px-2 py-1 rounded-full">Negative Surprise</span>
+                                            </h3>
+                                            <div className="space-y-2">
+                                                {data.highlights.worst_surprises.map(game => (
+                                                    <GameRow key={game.game_id} game={game} type="bad" />
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {data.highlights.best_surprises.length > 0 && (
+                                        <div>
+                                            <h3 className="text-xl font-serif text-primary mb-6 flex items-center gap-2">
+                                                <span>Most Helpful Games</span>
+                                                <span className="text-xs font-sans bg-emerald-500/10 text-emerald-600 px-2 py-1 rounded-full">Positive Surprise</span>
+                                            </h3>
+                                            <div className="space-y-2">
+                                                {data.highlights.best_surprises.map(game => (
+                                                    <GameRow key={game.game_id} game={game} type="good" />
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
+                                </section>
+                            )}
+                        </>
+                    )}
                 </>
             )}
         </div>
