@@ -105,3 +105,17 @@ class TrainingSession(Base):
     pass_count: Mapped[int] = mapped_column(Integer, default=0)
     fail_count: Mapped[int] = mapped_column(Integer, default=0)
     total_time_ms: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class RatingSnapshot(Base):
+    __tablename__ = "rating_snapshots"
+    __table_args__ = {"extend_existing": True}
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    username: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    source: Mapped[str] = mapped_column(String, default="chesscom", nullable=False)
+    time_control: Mapped[str] = mapped_column(String, nullable=False)  # "rapid", "blitz"
+    rating: Mapped[int] = mapped_column(Integer, nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    session_id: Mapped[str] = mapped_column(String, nullable=True, index=True)  # FK to training_sessions.id logical
+
