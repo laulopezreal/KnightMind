@@ -48,18 +48,17 @@ export default function UsernameDisplay() {
         setError(null);
 
         try {
-            // Simple validation check against Chess.com API
-            const res = await fetch(`https://api.chess.com/pub/player/${trimmed}`);
-            if (res.status === 404) {
-                setError('User not found on Chess.com');
+            // Validation check via backend proxy
+            const res = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/users/validate?username=${trimmed}`);
+            const data = await res.json();
+
+            if (!data.valid) {
+                setError(data.error || 'User not found on Chess.com');
                 setIsValidating(false);
                 return;
             }
-            if (!res.ok) {
-                throw new Error('Validation failed');
-            }
 
-            setUsername(trimmed);
+            setUsername(data.username || trimmed);
             setEditorOpen(false);
         } catch {
             setError('Could not validate username');

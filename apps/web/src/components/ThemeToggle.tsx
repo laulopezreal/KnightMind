@@ -28,7 +28,7 @@ export default function ThemeToggle() {
                     className={`
             h-6 w-7 rounded-full bg-toggle-knob
             absolute top-[6px]
-            transition-all duration-[3000ms] ease-in-out
+            transition-all duration-300 ease-in-out
             ${isNight ? 'left-[calc(100%-38px)] bg-chess-cream-100' : 'left-[6px] bg-chess-brown-900'}
           `}
                 />

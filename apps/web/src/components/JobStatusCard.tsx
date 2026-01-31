@@ -1,4 +1,4 @@
-import { type JobStatusResponse } from '../api/client';
+import { type JobStatusResponse } from '../api';
 
 interface JobStatusCardProps {
     status: JobStatusResponse['status'] | null;
