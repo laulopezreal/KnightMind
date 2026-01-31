@@ -203,6 +203,17 @@ The system uses a simple deterministic scheduling algorithm:
   - `ease_factor = min(2.8, ease_factor + 0.05)`
   - `next_due_at = now + interval_days`
 
+## Database Configuration
+
+KnightMind supports SQLite for local development and Postgres for production. Configure the
+database connection via `DATABASE_URL`.
+
+- **Default (local):** `sqlite:///./knightmind.db`
+- **Postgres example:** `postgresql+psycopg://user:password@host:5432/knightmind`
+
+Alembic migrations read the same `DATABASE_URL` value, so ensure it is set before running
+`alembic upgrade head`.
+
 ## Operations & Deployment
  
  ### Database Migrations
@@ -241,8 +252,9 @@ The system uses a simple deterministic scheduling algorithm:
 
 - **Frontend**: React, Vite, TypeScript, Tailwind CSS, D3.js
 - **Backend**: FastAPI, Pydantic, python-chess
+- **Database**: Postgres (recommended via `DATABASE_URL`), SQLite (default for local)
 - **Engine**: Stockfish (via `stockfish` PyPI package)
-- **Future**: Postgres, Neo4j
+- **Future**: Neo4j
 
 ## License
 
