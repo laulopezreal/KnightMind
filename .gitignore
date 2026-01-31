@@ -33,6 +33,9 @@ Thumbs.db
 # Local preferences
 WARP.md
 
+# Cursor IDE files
+.cursor/
+
 # Database
 *.db
 *.sqlite3
