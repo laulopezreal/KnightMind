@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { Chessboard } from 'react-chessboard';
 import { Chess } from 'chess.js';
-import { generatePuzzles, getDailyPuzzles, cancelJob, ApiError, type Puzzle, startSession, completeSession, getRecentSessions, reviewPuzzle, getSession, type SessionSummary } from '../api/client';
+import { generatePuzzles, getDailyPuzzles, getDuePuzzles, cancelJob, ApiError, type Puzzle, startSession, completeSession, getRecentSessions, reviewPuzzle, getSession, type SessionSummary } from '../api';
 import { JobStatusCard } from '../components/JobStatusCard';
 import { useJobPolling } from '../hooks/useJobPolling';
 import { useChessUsername } from '../context/ChessUsernameContext';
@@ -65,10 +65,13 @@ export default function Puzzles() {
                 setReviewedCount(session.pass_count + session.fail_count);
 
                 // Start a new generation job to get puzzles
+                // FIX: Use getDuePuzzles to fetch puzzles for the session instead of regenerating
                 setIsLoading(true);
                 try {
-                    const response = await generatePuzzles(username, session.requested_n);
-                    setActiveJobId(response.job_id);
+                    const response = await getDuePuzzles(username, session.requested_n);
+                    setPuzzles(response.puzzles);
+                    setCurrentIndex(0);
+                    setStatus('solving');
                 } catch (err) {
                     setError(err instanceof Error ? err.message : 'Failed to load puzzles');
                 } finally {
@@ -213,7 +216,18 @@ export default function Puzzles() {
             setReviewedCount(0);
 
             // Load puzzles
-            await handleLoadPuzzles();
+            // FIX: Use getDuePuzzles for session training
+            setIsLoading(true);
+            try {
+                const response = await getDuePuzzles(username.trim(), 5);
+                setPuzzles(response.puzzles);
+                setCurrentIndex(0);
+                setStatus('solving');
+            } catch (puzErr) {
+                setError(puzErr instanceof Error ? puzErr.message : 'Failed to load session puzzles');
+            } finally {
+                setIsLoading(false);
+            }
         } catch (err) {
             setError(err instanceof Error ? err.message : 'Failed to start session');
         }
