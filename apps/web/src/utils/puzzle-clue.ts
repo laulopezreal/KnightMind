@@ -13,6 +13,8 @@ const PIECE_TYPE_TO_NAME: Record<string, string> = {
   k: 'king',
 };
 
+const DEFAULT_HINT = 'Move the correct piece';
+
 /**
  * Parse best_move_uci into from square, to square, and optional promotion.
  */
@@ -31,14 +33,14 @@ export function parseBestMoveUci(uci: string): { from: string; to: string; promo
  * Get human-readable piece name at square from FEN. Uses puzzle FEN (initial position).
  */
 export function getPieceNameAtSquare(fen: string, square: string): string {
-  if (!fen || !square) return 'Move the correct piece';
+  if (!fen || !square) return DEFAULT_HINT;
   try {
     const chess = new Chess(fen);
     const piece = chess.get(square as 'a1');
-    if (!piece || !piece.type) return 'Move the correct piece';
+    if (!piece || !piece.type) return DEFAULT_HINT;
     const name = PIECE_TYPE_TO_NAME[piece.type.toLowerCase()];
-    return name ? `Move the ${name}` : 'Move the correct piece';
+    return name ? `Move the ${name}` : DEFAULT_HINT;
   } catch {
-    return 'Move the correct piece';
+    return DEFAULT_HINT;
   }
 }

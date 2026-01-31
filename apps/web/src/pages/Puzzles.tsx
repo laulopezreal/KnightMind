@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { Chessboard } from 'react-chessboard';
 import { Chess } from 'chess.js';
@@ -318,10 +318,15 @@ export default function Puzzles() {
 
     const [game, setGame] = useState(new Chess());
 
+    const bestMoveParsed = useMemo(() => {
+        if (!currentPuzzle?.best_move_uci) return { from: '', to: '' };
+        return parseBestMoveUci(currentPuzzle.best_move_uci);
+    }, [currentPuzzle?.best_move_uci]);
+
     const clueSquareStyles: Record<string, { backgroundColor: string }> =
         currentPuzzle?.best_move_uci && clueStage >= 1
             ? (() => {
-                const { from, to } = parseBestMoveUci(currentPuzzle.best_move_uci);
+                const { from, to } = bestMoveParsed;
                 const highlight = { backgroundColor: 'rgba(255, 235, 59, 0.45)' };
                 if (clueStage === 2 && to) return { [from]: highlight, [to]: highlight };
                 return from ? { [from]: highlight } : {};
@@ -509,7 +514,7 @@ export default function Puzzles() {
                             {status === 'solving' && clueStage === 1 && (
                                 <p className="text-primary/80 font-sans text-sm">
                                     {currentPuzzle?.best_move_uci
-                                        ? getPieceNameAtSquare(currentPuzzle.fen, parseBestMoveUci(currentPuzzle.best_move_uci).from)
+                                        ? getPieceNameAtSquare(currentPuzzle.fen, bestMoveParsed.from)
                                         : 'Move the correct piece'}
                                 </p>
                             )}
