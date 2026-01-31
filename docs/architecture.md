@@ -29,8 +29,8 @@ KnightMind is a personal chess intelligence platform that helps players analyze 
           ┌──────────────┼──────────────┐
           ▼              ▼              ▼
 ┌──────────────┐  ┌────────────┐  ┌────────────┐
-│    Ingest    │  │  Postgres  │  │ (future)   │
-│   Service    │  │  Database  │  │ Stockfish  │
+│    Ingest    │  │  Database  │  │ (future)   │
+│   Service    │  │ (Postgres) │  │ Stockfish  │
 │ (Chess.com)  │  │            │  │  Service   │
 └──────────────┘  └────────────┘  └────────────┘
 ```
@@ -54,7 +54,7 @@ KnightMind/
 1. User enters Chess.com username in web UI
 2. Frontend calls `POST /api/import/chesscom?username=...`
 3. API triggers ingest service to fetch games
-4. Games are parsed and stored in Postgres
+4. Games are parsed and stored in the configured database (Postgres recommended)
 5. Response returns count of imported games
 
 ### Opening Analysis
