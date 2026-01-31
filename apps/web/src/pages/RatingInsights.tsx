@@ -58,9 +58,14 @@ export default function RatingInsights() {
     useEffect(() => {
         if (username) {
             fetchData();
+        }
+    }, [username, timeControl, windowSource, fetchData]);
+
+    useEffect(() => {
+        if (username) {
             checkSessions();
         }
-    }, [username, timeControl, windowSource, fetchData, checkSessions]);
+    }, [username, checkSessions]);
 
     // Auto-switch to "Last 7 Days" when no sessions exist
     useEffect(() => {
@@ -192,14 +197,9 @@ export default function RatingInsights() {
                                 Blitz
                             </button>
                         </div>
-                        {data && (
+                        {data && data.stats.games === 0 && (
                             <div className="text-[10px] text-primary/40 font-sans ml-1">
-                                {timeControl === 'rapid' && data.stats.games === 0 && (!data.rating.end || data.rating.net_change === null) && (
-                                    <span>No data yet for Rapid.</span>
-                                )}
-                                {timeControl === 'blitz' && data.stats.games === 0 && (!data.rating.end || data.rating.net_change === null) && (
-                                    <span>No data yet for Blitz.</span>
-                                )}
+                                <span>No data yet for {timeControl.charAt(0).toUpperCase() + timeControl.slice(1)}.</span>
                             </div>
                         )}
                     </div>
