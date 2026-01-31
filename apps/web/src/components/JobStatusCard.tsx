@@ -46,7 +46,7 @@ export function JobStatusCard({ status, progress = 0, message, error, onCancel }
                         <button
                             type="button"
                             onClick={onCancel}
-                            className="km-interactive km-focus-visible px-4 py-2 text-sm border border-red-500/30 text-red-500 rounded-sm font-serif transition-all"
+                            className="km-interactive km-focus-visible px-4 py-2 text-sm border border-red-500/30 text-red-500 rounded-sm font-serif transition-all hover:bg-red-500/10"
                         >
                             Cancel
                         </button>
