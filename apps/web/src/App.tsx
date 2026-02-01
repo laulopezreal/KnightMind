@@ -8,24 +8,27 @@ import RatingInsights from './pages/RatingInsights';
 import Ops from './pages/Ops';
 import Layout from './components/Layout';
 import { ChessUsernameProvider } from './context/ChessUsernameContext';
+import { ErrorBoundary } from './components/ErrorBoundary';
 
 function App() {
   return (
-    <ChessUsernameProvider>
-      <BrowserRouter>
-        <Layout>
-          <Routes>
-            <Route path="/" element={<Home />} />
-            <Route path="/dashboard" element={<Dashboard />} />
-            <Route path="/openings" element={<Openings />} />
-            <Route path="/engine" element={<Engine />} />
-            <Route path="/puzzles" element={<Puzzles />} />
-            <Route path="/rating-insights" element={<RatingInsights />} />
-            <Route path="/ops" element={<Ops />} />
-          </Routes>
-        </Layout>
-      </BrowserRouter>
-    </ChessUsernameProvider>
+    <ErrorBoundary>
+      <ChessUsernameProvider>
+        <BrowserRouter>
+          <Layout>
+            <Routes>
+              <Route path="/" element={<Home />} />
+              <Route path="/dashboard" element={<Dashboard />} />
+              <Route path="/openings" element={<Openings />} />
+              <Route path="/engine" element={<Engine />} />
+              <Route path="/puzzles" element={<Puzzles />} />
+              <Route path="/rating-insights" element={<RatingInsights />} />
+              <Route path="/ops" element={<Ops />} />
+            </Routes>
+          </Layout>
+        </BrowserRouter>
+      </ChessUsernameProvider>
+    </ErrorBoundary>
   );
 }
 

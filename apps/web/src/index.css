@@ -150,3 +150,16 @@ body.night .km-toggle-option:hover:not(.km-interactive-disabled) {
 .km-inline-link:hover {
   text-decoration: underline;
 }
+
+/* Screen reader only - visually hidden but accessible to assistive technologies */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
