@@ -116,17 +116,6 @@ export default function Puzzles() {
     const [timeRemaining, setTimeRemaining] = useState<number>(0);
     const puzzleTimeRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-    // Refs for accessing latest state in timers
-    const statusRef = useRef(status);
-    statusRef.current = status;
-
-    const handleReviewPuzzleRef = useRef<(result: 'pass' | 'fail', timeMs?: number) => Promise<void>>(async () => { });
-
-    const statusRef = useRef(status);
-    statusRef.current = status;
-
-    const handleReviewPuzzleRef = useRef<((result: 'pass' | 'fail', timeMs?: number) => Promise<void>)>(async () => { });
-
     // Mock progress for now until we hook up real polling
     // const mockProgress = 0; 
 
@@ -701,7 +690,6 @@ export default function Puzzles() {
         handleReviewPuzzleRef.current = handleReviewPuzzle;
     }, [handleReviewPuzzle]);
 
-    handleReviewPuzzleRef.current = handleReviewPuzzle;
 
     const shouldShowJobStatusCard =
         !!job &&
