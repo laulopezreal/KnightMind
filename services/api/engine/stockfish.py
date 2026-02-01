@@ -17,6 +17,8 @@ try:
 except ImportError:
     StockfishEngine = None
 
+from sqlalchemy.exc import IntegrityError
+
 from services.api.db import SessionLocal
 from services.api.models import FenEvalCache
 
@@ -290,7 +292,7 @@ def get_or_compute_eval(
             db.add(cache_entry)
             try:
                 db.commit()
-            except Exception as commit_error:
+            except IntegrityError as commit_error:
                 # Handle concurrent insert (unique constraint violation)
                 db.rollback()
                 # Re-select to get the value inserted by another process
@@ -302,7 +304,7 @@ def get_or_compute_eval(
                         eval=cached.eval_pawns
                     )
                 # If still not found, something else went wrong
-                logger.error(f"Failed to cache evaluation: {commit_error}")
+                logger.error(f"Failed to cache evaluation after integrity error: {commit_error}")
     except Exception as e:
         # Cache insert failed, log but return the computed result
         logger.error(f"Failed to cache evaluation: {e}")
