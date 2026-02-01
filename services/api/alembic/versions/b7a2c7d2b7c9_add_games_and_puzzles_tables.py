@@ -63,26 +63,28 @@ def upgrade() -> None:
     op.create_index("ix_puzzles_username_created_at", "puzzles", ["username", "created_at"])
     op.create_index("ix_puzzles_username", "puzzles", ["username"])
 
-    op.create_foreign_key(
-        "fk_puzzle_stats_puzzle_id",
-        "puzzle_stats",
-        "puzzles",
-        ["puzzle_id"],
-        ["id"],
-    )
-    op.create_foreign_key(
-        "fk_puzzle_reviews_puzzle_id",
-        "puzzle_reviews",
-        "puzzles",
-        ["puzzle_id"],
-        ["id"],
-    )
+    with op.batch_alter_table("puzzle_stats") as batch_op:
+        batch_op.create_foreign_key(
+            "fk_puzzle_stats_puzzle_id",
+            "puzzles",
+            ["puzzle_id"],
+            ["id"],
+        )
+    with op.batch_alter_table("puzzle_reviews") as batch_op:
+        batch_op.create_foreign_key(
+            "fk_puzzle_reviews_puzzle_id",
+            "puzzles",
+            ["puzzle_id"],
+            ["id"],
+        )
 
 
 def downgrade() -> None:
     """Downgrade schema."""
-    op.drop_constraint("fk_puzzle_reviews_puzzle_id", "puzzle_reviews", type_="foreignkey")
-    op.drop_constraint("fk_puzzle_stats_puzzle_id", "puzzle_stats", type_="foreignkey")
+    with op.batch_alter_table("puzzle_reviews") as batch_op:
+        batch_op.drop_constraint("fk_puzzle_reviews_puzzle_id", type_="foreignkey")
+    with op.batch_alter_table("puzzle_stats") as batch_op:
+        batch_op.drop_constraint("fk_puzzle_stats_puzzle_id", type_="foreignkey")
 
     op.drop_index("ix_puzzles_username", table_name="puzzles")
     op.drop_index("ix_puzzles_username_created_at", table_name="puzzles")
