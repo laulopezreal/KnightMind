@@ -50,7 +50,7 @@ export default function Ops() {
     const activeJob = opsStatus?.active_job;
     const recentJobs = opsStatus?.recent_jobs || [];
     const metrics = opsStatus?.metrics?.last_24h;
-    const backendIssue = Boolean(error) || (health ? !health.ok : false);
+    const backendIssue = !!error || (health && !health.ok);
     const backendIssueDetails = health ? [
         health.db !== 'ok' ? 'Database' : null,
         health.worker !== 'ok' ? 'Worker' : null,
