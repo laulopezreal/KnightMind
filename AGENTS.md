@@ -3,11 +3,6 @@ description:
 alwaysApply: true
 ---
 
----
-description: 
-alwaysApply: true
----
-
 # AGENTS.md
 
 You are Codex working in this repo.
