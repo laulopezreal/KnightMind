@@ -307,7 +307,7 @@ export default function Puzzles() {
     const isGenerating = isJobPolling || (job?.status === 'queued' || job?.status === 'running');
     const controlsDisabled = !controlsEnabled || isLoading || isGenerating;
     const generateNewDisabled = !controlsEnabled || isLoading || isGenerating || !userStatus?.has_new_games;
-    const loadPuzzlesDisabled = !username || isLoading || isGenerating || (sessionState !== 'idle' && sessionState !== 'error' && sessionState !== 'completed');
+    const loadPuzzlesDisabled = !username || isLoading || isGenerating || (sessionState !== 'idle' && sessionState !== 'error' && sessionState !== 'completed') || userStatus?.puzzles_count === 0;
 
     // Sync job status to local isGenerating for backwards compat with other UI if needed,
     // but better to rely on 'job' object.
