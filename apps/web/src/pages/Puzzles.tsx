@@ -1,8 +1,8 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { Chessboard } from 'react-chessboard';
 import { Chess } from 'chess.js';
-import { generatePuzzles, getDailyPuzzles, getDuePuzzles, cancelJob, ApiError, type Puzzle, startSession, completeSession, getRecentSessions, reviewPuzzle, getSession, type SessionSummary } from '../api';
+import { generatePuzzles, getDailyPuzzles, getDuePuzzles, cancelJob, ApiError, type Puzzle, startSession, completeSession, getRecentSessions, reviewPuzzle, getSession, type SessionSummary, useHint } from '../api';
 import { JobStatusCard } from '../components/JobStatusCard';
 import { useJobPolling } from '../hooks/useJobPolling';
 import { useChessUsername } from '../context/ChessUsernameContext';
@@ -11,6 +11,63 @@ import { parseBestMoveUci, getPieceNameAtSquare } from '../utils/puzzle-clue';
 type PuzzleStatus = 'solving' | 'correct' | 'incorrect' | 'revealed';
 type ClueStage = 0 | 1 | 2;
 type SessionState = 'idle' | 'loading' | 'active' | 'completing' | 'completed' | 'error';
+type SessionType = 'standard' | 'timed' | 'accuracy_goal';
+
+// Achievement types
+interface Achievement {
+    id: string;
+    name: string;
+    description: string;
+    icon: string;
+    earned: boolean;
+    earnedAt?: Date;
+}
+
+// Define achievements
+const ACHIEVEMENTS: Achievement[] = [
+    {
+        id: 'first_session',
+        name: 'First Steps',
+        description: 'Complete your first training session',
+        icon: '👣',
+        earned: false
+    },
+    {
+        id: 'streak_5',
+        name: 'Hot Streak',
+        description: 'Achieve a 5 puzzle streak',
+        icon: '🔥',
+        earned: false
+    },
+    {
+        id: 'streak_10',
+        name: 'Blazing Streak',
+        description: 'Achieve a 10 puzzle streak',
+        icon: '🧨',
+        earned: false
+    },
+    {
+        id: 'accuracy_90',
+        name: 'Sharp Shooter',
+        description: 'Achieve 90% accuracy in a session',
+        icon: '🎯',
+        earned: false
+    },
+    {
+        id: 'speed_demon',
+        name: 'Speed Demon',
+        description: 'Solve a puzzle in under 10 seconds',
+        icon: '⚡',
+        earned: false
+    },
+    {
+        id: 'perfect_session',
+        name: 'Flawless Victory',
+        description: 'Complete a session with 100% accuracy',
+        icon: '🏆',
+        earned: false
+    }
+];
 
 export default function Puzzles() {
     const { username, setEditorOpen } = useChessUsername();
@@ -31,6 +88,28 @@ export default function Puzzles() {
     const [isResumingSession, setIsResumingSession] = useState(false);
     const [sessionState, setSessionState] = useState<SessionState>('idle');
     const [clueStage, setClueStage] = useState<ClueStage>(0);
+    
+    // Enhanced session features
+    const [sessionType, setSessionType] = useState<SessionType>('standard');
+    const [targetAccuracy, setTargetAccuracy] = useState<number>(80);
+    const [targetTimeMinutes, setTargetTimeMinutes] = useState<number>(10);
+    const [puzzleStartTime, setPuzzleStartTime] = useState<number | null>(null);
+    const [streak, setStreak] = useState(0);
+    const [bestStreak, setBestStreak] = useState(0);
+    const [hintsUsed, setHintsUsed] = useState(0);
+    
+    // Performance tracking
+    const [performanceHistory, setPerformanceHistory] = useState<Array<{time: number, result: 'pass' | 'fail'}>>([]);
+    const [currentPuzzleTime, setCurrentPuzzleTime] = useState<number>(0);
+    
+    // Achievements
+    const [achievements, setAchievements] = useState<Achievement[]>(ACHIEVEMENTS);
+    
+    // Timer for timed sessions
+    const puzzleTimerRef = useRef<NodeJS.Timeout | null>(null);
+    const sessionTimerRef = useRef<NodeJS.Timeout | null>(null);
+    const [timeRemaining, setTimeRemaining] = useState<number>(0);
+    const puzzleTimeRef = useRef<NodeJS.Timeout | null>(null);
 
     // Mock progress for now until we hook up real polling
     // const mockProgress = 0; 
@@ -171,6 +250,48 @@ export default function Puzzles() {
 
     // Sync job status to local isGenerating for backwards compat with other UI if needed, 
     // but better to rely on 'job' object.
+    
+    // Initialize achievements from localStorage
+    useEffect(() => {
+        if (username) {
+            const savedAchievements = localStorage.getItem(`knightmind:achievements:${username}`);
+            if (savedAchievements) {
+                try {
+                    const parsed = JSON.parse(savedAchievements);
+                    // Merge with default achievements to ensure all are present
+                    const merged = ACHIEVEMENTS.map(defaultAchievement => {
+                        const saved = parsed.find((a: Achievement) => a.id === defaultAchievement.id);
+                        return saved ? {...defaultAchievement, ...saved} : defaultAchievement;
+                    });
+                    setAchievements(merged);
+                } catch (e) {
+                    console.error('Failed to parse saved achievements', e);
+                }
+            }
+        }
+    }, [username]);
+    
+    // Save achievements to localStorage when they change
+    useEffect(() => {
+        if (username && achievements.some(a => a.earned)) {
+            localStorage.setItem(`knightmind:achievements:${username}`, JSON.stringify(achievements));
+        }
+    }, [achievements, username]);
+
+    // Cleanup timers on unmount
+    useEffect(() => {
+        return () => {
+            if (puzzleTimerRef.current) {
+                clearTimeout(puzzleTimerRef.current);
+            }
+            if (sessionTimerRef.current) {
+                clearInterval(sessionTimerRef.current);
+            }
+            if (puzzleTimeRef.current) {
+                clearInterval(puzzleTimeRef.current);
+            }
+        };
+    }, []);
 
     // ... (keep logic same as original, just updating UI)
     // ... (keep logic same as original, just updating UI)
@@ -271,19 +392,60 @@ export default function Puzzles() {
 
         setSessionState('loading');
         setError(null);
+        setLastFeedback('');
 
         try {
-            const { session_id } = await startSession(username.trim(), 5);
+            // Determine parameters based on session type
+            let targetAccuracyParam: number | undefined = undefined;
+            let targetTimeMinutesParam: number | undefined = undefined;
+            
+            if (sessionType === 'accuracy_goal') {
+                targetAccuracyParam = targetAccuracy;
+            } else if (sessionType === 'timed') {
+                targetTimeMinutesParam = targetTimeMinutes;
+                // Set up session timer
+                setTimeRemaining(targetTimeMinutes * 60); // Convert to seconds
+                if (sessionTimerRef.current) clearInterval(sessionTimerRef.current);
+                sessionTimerRef.current = setInterval(() => {
+                    setTimeRemaining(prev => {
+                        if (prev <= 1) {
+                            if (sessionTimerRef.current) clearInterval(sessionTimerRef.current);
+                            // Auto-complete session when time runs out
+                            if (activeSessionId) {
+                                handleCompleteSession();
+                            }
+                            return 0;
+                        }
+                        return prev - 1;
+                    });
+                }, 1000);
+            }
+
+            const { session_id } = await startSession(
+                username.trim(), 
+                5,
+                sessionType,
+                targetAccuracyParam,
+                targetTimeMinutesParam
+            );
             setActiveSessionId(session_id);
             localStorage.setItem(`knightmind:session:${username.trim()}`, session_id);
             setSessionSummary(null);
             setReviewedCount(0);
+            setStreak(0);
+            setBestStreak(0);
+            setHintsUsed(0);
 
             // Load puzzles
             // FIX: Use getDuePuzzles for session training
             setIsLoading(true);
             try {
-                const response = await getDuePuzzles(username.trim(), 5);
+                const response = await getDuePuzzles(
+                    username.trim(), 
+                    5,
+                    sessionType,
+                    sessionType === 'accuracy_goal' ? targetAccuracy : undefined
+                );
                 setPuzzles(response.puzzles);
                 setCurrentIndex(0);
                 setStatus('solving');
@@ -323,12 +485,30 @@ export default function Puzzles() {
         setSessionState('completing');
         setError(null); // Clear any previous errors
 
+        // Clean up timers
+        if (puzzleTimerRef.current) {
+            clearTimeout(puzzleTimerRef.current);
+            puzzleTimerRef.current = null;
+        }
+        if (sessionTimerRef.current) {
+            clearInterval(sessionTimerRef.current);
+            sessionTimerRef.current = null;
+        }
+
         try {
             const summary = await completeSession(activeSessionId, username.trim());
             setSessionSummary(summary);
             setActiveSessionId(null);
             localStorage.removeItem(`knightmind:session:${username.trim()}`);
             setSessionState('completed');
+
+            // Check for session completion achievements
+            const updatedAchievements = checkSessionAchievements();
+            
+            // Save achievements to localStorage
+            if (updatedAchievements.some(a => a.earned)) {
+                localStorage.setItem(`knightmind:achievements:${username.trim()}`, JSON.stringify(updatedAchievements));
+            }
 
             // Refresh recent sessions
             const recent = await getRecentSessions(username.trim(), 5);
@@ -344,14 +524,44 @@ export default function Puzzles() {
     const handleReviewPuzzle = async (result: 'pass' | 'fail', timeMs?: number) => {
         if (!currentPuzzle || !username.trim()) return;
 
+        // Calculate time spent on this puzzle if not provided
+        let timeSpent = timeMs;
+        if (!timeSpent && puzzleStartTime) {
+            timeSpent = Date.now() - puzzleStartTime;
+        }
+
         try {
-            await reviewPuzzle(
+            const response = await reviewPuzzle(
                 currentPuzzle.id,
                 username.trim(),
                 result,
-                timeMs,
+                timeSpent,
                 activeSessionId || undefined
             );
+
+            // Set feedback message
+            if (response.feedback) {
+                setLastFeedback(response.feedback);
+                // Clear feedback after a few seconds
+                setTimeout(() => setLastFeedback(''), 5000);
+            }
+
+            // Update streak
+            if (result === 'pass') {
+                const newStreak = streak + 1;
+                setStreak(newStreak);
+                if (newStreak > bestStreak) {
+                    setBestStreak(newStreak);
+                }
+            } else {
+                setStreak(0);
+            }
+
+            // Update performance history
+            setPerformanceHistory(prev => [...prev, {time: Date.now(), result}]);
+
+            // Check for achievements
+            checkAchievements();
 
             // Increment reviewed count
             const newCount = reviewedCount + 1;
@@ -397,6 +607,19 @@ export default function Puzzles() {
         }
     };
 
+    const handleUseHint = async () => {
+        if (!activeSessionId || !username.trim()) return;
+        
+        try {
+            const updatedSession = await useHint(activeSessionId, username.trim());
+            setHintsUsed(updatedSession.hints_used);
+            setSessionSummary(updatedSession);
+        } catch (err) {
+            console.error('Failed to use hint:', err);
+            setError(err instanceof Error ? err.message : 'Failed to use hint');
+        }
+    };
+
     const handleClue = () => {
         if (!currentPuzzle?.best_move_uci) return;
         if (clueStage === 0) {
@@ -408,6 +631,7 @@ export default function Puzzles() {
     };
 
     const [game, setGame] = useState(new Chess());
+    const [lastFeedback, setLastFeedback] = useState<string>('');
 
     const bestMoveParsed = useMemo(() => {
         if (!currentPuzzle?.best_move_uci) return { from: '', to: '' };
@@ -428,8 +652,42 @@ export default function Puzzles() {
         if (currentPuzzle) {
             setGame(new Chess(currentPuzzle.fen));
             setClueStage(0);
+            // Start timer for this puzzle
+            setPuzzleStartTime(Date.now());
+            setCurrentPuzzleTime(0);
+            
+            // Set up timer for timed sessions
+            if (sessionSummary?.session_type === 'timed' && sessionSummary.target_time_minutes) {
+                if (puzzleTimerRef.current) clearTimeout(puzzleTimerRef.current);
+                puzzleTimerRef.current = setTimeout(() => {
+                    // Auto-mark as failed if time runs out
+                    if (status === 'solving') {
+                        handleReviewPuzzle('fail');
+                        setStatus('incorrect');
+                    }
+                }, 30000); // 30 seconds per puzzle in timed mode
+            }
+            
+            // Set up puzzle time tracker
+            if (puzzleTimeRef.current) clearInterval(puzzleTimeRef.current);
+            puzzleTimeRef.current = setInterval(() => {
+                if (puzzleStartTime) {
+                    setCurrentPuzzleTime(Math.floor((Date.now() - puzzleStartTime) / 1000));
+                }
+            }, 1000);
         }
-    }, [currentPuzzle]);
+        
+        return () => {
+            if (puzzleTimerRef.current) {
+                clearTimeout(puzzleTimerRef.current);
+                puzzleTimerRef.current = null;
+            }
+            if (puzzleTimeRef.current) {
+                clearInterval(puzzleTimeRef.current);
+                puzzleTimeRef.current = null;
+            }
+        };
+    }, [currentPuzzle, sessionSummary, status, puzzleStartTime]);
 
     const onPieceDrop = (sourceSquare: string, targetSquare: string) => {
         if (!currentPuzzle || status === 'correct' || status === 'revealed') return false;
@@ -472,6 +730,117 @@ export default function Puzzles() {
         const total = passCount + failCount;
         return total > 0 ? Math.round((passCount / total) * 100) : 0;
     };
+    
+    // Helper function to calculate recent performance
+    const calculateRecentPerformance = (history: Array<{time: number, result: 'pass' | 'fail'}>, minutes: number = 5): number => {
+        const cutoffTime = Date.now() - (minutes * 60 * 1000);
+        const recent = history.filter(item => item.time > cutoffTime);
+        if (recent.length === 0) return 0;
+        const passCount = recent.filter(item => item.result === 'pass').length;
+        return Math.round((passCount / recent.length) * 100);
+    };
+    
+    // Helper function to get performance trend
+    const getPerformanceTrend = (history: Array<{time: number, result: 'pass' | 'fail'}>): 'improving' | 'declining' | 'stable' => {
+        if (history.length < 4) return 'stable';
+        
+        const recent = history.slice(-4);
+        const firstHalf = recent.slice(0, 2);
+        const secondHalf = recent.slice(2, 4);
+        
+        const firstHalfAccuracy = firstHalf.filter(item => item.result === 'pass').length / firstHalf.length;
+        const secondHalfAccuracy = secondHalf.filter(item => item.result === 'pass').length / secondHalf.length;
+        
+        if (secondHalfAccuracy > firstHalfAccuracy + 0.1) return 'improving';
+        if (secondHalfAccuracy < firstHalfAccuracy - 0.1) return 'declining';
+        return 'stable';
+    };
+    
+    // Helper function to check and award achievements
+    const checkAchievements = (newAchievements: Achievement[] = achievements) => {
+        const updatedAchievements = [...newAchievements];
+        let achievementsChanged = false;
+        
+        // Check for streak achievements
+        if (streak >= 5 && !updatedAchievements.find(a => a.id === 'streak_5')?.earned) {
+            const achievement = updatedAchievements.find(a => a.id === 'streak_5');
+            if (achievement) {
+                achievement.earned = true;
+                achievement.earnedAt = new Date();
+                achievementsChanged = true;
+            }
+        }
+        
+        if (streak >= 10 && !updatedAchievements.find(a => a.id === 'streak_10')?.earned) {
+            const achievement = updatedAchievements.find(a => a.id === 'streak_10');
+            if (achievement) {
+                achievement.earned = true;
+                achievement.earnedAt = new Date();
+                achievementsChanged = true;
+            }
+        }
+        
+        // Check for speed achievement
+        if (currentPuzzleTime < 10 && !updatedAchievements.find(a => a.id === 'speed_demon')?.earned) {
+            const achievement = updatedAchievements.find(a => a.id === 'speed_demon');
+            if (achievement) {
+                achievement.earned = true;
+                achievement.earnedAt = new Date();
+                achievementsChanged = true;
+            }
+        }
+        
+        if (achievementsChanged) {
+            setAchievements(updatedAchievements);
+        }
+        
+        return updatedAchievements;
+    };
+    
+    // Helper function to check session completion achievements
+    const checkSessionAchievements = () => {
+        const updatedAchievements = [...achievements];
+        let achievementsChanged = false;
+        
+        // First session achievement (if this is the first session)
+        if (!updatedAchievements.find(a => a.id === 'first_session')?.earned) {
+            const achievement = updatedAchievements.find(a => a.id === 'first_session');
+            if (achievement) {
+                achievement.earned = true;
+                achievement.earnedAt = new Date();
+                achievementsChanged = true;
+            }
+        }
+        
+        // Accuracy achievements
+        if (sessionSummary && sessionSummary.pass_count + sessionSummary.fail_count > 0) {
+            const accuracy = calculateAccuracy(sessionSummary.pass_count, sessionSummary.fail_count);
+            
+            if (accuracy >= 90 && !updatedAchievements.find(a => a.id === 'accuracy_90')?.earned) {
+                const achievement = updatedAchievements.find(a => a.id === 'accuracy_90');
+                if (achievement) {
+                    achievement.earned = true;
+                    achievement.earnedAt = new Date();
+                    achievementsChanged = true;
+                }
+            }
+            
+            if (accuracy === 100 && !updatedAchievements.find(a => a.id === 'perfect_session')?.earned) {
+                const achievement = updatedAchievements.find(a => a.id === 'perfect_session');
+                if (achievement) {
+                    achievement.earned = true;
+                    achievement.earnedAt = new Date();
+                    achievementsChanged = true;
+                }
+            }
+        }
+        
+        if (achievementsChanged) {
+            setAchievements(updatedAchievements);
+        }
+        
+        return updatedAchievements;
+    };
 
     return (
         <div className="space-y-12 animate-teedin">
@@ -510,10 +879,43 @@ export default function Puzzles() {
                     </div>
                     <div className="flex gap-4">
                         {!activeSessionId && (
-                            <button type="button" onClick={handleStartSession} disabled={controlsDisabled}
-                                className={`px-6 py-2 bg-accent text-bg-primary rounded-sm font-serif transition-colors km-focus-visible ${controlsDisabled ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'}`}>
-                                Start Session
-                            </button>
+                            <>
+                                <select 
+                                    value={sessionType}
+                                    onChange={(e) => setSessionType(e.target.value as SessionType)}
+                                    className="px-3 py-2 border border-primary/20 rounded-sm bg-bg-primary text-primary"
+                                >
+                                    <option value="standard">Standard</option>
+                                    <option value="timed">Timed</option>
+                                    <option value="accuracy_goal">Accuracy Goal</option>
+                                </select>
+                                {sessionType === 'accuracy_goal' && (
+                                    <input
+                                        type="number"
+                                        min="50"
+                                        max="100"
+                                        value={targetAccuracy}
+                                        onChange={(e) => setTargetAccuracy(Number(e.target.value))}
+                                        className="px-3 py-2 border border-primary/20 rounded-sm bg-bg-primary text-primary w-24"
+                                        placeholder="Accuracy %"
+                                    />
+                                )}
+                                {sessionType === 'timed' && (
+                                    <input
+                                        type="number"
+                                        min="1"
+                                        max="60"
+                                        value={targetTimeMinutes}
+                                        onChange={(e) => setTargetTimeMinutes(Number(e.target.value))}
+                                        className="px-3 py-2 border border-primary/20 rounded-sm bg-bg-primary text-primary w-24"
+                                        placeholder="Minutes"
+                                    />
+                                )}
+                                <button type="button" onClick={handleStartSession} disabled={controlsDisabled}
+                                    className={`px-6 py-2 bg-accent text-bg-primary rounded-sm font-serif transition-colors km-focus-visible ${controlsDisabled ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'}`}>
+                                    Start Session
+                                </button>
+                            </>
                         )}
                         <button type="button" onClick={handleLoadPuzzles} disabled={controlsDisabled}
                             className={`px-6 py-2 border border-primary/20 text-primary rounded-sm font-serif transition-all km-focus-visible ${controlsDisabled ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'}`}>
@@ -572,7 +974,12 @@ export default function Puzzles() {
                                     {activeSessionId && sessionSummary && (
                                         <div className="bg-primary/5 border border-primary/20 rounded-lg p-4 mb-4 w-full">
                                             <div className="flex justify-between items-center mb-2">
-                                                <span className="font-serif text-primary font-medium">Session in Progress</span>
+                                                <span className="font-serif text-primary font-medium">
+                                                    Session in Progress
+                                                    {sessionSummary.session_type && sessionSummary.session_type !== 'standard' 
+                                                        ? ` (${sessionSummary.session_type.replace('_', ' ')})` 
+                                                        : ''}
+                                                </span>
                                                 <span className="text-sm font-mono text-primary/60">
                                                     {reviewedCount} / {sessionSummary.requested_n}
                                                 </span>
@@ -585,6 +992,64 @@ export default function Puzzles() {
                                                     style={{ width: `${Math.min(100, (reviewedCount / sessionSummary.requested_n) * 100)}%` }}
                                                 />
                                             </div>
+
+                                            {/* Enhanced Session Stats */}
+                                            <div className="flex justify-between mt-3 text-xs">
+                                                <div className="flex items-center">
+                                                    <span className="text-primary/60 mr-1">🔥</span>
+                                                    <span className="text-primary/80">Streak: {streak}</span>
+                                                    <span className="text-primary/40 mx-1">|</span>
+                                                    <span className="text-primary/60 mr-1">🏆</span>
+                                                    <span className="text-primary/80">Best: {bestStreak}</span>
+                                                </div>
+                                                <div className="flex items-center">
+                                                    <span className="text-primary/60 mr-1">💡</span>
+                                                    <span className="text-primary/80">Hints: {hintsUsed}</span>
+                                                </div>
+                                            </div>
+                                            
+                                            {/* Performance Visualization */}
+                                            {performanceHistory.length > 0 && (
+                                                <div className="mt-3">
+                                                    <div className="flex justify-between text-xs text-primary/60 mb-1">
+                                                        <span>Recent Performance:</span>
+                                                        <span>{calculateRecentPerformance(performanceHistory)}% accuracy (5min)</span>
+                                                    </div>
+                                                    <div className="flex h-2 rounded-full overflow-hidden bg-primary/10">
+                                                        {performanceHistory.slice(-10).map((item, index) => (
+                                                            <div 
+                                                                key={index} 
+                                                                className={`flex-1 ${item.result === 'pass' ? 'bg-green-500' : 'bg-red-500'}`}
+                                                                title={`${item.result.toUpperCase()} - ${new Date(item.time).toLocaleTimeString()}`}
+                                                            />
+                                                        ))}
+                                                    </div>
+                                                    <div className="flex justify-between text-xs text-primary/60 mt-1">
+                                                        <span>
+                                                            Trend: 
+                                                            <span className={`ml-1 ${
+                                                                getPerformanceTrend(performanceHistory) === 'improving' ? 'text-green-500' :
+                                                                getPerformanceTrend(performanceHistory) === 'declining' ? 'text-red-500' : 'text-primary/60'
+                                                            }`}>
+                                                                {getPerformanceTrend(performanceHistory) === 'improving' ? '↗ Improving' :
+                                                                 getPerformanceTrend(performanceHistory) === 'declining' ? '↘ Declining' : '→ Stable'}
+                                                            </span>
+                                                        </span>
+                                                        <span>
+                                                            Time: {currentPuzzleTime}s
+                                                        </span>
+                                                    </div>
+                                                </div>
+                                            )}
+
+                                            {/* Timed Session Timer */}
+                                            {sessionSummary.session_type === 'timed' && timeRemaining > 0 && (
+                                                <div className="mt-2 text-center">
+                                                    <span className={`font-mono text-sm ${timeRemaining < 60 ? 'text-red-500' : 'text-primary/80'}`}>
+                                                        Time Remaining: {Math.floor(timeRemaining / 60)}:{(timeRemaining % 60).toString().padStart(2, '0')}
+                                                    </span>
+                                                </div>
+                                            )}
 
                                             {isResumingSession && (
                                                 <div className="text-xs text-center mt-2 text-primary/60 animate-pulse">
@@ -619,8 +1084,22 @@ export default function Puzzles() {
                                         : 'Move the correct piece'}
                                 </p>
                             )}
-                            {status === 'correct' && <p className="text-green-600 font-serif text-2xl animate-teedin">Correct! Excellent.</p>}
-                            {status === 'incorrect' && <p className="text-red-500 font-serif text-2xl animate-teedin">Incorrect.</p>}
+                            {status === 'correct' && (
+                                <div className="text-center">
+                                    <p className="text-green-600 font-serif text-2xl animate-teedin">Correct! Excellent.</p>
+                                    {lastFeedback && (
+                                        <p className="text-green-600 font-sans text-sm mt-2 animate-teedin">{lastFeedback}</p>
+                                    )}
+                                </div>
+                            )}
+                            {status === 'incorrect' && (
+                                <div className="text-center">
+                                    <p className="text-red-500 font-serif text-2xl animate-teedin">Incorrect.</p>
+                                    {lastFeedback && (
+                                        <p className="text-red-500 font-sans text-sm mt-2 animate-teedin">{lastFeedback}</p>
+                                    )}
+                                </div>
+                            )}
                             {status === 'revealed' && (
                                 <div>
                                     <p className="text-primary/60 font-sans text-xs uppercase tracking-widest mb-1">Solution</p>
@@ -666,10 +1145,12 @@ export default function Puzzles() {
                                     </button>
                                     <button
                                         type="button"
-                                        onClick={handleClue}
-                                        disabled={!currentPuzzle?.best_move_uci || clueStage === 2}
+                                        onClick={activeSessionId ? handleUseHint : handleClue}
+                                        disabled={activeSessionId 
+                                            ? (!currentPuzzle?.best_move_uci || hintsUsed >= 3) 
+                                            : (!currentPuzzle?.best_move_uci || clueStage === 2)}
                                         className="px-6 py-4 border border-primary/20 text-primary rounded-sm font-serif text-lg transition-all km-interactive km-focus-visible disabled:opacity-50 disabled:cursor-default">
-                                        Clue
+                                        {activeSessionId ? `Hint (${hintsUsed}/3)` : 'Clue'}
                                     </button>
                                     <button
                                         type="button"
@@ -680,33 +1161,71 @@ export default function Puzzles() {
                                 </div>
                             )}
                             {(status === 'correct' || status === 'revealed') && (
-                                <button
-                                    type="button"
-                                    onClick={handleAdvancePuzzle}
-                                    disabled={finishButtonDisabled || sessionState === 'completing'}
-                                    className={`w-full px-6 py-4 bg-green-600 text-white rounded-sm font-serif text-lg transition-all shadow-lg shadow-green-900/20 km-focus-visible ${finishButtonDisabled || sessionState === 'completing' ? 'km-interactive-disabled' : 'km-interactive'} flex items-center justify-center`}>
-                                    {sessionState === 'completing' ? (
-                                        <>
-                                            <span className="animate-spin h-5 w-5 border-2 border-white/20 border-t-white rounded-full mr-2"></span>
-                                            Recording Session...
-                                        </>
-                                    ) : isFinalPuzzle ? 'All Done' : 'Next Puzzle →'}
-                                </button>
+                                <div className="space-y-4">
+                                    {/* Performance Stats for this puzzle */}
+                                    {currentPuzzle?.attempts !== undefined && (
+                                        <div className="bg-primary/5 p-3 rounded-sm text-sm">
+                                            <div className="flex justify-between">
+                                                <span className="text-primary/60">Puzzle Stats:</span>
+                                                <span className="font-mono">
+                                                    {currentPuzzle.pass_count || 0}/{currentPuzzle.attempts || 0} 
+                                                    {currentPuzzle.attempts ? ` (${Math.round(((currentPuzzle.pass_count || 0) / currentPuzzle.attempts) * 100)}%)` : ''}
+                                                </span>
+                                            </div>
+                                            {currentPuzzle.next_due_at && (
+                                                <div className="flex justify-between mt-1">
+                                                    <span className="text-primary/60">Next Review:</span>
+                                                    <span className="font-mono">
+                                                        {new Date(currentPuzzle.next_due_at).toLocaleDateString()}
+                                                    </span>
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
+                                    
+                                    <button
+                                        type="button"
+                                        onClick={handleAdvancePuzzle}
+                                        disabled={finishButtonDisabled || sessionState === 'completing'}
+                                        className={`w-full px-6 py-4 bg-green-600 text-white rounded-sm font-serif text-lg transition-all shadow-lg shadow-green-900/20 km-focus-visible ${finishButtonDisabled || sessionState === 'completing' ? 'km-interactive-disabled' : 'km-interactive'} flex items-center justify-center`}>
+                                        {sessionState === 'completing' ? (
+                                            <>
+                                                <span className="animate-spin h-5 w-5 border-2 border-white/20 border-t-white rounded-full mr-2"></span>
+                                                Recording Session...
+                                            </>
+                                        ) : isFinalPuzzle ? 'All Done' : 'Next Puzzle →'}
+                                    </button>
+                                </div>
                             )}
                             {status === 'incorrect' && (
                                 <div className="space-y-4">
-                                    <button
-                                        type="button"
-                                        onClick={async () => {
-                                            await handleReviewPuzzle('fail');
-                                            setStatus('solving');
-                                            setUserMove('');
-                                            setGame(new Chess(currentPuzzle.fen));
-                                            setClueStage(0);
-                                        }}
-                                        className="w-full px-6 py-4 border border-primary/20 text-primary rounded-sm font-serif text-lg transition-all km-interactive km-focus-visible">
-                                        Mark as Failed & Try Again
-                                    </button>
+                                    {/* Detailed feedback for incorrect answers */}
+                                    {lastFeedback && (
+                                        <div className="bg-red-500/10 border border-red-500/20 p-3 rounded-sm text-sm">
+                                            <p className="text-red-500 font-sans">{lastFeedback}</p>
+                                        </div>
+                                    )}
+                                    
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <button
+                                            type="button"
+                                            onClick={async () => {
+                                                await handleReviewPuzzle('fail');
+                                                setStatus('solving');
+                                                setUserMove('');
+                                                setGame(new Chess(currentPuzzle.fen));
+                                                setClueStage(0);
+                                            }}
+                                            className="px-6 py-4 border border-primary/20 text-primary rounded-sm font-serif text-lg transition-all km-interactive km-focus-visible">
+                                            Mark as Failed & Try Again
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={handleRevealSolution}
+                                            className="px-6 py-4 bg-primary text-bg-primary rounded-sm font-serif text-lg transition-all km-interactive km-focus-visible">
+                                            Show Solution
+                                        </button>
+                                    </div>
                                 </div>
                             )}
                         </div>
@@ -754,10 +1273,53 @@ export default function Puzzles() {
                             <div className="text-xs uppercase tracking-widest text-primary/40 mt-1">Total Time</div>
                         </div>
                     </div>
+                    
+                    {/* Enhanced Session Stats */}
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-6 mb-6">
+                        <div className="text-center">
+                            <div className="text-3xl font-serif text-primary">{sessionSummary.best_streak}</div>
+                            <div className="text-xs uppercase tracking-widest text-primary/40 mt-1">Best Streak</div>
+                        </div>
+                        <div className="text-center">
+                            <div className="text-3xl font-serif text-primary">{sessionSummary.hints_used}</div>
+                            <div className="text-xs uppercase tracking-widest text-primary/40 mt-1">Hints Used</div>
+                        </div>
+                        {sessionSummary.session_type && sessionSummary.session_type !== 'standard' && (
+                            <div className="text-center md:col-span-2">
+                                <div className="text-xl font-serif text-primary capitalize">
+                                    {sessionSummary.session_type.replace('_', ' ')}
+                                    {sessionSummary.target_accuracy && ` (${sessionSummary.target_accuracy}% accuracy)`}
+                                    {sessionSummary.target_time_minutes && ` (${sessionSummary.target_time_minutes} minutes)`}
+                                </div>
+                                <div className="text-xs uppercase tracking-widest text-primary/40 mt-1">Session Type</div>
+                            </div>
+                        )}
+                    </div>
+                    
+                    {/* Achievements Earned */}
+                    {achievements.filter(a => a.earned).length > 0 && (
+                        <div className="mb-6">
+                            <h3 className="text-lg font-serif text-primary mb-3">Achievements Earned</h3>
+                            <div className="flex flex-wrap gap-2">
+                                {achievements.filter(a => a.earned).map(achievement => (
+                                    <div 
+                                        key={achievement.id} 
+                                        className="flex items-center bg-primary/10 border border-primary/20 rounded-full px-3 py-1"
+                                        title={achievement.description}
+                                    >
+                                        <span className="text-lg mr-2">{achievement.icon}</span>
+                                        <span className="text-sm font-serif text-primary">{achievement.name}</span>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+                    
                     <button
                         type="button"
                         onClick={() => {
                             setSessionSummary(null);
+                            setLastFeedback('');
                             handleStartSession();
                         }}
                         className="w-full px-6 py-3 bg-primary text-bg-primary rounded-sm font-serif transition-colors km-interactive km-focus-visible">
@@ -779,15 +1341,57 @@ export default function Puzzles() {
                                     <span className="text-primary/60">
                                         {calculateAccuracy(session.pass_count, session.fail_count)}%
                                     </span>
+                                    {session.best_streak > 0 && (
+                                        <span className="text-primary/80">🔥{session.best_streak}</span>
+                                    )}
                                 </div>
-                                <span className="text-primary/40 text-xs">
-                                    {new Date(session.created_at).toLocaleDateString()}
-                                </span>
+                                <div className="flex gap-2">
+                                    {session.session_type && session.session_type !== 'standard' && (
+                                        <span className="text-primary/40 text-xs capitalize">
+                                            {session.session_type.replace('_', ' ')}
+                                        </span>
+                                    )}
+                                    <span className="text-primary/40 text-xs">
+                                        {new Date(session.created_at).toLocaleDateString()}
+                                    </span>
+                                </div>
                             </div>
                         ))}
                     </div>
                 </section>
             )}
+            
+            {/* Achievements Progress */}
+            <section className="bg-primary/5 border border-primary/10 rounded-sm p-6 backdrop-blur-sm">
+                <h3 className="text-lg font-serif text-primary mb-4">Achievements</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {achievements.map(achievement => (
+                        <div 
+                            key={achievement.id} 
+                            className={`p-4 rounded-sm border ${
+                                achievement.earned 
+                                    ? 'bg-green-500/10 border-green-500/30' 
+                                    : 'bg-primary/5 border-primary/20'
+                            }`}
+                        >
+                            <div className="flex items-center">
+                                <span className="text-2xl mr-3">{achievement.icon}</span>
+                                <div>
+                                    <h4 className={`font-serif ${achievement.earned ? 'text-green-600' : 'text-primary'}`}>
+                                        {achievement.name}
+                                    </h4>
+                                    <p className="text-xs text-primary/60 mt-1">{achievement.description}</p>
+                                    {achievement.earned && achievement.earnedAt && (
+                                        <p className="text-xs text-green-600/80 mt-1">
+                                            Earned: {achievement.earnedAt.toLocaleDateString()}
+                                        </p>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            </section>
         </div>
     );
 }

@@ -160,6 +160,80 @@ def update_puzzle_stats(
     return stats
 
 
+def get_adaptive_puzzles(
+    db: Session,
+    username: str,
+    puzzle_ids: list[str],
+    n: int = 5,
+    session_type: str = "standard",
+    target_accuracy: float = None
+) -> tuple[list[str], dict[str, PuzzleStats]]:
+    """
+    Get puzzles for the user from the candidate list, ordered by adaptive priority.
+    
+    Priority factors:
+    1. Due: next_due_at <= now
+    2. New: next_due_at IS NULL
+    3. Future: ordered by next_due_at ASC
+    4. Adaptive: Based on user performance and session type
+    
+    For accuracy_goal sessions:
+    - Prioritize puzzles with lower pass rates if user is below target
+    - Prioritize puzzles with higher pass rates if user is above target
+    """
+    now = datetime.now(timezone.utc)
+    
+    # Query stats for the given puzzle IDs
+    stmt = select(PuzzleStats).where(
+        PuzzleStats.username == username,
+        PuzzleStats.puzzle_id.in_(puzzle_ids)
+    )
+    all_stats = {s.puzzle_id: s for s in db.scalars(stmt).all()}
+    
+    # Sort candidate IDs with adaptive logic
+    def sort_key(pid: str):
+        stats = all_stats.get(pid)
+        
+        # Base priority (same as before)
+        if not stats or stats.next_due_at is None:
+            # New puzzle: Priority 2 (high, but after due)
+            base_priority = 1
+            time_factor = now
+        else:
+            # Ensure stats.next_due_at is aware for comparison
+            next_due = stats.next_due_at
+            if next_due.tzinfo is None:
+                next_due = next_due.replace(tzinfo=timezone.utc)
+                
+            if next_due <= now:
+                # Due puzzle: Priority 1 (highest)
+                base_priority = 0
+                time_factor = next_due
+            else:
+                # Future puzzle: Priority 3 (lowest)
+                base_priority = 2
+                time_factor = next_due
+        
+        # Adaptive factors
+        adaptive_score = 0.0
+        
+        # For accuracy goal sessions, adjust based on target
+        if session_type == "accuracy_goal" and target_accuracy is not None and stats:
+            # Calculate current accuracy for this puzzle
+            if stats.attempts > 0:
+                puzzle_accuracy = (stats.pass_count / stats.attempts) * 100
+                # If user is below target, prioritize harder puzzles (lower accuracy)
+                # If user is above target, prioritize easier puzzles (higher accuracy)
+                accuracy_diff = puzzle_accuracy - target_accuracy
+                # Normalize to -1 to 1 range
+                adaptive_score = accuracy_diff / 100.0
+        
+        return (base_priority, time_factor, -adaptive_score)
+
+    sorted_pids = sorted(puzzle_ids, key=sort_key)
+    return sorted_pids[:n], all_stats
+
+
 def get_due_puzzles(
     db: Session,
     username: str,
@@ -174,33 +248,4 @@ def get_due_puzzles(
     2. New: next_due_at IS NULL
     3. Future: ordered by next_due_at ASC
     """
-    now = datetime.now(timezone.utc)
-    
-    # Query stats for the given puzzle IDs
-    stmt = select(PuzzleStats).where(
-        PuzzleStats.username == username,
-        PuzzleStats.puzzle_id.in_(puzzle_ids)
-    )
-    all_stats = {s.puzzle_id: s for s in db.scalars(stmt).all()}
-    
-    # Sort candidate IDs
-    def sort_key(pid: str):
-        stats = all_stats.get(pid)
-        if not stats or stats.next_due_at is None:
-            # New puzzle: Priority 2 (high, but after due)
-            return (1, now) 
-        
-        # Ensure stats.next_due_at is aware for comparison
-        next_due = stats.next_due_at
-        if next_due.tzinfo is None:
-            next_due = next_due.replace(tzinfo=timezone.utc)
-            
-        if next_due <= now:
-            # Due puzzle: Priority 1 (highest)
-            return (0, next_due)
-        
-        # Future puzzle: Priority 3 (lowest)
-        return (2, next_due)
-
-    sorted_pids = sorted(puzzle_ids, key=sort_key)
-    return sorted_pids[:n], all_stats
+    return get_adaptive_puzzles(db, username, puzzle_ids, n)

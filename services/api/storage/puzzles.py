@@ -261,6 +261,26 @@ class PuzzleStorage:
     def get_puzzle_count(self, username: str) -> int:
         """Get the total number of puzzles for a user."""
         return len(self.get_all_puzzles(username))
+    
+    def get_puzzle_stats(self, username: str, puzzle_id: str) -> dict:
+        """
+        Get detailed statistics for a specific puzzle.
+        
+        Returns:
+            Dict with puzzle performance statistics
+        """
+        puzzle = self.get_puzzle(username, puzzle_id)
+        if not puzzle:
+            return {}
+        
+        # For now, we'll return basic puzzle info
+        # In a real implementation, this would pull from the database
+        return {
+            "fen": puzzle.fen,
+            "best_move": puzzle.best_move_uci,
+            "side_to_move": puzzle.side_to_move,
+            "swing": puzzle.swing,
+        }
 
 
 # Default storage instance

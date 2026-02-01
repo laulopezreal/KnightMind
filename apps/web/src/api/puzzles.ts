@@ -20,6 +20,12 @@ export interface Puzzle {
     next_due_at?: string;
     interval_days?: number;
     ease_factor?: number;
+    // Review stats
+    attempts?: number;
+    pass_count?: number;
+    fail_count?: number;
+    last_reviewed_at?: string;
+    last_result?: string;
 }
 
 export interface DailyPuzzlesResponse {
@@ -38,6 +44,13 @@ export interface ReviewPuzzleResponse {
     next_due_at: string;
     interval_days: number;
     ease_factor: number;
+    feedback: string;
+    puzzle_info: {
+        fen: string;
+        best_move: string;
+        side_to_move: string;
+        swing: number;
+    };
     stats: {
         attempts: number;
         pass_count: number;
@@ -91,12 +104,19 @@ export async function getDailyPuzzles(
 
 export async function getDuePuzzles(
     username: string,
-    n: number = 5
+    n: number = 5,
+    sessionType: string = "standard",
+    targetAccuracy?: number
 ): Promise<DuePuzzlesResponse> {
     const params = new URLSearchParams({
         username,
         n: n.toString(),
+        session_type: sessionType,
     });
+    
+    if (targetAccuracy !== undefined) {
+        params.append('target_accuracy', targetAccuracy.toString());
+    }
 
     try {
         return await request<DuePuzzlesResponse>(`/puzzles/due?${params}`);

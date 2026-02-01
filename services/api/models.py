@@ -105,6 +105,15 @@ class TrainingSession(Base):
     pass_count: Mapped[int] = mapped_column(Integer, default=0)
     fail_count: Mapped[int] = mapped_column(Integer, default=0)
     total_time_ms: Mapped[int] = mapped_column(Integer, default=0)
+    # Enhanced session fields
+    session_type: Mapped[str] = mapped_column(String, nullable=True)  # "timed", "target_count", "accuracy_goal"
+    target_accuracy: Mapped[float] = mapped_column(Float, nullable=True)  # Target accuracy percentage (0.0-100.0)
+    target_time_minutes: Mapped[int] = mapped_column(Integer, nullable=True)  # Target session time in minutes
+    current_streak: Mapped[int] = mapped_column(Integer, default=0)  # Current correct answer streak
+    best_streak: Mapped[int] = mapped_column(Integer, default=0)  # Best streak in this session
+    hints_used: Mapped[int] = mapped_column(Integer, default=0)  # Number of hints used in session
+    session_data: Mapped[dict] = mapped_column(JSON, nullable=True)  # Flexible storage for session-specific data
+    achievements: Mapped[list] = mapped_column(JSON, nullable=True, default=list)  # List of achievements earned in this session
 
 
 class RatingSnapshot(Base):

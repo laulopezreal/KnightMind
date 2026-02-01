@@ -606,10 +606,13 @@ async def get_daily_puzzles(
 async def get_due_puzzles_endpoint(
     username: str = Query(..., description="Username to get puzzles for"),
     n: int = Query(5, ge=1, le=20, description="Number of puzzles to return"),
+    session_type: str = Query("standard", description="Session type for adaptive selection"),
+    target_accuracy: float = Query(None, description="Target accuracy for adaptive selection"),
     db: Session = Depends(get_db)
 ):
     """
     Get puzzles due for review, followed by new puzzles.
+    Supports adaptive selection based on session type and target accuracy.
     """
     puzzle_storage = get_puzzle_storage()
     
@@ -623,8 +626,8 @@ async def get_due_puzzles_endpoint(
             detail=f"No puzzles found for user '{username}'. Generate puzzles first."
         )
     
-    # 2. Get prioritized IDs and their stats
-    due_ids, all_stats = get_due_puzzles(db, username, puzzle_ids, n)
+    # 2. Get prioritized IDs and their stats using adaptive selection
+    due_ids, all_stats = get_adaptive_puzzles(db, username, puzzle_ids, n, session_type, target_accuracy)
     
     # 3. Load content and merge with stats
     result_puzzles = []
@@ -691,9 +694,11 @@ async def review_puzzle(
     Record a puzzle review and update scheduling.
     
     Optionally tracks the review in a training session.
+    Provides enhanced feedback including puzzle statistics.
     """
     puzzle_storage = get_puzzle_storage()
-    if not puzzle_storage.get_puzzle(request.username, puzzle_id):
+    puzzle = puzzle_storage.get_puzzle(request.username, puzzle_id)
+    if not puzzle:
         raise HTTPException(status_code=404, detail="Puzzle not found")
     
     # If session_id provided, validate session and update counters
@@ -715,8 +720,14 @@ async def review_puzzle(
         # Increment session counters (will be committed with review)
         if request.result == PR.PASS:
             session.pass_count += 1
+            # Update streak
+            session.current_streak += 1
+            if session.current_streak > session.best_streak:
+                session.best_streak = session.current_streak
         else:
             session.fail_count += 1
+            # Reset streak on fail
+            session.current_streak = 0
         
         # Add time if provided
         if request.time_spent_ms:
@@ -735,13 +746,33 @@ async def review_puzzle(
     # 2. Update aggregate stats (triggers scheduling logic)
     stats = update_puzzle_stats(db, puzzle_id, request.username, request.result)
     
-    # 3. Commit all changes atomically
+    # 3. Get puzzle details for feedback
+    puzzle_stats = puzzle_storage.get_puzzle_stats(request.username, puzzle_id)
+    
+    # 4. Commit all changes atomically
     db.commit()
+    
+    # 5. Generate feedback message
+    feedback_message = ""
+    if request.result == "pass":
+        if stats.attempts == 1:
+            feedback_message = "Perfect! First try!"
+        elif stats.attempts > 0 and stats.pass_count / stats.attempts > 0.8:
+            feedback_message = "Great job! You're mastering this pattern."
+        else:
+            feedback_message = "Good solve!"
+    else:
+        if stats.attempts > 0 and stats.fail_count / stats.attempts > 0.5:
+            feedback_message = "Keep practicing this pattern."
+        else:
+            feedback_message = "Almost! Review the solution carefully."
     
     return {
         "next_due_at": stats.next_due_at,
         "interval_days": stats.interval_days,
         "ease_factor": stats.ease_factor,
+        "feedback": feedback_message,
+        "puzzle_info": puzzle_stats,
         "stats": {
             "attempts": stats.attempts,
             "pass_count": stats.pass_count,

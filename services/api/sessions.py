@@ -20,11 +20,17 @@ router = APIRouter(prefix="/sessions", tags=["sessions"])
 class StartSessionRequest(BaseModel):
     username: str
     n: int
+    session_type: str = "standard"  # "standard", "timed", "accuracy_goal"
+    target_accuracy: float = None  # Target accuracy percentage (0.0-100.0)
+    target_time_minutes: int = None  # Target session time in minutes
 
 
 class StartSessionResponse(BaseModel):
     session_id: str
     requested_n: int
+    session_type: str = None
+    target_accuracy: float = None
+    target_time_minutes: int = None
 
 
 class CompleteSessionRequest(BaseModel):
@@ -39,6 +45,17 @@ class SessionSummary(BaseModel):
     total_time_ms: int
     created_at: datetime
     completed_at: datetime | None
+    # Enhanced session fields
+    session_type: str = None
+    target_accuracy: float = None
+    target_time_minutes: int = None
+    current_streak: int = 0
+    best_streak: int = 0
+    hints_used: int = 0
+
+
+class UseHintRequest(BaseModel):
+    username: str
 
 
 @router.post("/start", response_model=StartSessionResponse)
@@ -59,7 +76,13 @@ async def start_session(
         requested_n=request.n,
         pass_count=0,
         fail_count=0,
-        total_time_ms=0
+        total_time_ms=0,
+        session_type=request.session_type,
+        target_accuracy=request.target_accuracy,
+        target_time_minutes=request.target_time_minutes,
+        current_streak=0,
+        best_streak=0,
+        hints_used=0
     )
     
     db.add(session)
@@ -67,7 +90,10 @@ async def start_session(
     
     return StartSessionResponse(
         session_id=session_id,
-        requested_n=request.n
+        requested_n=request.n,
+        session_type=request.session_type,
+        target_accuracy=request.target_accuracy,
+        target_time_minutes=request.target_time_minutes
     )
 
 
@@ -94,7 +120,13 @@ async def get_session(
         fail_count=session.fail_count,
         total_time_ms=session.total_time_ms,
         created_at=session.created_at,
-        completed_at=session.completed_at
+        completed_at=session.completed_at,
+        session_type=session.session_type,
+        target_accuracy=session.target_accuracy,
+        target_time_minutes=session.target_time_minutes,
+        current_streak=session.current_streak,
+        best_streak=session.best_streak,
+        hints_used=session.hints_used
     )
 
 
@@ -132,7 +164,13 @@ async def complete_session(
         fail_count=session.fail_count,
         total_time_ms=session.total_time_ms,
         created_at=session.created_at,
-        completed_at=session.completed_at
+        completed_at=session.completed_at,
+        session_type=session.session_type,
+        target_accuracy=session.target_accuracy,
+        target_time_minutes=session.target_time_minutes,
+        current_streak=session.current_streak,
+        best_streak=session.best_streak,
+        hints_used=session.hints_used
     )
 
 
@@ -168,7 +206,59 @@ async def get_recent_sessions(
             fail_count=s.fail_count,
             total_time_ms=s.total_time_ms,
             created_at=s.created_at,
-            completed_at=s.completed_at
+            completed_at=s.completed_at,
+            session_type=s.session_type,
+            target_accuracy=s.target_accuracy,
+            target_time_minutes=s.target_time_minutes,
+            current_streak=s.current_streak,
+            best_streak=s.best_streak,
+            hints_used=s.hints_used
         )
         for s in sessions
     ]
+
+
+@router.post("/{session_id}/use_hint", response_model=SessionSummary)
+async def use_hint(
+    session_id: str,
+    request: UseHintRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Use a hint during a training session.
+    
+    Updates the session's hint counter.
+    """
+    # Fetch session
+    stmt = select(TrainingSession).where(TrainingSession.id == session_id)
+    session = db.scalars(stmt).first()
+    
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    if session.username != request.username:
+        raise HTTPException(status_code=403, detail="Session belongs to different user")
+    
+    if session.completed_at is not None:
+        raise HTTPException(status_code=400, detail="Session already completed")
+    
+    # Increment hints used
+    session.hints_used += 1
+    db.commit()
+    db.refresh(session)
+    
+    return SessionSummary(
+        session_id=session.id,
+        requested_n=session.requested_n,
+        pass_count=session.pass_count,
+        fail_count=session.fail_count,
+        total_time_ms=session.total_time_ms,
+        created_at=session.created_at,
+        completed_at=session.completed_at,
+        session_type=session.session_type,
+        target_accuracy=session.target_accuracy,
+        target_time_minutes=session.target_time_minutes,
+        current_streak=session.current_streak,
+        best_streak=session.best_streak,
+        hints_used=session.hints_used
+    )
