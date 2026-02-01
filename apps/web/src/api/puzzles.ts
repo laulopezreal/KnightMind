@@ -87,13 +87,15 @@ export async function getDailyPuzzles(
     username: string,
     n: number = 5
 ): Promise<DailyPuzzlesResponse> {
-    const params = new URLSearchParams({
-        username,
-        n: n.toString(),
-    });
-
     try {
-        return await request<DailyPuzzlesResponse>(`/puzzles/daily?${params}`);
+        return await request<DailyPuzzlesResponse>(`/daily-puzzle-sessions`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                username,
+                n,
+            }),
+        });
     } catch (err) {
         if (err instanceof ApiError && err.statusCode === 404) {
             throw new ApiError('No puzzles found', 404, err.detail);

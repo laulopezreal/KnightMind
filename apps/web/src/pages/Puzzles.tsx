@@ -4,6 +4,9 @@ import { Chessboard } from 'react-chessboard';
 import { Chess } from 'chess.js';
 import { generatePuzzles, getDailyPuzzles, getDuePuzzles, cancelJob, ApiError, type Puzzle, startSession, completeSession, getRecentSessions, reviewPuzzle, getSession, type SessionSummary, useHint as requestHint, getUserStatus, type UserStatus, getMotifPerformance, type MotifPerformanceResponse } from '../api';
 import { JobStatusCard } from '../components/JobStatusCard';
+import { SessionSummaryCard } from '../components/SessionSummaryCard';
+import { AchievementsList } from '../components/AchievementsList';
+import { RecentSessionsCard } from '../components/RecentSessionsCard';
 import { useJobPolling } from '../hooks/useJobPolling';
 import { useChessUsername } from '../context/ChessUsernameContext';
 import { parseBestMoveUci, getPieceNameAtSquare } from '../utils/puzzle-clue';
@@ -1461,162 +1464,22 @@ export default function Puzzles() {
 
             {/* Session Summary */}
             {sessionSummary && (
-                <section className="bg-primary/5 border border-green-500/30 rounded-sm p-8 backdrop-blur-sm animate-teedin">
-                    <div className="flex items-center mb-6">
-                        <div className="flex-shrink-0 h-8 w-8 rounded-full bg-green-500 flex items-center justify-center mr-3">
-                            <svg className="h-5 w-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                            </svg>
-                        </div>
-                        <h2 className="text-2xl font-serif text-primary">Session Successfully Recorded!</h2>
-                    </div>
-
-                    {sessionSummary.completed_at && (
-                        <div className="text-sm text-primary/60 mb-4">
-                            Completed on {new Date(sessionSummary.completed_at).toLocaleString()}
-                        </div>
-                    )}
-
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-6 mb-6">
-                        <div className="text-center">
-                            <div className="text-3xl font-serif text-green-600">{sessionSummary.pass_count}</div>
-                            <div className="text-xs uppercase tracking-widest text-primary/40 mt-1">Passed</div>
-                        </div>
-                        <div className="text-center">
-                            <div className="text-3xl font-serif text-red-500">{sessionSummary.fail_count}</div>
-                            <div className="text-xs uppercase tracking-widest text-primary/40 mt-1">Failed</div>
-                        </div>
-                        <div className="text-center">
-                            <div className="text-3xl font-serif text-primary">
-                                {calculateAccuracy(sessionSummary.pass_count, sessionSummary.fail_count)}%
-                            </div>
-                            <div className="text-xs uppercase tracking-widest text-primary/40 mt-1">Accuracy</div>
-                        </div>
-                        <div className="text-center">
-                            <div className="text-3xl font-serif text-primary">
-                                {Math.floor(sessionSummary.total_time_ms / 60000)}m {Math.floor((sessionSummary.total_time_ms % 60000) / 1000)}s
-                            </div>
-                            <div className="text-xs uppercase tracking-widest text-primary/40 mt-1">Total Time</div>
-                        </div>
-                    </div>
-
-                    {/* Enhanced Session Stats */}
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-6 mb-6">
-                        <div className="text-center">
-                            <div className="text-3xl font-serif text-primary">{sessionSummary.best_streak}</div>
-                            <div className="text-xs uppercase tracking-widest text-primary/40 mt-1">Best Streak</div>
-                        </div>
-                        <div className="text-center">
-                            <div className="text-3xl font-serif text-primary">{sessionSummary.hints_used}</div>
-                            <div className="text-xs uppercase tracking-widest text-primary/40 mt-1">Hints Used</div>
-                        </div>
-                        {sessionSummary.session_type && sessionSummary.session_type !== 'standard' && (
-                            <div className="text-center md:col-span-2">
-                                <div className="text-xl font-serif text-primary capitalize">
-                                    {sessionSummary.session_type.replace('_', ' ')}
-                                    {sessionSummary.target_accuracy && ` (${sessionSummary.target_accuracy}% accuracy)`}
-                                    {sessionSummary.target_time_minutes && ` (${sessionSummary.target_time_minutes} minutes)`}
-                                </div>
-                                <div className="text-xs uppercase tracking-widest text-primary/40 mt-1">Session Type</div>
-                            </div>
-                        )}
-                    </div>
-
-                    {/* Achievements Earned */}
-                    {achievements.filter(a => a.earned).length > 0 && (
-                        <div className="mb-6">
-                            <h3 className="text-lg font-serif text-primary mb-3">Achievements Earned</h3>
-                            <div className="flex flex-wrap gap-2">
-                                {achievements.filter(a => a.earned).map(achievement => (
-                                    <div
-                                        key={achievement.id}
-                                        className="flex items-center bg-primary/10 border border-primary/20 rounded-full px-3 py-1"
-                                        title={achievement.description}
-                                    >
-                                        <span className="text-lg mr-2">{achievement.icon}</span>
-                                        <span className="text-sm font-serif text-primary">{achievement.name}</span>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-                    )}
-
-                    <button
-                        type="button"
-                        onClick={() => {
-                            setSessionSummary(null);
-                            setLastFeedback('');
-                            handleStartSession();
-                        }}
-                        className="w-full px-6 py-3 bg-primary text-bg-primary rounded-sm font-serif transition-colors km-interactive km-focus-visible">
-                        Start New Session
-                    </button>
-                </section>
+                <SessionSummaryCard
+                    sessionSummary={sessionSummary}
+                    achievements={achievements}
+                    onStartNewSession={() => {
+                        setSessionSummary(null);
+                        setLastFeedback('');
+                        handleStartSession();
+                    }}
+                />
             )}
 
             {/* Recent Sessions */}
-            {recentSessions.length > 0 && (
-                <section className="bg-primary/5 border border-primary/10 rounded-sm p-6 backdrop-blur-sm">
-                    <h3 className="text-lg font-serif text-primary mb-4">Recent Sessions</h3>
-                    <div className="space-y-2">
-                        {recentSessions.map((session) => (
-                            <div key={session.session_id} className="flex justify-between items-center p-3 bg-primary/5 rounded-sm text-sm">
-                                <div className="flex gap-4">
-                                    <span className="text-green-600">{session.pass_count}P</span>
-                                    <span className="text-red-500">{session.fail_count}F</span>
-                                    <span className="text-primary/60">
-                                        {calculateAccuracy(session.pass_count, session.fail_count)}%
-                                    </span>
-                                    {session.best_streak > 0 && (
-                                        <span className="text-primary/80">🔥{session.best_streak}</span>
-                                    )}
-                                </div>
-                                <div className="flex gap-2">
-                                    {session.session_type && session.session_type !== 'standard' && (
-                                        <span className="text-primary/40 text-xs capitalize">
-                                            {session.session_type.replace('_', ' ')}
-                                        </span>
-                                    )}
-                                    <span className="text-primary/40 text-xs">
-                                        {new Date(session.created_at).toLocaleDateString()}
-                                    </span>
-                                </div>
-                            </div>
-                        ))}
-                    </div>
-                </section>
-            )}
+            <RecentSessionsCard sessions={recentSessions} />
 
             {/* Achievements Progress */}
-            <section className="bg-primary/5 border border-primary/10 rounded-sm p-6 backdrop-blur-sm">
-                <h3 className="text-lg font-serif text-primary mb-4">Achievements</h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                    {achievements.map(achievement => (
-                        <div
-                            key={achievement.id}
-                            className={`p-4 rounded-sm border ${achievement.earned
-                                ? 'bg-green-500/10 border-green-500/30'
-                                : 'bg-primary/5 border-primary/20'
-                                }`}
-                        >
-                            <div className="flex items-center">
-                                <span className="text-2xl mr-3">{achievement.icon}</span>
-                                <div>
-                                    <h4 className={`font-serif ${achievement.earned ? 'text-green-600' : 'text-primary'}`}>
-                                        {achievement.name}
-                                    </h4>
-                                    <p className="text-xs text-primary/60 mt-1">{achievement.description}</p>
-                                    {achievement.earned && achievement.earnedAt && (
-                                        <p className="text-xs text-green-600/80 mt-1">
-                                            Earned: {achievement.earnedAt.toLocaleDateString()}
-                                        </p>
-                                    )}
-                                </div>
-                            </div>
-                        </div>
-                    ))}
-                </div>
-            </section>
+            <AchievementsList achievements={achievements} />
 
             {/* Chess Pattern Mastery */}
             {motifPerformance && motifPerformance.motifs.length > 0 && (

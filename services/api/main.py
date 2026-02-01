@@ -344,6 +344,11 @@ class DailyPuzzlesResponse(BaseModel):
     count: int
 
 
+class DailyPuzzleSessionRequest(BaseModel):
+    username: str
+    n: int = 5
+
+
 class DuePuzzlesResponse(BaseModel):
     due_count: int
     returned_count: int
@@ -541,15 +546,24 @@ async def cancel_job(job_id: str, db: Session = Depends(get_db)):
     )
 
 
-@app.get("/puzzles/daily", response_model=DailyPuzzlesResponse)
-async def get_daily_puzzles(
-    username: str = Query(..., description="Username to get puzzles for"),
-    n: int = Query(5, ge=1, le=20, description="Number of puzzles to return"),
+@app.post("/daily-puzzle-sessions", response_model=DailyPuzzlesResponse)
+async def create_daily_puzzle_session(
+    request: DailyPuzzleSessionRequest,
     db: Session = Depends(get_db)
 ):
-    """Get daily puzzle set for a user."""
+    """Create a new daily puzzle session for a user."""
+    username = request.username
+    n = request.n
+
+    # Validate n parameter
+    if n < 1 or n > 20:
+        raise HTTPException(
+            status_code=400,
+            detail="Number of puzzles must be between 1 and 20"
+        )
+
     puzzle_repository = PuzzleRepository(db)
-    
+
     # Get puzzles using the storage's selection logic
     puzzles = puzzle_repository.get_daily_puzzles(username, n)
     
