@@ -9,6 +9,11 @@ from pathlib import Path
 import pytest
 
 from services.api.storage.puzzles import Puzzle, PuzzleStorage
+from scripts.backfill_storage import validate_puzzle_data
+from services.api.db import Base
+from services.api.storage.puzzle_repository import PuzzleRepository
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 
 @pytest.fixture
@@ -16,6 +21,24 @@ def temp_storage():
     """Create a temporary puzzle storage for testing."""
     with tempfile.TemporaryDirectory() as tmpdir:
         yield PuzzleStorage(base_path=tmpdir)
+
+
+@pytest.fixture
+def db_session(tmp_path, monkeypatch):
+    monkeypatch.setenv("KNIGHTMIND_STORAGE_MODE", "database")
+    engine = create_engine(f"sqlite:///{tmp_path / 'test.db'}")
+    Base.metadata.create_all(engine)
+    session_local = sessionmaker(bind=engine)
+    session = session_local()
+    try:
+        yield session
+    finally:
+        session.close()
+
+
+@pytest.fixture
+def repository(db_session, tmp_path):
+    return PuzzleRepository(db_session, base_path=tmp_path)
 
 
 def test_save_puzzle_creates_new(temp_storage):
@@ -367,3 +390,32 @@ def test_username_case_insensitive(temp_storage):
     assert puzzle_upper is not None
     assert puzzle_lower is not None
     assert puzzle_upper.id == puzzle_lower.id
+
+
+def test_puzzle_repository_database_mode_stores_and_updates(repository):
+    is_new, puzzle_id = repository.save_puzzle(
+        username="testuser",
+        source_game_id="game123",
+        ply=15,
+        fen="fen",
+        side_to_move="white",
+        played_move_uci="e2e4",
+        best_move_uci="d2d4",
+        eval_before=0.5,
+        eval_after=-1.5,
+        swing=2.0,
+    )
+
+    assert is_new is True
+    puzzle = repository.get_puzzle("testuser", puzzle_id)
+    assert puzzle is not None
+
+    marked = repository.mark_puzzles_used("testuser", [puzzle_id])
+    assert marked == 1
+    updated = repository.get_puzzle("testuser", puzzle_id)
+    assert updated.used_on is not None
+
+
+def test_validate_puzzle_data_missing_fields():
+    errors = validate_puzzle_data({"id": "p1"})
+    assert any(error.startswith("missing_fields") for error in errors)

@@ -1,6 +1,6 @@
 import uuid
-from datetime import datetime, timezone
-from sqlalchemy import String, Integer, Text, JSON, DateTime, Index, text, Float
+from datetime import datetime, timezone, date
+from sqlalchemy import String, Integer, Text, JSON, DateTime, Index, text, Float, Boolean, Date, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column
 from enum import Enum
 from services.api.db import Base
@@ -66,7 +66,7 @@ class PuzzleStats(Base):
     __tablename__ = "puzzle_stats"
     __table_args__ = {"extend_existing": True}
 
-    puzzle_id: Mapped[str] = mapped_column(String, primary_key=True)
+    puzzle_id: Mapped[str] = mapped_column(String, ForeignKey("puzzles.id"), primary_key=True)
     username: Mapped[str] = mapped_column(String, index=True)
     title: Mapped[str] = mapped_column(String, nullable=True)
     primary_motif: Mapped[str] = mapped_column(String, nullable=True)
@@ -85,7 +85,7 @@ class PuzzleReview(Base):
     __table_args__ = {"extend_existing": True}
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    puzzle_id: Mapped[str] = mapped_column(String, index=True)
+    puzzle_id: Mapped[str] = mapped_column(String, ForeignKey("puzzles.id"), index=True)
     username: Mapped[str] = mapped_column(String, index=True)
     reviewed_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
     result: Mapped[PuzzleResult] = mapped_column(String)
@@ -128,3 +128,50 @@ class RatingSnapshot(Base):
     recorded_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
     session_id: Mapped[str] = mapped_column(String, nullable=True, index=True)  # FK to training_sessions.id logical
 
+
+class Game(Base):
+    __tablename__ = "games"
+    __table_args__ = (
+        Index("ix_games_username_end_time", "username", "end_time"),
+        Index("ix_games_game_id", "game_id"),
+        {"extend_existing": True},
+    )
+
+    game_id: Mapped[str] = mapped_column(String, primary_key=True)
+    url: Mapped[str] = mapped_column(Text, nullable=False)
+    username: Mapped[str] = mapped_column(String, index=True)
+    white_username: Mapped[str] = mapped_column(String, nullable=False)
+    black_username: Mapped[str] = mapped_column(String, nullable=False)
+    white_result: Mapped[str] = mapped_column(String, nullable=False)
+    black_result: Mapped[str] = mapped_column(String, nullable=False)
+    time_control: Mapped[str] = mapped_column(String, nullable=False)
+    end_time: Mapped[int] = mapped_column(Integer, nullable=False)
+    rated: Mapped[bool] = mapped_column(Boolean, default=False)
+    imported_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+    source_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    pgn_blob: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class Puzzle(Base):
+    __tablename__ = "puzzles"
+    __table_args__ = (
+        Index("ix_puzzles_username_created_at", "username", "created_at"),
+        Index("ix_puzzles_username_source_game_id_ply", "username", "source_game_id", "ply", unique=True),
+        {"extend_existing": True},
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    username: Mapped[str] = mapped_column(String, index=True)
+    source_game_id: Mapped[str] = mapped_column(String, ForeignKey("games.game_id"), nullable=False)
+    ply: Mapped[int] = mapped_column(Integer, nullable=False)
+    fen: Mapped[str] = mapped_column(Text, nullable=False)
+    side_to_move: Mapped[str] = mapped_column(String, nullable=False)
+    played_move_uci: Mapped[str] = mapped_column(String, nullable=False)
+    best_move_uci: Mapped[str] = mapped_column(String, nullable=False)
+    eval_before: Mapped[float] = mapped_column(Float, nullable=False)
+    eval_after: Mapped[float] = mapped_column(Float, nullable=False)
+    swing: Mapped[float] = mapped_column(Float, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+    used_on: Mapped[date | None] = mapped_column(Date, nullable=True)
+    imported_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+    source_path: Mapped[str | None] = mapped_column(Text, nullable=True)

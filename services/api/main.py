@@ -29,7 +29,7 @@ from services.api.engine import (
 )
 from services.api.openings import build_opening_tree
 from services.api.puzzles import generate_puzzles
-from services.api.storage import get_puzzle_storage, get_storage
+from services.api.storage import GameRepository, PuzzleRepository
 from services.api.storage.spaced_repetition import (
     get_adaptive_puzzles,
     get_due_puzzles,
@@ -138,8 +138,9 @@ class ImportResponse(BaseModel):
 @app.get("/users")
 async def get_users():
     """Get list of users who have imported games."""
-    storage = get_storage()
-    users = storage.get_users()
+    with SessionLocal() as db:
+        game_repository = GameRepository(db)
+        users = game_repository.get_users()
     return {"users": users}
 
 
@@ -177,31 +178,32 @@ async def import_chesscom_games(username: str):
         count = 0
         new_games = 0
         skipped = 0
-        
-        storage = get_storage()
-        
-        # Create generator
-        games_generator = import_all_games(username)
-        
-        async for game in games_generator:
-            count += 1
-            is_new, _ = storage.store_game(
-                username=username,
-                url=game.url,
-                pgn=game.pgn,
-                white_username=game.white_username,
-                black_username=game.black_username,
-                white_result=game.white_result,
-                black_result=game.black_result,
-                time_control=game.time_control,
-                end_time=game.end_time,
-                rated=game.rated,
-            )
+
+        with SessionLocal() as db:
+            game_repository = GameRepository(db)
+
+            # Create generator
+            games_generator = import_all_games(username)
             
-            if is_new:
-                new_games += 1
-            else:
-                skipped += 1
+            async for game in games_generator:
+                count += 1
+                is_new, _ = game_repository.store_game(
+                    username=username,
+                    url=game.url,
+                    pgn=game.pgn,
+                    white_username=game.white_username,
+                    black_username=game.black_username,
+                    white_result=game.white_result,
+                    black_result=game.black_result,
+                    time_control=game.time_control,
+                    end_time=game.end_time,
+                    rated=game.rated,
+                )
+                
+                if is_new:
+                    new_games += 1
+                else:
+                    skipped += 1
                 
         return ImportResponse(
             message=f"Successfully processed {count} games for {username}",
@@ -281,60 +283,61 @@ async def import_chesscom_games(username: str = Query(..., description="Chess.co
     Fetches all games from Chess.com API and stores them locally.
     Duplicate games are skipped automatically.
     """
-    storage = get_storage()
-
     try:
-        # Get all archive URLs for the user
-        archives = await get_player_archives(username)
+        with SessionLocal() as db:
+            game_repository = GameRepository(db)
 
-        if not archives:
-            return ImportResponse(
-                message=f"No games found for {username}",
-                games_count=0,
-                new_games=0,
-                skipped_duplicates=0,
-            )
+            # Get all archive URLs for the user
+            archives = await get_player_archives(username)
 
-        new_games = 0
-        skipped = 0
-
-        # Process each monthly archive
-        for archive_url in archives:
-            games = await fetch_games_from_archive(archive_url)
-
-            for game_data in games:
-                game = parse_game(game_data)
-
-                # Skip games without PGN
-                if not game.pgn:
-                    continue
-
-                is_new, _ = storage.store_game(
-                    username=username,
-                    url=game.url,
-                    pgn=game.pgn,
-                    white_username=game.white_username,
-                    black_username=game.black_username,
-                    white_result=game.white_result,
-                    black_result=game.black_result,
-                    time_control=game.time_control,
-                    end_time=game.end_time,
-                    rated=game.rated,
+            if not archives:
+                return ImportResponse(
+                    message=f"No games found for {username}",
+                    games_count=0,
+                    new_games=0,
+                    skipped_duplicates=0,
                 )
 
-                if is_new:
-                    new_games += 1
-                else:
-                    skipped += 1
+            new_games = 0
+            skipped = 0
 
-        total_games = storage.get_game_count(username)
+            # Process each monthly archive
+            for archive_url in archives:
+                games = await fetch_games_from_archive(archive_url)
 
-        return ImportResponse(
-            message=f"Successfully imported games for {username}",
-            games_count=total_games,
-            new_games=new_games,
-            skipped_duplicates=skipped,
-        )
+                for game_data in games:
+                    game = parse_game(game_data)
+
+                    # Skip games without PGN
+                    if not game.pgn:
+                        continue
+
+                    is_new, _ = game_repository.store_game(
+                        username=username,
+                        url=game.url,
+                        pgn=game.pgn,
+                        white_username=game.white_username,
+                        black_username=game.black_username,
+                        white_result=game.white_result,
+                        black_result=game.black_result,
+                        time_control=game.time_control,
+                        end_time=game.end_time,
+                        rated=game.rated,
+                    )
+
+                    if is_new:
+                        new_games += 1
+                    else:
+                        skipped += 1
+
+            total_games = game_repository.get_game_count(username)
+
+            return ImportResponse(
+                message=f"Successfully imported games for {username}",
+                games_count=total_games,
+                new_games=new_games,
+                skipped_duplicates=skipped,
+            )
 
     except UserNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -375,33 +378,34 @@ async def get_openings(
     Returns:
         Opening tree as nested JSON structure
     """
-    storage = get_storage()
+    with SessionLocal() as db:
+        game_repository = GameRepository(db)
 
-    # Check if user has any games
-    game_count = storage.get_game_count(username)
-    if game_count == 0:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No games found for user '{username}'. Import games first using POST /import/chesscom"
+        # Check if user has any games
+        game_count = game_repository.get_game_count(username)
+        if game_count == 0:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No games found for user '{username}'. Import games first using POST /import/chesscom"
+            )
+
+        # Get all PGNs for the user
+        pgn_texts = []
+        metadata_list = game_repository.get_all_metadata(username)
+        for meta in metadata_list:
+            pgn = game_repository.get_pgn(username, meta.game_id)
+            if pgn:
+                pgn_texts.append(pgn)
+
+        # Build the opening tree
+        tree = build_opening_tree(
+            pgn_texts=pgn_texts,
+            player_username=username,
+            color_filter=color,
+            max_ply=max_ply
         )
 
-    # Get all PGNs for the user
-    pgn_texts = []
-    metadata_list = storage.get_all_metadata(username)
-    for meta in metadata_list:
-        pgn = storage.get_pgn(username, meta.game_id)
-        if pgn:
-            pgn_texts.append(pgn)
-
-    # Build the opening tree
-    tree = build_opening_tree(
-        pgn_texts=pgn_texts,
-        player_username=username,
-        color_filter=color,
-        max_ply=max_ply
-    )
-
-    return tree
+        return tree
 
 
 @app.get("/engine/status", response_model=EngineStatusResponse)
@@ -575,32 +579,33 @@ async def get_daily_puzzles(
     Returns:
         List of puzzles with metadata
     """
-    puzzle_storage = get_puzzle_storage()
-    
-    # Get puzzles using the storage's selection logic
-    puzzles = puzzle_storage.get_daily_puzzles(username, n)
-    
-    if not puzzles:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No puzzles found for user '{username}'. Generate puzzles first using POST /puzzles/generate"
+    with SessionLocal() as db:
+        puzzle_repository = PuzzleRepository(db)
+        
+        # Get puzzles using the storage's selection logic
+        puzzles = puzzle_repository.get_daily_puzzles(username, n)
+        
+        if not puzzles:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No puzzles found for user '{username}'. Generate puzzles first using POST /puzzles/generate"
+            )
+        
+        # Mark puzzles as used today
+        puzzle_ids = [p.id for p in puzzles]
+        puzzle_repository.mark_puzzles_used(username, puzzle_ids, date.today())
+        
+        # Reload specific puzzles to get updated used_on field
+        updated_puzzles = [puzzle_repository.get_puzzle(username, pid) for pid in puzzle_ids]
+        updated_puzzles = [p for p in updated_puzzles if p is not None]
+        
+        # Convert to dict format for response
+        puzzles_dict = [asdict(p) for p in updated_puzzles]
+        
+        return DailyPuzzlesResponse(
+            puzzles=puzzles_dict,
+            count=len(puzzles_dict)
         )
-    
-    # Mark puzzles as used today
-    puzzle_ids = [p.id for p in puzzles]
-    puzzle_storage.mark_puzzles_used(username, puzzle_ids, date.today())
-    
-    # Reload specific puzzles to get updated used_on field
-    updated_puzzles = [puzzle_storage.get_puzzle(username, pid) for pid in puzzle_ids]
-    updated_puzzles = [p for p in updated_puzzles if p is not None]
-    
-    # Convert to dict format for response
-    puzzles_dict = [asdict(p) for p in updated_puzzles]
-    
-    return DailyPuzzlesResponse(
-        puzzles=puzzles_dict,
-        count=len(puzzles_dict)
-    )
 
 
 @app.get("/puzzles/due", response_model=DuePuzzlesResponse)
@@ -615,11 +620,11 @@ async def get_due_puzzles_endpoint(
     Get puzzles due for review, followed by new puzzles.
     Supports adaptive selection based on session type and target accuracy.
     """
-    puzzle_storage = get_puzzle_storage()
+    puzzle_repository = PuzzleRepository(db)
     
     # 1. Load index to get all candidate IDs
-    index = puzzle_storage._get_user_index(username)
-    puzzle_ids = list(index.values())
+    puzzles = puzzle_repository.get_all_puzzles(username)
+    puzzle_ids = [p.id for p in puzzles]
     
     if not puzzle_ids:
         raise HTTPException(
@@ -633,7 +638,7 @@ async def get_due_puzzles_endpoint(
     # 3. Load content and merge with stats
     result_puzzles = []
     for pid in due_ids:
-        puzzle = puzzle_storage.get_puzzle(username, pid)
+        puzzle = puzzle_repository.get_puzzle(username, pid)
         if not puzzle:
             continue
         
@@ -697,8 +702,8 @@ async def review_puzzle(
     Optionally tracks the review in a training session.
     Provides enhanced feedback including puzzle statistics.
     """
-    puzzle_storage = get_puzzle_storage()
-    puzzle = puzzle_storage.get_puzzle(request.username, puzzle_id)
+    puzzle_repository = PuzzleRepository(db)
+    puzzle = puzzle_repository.get_puzzle(request.username, puzzle_id)
     if not puzzle:
         raise HTTPException(status_code=404, detail="Puzzle not found")
     
@@ -748,7 +753,7 @@ async def review_puzzle(
     stats = update_puzzle_stats(db, puzzle_id, request.username, request.result)
     
     # 3. Get puzzle details for feedback
-    puzzle_stats = puzzle_storage.get_puzzle_stats(request.username, puzzle_id)
+    puzzle_stats = puzzle_repository.get_puzzle_stats(request.username, puzzle_id)
     
     # 4. Commit all changes atomically
     db.commit()
@@ -935,8 +940,8 @@ async def explain_rating_changes(
         window_start = window_start.replace(tzinfo=timezone.utc)
 
     # 2. Load Games
-    storage = get_storage()
-    all_metadata = storage.get_all_metadata(username)
+    game_repository = GameRepository(db)
+    all_metadata = game_repository.get_all_metadata(username)
     
     start_ts = int(window_start.timestamp())
     relevant_games = []
@@ -989,7 +994,7 @@ async def explain_rating_changes(
         reference_rating = latest_snapshot.rating
     
     for meta in relevant_games:
-        pgn = storage.get_pgn(username, meta.game_id)
+        pgn = game_repository.get_pgn(username, meta.game_id)
         if not pgn:
              continue
              

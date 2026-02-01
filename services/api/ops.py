@@ -5,7 +5,8 @@ from sqlalchemy.orm import Session
 from sqlalchemy import select, func, text
 
 from services.api.db import get_db, engine
-from services.api.models import Job, JobStatus
+from services.api.models import Job, JobStatus, Game, Puzzle
+from services.api.storage import get_storage, get_puzzle_storage
 from services.api.worker import worker
 from services.api.engine import is_engine_available
 
@@ -104,4 +105,48 @@ def get_ops_status(db: Session = Depends(get_db)):
                 "cache_misses": total_cache_misses
             }
         }
+    }
+
+
+@router.get("/storage/report")
+def get_storage_report(username: str | None = None, db: Session = Depends(get_db)):
+    """Identify filesystem records not yet present in the database."""
+    game_storage = get_storage()
+    puzzle_storage = get_puzzle_storage()
+
+    fs_users = set(game_storage.get_users()) | {
+        user.name.lower() for user in puzzle_storage.puzzles_path.glob("*") if user.is_dir()
+    }
+
+    if username:
+        usernames = {username.lower()}
+    else:
+        usernames = fs_users
+
+    report = {}
+    for user in sorted(usernames):
+        fs_games = {meta.game_id for meta in game_storage.get_all_metadata(user)}
+        db_games = set(
+            row[0]
+            for row in db.execute(select(Game.game_id).where(Game.username == user)).all()
+        )
+        missing_games = sorted(fs_games - db_games)
+
+        fs_puzzles = {p.id for p in puzzle_storage.get_all_puzzles(user)}
+        db_puzzles = set(
+            row[0]
+            for row in db.execute(select(Puzzle.id).where(Puzzle.username == user)).all()
+        )
+        missing_puzzles = sorted(fs_puzzles - db_puzzles)
+
+        report[user] = {
+            "missing_games_count": len(missing_games),
+            "missing_puzzles_count": len(missing_puzzles),
+            "missing_games_sample": missing_games[:20],
+            "missing_puzzles_sample": missing_puzzles[:20],
+        }
+
+    return {
+        "user_count": len(report),
+        "report": report,
     }

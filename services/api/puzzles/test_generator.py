@@ -2,15 +2,17 @@
 Unit tests for puzzle generator.
 """
 
+import os
 import tempfile
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 import chess
 import pytest
 
 from services.api.engine import EvalResult
 from services.api.puzzles.generator import _is_user_move, generate_puzzles
-from services.api.storage import get_puzzle_storage, get_storage
+from services.api.storage.game_repository import GameRepository
+from services.api.storage.puzzle_repository import PuzzleRepository
 from services.api.engine import StockfishError
 
 
@@ -18,19 +20,26 @@ from services.api.engine import StockfishError
 def temp_storage():
     """Create temporary storage for testing."""
     with tempfile.TemporaryDirectory() as tmpdir:
-        # Create storage instances
-        with patch("services.api.puzzles.generator.get_storage") as mock_storage, \
-             patch("services.api.puzzles.generator.get_puzzle_storage") as mock_puzzle_storage:
-            
+        os.environ["KNIGHTMIND_STORAGE_MODE"] = "filesystem"
+
+        with (
+            patch("services.api.puzzles.generator.SessionLocal") as mock_session_local,
+            patch("services.api.puzzles.generator.GameRepository") as mock_game_repository,
+            patch("services.api.puzzles.generator.PuzzleRepository") as mock_puzzle_repository,
+        ):
             from services.api.storage.games import GameStorage
             from services.api.storage.puzzles import PuzzleStorage
-            
+
             storage = GameStorage(base_path=tmpdir)
             puzzle_storage = PuzzleStorage(base_path=tmpdir)
-            
-            mock_storage.return_value = storage
-            mock_puzzle_storage.return_value = puzzle_storage
-            
+
+            mock_session = MagicMock()
+            mock_session_local.return_value.__enter__.return_value = mock_session
+            mock_session_local.return_value.__exit__.return_value = None
+
+            mock_game_repository.side_effect = lambda db: GameRepository(db, base_path=tmpdir)
+            mock_puzzle_repository.side_effect = lambda db: PuzzleRepository(db, base_path=tmpdir)
+
             yield storage, puzzle_storage
 
 

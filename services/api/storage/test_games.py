@@ -6,6 +6,11 @@ import tempfile
 import pytest
 
 from .games import GameStorage
+from scripts.backfill_storage import validate_game_metadata
+from services.api.db import Base
+from services.api.storage.game_repository import GameRepository
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 
 @pytest.fixture
@@ -15,6 +20,24 @@ def storage():
     storage = GameStorage(temp_dir)
     yield storage
     shutil.rmtree(temp_dir)
+
+
+@pytest.fixture
+def db_session(tmp_path, monkeypatch):
+    monkeypatch.setenv("KNIGHTMIND_STORAGE_MODE", "database")
+    engine = create_engine(f"sqlite:///{tmp_path / 'test.db'}")
+    Base.metadata.create_all(engine)
+    session_local = sessionmaker(bind=engine)
+    session = session_local()
+    try:
+        yield session
+    finally:
+        session.close()
+
+
+@pytest.fixture
+def repository(db_session, tmp_path):
+    return GameRepository(db_session, base_path=tmp_path)
 
 
 class TestGameStorage:
@@ -228,3 +251,56 @@ class TestGameStorage:
         assert "user1" in users
         assert "user2" in users
         assert users == sorted(users)
+
+
+def test_game_repository_database_mode_stores_pgn(repository):
+    is_new, game_id = repository.store_game(
+        username="testuser",
+        url="https://chess.com/game/12345",
+        pgn='[Event "Test"]\n1. e4 e5 *',
+        white_username="testuser",
+        black_username="opponent",
+        white_result="win",
+        black_result="lose",
+        time_control="600",
+        end_time=1704067200,
+        rated=True,
+    )
+
+    assert is_new is True
+    assert repository.get_game_count("testuser") == 1
+    assert repository.get_pgn("testuser", game_id) == '[Event "Test"]\n1. e4 e5 *'
+
+
+def test_game_repository_get_users(repository):
+    repository.store_game(
+        username="user1",
+        url="https://chess.com/game/1",
+        pgn='[Event "Test"]\n1. e4 e5 *',
+        white_username="user1",
+        black_username="opponent",
+        white_result="win",
+        black_result="lose",
+        time_control="600",
+        end_time=1704067200,
+        rated=True,
+    )
+    repository.store_game(
+        username="user2",
+        url="https://chess.com/game/2",
+        pgn='[Event "Test"]\n1. e4 e5 *',
+        white_username="user2",
+        black_username="opponent",
+        white_result="win",
+        black_result="lose",
+        time_control="600",
+        end_time=1704067201,
+        rated=True,
+    )
+
+    assert repository.get_users() == ["user1", "user2"]
+
+
+def test_validate_game_metadata_missing_fields():
+    errors = validate_game_metadata({"game_id": "g1"})
+    assert any(error.startswith("missing_fields") for error in errors)
