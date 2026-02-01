@@ -21,6 +21,8 @@ KnightMind/
 
 ## Setup
 
+All commands in this section assume you are in the project root (the KnightMind directory).
+
 ### Frontend (apps/web)
 
 ```bash
