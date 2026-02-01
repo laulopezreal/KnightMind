@@ -28,13 +28,13 @@ cd apps/web
 npm install
 ```
 
-### Backend (services/api)
+### Backend (pyproject at repo root)
 
 ```bash
-cd services/api
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-pip install -r requirements.txt
+cd /path/to/KnightMind
+python -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+pip install -e .
 ```
 
 ### Stockfish Engine
@@ -71,9 +71,9 @@ export STOCKFISH_MOVETIME_MS=200           # Or use movetime instead of depth
 ### Start the API server
 
 ```bash
-cd services/api
-source venv/bin/activate
-uvicorn main:app --reload --port 8000
+cd /path/to/KnightMind
+source .venv/bin/activate
+uvicorn services.api.main:app --reload --port 8000
 ```
 
 API will be available at http://localhost:8000
@@ -113,9 +113,9 @@ npm run build     # Type check and build
 ### Backend
 
 ```bash
-cd services/api
-source venv/bin/activate
-pytest            # Run tests
+cd /path/to/KnightMind
+source .venv/bin/activate
+pytest
 ```
 
 ## Data Schema

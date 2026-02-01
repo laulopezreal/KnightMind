@@ -30,6 +30,24 @@ start-backend = "scripts.start_backend:main"
 kill-backends = "scripts.kill_backends:main"
 
 [project.optional-dependencies]
+# API service (FastAPI, DB, Stockfish, etc.)
+api = [
+    "alembic>=1.13.0",
+    "chess>=1.10.0",
+    "fastapi>=0.109.0",
+    "httpx>=0.26.0",
+    "pydantic>=2.0.0",
+    "pydantic-settings>=2.0.0",
+    "psycopg[binary]>=3.1.18",
+    "sqlalchemy>=2.0.0",
+    "stockfish>=3.28.0",
+    "uvicorn[standard]>=0.27.0",
+]
+# Ingest service (Chess.com fetch)
+ingest = [
+    "httpx>=0.26.0",
+    "truststore",
+]
 dev = [
     "black",
     "flake8",

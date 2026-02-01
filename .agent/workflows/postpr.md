@@ -76,11 +76,11 @@ git commit -m "test: add missing test case for session completion edge case"
 ### 4. Run Tests
 
 ```bash
-# Backend tests
-cd services/api && python -m pytest -v
+# Backend tests (from repo root)
+python -m pytest -v
 
 # Linting
-cd services/api && ruff check .
+ruff check .
 cd apps/web && npm run lint
 ```
 
