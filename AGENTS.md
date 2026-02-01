@@ -48,7 +48,6 @@ A platform for analyzing chess games, tracking progress, and gaining insights us
 
 ### Frontend
 ```bash
-npm test          # Run tests
 npm run lint      # Lint code
 npm run build     # Build for production
 ```
