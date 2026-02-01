@@ -1,8 +1,9 @@
 /**
  * Format a date/time into a human-readable relative time string.
+ * Handles both past dates ("5m ago") and future dates ("5m").
  *
  * @param isoString - ISO 8601 date string
- * @returns Relative time string (e.g., "5m ago", "2h ago", "3d ago")
+ * @returns Relative time string (e.g., "5m ago", "2h ago", "3d ago", "5m", "2h")
  */
 export const formatRelativeTime = (isoString: string | null): string => {
     if (!isoString) return 'N/A';
@@ -12,17 +13,32 @@ export const formatRelativeTime = (isoString: string | null): string => {
         return 'Unknown';
     }
 
-    const deltaMs = Date.now() - date.getTime();
-    const minutes = Math.floor(deltaMs / 60000);
+    const deltaMs = date.getTime() - Date.now();
+    const isPast = deltaMs < 0;
+    const absDeltaMs = Math.abs(deltaMs);
 
-    if (minutes < 1) return 'Just now';
-    if (minutes < 60) return `${minutes}m ago`;
+    const minutes = Math.floor(absDeltaMs / 60000);
 
-    const hours = Math.floor(minutes / 60);
-    if (hours < 24) return `${hours}h ago`;
+    if (minutes < 1) {
+        return isPast ? 'Just now' : 'soon';
+    }
 
-    const days = Math.floor(hours / 24);
-    if (days < 7) return `${days}d ago`;
+    let timeString;
+    if (minutes < 60) {
+        timeString = `${minutes}m`;
+    } else {
+        const hours = Math.floor(minutes / 60);
+        if (hours < 24) {
+            timeString = `${hours}h`;
+        } else {
+            const days = Math.floor(hours / 24);
+            if (days < 7) {
+                timeString = `${days}d`;
+            } else {
+                return date.toLocaleDateString();
+            }
+        }
+    }
 
-    return date.toLocaleDateString();
+    return isPast ? `${timeString} ago` : timeString;
 };
