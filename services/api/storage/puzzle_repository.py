@@ -190,8 +190,8 @@ class PuzzleRepository:
         if mode == "filesystem":
             return self.filesystem.get_puzzle_count(username_lower)
 
-        stmt = select(PuzzleModel.id).where(PuzzleModel.username == username_lower)
-        count = len(self.db.execute(stmt).all())
+        stmt = select(func.count()).select_from(PuzzleModel).where(PuzzleModel.username == username_lower)
+        count = self.db.scalar(stmt) or 0
         if mode == "dual" and count == 0:
             return self.filesystem.get_puzzle_count(username_lower)
         return count
