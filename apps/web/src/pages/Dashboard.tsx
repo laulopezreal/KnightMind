@@ -6,6 +6,7 @@ import { useChessUsername } from '../context/ChessUsernameContext';
 import { TacticalRadar } from '../components/TacticalRadar';
 import { MotifTrends } from '../components/MotifTrends';
 import { RecentSessionsCard } from '../components/RecentSessionsCard';
+import { formatRelativeTime } from '../utils/time';
 
 export default function Dashboard() {
     const { username } = useChessUsername();
@@ -56,20 +57,6 @@ export default function Dashboard() {
     const handleMotifClick = (motif: string) => {
         // Navigate to puzzles page with motif filter
         navigate(`/puzzles?motif=${encodeURIComponent(motif)}`);
-    };
-
-    const formatRelativeTime = (dateString: string | null): string => {
-        if (!dateString) return 'N/A';
-        const date = new Date(dateString);
-        const now = new Date();
-        const diffMs = now.getTime() - date.getTime();
-        const diffMins = Math.floor(diffMs / 60000);
-
-        if (diffMins < 60) return `${diffMins}m`;
-        const diffHours = Math.floor(diffMins / 60);
-        if (diffHours < 24) return `${diffHours}h`;
-        const diffDays = Math.floor(diffHours / 24);
-        return `${diffDays}d`;
     };
 
     if (loading) {

@@ -2,27 +2,12 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { importChessComGames, getImportStatus, validateChessComUser, ApiError } from '../api';
 import { useChessUsername } from '../context/ChessUsernameContext';
+import { formatRelativeTime } from '../utils/time';
 
 
 type ImportStatus = {
   lastImportedAt: string | null;
   lastNewGames: number | null;
-};
-
-const formatLastSynced = (isoString: string): string => {
-  const date = new Date(isoString);
-  if (Number.isNaN(date.getTime())) {
-    return 'Unknown';
-  }
-  const deltaMs = Date.now() - date.getTime();
-  const minutes = Math.floor(deltaMs / 60000);
-  if (minutes < 1) return 'Just now';
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  if (days < 7) return `${days}d ago`;
-  return date.toLocaleDateString();
 };
 
 
@@ -181,7 +166,7 @@ export default function Home() {
                   <span className="text-red-500/80">{statusError}</span>
                 )}
                 {!statusLoading && !statusError && importStatus.lastImportedAt && (
-                  <span>Last synced: {formatLastSynced(importStatus.lastImportedAt)}</span>
+                  <span>Last synced: {formatRelativeTime(importStatus.lastImportedAt)}</span>
                 )}
                 {!statusLoading && !statusError && (importStatus.lastNewGames ?? 0) > 0 && (
                   <Link
