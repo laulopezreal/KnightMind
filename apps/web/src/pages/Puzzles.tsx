@@ -2,8 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Chessboard } from 'react-chessboard';
 import { Chess } from 'chess.js';
-import { generatePuzzles, getDailyPuzzles, getDuePuzzles, cancelJob, ApiError, type Puzzle, startSession, completeSession, getRecentSessions, reviewPuzzle, getSession, type SessionSummary, useHint as requestHint, getUserStatus, type UserStatus } from '../api';
+import { generatePuzzles, getDailyPuzzles, getDuePuzzles, cancelJob, ApiError, type Puzzle, startSession, completeSession, getRecentSessions, reviewPuzzle, getSession, type SessionSummary, useHint as requestHint, getUserStatus, type UserStatus, getMotifPerformance, type MotifPerformanceResponse } from '../api';
 import { JobStatusCard } from '../components/JobStatusCard';
+import { SessionSummaryCard } from '../components/SessionSummaryCard';
+import { AchievementsList } from '../components/AchievementsList';
+import { RecentSessionsCard } from '../components/RecentSessionsCard';
 import { useJobPolling } from '../hooks/useJobPolling';
 import { useChessUsername } from '../context/ChessUsernameContext';
 import { parseBestMoveUci, getPieceNameAtSquare } from '../utils/puzzle-clue';
@@ -117,6 +120,7 @@ export default function Puzzles() {
     const puzzleTimeRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const [userStatus, setUserStatus] = useState<UserStatus | null>(null);
     const [isLoadingStatus, setIsLoadingStatus] = useState(false);
+    const [motifPerformance, setMotifPerformance] = useState<MotifPerformanceResponse | null>(null);
 
     const statusRef = useRef(status);
     statusRef.current = status;
@@ -163,6 +167,25 @@ export default function Puzzles() {
                 setActiveSessionId(session.session_id);
                 setSessionSummary(session);
                 setReviewedCount(session.pass_count + session.fail_count);
+                setHintsUsed(session.hints_used || 0);
+
+                // Restore streak and performance from localStorage if available
+                const savedState = localStorage.getItem(`knightmind:sessionState:${username}`);
+                if (savedState) {
+                    try {
+                        const state = JSON.parse(savedState);
+                        if (state.sessionId === session.session_id) {
+                            // Restore streak and performance (index is restored after puzzles load)
+                            setStreak(state.streak || 0);
+                            setBestStreak(state.bestStreak || 0);
+                            if (state.performanceHistory) {
+                                setPerformanceHistory(state.performanceHistory);
+                            }
+                        }
+                    } catch (e) {
+                        console.error('Failed to parse saved session state', e);
+                    }
+                }
 
                 setSessionState('loading');
                 setError(null);
@@ -170,7 +193,23 @@ export default function Puzzles() {
                 try {
                     const response = await getDuePuzzles(username, session.requested_n);
                     setPuzzles(response.puzzles);
-                    setCurrentIndex(0);
+
+                    // Restore current index from saved state, with bounds checking
+                    const savedState = localStorage.getItem(`knightmind:sessionState:${username}`);
+                    let restoredIndex = 0;
+                    if (savedState) {
+                        try {
+                            const state = JSON.parse(savedState);
+                            if (state.sessionId === session.session_id && state.currentIndex !== undefined) {
+                                // Ensure index is within bounds
+                                restoredIndex = Math.min(state.currentIndex, response.puzzles.length - 1);
+                                restoredIndex = Math.max(0, restoredIndex);
+                            }
+                        } catch (e) {
+                            console.error('Failed to restore puzzle index', e);
+                        }
+                    }
+                    setCurrentIndex(restoredIndex);
                     setStatus('solving');
                     if (response.puzzles.length > 0) {
                         setSessionState('active');
@@ -252,6 +291,35 @@ export default function Puzzles() {
         } catch (err) {
             console.warn('Unable to refresh user status:', err);
         }
+    }, [username]);
+
+    useEffect(() => {
+        if (!username) {
+            setMotifPerformance(null);
+            return;
+        }
+
+        let cancelled = false;
+
+        const fetchMotifs = async () => {
+            try {
+                const performance = await getMotifPerformance(username);
+                if (!cancelled) {
+                    setMotifPerformance(performance);
+                }
+            } catch (err) {
+                if (!cancelled) {
+                    console.warn('Unable to load motif performance:', err);
+                    setMotifPerformance(null);
+                }
+            }
+        };
+
+        fetchMotifs();
+
+        return () => {
+            cancelled = true;
+        };
     }, [username]);
 
     const { job, isPolling: isJobPolling } = useJobPolling(activeJobId, {
@@ -346,6 +414,20 @@ export default function Puzzles() {
             localStorage.setItem(`knightmind:achievements:${username}`, JSON.stringify(achievements));
         }
     }, [achievements, username]);
+
+    // Save session state to localStorage for recovery after refresh
+    useEffect(() => {
+        if (username && activeSessionId) {
+            const state = {
+                sessionId: activeSessionId,
+                currentIndex,
+                streak,
+                bestStreak,
+                performanceHistory,
+            };
+            localStorage.setItem(`knightmind:sessionState:${username}`, JSON.stringify(state));
+        }
+    }, [username, activeSessionId, currentIndex, streak, bestStreak, performanceHistory]);
 
     // Cleanup timers on unmount
     useEffect(() => {
@@ -522,11 +604,13 @@ export default function Puzzles() {
                 }, 1000);
             }
             localStorage.setItem(`knightmind:session:${username.trim()}`, session_id);
+            localStorage.removeItem(`knightmind:sessionState:${username.trim()}`); // Clear any old state
             setSessionSummary(null);
             setReviewedCount(0);
             setStreak(0);
             setBestStreak(0);
             setHintsUsed(0);
+            setPerformanceHistory([]);
 
             // Load puzzles
             // FIX: Use getDuePuzzles for session training
@@ -684,6 +768,7 @@ export default function Puzzles() {
             setSessionSummary(summary);
             setActiveSessionId(null);
             localStorage.removeItem(`knightmind:session:${username.trim()}`);
+            localStorage.removeItem(`knightmind:sessionState:${username.trim()}`);
             setSessionState('completed');
 
             // Check for session completion achievements
@@ -697,6 +782,14 @@ export default function Puzzles() {
             // Refresh recent sessions
             const recent = await getRecentSessions(username.trim(), 5);
             setRecentSessions(recent);
+
+            // Refresh motif performance
+            try {
+                const updated = await getMotifPerformance(username.trim());
+                setMotifPerformance(updated);
+            } catch (motifErr) {
+                console.warn('Failed to refresh motif performance:', motifErr);
+            }
         } catch (err) {
             console.error('Failed to complete session:', err);
             const errorMessage = err instanceof Error ? err.message : 'Failed to complete session. Please try again.';
@@ -1186,6 +1279,35 @@ export default function Puzzles() {
                 </div>
             </section>
 
+            {/* Weak Areas Card */}
+            {motifPerformance && motifPerformance.weakest_motifs.length > 0 && (
+                <section className="bg-primary/5 border border-primary/10 rounded-sm p-6 backdrop-blur-sm">
+                    <h3 className="text-lg font-serif text-primary mb-4">
+                        Your Weak Areas
+                    </h3>
+                    <div className="space-y-2">
+                        {motifPerformance.motifs
+                            .filter(m => m.rank === 'needs_work')
+                            .map(motif => (
+                                <div key={motif.name} className="flex justify-between items-center p-3 bg-red-500/10 rounded-sm">
+                                    <div>
+                                        <span className="font-serif text-primary">{motif.name}</span>
+                                        <span className="text-xs text-primary/60 ml-2">
+                                            {motif.passed}/{motif.total_puzzles} correct
+                                        </span>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                        <span className="text-red-500 font-mono text-sm">
+                                            {Math.round(motif.accuracy * 100)}%
+                                        </span>
+                                        <span className="text-xs text-primary/40">needs work</span>
+                                    </div>
+                                </div>
+                            ))}
+                    </div>
+                </section>
+            )}
+
             {currentPuzzle && ( // Make sure currentPuzzle is defined or access checked
                 <section className="grid lg:grid-cols-2 gap-12 lg:gap-24">
                     {/* Chessboard */}
@@ -1297,12 +1419,19 @@ export default function Puzzles() {
                                     )}
 
                                     <div className="flex justify-between items-center">
-                                        <span className="font-serif text-xl text-primary">
-                                            {currentPuzzle.title || "Puzzle"}
-                                            <span className="text-base font-normal opacity-50 ml-2 font-sans">
-                                                {currentIndex + 1} / {puzzles.length}
+                                        <div className="flex items-center gap-2">
+                                            <span className="font-serif text-xl text-primary">
+                                                {currentPuzzle.title || "Puzzle"}
+                                                <span className="text-base font-normal opacity-50 ml-2 font-sans">
+                                                    {currentIndex + 1} / {puzzles.length}
+                                                </span>
                                             </span>
-                                        </span>
+                                            {currentPuzzle.primary_motif && (
+                                                <span className="text-sm font-sans text-primary/60 px-2 py-1 bg-primary/10 rounded-sm">
+                                                    {currentPuzzle.primary_motif}
+                                                </span>
+                                            )}
+                                        </div>
                                     </div>
                                 </div>
                                 <span className="font-sans text-sm tracking-wide uppercase text-primary/60">
@@ -1493,162 +1622,69 @@ export default function Puzzles() {
 
             {/* Session Summary */}
             {sessionSummary && (
-                <section className="bg-primary/5 border border-green-500/30 rounded-sm p-8 backdrop-blur-sm animate-teedin">
-                    <div className="flex items-center mb-6">
-                        <div className="flex-shrink-0 h-8 w-8 rounded-full bg-green-500 flex items-center justify-center mr-3">
-                            <svg className="h-5 w-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                            </svg>
-                        </div>
-                        <h2 className="text-2xl font-serif text-primary">Session Successfully Recorded!</h2>
-                    </div>
-
-                    {sessionSummary.completed_at && (
-                        <div className="text-sm text-primary/60 mb-4">
-                            Completed on {new Date(sessionSummary.completed_at).toLocaleString()}
-                        </div>
-                    )}
-
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-6 mb-6">
-                        <div className="text-center">
-                            <div className="text-3xl font-serif text-green-600">{sessionSummary.pass_count}</div>
-                            <div className="text-xs uppercase tracking-widest text-primary/40 mt-1">Passed</div>
-                        </div>
-                        <div className="text-center">
-                            <div className="text-3xl font-serif text-red-500">{sessionSummary.fail_count}</div>
-                            <div className="text-xs uppercase tracking-widest text-primary/40 mt-1">Failed</div>
-                        </div>
-                        <div className="text-center">
-                            <div className="text-3xl font-serif text-primary">
-                                {calculateAccuracy(sessionSummary.pass_count, sessionSummary.fail_count)}%
-                            </div>
-                            <div className="text-xs uppercase tracking-widest text-primary/40 mt-1">Accuracy</div>
-                        </div>
-                        <div className="text-center">
-                            <div className="text-3xl font-serif text-primary">
-                                {Math.floor(sessionSummary.total_time_ms / 60000)}m {Math.floor((sessionSummary.total_time_ms % 60000) / 1000)}s
-                            </div>
-                            <div className="text-xs uppercase tracking-widest text-primary/40 mt-1">Total Time</div>
-                        </div>
-                    </div>
-
-                    {/* Enhanced Session Stats */}
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-6 mb-6">
-                        <div className="text-center">
-                            <div className="text-3xl font-serif text-primary">{sessionSummary.best_streak}</div>
-                            <div className="text-xs uppercase tracking-widest text-primary/40 mt-1">Best Streak</div>
-                        </div>
-                        <div className="text-center">
-                            <div className="text-3xl font-serif text-primary">{sessionSummary.hints_used}</div>
-                            <div className="text-xs uppercase tracking-widest text-primary/40 mt-1">Hints Used</div>
-                        </div>
-                        {sessionSummary.session_type && sessionSummary.session_type !== 'standard' && (
-                            <div className="text-center md:col-span-2">
-                                <div className="text-xl font-serif text-primary capitalize">
-                                    {sessionSummary.session_type.replace('_', ' ')}
-                                    {sessionSummary.target_accuracy && ` (${sessionSummary.target_accuracy}% accuracy)`}
-                                    {sessionSummary.target_time_minutes && ` (${sessionSummary.target_time_minutes} minutes)`}
-                                </div>
-                                <div className="text-xs uppercase tracking-widest text-primary/40 mt-1">Session Type</div>
-                            </div>
-                        )}
-                    </div>
-
-                    {/* Achievements Earned */}
-                    {achievements.filter(a => a.earned).length > 0 && (
-                        <div className="mb-6">
-                            <h3 className="text-lg font-serif text-primary mb-3">Achievements Earned</h3>
-                            <div className="flex flex-wrap gap-2">
-                                {achievements.filter(a => a.earned).map(achievement => (
-                                    <div
-                                        key={achievement.id}
-                                        className="flex items-center bg-primary/10 border border-primary/20 rounded-full px-3 py-1"
-                                        title={achievement.description}
-                                    >
-                                        <span className="text-lg mr-2">{achievement.icon}</span>
-                                        <span className="text-sm font-serif text-primary">{achievement.name}</span>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-                    )}
-
-                    <button
-                        type="button"
-                        onClick={() => {
-                            setSessionSummary(null);
-                            setLastFeedback('');
-                            handleStartSession();
-                        }}
-                        className="w-full px-6 py-3 bg-primary text-bg-primary rounded-sm font-serif transition-colors km-interactive km-focus-visible">
-                        Start New Session
-                    </button>
-                </section>
+                <SessionSummaryCard
+                    sessionSummary={sessionSummary}
+                    achievements={achievements}
+                    onStartNewSession={() => {
+                        setSessionSummary(null);
+                        setLastFeedback('');
+                        handleStartSession();
+                    }}
+                />
             )}
 
             {/* Recent Sessions */}
-            {recentSessions.length > 0 && (
+            <RecentSessionsCard sessions={recentSessions} />
+
+            {/* Achievements Progress */}
+            <AchievementsList achievements={achievements} />
+
+            {/* Chess Pattern Mastery */}
+            {motifPerformance && motifPerformance.motifs.length > 0 && (
                 <section className="bg-primary/5 border border-primary/10 rounded-sm p-6 backdrop-blur-sm">
-                    <h3 className="text-lg font-serif text-primary mb-4">Recent Sessions</h3>
-                    <div className="space-y-2">
-                        {recentSessions.map((session) => (
-                            <div key={session.session_id} className="flex justify-between items-center p-3 bg-primary/5 rounded-sm text-sm">
-                                <div className="flex gap-4">
-                                    <span className="text-green-600">{session.pass_count}P</span>
-                                    <span className="text-red-500">{session.fail_count}F</span>
+                    <h3 className="text-lg font-serif text-primary mb-4">Chess Pattern Mastery</h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                        {motifPerformance.motifs.map(motif => (
+                            <div
+                                key={motif.name}
+                                className={`p-4 rounded-sm border ${
+                                    motif.rank === 'mastered'
+                                        ? 'bg-green-500/10 border-green-500/30'
+                                        : motif.rank === 'learning'
+                                        ? 'bg-yellow-500/10 border-yellow-500/30'
+                                        : 'bg-red-500/10 border-red-500/30'
+                                }`}
+                            >
+                                <h4 className="font-serif text-primary mb-1">{motif.name}</h4>
+                                <div className="flex justify-between text-sm">
                                     <span className="text-primary/60">
-                                        {calculateAccuracy(session.pass_count, session.fail_count)}%
+                                        {motif.passed}/{motif.total_puzzles} solved
                                     </span>
-                                    {session.best_streak > 0 && (
-                                        <span className="text-primary/80">🔥{session.best_streak}</span>
-                                    )}
+                                    <span className={`font-mono ${
+                                        motif.rank === 'mastered' ? 'text-green-600' :
+                                        motif.rank === 'learning' ? 'text-yellow-600' :
+                                        'text-red-500'
+                                    }`}>
+                                        {Math.round(motif.accuracy * 100)}%
+                                    </span>
                                 </div>
-                                <div className="flex gap-2">
-                                    {session.session_type && session.session_type !== 'standard' && (
-                                        <span className="text-primary/40 text-xs capitalize">
-                                            {session.session_type.replace('_', ' ')}
-                                        </span>
-                                    )}
-                                    <span className="text-primary/40 text-xs">
-                                        {new Date(session.created_at).toLocaleDateString()}
-                                    </span>
+
+                                {/* Progress bar */}
+                                <div className="mt-2 h-2 bg-primary/10 rounded-full overflow-hidden">
+                                    <div
+                                        className={`h-full ${
+                                            motif.rank === 'mastered' ? 'bg-green-500' :
+                                            motif.rank === 'learning' ? 'bg-yellow-500' :
+                                            'bg-red-500'
+                                        }`}
+                                        style={{ width: `${motif.accuracy * 100}%` }}
+                                    />
                                 </div>
                             </div>
                         ))}
                     </div>
                 </section>
             )}
-
-            {/* Achievements Progress */}
-            <section className="bg-primary/5 border border-primary/10 rounded-sm p-6 backdrop-blur-sm">
-                <h3 className="text-lg font-serif text-primary mb-4">Achievements</h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                    {achievements.map(achievement => (
-                        <div
-                            key={achievement.id}
-                            className={`p-4 rounded-sm border ${achievement.earned
-                                ? 'bg-green-500/10 border-green-500/30'
-                                : 'bg-primary/5 border-primary/20'
-                                }`}
-                        >
-                            <div className="flex items-center">
-                                <span className="text-2xl mr-3">{achievement.icon}</span>
-                                <div>
-                                    <h4 className={`font-serif ${achievement.earned ? 'text-green-600' : 'text-primary'}`}>
-                                        {achievement.name}
-                                    </h4>
-                                    <p className="text-xs text-primary/60 mt-1">{achievement.description}</p>
-                                    {achievement.earned && achievement.earnedAt && (
-                                        <p className="text-xs text-green-600/80 mt-1">
-                                            Earned: {achievement.earnedAt.toLocaleDateString()}
-                                        </p>
-                                    )}
-                                </div>
-                            </div>
-                        </div>
-                    ))}
-                </div>
-            </section>
         </div>
     );
 }

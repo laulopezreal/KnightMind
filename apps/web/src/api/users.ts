@@ -59,3 +59,21 @@ export async function getImportStatus(username: string): Promise<ImportStatusRes
 export async function getUserStatus(username: string): Promise<UserStatus> {
     return request<UserStatus>(`/users/${encodeURIComponent(username)}/status`);
 }
+
+export interface MotifPerformance {
+    name: string;
+    total_puzzles: number;
+    passed: number;
+    accuracy: number;
+    rank: 'needs_work' | 'learning' | 'mastered';
+}
+
+export interface MotifPerformanceResponse {
+    motifs: MotifPerformance[];
+    weakest_motifs: string[];
+    total_motifs_practiced: number;
+}
+
+export async function getMotifPerformance(username: string): Promise<MotifPerformanceResponse> {
+    return request<MotifPerformanceResponse>(`/users/${encodeURIComponent(username)}/motifs/performance`);
+}
