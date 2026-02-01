@@ -43,3 +43,6 @@ services/api/knightmind.dba/
 
 # Data storage
 data/
+
+# AI Artifacts
+.gemini/
