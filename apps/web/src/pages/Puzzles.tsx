@@ -216,20 +216,32 @@ export default function Puzzles() {
             return;
         }
 
+        let cancelled = false;
+
         const fetchStatus = async () => {
             setIsLoadingStatus(true);
             try {
                 const status = await getUserStatus(username);
-                setUserStatus(status);
+                if (!cancelled) {
+                    setUserStatus(status);
+                }
             } catch (err) {
-                console.warn('Unable to load user status:', err);
-                setUserStatus(null);
+                if (!cancelled) {
+                    console.warn('Unable to load user status:', err);
+                    setUserStatus(null);
+                }
             } finally {
-                setIsLoadingStatus(false);
+                if (!cancelled) {
+                    setIsLoadingStatus(false);
+                }
             }
         };
 
         fetchStatus();
+
+        return () => {
+            cancelled = true;
+        };
     }, [username]);
 
     const { job, isPolling: isJobPolling } = useJobPolling(activeJobId, {

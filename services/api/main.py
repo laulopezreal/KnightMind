@@ -33,7 +33,9 @@ from services.api.storage import GameRepository, PuzzleRepository
 from services.api.storage.spaced_repetition import (
     get_adaptive_puzzles,
     get_all_puzzle_stats,
+    get_due_puzzle_count,
     get_due_puzzles,
+    get_next_due_date,
     insert_puzzle_review,
     update_puzzle_stats
 )
@@ -170,49 +172,31 @@ async def get_user_status(username: str, db: Session = Depends(get_db)):
     games_count = game_repository.get_game_count(username)
     puzzles_count = puzzle_repository.get_puzzle_count(username)
 
-    metadata = game_repository.get_all_metadata(username)
-    latest_game_time = (
-        datetime.fromtimestamp(metadata[0].end_time, tz=timezone.utc) if metadata else None
+    # Use optimized queries instead of fetching all data
+    latest_game_time = game_repository.get_latest_game_time(username)
+    latest_puzzle_time = (
+        puzzle_repository.get_latest_puzzle_time(username) if puzzles_count > 0 else None
     )
-
-    latest_puzzle_time = None
-    if puzzles_count > 0:
-        all_puzzles = puzzle_repository.get_all_puzzles(username)
-        puzzle_times = [
-            datetime.fromisoformat(p.created_at.replace("Z", "+00:00"))
-            for p in all_puzzles
-            if p.created_at
-        ]
-        if puzzle_times:
-            latest_puzzle_time = max(puzzle_times)
 
     has_new_games = False
     if latest_game_time:
         if latest_puzzle_time is None or latest_game_time > latest_puzzle_time:
             has_new_games = True
 
+    # Use efficient count queries
     due_count = 0
     next_due_at = None
     if puzzles_count > 0:
-        all_stats = get_all_puzzle_stats(db, username)
-        now = datetime.now(timezone.utc)
-        due_dates = []
-        for stats in all_stats.values():
-            if stats.next_due_at:
-                due_dt = (
-                    stats.next_due_at.replace(tzinfo=timezone.utc)
-                    if stats.next_due_at.tzinfo is None
-                    else stats.next_due_at
-                )
-                due_dates.append(due_dt)
-                if due_dt <= now:
-                    due_count += 1
+        due_count = get_due_puzzle_count(db, username)
+        next_due_at = get_next_due_date(db, username)
 
-        future_dues = [due for due in due_dates if due > now]
-        if future_dues:
-            next_due_at = min(future_dues)
-
-        if not all_stats:
+        # If no stats exist, all puzzles are due
+        total_stats = db.scalar(
+            select(func.count(PuzzleStats.puzzle_id)).where(
+                PuzzleStats.username == username
+            )
+        ) or 0
+        if total_stats == 0:
             due_count = puzzles_count
 
     return UserStatusResponse(

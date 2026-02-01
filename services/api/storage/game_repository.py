@@ -151,6 +151,31 @@ class GameRepository:
             return self.filesystem.get_all_metadata(username_lower)
         return [self._to_metadata(game) for game in games]
 
+    def get_latest_game_time(self, username: str) -> datetime | None:
+        """Get the timestamp of the most recent game for a user."""
+        mode = get_storage_mode()
+        username_lower = username.lower()
+
+        if mode == "filesystem":
+            metadata = self.filesystem.get_all_metadata(username_lower)
+            return (
+                datetime.fromtimestamp(metadata[0].end_time, tz=timezone.utc)
+                if metadata
+                else None
+            )
+
+        # Database mode: use SQL to get just the max end_time
+        stmt = select(func.max(Game.end_time)).where(Game.username == username_lower)
+        max_time = self.db.scalar(stmt)
+        if mode == "dual" and max_time is None:
+            metadata = self.filesystem.get_all_metadata(username_lower)
+            return (
+                datetime.fromtimestamp(metadata[0].end_time, tz=timezone.utc)
+                if metadata
+                else None
+            )
+        return datetime.fromtimestamp(max_time, tz=timezone.utc) if max_time else None
+
     def get_pgn(self, username: str, game_id: str) -> str | None:
         mode = get_storage_mode()
         if mode == "filesystem":

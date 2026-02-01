@@ -136,6 +136,39 @@ class PuzzleRepository:
             return self.filesystem.get_all_puzzles(username_lower)
         return [self._to_puzzle(puzzle) for puzzle in puzzles]
 
+    def get_latest_puzzle_time(self, username: str) -> datetime | None:
+        """Get the timestamp of the most recently created puzzle for a user."""
+        mode = get_storage_mode()
+        username_lower = username.lower()
+
+        if mode == "filesystem":
+            puzzles = self.filesystem.get_all_puzzles(username_lower)
+            if not puzzles:
+                return None
+            puzzle_times = [
+                datetime.fromisoformat(p.created_at.replace("Z", "+00:00"))
+                for p in puzzles
+                if p.created_at
+            ]
+            return max(puzzle_times) if puzzle_times else None
+
+        # Database mode: use SQL aggregation
+        stmt = select(func.max(PuzzleModel.created_at)).where(
+            PuzzleModel.username == username_lower
+        )
+        max_time = self.db.scalar(stmt)
+        if mode == "dual" and max_time is None:
+            puzzles = self.filesystem.get_all_puzzles(username_lower)
+            if not puzzles:
+                return None
+            puzzle_times = [
+                datetime.fromisoformat(p.created_at.replace("Z", "+00:00"))
+                for p in puzzles
+                if p.created_at
+            ]
+            return max(puzzle_times) if puzzle_times else None
+        return max_time
+
     def get_daily_puzzles(self, username: str, n: int = 5) -> list[Puzzle]:
         mode = get_storage_mode()
         if mode == "filesystem":
