@@ -3,11 +3,10 @@ Spaced repetition storage module.
 Handles database operations for puzzle reviews and statistics.
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from sqlalchemy.orm import Session
-from sqlalchemy import select
+from sqlalchemy import select, func
 from services.api.models import PuzzleStats, PuzzleReview, PuzzleResult
-from datetime import timedelta
 
 
 def calculate_next_interval(
@@ -248,10 +247,36 @@ def get_due_puzzles(
 ) -> tuple[list[str], dict[str, PuzzleStats]]:
     """
     Get puzzles for the user from the candidate list, ordered by SR priority.
-    
+
     Priority:
     1. Due: next_due_at <= now
     2. New: next_due_at IS NULL
     3. Future: ordered by next_due_at ASC
     """
     return get_adaptive_puzzles(db, username, puzzle_ids, n)
+
+
+def get_due_puzzle_count(db: Session, username: str) -> int:
+    """Get count of puzzles due for review."""
+    now = datetime.now(timezone.utc)
+    stmt = (
+        select(func.count(PuzzleStats.puzzle_id))
+        .where(
+            PuzzleStats.username == username,
+            PuzzleStats.next_due_at <= now
+        )
+    )
+    return db.scalar(stmt) or 0
+
+
+def get_next_due_date(db: Session, username: str) -> datetime | None:
+    """Get the next upcoming due date for a user's puzzles."""
+    now = datetime.now(timezone.utc)
+    stmt = (
+        select(func.min(PuzzleStats.next_due_at))
+        .where(
+            PuzzleStats.username == username,
+            PuzzleStats.next_due_at > now
+        )
+    )
+    return db.scalar(stmt)

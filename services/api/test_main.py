@@ -33,6 +33,11 @@ def client_with_temp_storage(temp_storage, db_session, monkeypatch):
     puzzle_storage = PuzzleStorage(temp_storage.base_path)
     app.dependency_overrides[get_db] = lambda: db_session
     with patch("services.api.main.GameRepository") as mock_repo:
+        # Create actual repository instance for new methods
+        from services.api.storage import GameRepository
+        actual_game_repo = GameRepository(db_session, base_path=temp_storage.base_path)
+        actual_game_repo.filesystem = temp_storage  # Use the same storage instance
+
         mock_repo.return_value.filesystem = temp_storage
         # Proxy calls to filesystem methods that endpoints use
         mock_repo.return_value.get_users.side_effect = temp_storage.get_users
@@ -40,10 +45,16 @@ def client_with_temp_storage(temp_storage, db_session, monkeypatch):
         mock_repo.return_value.store_game.side_effect = temp_storage.store_game
         mock_repo.return_value.get_all_metadata.side_effect = temp_storage.get_all_metadata
         mock_repo.return_value.get_pgn.side_effect = temp_storage.get_pgn
+        mock_repo.return_value.get_latest_game_time.side_effect = actual_game_repo.get_latest_game_time
         with patch("services.api.main.PuzzleRepository") as mock_puzzle_repo:
+            from services.api.storage import PuzzleRepository
+            actual_puzzle_repo = PuzzleRepository(db_session, base_path=temp_storage.base_path)
+            actual_puzzle_repo.filesystem = puzzle_storage  # Use the same storage instance
+
             mock_puzzle_repo.return_value.filesystem = puzzle_storage
             mock_puzzle_repo.return_value.get_puzzle_count.side_effect = puzzle_storage.get_puzzle_count
             mock_puzzle_repo.return_value.get_all_puzzles.side_effect = puzzle_storage.get_all_puzzles
+            mock_puzzle_repo.return_value.get_latest_puzzle_time.side_effect = actual_puzzle_repo.get_latest_puzzle_time
 
             yield TestClient(app)
     app.dependency_overrides.clear()
