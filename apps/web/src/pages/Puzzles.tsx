@@ -89,8 +89,8 @@ export default function Puzzles() {
     const [activeJobId, setActiveJobId] = useState<string | null>(null);
 
     // Get motif filter from URL query params
-    const urlParams = new URLSearchParams(window.location.search);
-    const motifFilter = urlParams.get('motif');
+    const [searchParams] = useSearchParams();
+    const motifFilter = searchParams.get('motif');
 
     // Session state
     const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
