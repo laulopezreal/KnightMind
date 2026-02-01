@@ -20,6 +20,15 @@ export default function Dashboard() {
     const [refreshing, setRefreshing] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const isFetchingRef = useRef(false);
+    const isMountedRef = useRef(true);
+
+    // Track mounted status to prevent state updates after unmount
+    useEffect(() => {
+        isMountedRef.current = true;
+        return () => {
+            isMountedRef.current = false;
+        };
+    }, []);
 
     // Redirect if no username
     useEffect(() => {
@@ -49,16 +58,22 @@ export default function Dashboard() {
                 getMotifTrends(username, 30)
             ]);
 
-            setDashboardData(dashboard);
-            setMotifPerformance(motifs);
-            setRecentSessions(sessions);
-            setTrends(trendsData);
+            if (isMountedRef.current) {
+                setDashboardData(dashboard);
+                setMotifPerformance(motifs);
+                setRecentSessions(sessions);
+                setTrends(trendsData);
+            }
         } catch (err) {
             console.error('Failed to load dashboard:', err);
-            setError(err instanceof Error ? err.message : 'Failed to load dashboard data');
+            if (isMountedRef.current) {
+                setError(err instanceof Error ? err.message : 'Failed to load dashboard data');
+            }
         } finally {
-            setLoading(false);
-            setRefreshing(false);
+            if (isMountedRef.current) {
+                setLoading(false);
+                setRefreshing(false);
+            }
             isFetchingRef.current = false;
         }
     }, [username]);
