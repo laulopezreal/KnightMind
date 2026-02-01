@@ -329,8 +329,8 @@ export default function RatingInsights() {
                                     sub={windowLabel}
                                     helper={confidenceQualifier}
                                     highlight={hasSnapshots && data.rating.net_change !== null && data.rating.net_change !== 0}
-                                    positive={hasSnapshots && data.rating.net_change !== null && (data.rating.net_change || 0) > 0}
-                                    extra={!hasSnapshots && "Record a snapshot to track rating change."}
+                                    positive={hasSnapshots && data.rating.net_change !== null && data.rating.net_change > 0}
+                                    extra={!hasSnapshots ? "Record a snapshot to track rating change." : undefined}
                                 />
                                 <Card
                                     label="Performance"
