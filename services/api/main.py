@@ -114,7 +114,17 @@ app.include_router(sessions_router)
 
 def get_allowed_origins() -> list[str]:
     origins = os.environ.get("KNIGHTMIND_CORS_ORIGINS", "")
-    return [origin.strip() for origin in origins.split(",") if origin.strip()]
+    if origins:
+        return [origin.strip() for origin in origins.split(",") if origin.strip()]
+    
+    # Default local development origins
+    return [
+        "http://localhost:5173",
+        "http://localhost:5174",
+        "http://localhost:4173",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:5174",
+    ]
 
 
 # CORS configuration
@@ -140,6 +150,88 @@ async def get_users():
     storage = get_storage()
     users = storage.get_users()
     return {"users": users}
+
+
+class UserStatusResponse(BaseModel):
+    username: str
+    games_count: int
+    puzzles_count: int
+    due_count: int
+    next_due_at: datetime | None
+    has_new_games: bool
+
+
+@app.get("/users/{username}/status", response_model=UserStatusResponse)
+async def get_user_status(username: str, db: Session = Depends(get_db)):
+    """
+    Get comprehensive status for a user's training state.
+    
+    Returns counts for games, puzzles, and due puzzles, plus whether
+    new games exist that haven't been analyzed for puzzles yet.
+    """
+    storage = get_storage()
+    puzzle_storage = get_puzzle_storage()
+    
+    # Get counts
+    games_count = storage.get_game_count(username)
+    puzzles_count = puzzle_storage.get_puzzle_count(username)
+    
+    # Get latest game time (games are sorted by end_time descending)
+    metadata = storage.get_all_metadata(username)
+    latest_game_time = datetime.fromtimestamp(metadata[0].end_time, tz=timezone.utc) if metadata else None
+    
+    # Get latest puzzle creation time
+    latest_puzzle_time = None
+    if puzzles_count > 0:
+        all_puzzles = puzzle_storage.get_all_puzzles(username)
+        if all_puzzles:
+            # Puzzles have created_at as ISO string
+            puzzle_times = [datetime.fromisoformat(p.created_at.replace('Z', '+00:00')) for p in all_puzzles if p.created_at]
+            if puzzle_times:
+                latest_puzzle_time = max(puzzle_times)
+    
+    # has_new_games: true if latest game is newer than latest puzzle generation
+    has_new_games = False
+    if latest_game_time:
+        if latest_puzzle_time is None:
+            has_new_games = True  # Have games but no puzzles
+        elif latest_game_time > latest_puzzle_time:
+            has_new_games = True
+    
+    # Get due puzzles count from spaced repetition
+    due_count = 0
+    next_due_at = None
+    if puzzles_count > 0:
+        from services.api.storage.spaced_repetition import get_all_puzzle_stats
+        all_stats = get_all_puzzle_stats(db, username)
+        now = datetime.now(timezone.utc)
+        
+        # Count puzzles that are due now
+        due_dates = []
+        for stats in all_stats.values():
+            if stats.next_due_at:
+                due_dt = stats.next_due_at.replace(tzinfo=timezone.utc) if stats.next_due_at.tzinfo is None else stats.next_due_at
+                due_dates.append(due_dt)
+                if due_dt <= now:
+                    due_count += 1
+        
+        # Find next due date (for puzzles not yet due)
+        future_dues = [d for d in due_dates if d > now]
+        if future_dues:
+            next_due_at = min(future_dues)
+        
+        # If no stats exist for puzzles, they're all "new" and therefore due
+        if not all_stats:
+            due_count = puzzles_count
+    
+    return UserStatusResponse(
+        username=username,
+        games_count=games_count,
+        puzzles_count=puzzles_count,
+        due_count=due_count,
+        next_due_at=next_due_at,
+        has_new_games=has_new_games
+    )
 
 
 @app.get("/users/validate")

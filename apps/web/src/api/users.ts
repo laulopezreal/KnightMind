@@ -37,3 +37,16 @@ export async function validateChessComUser(username: string): Promise<ValidateUs
     // Keep validation requests routed through the same /api proxy for local/prod parity.
     return request<ValidateUserResponse>(`/users/validate?username=${encodeURIComponent(username)}`);
 }
+
+export interface UserStatus {
+    username: string;
+    games_count: number;
+    puzzles_count: number;
+    due_count: number;
+    next_due_at: string | null;
+    has_new_games: boolean;
+}
+
+export async function getUserStatus(username: string): Promise<UserStatus> {
+    return request<UserStatus>(`/users/${encodeURIComponent(username)}/status`);
+}

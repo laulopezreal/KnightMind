@@ -46,9 +46,9 @@ class SessionSummary(BaseModel):
     created_at: datetime
     completed_at: datetime | None
     # Enhanced session fields
-    session_type: str = None
-    target_accuracy: float = None
-    target_time_minutes: int = None
+    session_type: str | None = None
+    target_accuracy: float | None = None
+    target_time_minutes: int | None = None
     current_streak: int = 0
     best_streak: int = 0
     hints_used: int = 0
@@ -95,6 +95,50 @@ async def start_session(
         target_accuracy=request.target_accuracy,
         target_time_minutes=request.target_time_minutes
     )
+
+
+@router.get("/recent", response_model=list[SessionSummary])
+async def get_recent_sessions(
+    username: str,
+    limit: int = 10,
+    db: Session = Depends(get_db)
+):
+    """
+    Get recent training sessions for a user.
+    
+    Returns sessions ordered by created_at descending.
+    Limit: default 10, max 50.
+    """
+    # Enforce max limit
+    limit = min(limit, 50)
+    
+    stmt = (
+        select(TrainingSession)
+        .where(TrainingSession.username == username)
+        .order_by(desc(TrainingSession.created_at))
+        .limit(limit)
+    )
+    
+    sessions = db.scalars(stmt).all()
+    
+    return [
+        SessionSummary(
+            session_id=s.id,
+            requested_n=s.requested_n,
+            pass_count=s.pass_count,
+            fail_count=s.fail_count,
+            total_time_ms=s.total_time_ms,
+            created_at=s.created_at,
+            completed_at=s.completed_at,
+            session_type=s.session_type,
+            target_accuracy=s.target_accuracy,
+            target_time_minutes=s.target_time_minutes,
+            current_streak=s.current_streak,
+            best_streak=s.best_streak,
+            hints_used=s.hints_used
+        )
+        for s in sessions
+    ]
 
 
 @router.get("/{session_id}", response_model=SessionSummary)
@@ -174,48 +218,6 @@ async def complete_session(
     )
 
 
-@router.get("/recent", response_model=list[SessionSummary])
-async def get_recent_sessions(
-    username: str,
-    limit: int = 10,
-    db: Session = Depends(get_db)
-):
-    """
-    Get recent training sessions for a user.
-    
-    Returns sessions ordered by created_at descending.
-    Limit: default 10, max 50.
-    """
-    # Enforce max limit
-    limit = min(limit, 50)
-    
-    stmt = (
-        select(TrainingSession)
-        .where(TrainingSession.username == username)
-        .order_by(desc(TrainingSession.created_at))
-        .limit(limit)
-    )
-    
-    sessions = db.scalars(stmt).all()
-    
-    return [
-        SessionSummary(
-            session_id=s.id,
-            requested_n=s.requested_n,
-            pass_count=s.pass_count,
-            fail_count=s.fail_count,
-            total_time_ms=s.total_time_ms,
-            created_at=s.created_at,
-            completed_at=s.completed_at,
-            session_type=s.session_type,
-            target_accuracy=s.target_accuracy,
-            target_time_minutes=s.target_time_minutes,
-            current_streak=s.current_streak,
-            best_streak=s.best_streak,
-            hints_used=s.hints_used
-        )
-        for s in sessions
-    ]
 
 
 @router.post("/{session_id}/use_hint", response_model=SessionSummary)

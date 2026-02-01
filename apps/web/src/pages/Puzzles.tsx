@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { Chessboard } from 'react-chessboard';
 import { Chess } from 'chess.js';
-import { generatePuzzles, getDailyPuzzles, getDuePuzzles, cancelJob, ApiError, type Puzzle, startSession, completeSession, getRecentSessions, reviewPuzzle, getSession, type SessionSummary, useHint } from '../api';
+import { generatePuzzles, getDailyPuzzles, getDuePuzzles, cancelJob, ApiError, type Puzzle, startSession, completeSession, getRecentSessions, reviewPuzzle, getSession, type SessionSummary, useHint, getUserStatus, type UserStatus } from '../api';
 import { JobStatusCard } from '../components/JobStatusCard';
 import { useJobPolling } from '../hooks/useJobPolling';
 import { useChessUsername } from '../context/ChessUsernameContext';
@@ -88,7 +88,7 @@ export default function Puzzles() {
     const [isResumingSession, setIsResumingSession] = useState(false);
     const [sessionState, setSessionState] = useState<SessionState>('idle');
     const [clueStage, setClueStage] = useState<ClueStage>(0);
-    
+
     // Enhanced session features
     const [sessionType, setSessionType] = useState<SessionType>('standard');
     const [targetAccuracy, setTargetAccuracy] = useState<number>(80);
@@ -97,19 +97,23 @@ export default function Puzzles() {
     const [streak, setStreak] = useState(0);
     const [bestStreak, setBestStreak] = useState(0);
     const [hintsUsed, setHintsUsed] = useState(0);
-    
+
     // Performance tracking
-    const [performanceHistory, setPerformanceHistory] = useState<Array<{time: number, result: 'pass' | 'fail'}>>([]);
+    const [performanceHistory, setPerformanceHistory] = useState<Array<{ time: number, result: 'pass' | 'fail' }>>([]);
     const [currentPuzzleTime, setCurrentPuzzleTime] = useState<number>(0);
-    
+
     // Achievements
     const [achievements, setAchievements] = useState<Achievement[]>(ACHIEVEMENTS);
-    
+
     // Timer for timed sessions
-    const puzzleTimerRef = useRef<NodeJS.Timeout | null>(null);
-    const sessionTimerRef = useRef<NodeJS.Timeout | null>(null);
+    const puzzleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const sessionTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const [timeRemaining, setTimeRemaining] = useState<number>(0);
-    const puzzleTimeRef = useRef<NodeJS.Timeout | null>(null);
+    const puzzleTimeRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+    // User status for intelligent empty states
+    const [userStatus, setUserStatus] = useState<UserStatus | null>(null);
+    const [isLoadingStatus, setIsLoadingStatus] = useState(false);
 
     // Mock progress for now until we hook up real polling
     // const mockProgress = 0; 
@@ -198,6 +202,30 @@ export default function Puzzles() {
         // eslint-disable-next-line react-hooks/exhaustive-deps -- run only on username change
     }, [username]);
 
+    // Fetch user status for intelligent empty states
+    useEffect(() => {
+        if (!username) {
+            setUserStatus(null);
+            return;
+        }
+
+        const fetchStatus = async () => {
+            setIsLoadingStatus(true);
+            try {
+                const status = await getUserStatus(username);
+                setUserStatus(status);
+            } catch (err) {
+                // Silently fail - status is optional enhancement
+                console.error('Failed to fetch user status:', err);
+                setUserStatus(null);
+            } finally {
+                setIsLoadingStatus(false);
+            }
+        };
+
+        fetchStatus();
+    }, [username]);
+
     const { job, isPolling: isJobPolling } = useJobPolling(activeJobId, {
         enabled: !!activeJobId,
         onSuccess: async () => {
@@ -250,7 +278,7 @@ export default function Puzzles() {
 
     // Sync job status to local isGenerating for backwards compat with other UI if needed, 
     // but better to rely on 'job' object.
-    
+
     // Initialize achievements from localStorage
     useEffect(() => {
         if (username) {
@@ -261,7 +289,7 @@ export default function Puzzles() {
                     // Merge with default achievements to ensure all are present
                     const merged = ACHIEVEMENTS.map(defaultAchievement => {
                         const saved = parsed.find((a: Achievement) => a.id === defaultAchievement.id);
-                        return saved ? {...defaultAchievement, ...saved} : defaultAchievement;
+                        return saved ? { ...defaultAchievement, ...saved } : defaultAchievement;
                     });
                     setAchievements(merged);
                 } catch (e) {
@@ -270,7 +298,7 @@ export default function Puzzles() {
             }
         }
     }, [username]);
-    
+
     // Save achievements to localStorage when they change
     useEffect(() => {
         if (username && achievements.some(a => a.earned)) {
@@ -398,7 +426,7 @@ export default function Puzzles() {
             // Determine parameters based on session type
             let targetAccuracyParam: number | undefined = undefined;
             let targetTimeMinutesParam: number | undefined = undefined;
-            
+
             if (sessionType === 'accuracy_goal') {
                 targetAccuracyParam = targetAccuracy;
             } else if (sessionType === 'timed') {
@@ -422,7 +450,7 @@ export default function Puzzles() {
             }
 
             const { session_id } = await startSession(
-                username.trim(), 
+                username.trim(),
                 5,
                 sessionType,
                 targetAccuracyParam,
@@ -441,7 +469,7 @@ export default function Puzzles() {
             setIsLoading(true);
             try {
                 const response = await getDuePuzzles(
-                    username.trim(), 
+                    username.trim(),
                     5,
                     sessionType,
                     sessionType === 'accuracy_goal' ? targetAccuracy : undefined
@@ -454,6 +482,9 @@ export default function Puzzles() {
                     setError(null);
                 } else {
                     setSessionState('error');
+                    setError('No puzzles found for this session. Please generate more puzzles.');
+                    // Cancel the session if no puzzles are found?
+                    // Ideally we should cleaning up the empty session here
                 }
             } catch (puzErr) {
                 const message = puzErr instanceof Error ? puzErr.message : 'Failed to load session puzzles';
@@ -504,7 +535,7 @@ export default function Puzzles() {
 
             // Check for session completion achievements
             const updatedAchievements = checkSessionAchievements();
-            
+
             // Save achievements to localStorage
             if (updatedAchievements.some(a => a.earned)) {
                 localStorage.setItem(`knightmind:achievements:${username.trim()}`, JSON.stringify(updatedAchievements));
@@ -558,7 +589,7 @@ export default function Puzzles() {
             }
 
             // Update performance history
-            setPerformanceHistory(prev => [...prev, {time: Date.now(), result}]);
+            setPerformanceHistory(prev => [...prev, { time: Date.now(), result }]);
 
             // Check for achievements
             checkAchievements();
@@ -609,7 +640,7 @@ export default function Puzzles() {
 
     const handleUseHint = async () => {
         if (!activeSessionId || !username.trim()) return;
-        
+
         try {
             const updatedSession = await useHint(activeSessionId, username.trim());
             setHintsUsed(updatedSession.hints_used);
@@ -655,7 +686,7 @@ export default function Puzzles() {
             // Start timer for this puzzle
             setPuzzleStartTime(Date.now());
             setCurrentPuzzleTime(0);
-            
+
             // Set up timer for timed sessions
             if (sessionSummary?.session_type === 'timed' && sessionSummary.target_time_minutes) {
                 if (puzzleTimerRef.current) clearTimeout(puzzleTimerRef.current);
@@ -667,7 +698,7 @@ export default function Puzzles() {
                     }
                 }, 30000); // 30 seconds per puzzle in timed mode
             }
-            
+
             // Set up puzzle time tracker
             if (puzzleTimeRef.current) clearInterval(puzzleTimeRef.current);
             puzzleTimeRef.current = setInterval(() => {
@@ -676,7 +707,7 @@ export default function Puzzles() {
                 }
             }, 1000);
         }
-        
+
         return () => {
             if (puzzleTimerRef.current) {
                 clearTimeout(puzzleTimerRef.current);
@@ -730,37 +761,37 @@ export default function Puzzles() {
         const total = passCount + failCount;
         return total > 0 ? Math.round((passCount / total) * 100) : 0;
     };
-    
+
     // Helper function to calculate recent performance
-    const calculateRecentPerformance = (history: Array<{time: number, result: 'pass' | 'fail'}>, minutes: number = 5): number => {
+    const calculateRecentPerformance = (history: Array<{ time: number, result: 'pass' | 'fail' }>, minutes: number = 5): number => {
         const cutoffTime = Date.now() - (minutes * 60 * 1000);
         const recent = history.filter(item => item.time > cutoffTime);
         if (recent.length === 0) return 0;
         const passCount = recent.filter(item => item.result === 'pass').length;
         return Math.round((passCount / recent.length) * 100);
     };
-    
+
     // Helper function to get performance trend
-    const getPerformanceTrend = (history: Array<{time: number, result: 'pass' | 'fail'}>): 'improving' | 'declining' | 'stable' => {
+    const getPerformanceTrend = (history: Array<{ time: number, result: 'pass' | 'fail' }>): 'improving' | 'declining' | 'stable' => {
         if (history.length < 4) return 'stable';
-        
+
         const recent = history.slice(-4);
         const firstHalf = recent.slice(0, 2);
         const secondHalf = recent.slice(2, 4);
-        
+
         const firstHalfAccuracy = firstHalf.filter(item => item.result === 'pass').length / firstHalf.length;
         const secondHalfAccuracy = secondHalf.filter(item => item.result === 'pass').length / secondHalf.length;
-        
+
         if (secondHalfAccuracy > firstHalfAccuracy + 0.1) return 'improving';
         if (secondHalfAccuracy < firstHalfAccuracy - 0.1) return 'declining';
         return 'stable';
     };
-    
+
     // Helper function to check and award achievements
     const checkAchievements = (newAchievements: Achievement[] = achievements) => {
         const updatedAchievements = [...newAchievements];
         let achievementsChanged = false;
-        
+
         // Check for streak achievements
         if (streak >= 5 && !updatedAchievements.find(a => a.id === 'streak_5')?.earned) {
             const achievement = updatedAchievements.find(a => a.id === 'streak_5');
@@ -770,7 +801,7 @@ export default function Puzzles() {
                 achievementsChanged = true;
             }
         }
-        
+
         if (streak >= 10 && !updatedAchievements.find(a => a.id === 'streak_10')?.earned) {
             const achievement = updatedAchievements.find(a => a.id === 'streak_10');
             if (achievement) {
@@ -779,7 +810,7 @@ export default function Puzzles() {
                 achievementsChanged = true;
             }
         }
-        
+
         // Check for speed achievement
         if (currentPuzzleTime < 10 && !updatedAchievements.find(a => a.id === 'speed_demon')?.earned) {
             const achievement = updatedAchievements.find(a => a.id === 'speed_demon');
@@ -789,19 +820,19 @@ export default function Puzzles() {
                 achievementsChanged = true;
             }
         }
-        
+
         if (achievementsChanged) {
             setAchievements(updatedAchievements);
         }
-        
+
         return updatedAchievements;
     };
-    
+
     // Helper function to check session completion achievements
     const checkSessionAchievements = () => {
         const updatedAchievements = [...achievements];
         let achievementsChanged = false;
-        
+
         // First session achievement (if this is the first session)
         if (!updatedAchievements.find(a => a.id === 'first_session')?.earned) {
             const achievement = updatedAchievements.find(a => a.id === 'first_session');
@@ -811,11 +842,11 @@ export default function Puzzles() {
                 achievementsChanged = true;
             }
         }
-        
+
         // Accuracy achievements
         if (sessionSummary && sessionSummary.pass_count + sessionSummary.fail_count > 0) {
             const accuracy = calculateAccuracy(sessionSummary.pass_count, sessionSummary.fail_count);
-            
+
             if (accuracy >= 90 && !updatedAchievements.find(a => a.id === 'accuracy_90')?.earned) {
                 const achievement = updatedAchievements.find(a => a.id === 'accuracy_90');
                 if (achievement) {
@@ -824,7 +855,7 @@ export default function Puzzles() {
                     achievementsChanged = true;
                 }
             }
-            
+
             if (accuracy === 100 && !updatedAchievements.find(a => a.id === 'perfect_session')?.earned) {
                 const achievement = updatedAchievements.find(a => a.id === 'perfect_session');
                 if (achievement) {
@@ -834,11 +865,11 @@ export default function Puzzles() {
                 }
             }
         }
-        
+
         if (achievementsChanged) {
             setAchievements(updatedAchievements);
         }
-        
+
         return updatedAchievements;
     };
 
@@ -880,7 +911,7 @@ export default function Puzzles() {
                     <div className="flex gap-4">
                         {!activeSessionId && (
                             <>
-                                <select 
+                                <select
                                     value={sessionType}
                                     onChange={(e) => setSessionType(e.target.value as SessionType)}
                                     className="px-3 py-2 border border-primary/20 rounded-sm bg-bg-primary text-primary"
@@ -930,7 +961,89 @@ export default function Puzzles() {
 
                 {/* Job Status / Error Area */}
                 <div className="mt-6">
-                    {shouldShowErrorCard && (
+                    {/* Intelligent Empty States based on user status */}
+                    {!isLoading && !isGenerating && !puzzlesAvailable && !shouldShowJobStatusCard && userStatus && (
+                        <div className="bg-primary/5 border border-primary/10 rounded-sm p-6 text-center">
+                            {/* State 1: No games imported */}
+                            {userStatus.games_count === 0 && (
+                                <>
+                                    <h3 className="font-serif text-xl text-primary mb-2">No games imported yet</h3>
+                                    <p className="text-primary/60 font-sans mb-4">
+                                        Import your Chess.com games first to generate personalized puzzles from your blunders.
+                                    </p>
+                                    <Link
+                                        to="/"
+                                        className="inline-block px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-colors km-interactive km-focus-visible"
+                                    >
+                                        Go to Home to Import Games
+                                    </Link>
+                                </>
+                            )}
+
+                            {/* State 2: Games exist but no puzzles generated */}
+                            {userStatus.games_count > 0 && userStatus.puzzles_count === 0 && (
+                                <>
+                                    <h3 className="font-serif text-xl text-primary mb-2">Ready to generate puzzles!</h3>
+                                    <p className="text-primary/60 font-sans mb-4">
+                                        We found {userStatus.games_count} games. Generate puzzles from your tactical moments.
+                                    </p>
+                                    <button
+                                        type="button"
+                                        onClick={handleGeneratePuzzles}
+                                        disabled={controlsDisabled}
+                                        className={`px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-colors km-focus-visible ${controlsDisabled ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'}`}
+                                    >
+                                        Generate Puzzles
+                                    </button>
+                                </>
+                            )}
+
+                            {/* State 3: Puzzles exist but none are due */}
+                            {userStatus.puzzles_count > 0 && userStatus.due_count === 0 && (
+                                <>
+                                    <h3 className="font-serif text-xl text-primary mb-2">🎉 Nice work! All caught up.</h3>
+                                    <p className="text-primary/60 font-sans mb-4">
+                                        {userStatus.next_due_at
+                                            ? `Next review on ${new Date(userStatus.next_due_at).toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' })}.`
+                                            : 'No puzzles due for review right now.'}
+                                        {userStatus?.has_new_games && ' Or generate puzzles from your new games!'}
+                                    </p>
+                                    {userStatus?.has_new_games && (
+                                        <button
+                                            type="button"
+                                            onClick={handleGeneratePuzzles}
+                                            disabled={controlsDisabled}
+                                            className={`px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-colors km-focus-visible ${controlsDisabled ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'}`}
+                                        >
+                                            Generate from New Games
+                                        </button>
+                                    )}
+                                </>
+                            )}
+
+                            {/* State 4: Puzzles are due - encourage starting */}
+                            {userStatus.puzzles_count > 0 && userStatus.due_count > 0 && (
+                                <>
+                                    <h3 className="font-serif text-xl text-primary mb-2">
+                                        {userStatus.due_count} puzzle{userStatus.due_count === 1 ? '' : 's'} ready for review
+                                    </h3>
+                                    <p className="text-primary/60 font-sans mb-4">
+                                        Click "Start Session" above to practice your tactical patterns.
+                                    </p>
+                                </>
+                            )}
+                        </div>
+                    )}
+
+                    {/* Loading status indicator */}
+                    {isLoadingStatus && !puzzlesAvailable && (
+                        <div className="text-center text-primary/40 py-4">
+                            <span className="animate-pulse">Loading training status...</span>
+                        </div>
+                    )}
+
+                    {/* Only show error card for transient failures, not empty states */}
+                    {shouldShowErrorCard && !userStatus && (
                         <JobStatusCard status="failed" error={error ?? 'Failed to generate puzzles'} />
                     )}
                     {shouldShowJobStatusCard && job && (
@@ -946,6 +1059,7 @@ export default function Puzzles() {
                         <JobStatusCard status="running" message="Loading puzzles..." />
                     )}
                 </div>
+
             </section>
 
             {currentPuzzle && ( // Make sure currentPuzzle is defined or access checked
@@ -976,8 +1090,8 @@ export default function Puzzles() {
                                             <div className="flex justify-between items-center mb-2">
                                                 <span className="font-serif text-primary font-medium">
                                                     Session in Progress
-                                                    {sessionSummary.session_type && sessionSummary.session_type !== 'standard' 
-                                                        ? ` (${sessionSummary.session_type.replace('_', ' ')})` 
+                                                    {sessionSummary.session_type && sessionSummary.session_type !== 'standard'
+                                                        ? ` (${sessionSummary.session_type.replace('_', ' ')})`
                                                         : ''}
                                                 </span>
                                                 <span className="text-sm font-mono text-primary/60">
@@ -1007,7 +1121,7 @@ export default function Puzzles() {
                                                     <span className="text-primary/80">Hints: {hintsUsed}</span>
                                                 </div>
                                             </div>
-                                            
+
                                             {/* Performance Visualization */}
                                             {performanceHistory.length > 0 && (
                                                 <div className="mt-3">
@@ -1017,8 +1131,8 @@ export default function Puzzles() {
                                                     </div>
                                                     <div className="flex h-2 rounded-full overflow-hidden bg-primary/10">
                                                         {performanceHistory.slice(-10).map((item, index) => (
-                                                            <div 
-                                                                key={index} 
+                                                            <div
+                                                                key={index}
                                                                 className={`flex-1 ${item.result === 'pass' ? 'bg-green-500' : 'bg-red-500'}`}
                                                                 title={`${item.result.toUpperCase()} - ${new Date(item.time).toLocaleTimeString()}`}
                                                             />
@@ -1026,13 +1140,12 @@ export default function Puzzles() {
                                                     </div>
                                                     <div className="flex justify-between text-xs text-primary/60 mt-1">
                                                         <span>
-                                                            Trend: 
-                                                            <span className={`ml-1 ${
-                                                                getPerformanceTrend(performanceHistory) === 'improving' ? 'text-green-500' :
+                                                            Trend:
+                                                            <span className={`ml-1 ${getPerformanceTrend(performanceHistory) === 'improving' ? 'text-green-500' :
                                                                 getPerformanceTrend(performanceHistory) === 'declining' ? 'text-red-500' : 'text-primary/60'
-                                                            }`}>
+                                                                }`}>
                                                                 {getPerformanceTrend(performanceHistory) === 'improving' ? '↗ Improving' :
-                                                                 getPerformanceTrend(performanceHistory) === 'declining' ? '↘ Declining' : '→ Stable'}
+                                                                    getPerformanceTrend(performanceHistory) === 'declining' ? '↘ Declining' : '→ Stable'}
                                                             </span>
                                                         </span>
                                                         <span>
@@ -1146,8 +1259,8 @@ export default function Puzzles() {
                                     <button
                                         type="button"
                                         onClick={activeSessionId ? handleUseHint : handleClue}
-                                        disabled={activeSessionId 
-                                            ? (!currentPuzzle?.best_move_uci || hintsUsed >= 3) 
+                                        disabled={activeSessionId
+                                            ? (!currentPuzzle?.best_move_uci || hintsUsed >= 3)
                                             : (!currentPuzzle?.best_move_uci || clueStage === 2)}
                                         className="px-6 py-4 border border-primary/20 text-primary rounded-sm font-serif text-lg transition-all km-interactive km-focus-visible disabled:opacity-50 disabled:cursor-default">
                                         {activeSessionId ? `Hint (${hintsUsed}/3)` : 'Clue'}
@@ -1168,7 +1281,7 @@ export default function Puzzles() {
                                             <div className="flex justify-between">
                                                 <span className="text-primary/60">Puzzle Stats:</span>
                                                 <span className="font-mono">
-                                                    {currentPuzzle.pass_count || 0}/{currentPuzzle.attempts || 0} 
+                                                    {currentPuzzle.pass_count || 0}/{currentPuzzle.attempts || 0}
                                                     {currentPuzzle.attempts ? ` (${Math.round(((currentPuzzle.pass_count || 0) / currentPuzzle.attempts) * 100)}%)` : ''}
                                                 </span>
                                             </div>
@@ -1182,7 +1295,7 @@ export default function Puzzles() {
                                             )}
                                         </div>
                                     )}
-                                    
+
                                     <button
                                         type="button"
                                         onClick={handleAdvancePuzzle}
@@ -1205,7 +1318,7 @@ export default function Puzzles() {
                                             <p className="text-red-500 font-sans">{lastFeedback}</p>
                                         </div>
                                     )}
-                                    
+
                                     <div className="grid grid-cols-2 gap-4">
                                         <button
                                             type="button"
@@ -1233,8 +1346,8 @@ export default function Puzzles() {
                 </section>
             )}
 
-            {/* Session Summary */}
-            {sessionSummary && (
+            {/* Session Summary - only show if there's meaningful data */}
+            {sessionSummary && sessionState === 'completed' && (sessionSummary.pass_count > 0 || sessionSummary.fail_count > 0) && (
                 <section className="bg-primary/5 border border-green-500/30 rounded-sm p-8 backdrop-blur-sm animate-teedin">
                     <div className="flex items-center mb-6">
                         <div className="flex-shrink-0 h-8 w-8 rounded-full bg-green-500 flex items-center justify-center mr-3">
@@ -1244,13 +1357,13 @@ export default function Puzzles() {
                         </div>
                         <h2 className="text-2xl font-serif text-primary">Session Successfully Recorded!</h2>
                     </div>
-                    
+
                     {sessionSummary.completed_at && (
                         <div className="text-sm text-primary/60 mb-4">
                             Completed on {new Date(sessionSummary.completed_at).toLocaleString()}
                         </div>
                     )}
-                    
+
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-6 mb-6">
                         <div className="text-center">
                             <div className="text-3xl font-serif text-green-600">{sessionSummary.pass_count}</div>
@@ -1273,7 +1386,7 @@ export default function Puzzles() {
                             <div className="text-xs uppercase tracking-widest text-primary/40 mt-1">Total Time</div>
                         </div>
                     </div>
-                    
+
                     {/* Enhanced Session Stats */}
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-6 mb-6">
                         <div className="text-center">
@@ -1295,15 +1408,15 @@ export default function Puzzles() {
                             </div>
                         )}
                     </div>
-                    
+
                     {/* Achievements Earned */}
                     {achievements.filter(a => a.earned).length > 0 && (
                         <div className="mb-6">
                             <h3 className="text-lg font-serif text-primary mb-3">Achievements Earned</h3>
                             <div className="flex flex-wrap gap-2">
                                 {achievements.filter(a => a.earned).map(achievement => (
-                                    <div 
-                                        key={achievement.id} 
+                                    <div
+                                        key={achievement.id}
                                         className="flex items-center bg-primary/10 border border-primary/20 rounded-full px-3 py-1"
                                         title={achievement.description}
                                     >
@@ -1314,7 +1427,7 @@ export default function Puzzles() {
                             </div>
                         </div>
                     )}
-                    
+
                     <button
                         type="button"
                         onClick={() => {
@@ -1360,19 +1473,18 @@ export default function Puzzles() {
                     </div>
                 </section>
             )}
-            
+
             {/* Achievements Progress */}
             <section className="bg-primary/5 border border-primary/10 rounded-sm p-6 backdrop-blur-sm">
                 <h3 className="text-lg font-serif text-primary mb-4">Achievements</h3>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                     {achievements.map(achievement => (
-                        <div 
-                            key={achievement.id} 
-                            className={`p-4 rounded-sm border ${
-                                achievement.earned 
-                                    ? 'bg-green-500/10 border-green-500/30' 
-                                    : 'bg-primary/5 border-primary/20'
-                            }`}
+                        <div
+                            key={achievement.id}
+                            className={`p-4 rounded-sm border ${achievement.earned
+                                ? 'bg-green-500/10 border-green-500/30'
+                                : 'bg-primary/5 border-primary/20'
+                                }`}
                         >
                             <div className="flex items-center">
                                 <span className="text-2xl mr-3">{achievement.icon}</span>
