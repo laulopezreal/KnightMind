@@ -94,7 +94,7 @@ export default function Home() {
         setLoading(false);
         return;
       }
-    } catch (err) {
+    } catch {
       setStatus('Could not validate username. Continuing with import...');
       // Continue anyway if validation fails
     }
