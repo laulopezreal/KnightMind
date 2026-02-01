@@ -133,10 +133,12 @@ def downgrade() -> None:
     # Drop games table and its indexes if they exist
     if inspector.has_table("games"):
         games_indexes = {index["name"] for index in inspector.get_indexes("games")}
-        if "ix_games_username" in games_indexes:
-            op.drop_index("ix_games_username", table_name="games")
-        if "ix_games_game_id" in games_indexes:
-            op.drop_index("ix_games_game_id", table_name="games")
-        if "ix_games_username_end_time" in games_indexes:
-            op.drop_index("ix_games_username_end_time", table_name="games")
+        indexes_to_drop = [
+            "ix_games_username",
+            "ix_games_game_id",
+            "ix_games_username_end_time",
+        ]
+        for index_name in indexes_to_drop:
+            if index_name in games_indexes:
+                op.drop_index(index_name, table_name="games")
         op.drop_table("games")
