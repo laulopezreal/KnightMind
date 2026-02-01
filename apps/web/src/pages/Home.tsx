@@ -1,7 +1,29 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { importChessComGames, ApiError } from '../api';
+import { importChessComGames, getImportStatus, ApiError } from '../api';
 import { useChessUsername } from '../context/ChessUsernameContext';
+
+
+type ImportStatus = {
+  lastImportedAt: string | null;
+  lastNewGames: number | null;
+};
+
+const formatLastSynced = (isoString: string): string => {
+  const date = new Date(isoString);
+  if (Number.isNaN(date.getTime())) {
+    return 'Unknown';
+  }
+  const deltaMs = Date.now() - date.getTime();
+  const minutes = Math.floor(deltaMs / 60000);
+  if (minutes < 1) return 'Just now';
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days}d ago`;
+  return date.toLocaleDateString();
+};
 
 
 export default function Home() {
@@ -9,6 +31,48 @@ export default function Home() {
   const [status, setStatus] = useState<string | null>(null);
   const [isError, setIsError] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [importStatus, setImportStatus] = useState<ImportStatus>({
+    lastImportedAt: null,
+    lastNewGames: null,
+  });
+  const [statusLoading, setStatusLoading] = useState(false);
+  const [statusError, setStatusError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let isActive = true;
+
+    const fetchImportStatus = async () => {
+      if (!username) {
+        setImportStatus({ lastImportedAt: null, lastNewGames: null });
+        setStatusError(null);
+        return;
+      }
+      setStatusLoading(true);
+      setStatusError(null);
+      try {
+        const response = await getImportStatus(username);
+        if (!isActive) return;
+        setImportStatus({
+          lastImportedAt: response.last_imported_at,
+          lastNewGames: response.last_new_games,
+        });
+      } catch (error) {
+        if (!isActive) return;
+        const message = error instanceof Error ? error.message : 'Unable to load sync details.';
+        setStatusError(message);
+      } finally {
+        if (isActive) {
+          setStatusLoading(false);
+        }
+      }
+    };
+
+    fetchImportStatus();
+
+    return () => {
+      isActive = false;
+    };
+  }, [username]);
 
   const handleImport = async () => {
     if (!username.trim()) {
@@ -24,9 +88,15 @@ export default function Home() {
       const result = await importChessComGames(username);
       if (result.games_count === 0) {
         setStatus('No games found.');
+      } else if (result.new_games === 0) {
+        setStatus('No new games found.');
       } else {
         setStatus(`Imported ${result.new_games} new games.`);
       }
+      setImportStatus({
+        lastImportedAt: new Date().toISOString(),
+        lastNewGames: result.new_games,
+      });
       setIsError(false);
     } catch (error) {
       if (error instanceof ApiError) {
@@ -55,8 +125,14 @@ export default function Home() {
       <section className="grid grid-cols-1 md:grid-cols-2 gap-16">
         <div className="space-y-8">
           <div className="prose">
-            <h3 className="text-2xl font-serif text-primary">Begin Analysis</h3>
-            <p className="font-sans text-primary/60">Import your games from Chess.com to generate personalized puzzles and insights.</p>
+            <h3 className="text-2xl font-serif text-primary">
+              {username ? 'Welcome Back' : 'Begin Analysis'}
+            </h3>
+            <p className="font-sans text-primary/60">
+              {username
+                ? 'Have you played more? Sync to import your newest games, or jump straight into insights.'
+                : 'Import your games from Chess.com to generate personalized puzzles and insights.'}
+            </p>
           </div>
 
           <div className="space-y-4">
@@ -77,9 +153,29 @@ export default function Home() {
                 disabled={loading || !username}
                 className={`text-primary font-medium transition-opacity uppercase tracking-widest text-sm km-focus-visible rounded-sm px-2 py-1 ${loading || !username ? 'km-interactive-disabled disabled:opacity-30' : 'km-interactive'}`}
               >
-                {loading ? '...' : 'Import'}
+                {loading ? '...' : username ? 'Sync' : 'Import'}
               </button>
             </div>
+
+            {username && (
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm font-sans text-primary/60">
+                {statusLoading && <span className="animate-pulse">Loading sync details...</span>}
+                {!statusLoading && statusError && (
+                  <span className="text-red-500/80">{statusError}</span>
+                )}
+                {!statusLoading && !statusError && importStatus.lastImportedAt && (
+                  <span>Last synced: {formatLastSynced(importStatus.lastImportedAt)}</span>
+                )}
+                {!statusLoading && !statusError && (importStatus.lastNewGames ?? 0) > 0 && (
+                  <Link
+                    to="/puzzles"
+                    className="text-primary hover:text-primary/80 transition-colors"
+                  >
+                    See new games →
+                  </Link>
+                )}
+              </div>
+            )}
 
             {status && (
               <p className={`text-sm font-sans tracking-wide ${isError ? 'text-red-500/80' : 'text-primary/60'}`}>

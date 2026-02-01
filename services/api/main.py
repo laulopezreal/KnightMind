@@ -135,6 +135,11 @@ class ImportResponse(BaseModel):
     skipped_duplicates: int
 
 
+class ImportStatusResponse(BaseModel):
+    last_imported_at: str | None
+    last_new_games: int | None
+
+
 @app.get("/users")
 async def get_users():
     """Get list of users who have imported games."""
@@ -205,6 +210,8 @@ async def import_chesscom_games(username: str):
                 else:
                     skipped += 1
                 
+        storage.record_import_summary(username, new_games)
+
         return ImportResponse(
             message=f"Successfully processed {count} games for {username}",
             games_count=count,
@@ -226,6 +233,21 @@ async def import_chesscom_games(username: str):
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+@app.get("/import/status", response_model=ImportStatusResponse)
+async def get_import_status(username: str):
+    """Get the last import summary for a user."""
+    if not username:
+        raise HTTPException(status_code=400, detail="Username is required")
+    storage = get_storage()
+    summary = storage.get_last_import_summary(username)
+    if not summary:
+        return ImportStatusResponse(last_imported_at=None, last_new_games=None)
+    return ImportStatusResponse(
+        last_imported_at=summary.get("last_imported_at"),
+        last_new_games=summary.get("last_new_games"),
+    )
 
 
 class EvalRequest(BaseModel):

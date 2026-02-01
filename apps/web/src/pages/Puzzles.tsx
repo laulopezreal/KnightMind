@@ -1,8 +1,8 @@
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Chessboard } from 'react-chessboard';
 import { Chess } from 'chess.js';
-import { generatePuzzles, getDailyPuzzles, getDuePuzzles, cancelJob, ApiError, type Puzzle, startSession, completeSession, getRecentSessions, reviewPuzzle, getSession, type SessionSummary, useHint } from '../api';
+import { generatePuzzles, getDailyPuzzles, getDuePuzzles, cancelJob, ApiError, type Puzzle, startSession, completeSession, getRecentSessions, reviewPuzzle, getSession, type SessionSummary, useHint as requestHint } from '../api';
 import { JobStatusCard } from '../components/JobStatusCard';
 import { useJobPolling } from '../hooks/useJobPolling';
 import { useChessUsername } from '../context/ChessUsernameContext';
@@ -12,6 +12,11 @@ type PuzzleStatus = 'solving' | 'correct' | 'incorrect' | 'revealed';
 type ClueStage = 0 | 1 | 2;
 type SessionState = 'idle' | 'loading' | 'active' | 'completing' | 'completed' | 'error';
 type SessionType = 'standard' | 'timed' | 'accuracy_goal';
+
+const calculateAccuracy = (passCount: number, failCount: number): number => {
+    const total = passCount + failCount;
+    return total > 0 ? Math.round((passCount / total) * 100) : 0;
+};
 
 // Achievement types
 interface Achievement {
@@ -88,7 +93,7 @@ export default function Puzzles() {
     const [isResumingSession, setIsResumingSession] = useState(false);
     const [sessionState, setSessionState] = useState<SessionState>('idle');
     const [clueStage, setClueStage] = useState<ClueStage>(0);
-    
+
     // Enhanced session features
     const [sessionType, setSessionType] = useState<SessionType>('standard');
     const [targetAccuracy, setTargetAccuracy] = useState<number>(80);
@@ -97,19 +102,24 @@ export default function Puzzles() {
     const [streak, setStreak] = useState(0);
     const [bestStreak, setBestStreak] = useState(0);
     const [hintsUsed, setHintsUsed] = useState(0);
-    
+
     // Performance tracking
-    const [performanceHistory, setPerformanceHistory] = useState<Array<{time: number, result: 'pass' | 'fail'}>>([]);
+    const [performanceHistory, setPerformanceHistory] = useState<Array<{ time: number, result: 'pass' | 'fail' }>>([]);
     const [currentPuzzleTime, setCurrentPuzzleTime] = useState<number>(0);
-    
+
     // Achievements
     const [achievements, setAchievements] = useState<Achievement[]>(ACHIEVEMENTS);
-    
+
     // Timer for timed sessions
-    const puzzleTimerRef = useRef<NodeJS.Timeout | null>(null);
-    const sessionTimerRef = useRef<NodeJS.Timeout | null>(null);
+    const puzzleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const sessionTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const [timeRemaining, setTimeRemaining] = useState<number>(0);
-    const puzzleTimeRef = useRef<NodeJS.Timeout | null>(null);
+    const puzzleTimeRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+    const statusRef = useRef(status);
+    statusRef.current = status;
+
+    const handleReviewPuzzleRef = useRef<((result: 'pass' | 'fail', timeMs?: number) => Promise<void>)>(async () => { });
 
     // Mock progress for now until we hook up real polling
     // const mockProgress = 0; 
@@ -250,7 +260,7 @@ export default function Puzzles() {
 
     // Sync job status to local isGenerating for backwards compat with other UI if needed, 
     // but better to rely on 'job' object.
-    
+
     // Initialize achievements from localStorage
     useEffect(() => {
         if (username) {
@@ -261,7 +271,7 @@ export default function Puzzles() {
                     // Merge with default achievements to ensure all are present
                     const merged = ACHIEVEMENTS.map(defaultAchievement => {
                         const saved = parsed.find((a: Achievement) => a.id === defaultAchievement.id);
-                        return saved ? {...defaultAchievement, ...saved} : defaultAchievement;
+                        return saved ? { ...defaultAchievement, ...saved } : defaultAchievement;
                     });
                     setAchievements(merged);
                 } catch (e) {
@@ -270,7 +280,7 @@ export default function Puzzles() {
             }
         }
     }, [username]);
-    
+
     // Save achievements to localStorage when they change
     useEffect(() => {
         if (username && achievements.some(a => a.earned)) {
@@ -398,7 +408,7 @@ export default function Puzzles() {
             // Determine parameters based on session type
             let targetAccuracyParam: number | undefined = undefined;
             let targetTimeMinutesParam: number | undefined = undefined;
-            
+
             if (sessionType === 'accuracy_goal') {
                 targetAccuracyParam = targetAccuracy;
             } else if (sessionType === 'timed') {
@@ -422,7 +432,7 @@ export default function Puzzles() {
             }
 
             const { session_id } = await startSession(
-                username.trim(), 
+                username.trim(),
                 5,
                 sessionType,
                 targetAccuracyParam,
@@ -441,7 +451,7 @@ export default function Puzzles() {
             setIsLoading(true);
             try {
                 const response = await getDuePuzzles(
-                    username.trim(), 
+                    username.trim(),
                     5,
                     sessionType,
                     sessionType === 'accuracy_goal' ? targetAccuracy : undefined
@@ -479,7 +489,99 @@ export default function Puzzles() {
         }
     };
 
-    const handleCompleteSession = async () => {
+    // Helper function to check and award achievements
+    const checkAchievements = useCallback((newAchievements: Achievement[] = achievements) => {
+        const updatedAchievements = [...newAchievements];
+        let achievementsChanged = false;
+
+        // Check for streak achievements
+        if (streak >= 5 && !updatedAchievements.find(a => a.id === 'streak_5')?.earned) {
+            const achievement = updatedAchievements.find(a => a.id === 'streak_5');
+            if (achievement) {
+                achievement.earned = true;
+                achievement.earnedAt = new Date();
+                achievementsChanged = true;
+            }
+        }
+
+        if (streak >= 10 && !updatedAchievements.find(a => a.id === 'streak_10')?.earned) {
+            const achievement = updatedAchievements.find(a => a.id === 'streak_10');
+            if (achievement) {
+                achievement.earned = true;
+                achievement.earnedAt = new Date();
+                achievementsChanged = true;
+            }
+        }
+
+        // Check for speed achievement
+        if (currentPuzzleTime < 10 && !updatedAchievements.find(a => a.id === 'speed_demon')?.earned) {
+            const achievement = updatedAchievements.find(a => a.id === 'speed_demon');
+            if (achievement) {
+                achievement.earned = true;
+                achievement.earnedAt = new Date();
+                achievementsChanged = true;
+            }
+        }
+
+        if (achievementsChanged) {
+            setAchievements(updatedAchievements);
+        }
+
+        return updatedAchievements;
+    }, [achievements, currentPuzzleTime, streak]);
+
+    // Helper function to calculate accuracy percentage
+    // const calculateAccuracy = (passCount: number, failCount: number): number => {
+    //     const total = passCount + failCount;
+    //     return total > 0 ? Math.round((passCount / total) * 100) : 0;
+    // };
+
+    // Helper function to check session completion achievements
+    const checkSessionAchievements = useCallback(() => {
+        const updatedAchievements = [...achievements];
+        let achievementsChanged = false;
+
+        // First session achievement (if this is the first session)
+        if (!updatedAchievements.find(a => a.id === 'first_session')?.earned) {
+            const achievement = updatedAchievements.find(a => a.id === 'first_session');
+            if (achievement) {
+                achievement.earned = true;
+                achievement.earnedAt = new Date();
+                achievementsChanged = true;
+            }
+        }
+
+        // Accuracy achievements
+        if (sessionSummary && sessionSummary.pass_count + sessionSummary.fail_count > 0) {
+            const accuracy = calculateAccuracy(sessionSummary.pass_count, sessionSummary.fail_count);
+
+            if (accuracy >= 90 && !updatedAchievements.find(a => a.id === 'accuracy_90')?.earned) {
+                const achievement = updatedAchievements.find(a => a.id === 'accuracy_90');
+                if (achievement) {
+                    achievement.earned = true;
+                    achievement.earnedAt = new Date();
+                    achievementsChanged = true;
+                }
+            }
+
+            if (accuracy === 100 && !updatedAchievements.find(a => a.id === 'perfect_session')?.earned) {
+                const achievement = updatedAchievements.find(a => a.id === 'perfect_session');
+                if (achievement) {
+                    achievement.earned = true;
+                    achievement.earnedAt = new Date();
+                    achievementsChanged = true;
+                }
+            }
+        }
+
+        if (achievementsChanged) {
+            setAchievements(updatedAchievements);
+        }
+
+        return updatedAchievements;
+    }, [achievements, sessionSummary]);
+
+    const handleCompleteSession = useCallback(async () => {
         if (!activeSessionId || !username.trim()) return;
 
         setSessionState('completing');
@@ -504,7 +606,7 @@ export default function Puzzles() {
 
             // Check for session completion achievements
             const updatedAchievements = checkSessionAchievements();
-            
+
             // Save achievements to localStorage
             if (updatedAchievements.some(a => a.earned)) {
                 localStorage.setItem(`knightmind:achievements:${username.trim()}`, JSON.stringify(updatedAchievements));
@@ -519,9 +621,9 @@ export default function Puzzles() {
             setError(errorMessage);
             setSessionState('active');
         }
-    };
+    }, [activeSessionId, checkSessionAchievements, username]);
 
-    const handleReviewPuzzle = async (result: 'pass' | 'fail', timeMs?: number) => {
+    const handleReviewPuzzle = useCallback(async (result: 'pass' | 'fail', timeMs?: number) => {
         if (!currentPuzzle || !username.trim()) return;
 
         // Calculate time spent on this puzzle if not provided
@@ -558,7 +660,7 @@ export default function Puzzles() {
             }
 
             // Update performance history
-            setPerformanceHistory(prev => [...prev, {time: Date.now(), result}]);
+            setPerformanceHistory(prev => [...prev, { time: Date.now(), result }]);
 
             // Check for achievements
             checkAchievements();
@@ -575,7 +677,24 @@ export default function Puzzles() {
             console.error('Failed to review puzzle:', err);
             setError(err instanceof Error ? err.message : 'Failed to review puzzle');
         }
-    };
+    }, [
+        activeSessionId,
+        bestStreak,
+        checkAchievements,
+        currentPuzzle,
+        handleCompleteSession,
+        puzzleStartTime,
+        puzzles.length,
+        reviewedCount,
+        streak,
+        username,
+    ]);
+
+    // Keep ref in sync
+    useEffect(() => {
+        handleReviewPuzzleRef.current = handleReviewPuzzle;
+    }, [handleReviewPuzzle]);
+
 
     const shouldShowJobStatusCard =
         !!job &&
@@ -609,9 +728,9 @@ export default function Puzzles() {
 
     const handleUseHint = async () => {
         if (!activeSessionId || !username.trim()) return;
-        
+
         try {
-            const updatedSession = await useHint(activeSessionId, username.trim());
+            const updatedSession = await requestHint(activeSessionId, username.trim());
             setHintsUsed(updatedSession.hints_used);
             setSessionSummary(updatedSession);
         } catch (err) {
@@ -653,30 +772,29 @@ export default function Puzzles() {
             setGame(new Chess(currentPuzzle.fen));
             setClueStage(0);
             // Start timer for this puzzle
-            setPuzzleStartTime(Date.now());
+            const startTime = Date.now();
+            setPuzzleStartTime(startTime);
             setCurrentPuzzleTime(0);
-            
+
             // Set up timer for timed sessions
             if (sessionSummary?.session_type === 'timed' && sessionSummary.target_time_minutes) {
                 if (puzzleTimerRef.current) clearTimeout(puzzleTimerRef.current);
                 puzzleTimerRef.current = setTimeout(() => {
                     // Auto-mark as failed if time runs out
-                    if (status === 'solving') {
-                        handleReviewPuzzle('fail');
+                    if (statusRef.current === 'solving') {
+                        handleReviewPuzzleRef.current('fail');
                         setStatus('incorrect');
                     }
                 }, 30000); // 30 seconds per puzzle in timed mode
             }
-            
+
             // Set up puzzle time tracker
             if (puzzleTimeRef.current) clearInterval(puzzleTimeRef.current);
             puzzleTimeRef.current = setInterval(() => {
-                if (puzzleStartTime) {
-                    setCurrentPuzzleTime(Math.floor((Date.now() - puzzleStartTime) / 1000));
-                }
+                setCurrentPuzzleTime(Math.floor((Date.now() - startTime) / 1000));
             }, 1000);
         }
-        
+
         return () => {
             if (puzzleTimerRef.current) {
                 clearTimeout(puzzleTimerRef.current);
@@ -687,7 +805,7 @@ export default function Puzzles() {
                 puzzleTimeRef.current = null;
             }
         };
-    }, [currentPuzzle, sessionSummary, status, puzzleStartTime]);
+    }, [currentPuzzle, handleReviewPuzzle, puzzleStartTime, sessionSummary, status]);
 
     const onPieceDrop = (sourceSquare: string, targetSquare: string) => {
         if (!currentPuzzle || status === 'correct' || status === 'revealed') return false;
@@ -725,121 +843,29 @@ export default function Puzzles() {
     };
 
 
-    // Helper function to calculate accuracy percentage
-    const calculateAccuracy = (passCount: number, failCount: number): number => {
-        const total = passCount + failCount;
-        return total > 0 ? Math.round((passCount / total) * 100) : 0;
-    };
-    
     // Helper function to calculate recent performance
-    const calculateRecentPerformance = (history: Array<{time: number, result: 'pass' | 'fail'}>, minutes: number = 5): number => {
+    const calculateRecentPerformance = (history: Array<{ time: number, result: 'pass' | 'fail' }>, minutes: number = 5): number => {
         const cutoffTime = Date.now() - (minutes * 60 * 1000);
         const recent = history.filter(item => item.time > cutoffTime);
         if (recent.length === 0) return 0;
         const passCount = recent.filter(item => item.result === 'pass').length;
         return Math.round((passCount / recent.length) * 100);
     };
-    
+
     // Helper function to get performance trend
-    const getPerformanceTrend = (history: Array<{time: number, result: 'pass' | 'fail'}>): 'improving' | 'declining' | 'stable' => {
+    const getPerformanceTrend = (history: Array<{ time: number, result: 'pass' | 'fail' }>): 'improving' | 'declining' | 'stable' => {
         if (history.length < 4) return 'stable';
-        
+
         const recent = history.slice(-4);
         const firstHalf = recent.slice(0, 2);
         const secondHalf = recent.slice(2, 4);
-        
+
         const firstHalfAccuracy = firstHalf.filter(item => item.result === 'pass').length / firstHalf.length;
         const secondHalfAccuracy = secondHalf.filter(item => item.result === 'pass').length / secondHalf.length;
-        
+
         if (secondHalfAccuracy > firstHalfAccuracy + 0.1) return 'improving';
         if (secondHalfAccuracy < firstHalfAccuracy - 0.1) return 'declining';
         return 'stable';
-    };
-    
-    // Helper function to check and award achievements
-    const checkAchievements = (newAchievements: Achievement[] = achievements) => {
-        const updatedAchievements = [...newAchievements];
-        let achievementsChanged = false;
-        
-        // Check for streak achievements
-        if (streak >= 5 && !updatedAchievements.find(a => a.id === 'streak_5')?.earned) {
-            const achievement = updatedAchievements.find(a => a.id === 'streak_5');
-            if (achievement) {
-                achievement.earned = true;
-                achievement.earnedAt = new Date();
-                achievementsChanged = true;
-            }
-        }
-        
-        if (streak >= 10 && !updatedAchievements.find(a => a.id === 'streak_10')?.earned) {
-            const achievement = updatedAchievements.find(a => a.id === 'streak_10');
-            if (achievement) {
-                achievement.earned = true;
-                achievement.earnedAt = new Date();
-                achievementsChanged = true;
-            }
-        }
-        
-        // Check for speed achievement
-        if (currentPuzzleTime < 10 && !updatedAchievements.find(a => a.id === 'speed_demon')?.earned) {
-            const achievement = updatedAchievements.find(a => a.id === 'speed_demon');
-            if (achievement) {
-                achievement.earned = true;
-                achievement.earnedAt = new Date();
-                achievementsChanged = true;
-            }
-        }
-        
-        if (achievementsChanged) {
-            setAchievements(updatedAchievements);
-        }
-        
-        return updatedAchievements;
-    };
-    
-    // Helper function to check session completion achievements
-    const checkSessionAchievements = () => {
-        const updatedAchievements = [...achievements];
-        let achievementsChanged = false;
-        
-        // First session achievement (if this is the first session)
-        if (!updatedAchievements.find(a => a.id === 'first_session')?.earned) {
-            const achievement = updatedAchievements.find(a => a.id === 'first_session');
-            if (achievement) {
-                achievement.earned = true;
-                achievement.earnedAt = new Date();
-                achievementsChanged = true;
-            }
-        }
-        
-        // Accuracy achievements
-        if (sessionSummary && sessionSummary.pass_count + sessionSummary.fail_count > 0) {
-            const accuracy = calculateAccuracy(sessionSummary.pass_count, sessionSummary.fail_count);
-            
-            if (accuracy >= 90 && !updatedAchievements.find(a => a.id === 'accuracy_90')?.earned) {
-                const achievement = updatedAchievements.find(a => a.id === 'accuracy_90');
-                if (achievement) {
-                    achievement.earned = true;
-                    achievement.earnedAt = new Date();
-                    achievementsChanged = true;
-                }
-            }
-            
-            if (accuracy === 100 && !updatedAchievements.find(a => a.id === 'perfect_session')?.earned) {
-                const achievement = updatedAchievements.find(a => a.id === 'perfect_session');
-                if (achievement) {
-                    achievement.earned = true;
-                    achievement.earnedAt = new Date();
-                    achievementsChanged = true;
-                }
-            }
-        }
-        
-        if (achievementsChanged) {
-            setAchievements(updatedAchievements);
-        }
-        
-        return updatedAchievements;
     };
 
     return (
@@ -880,7 +906,7 @@ export default function Puzzles() {
                     <div className="flex gap-4">
                         {!activeSessionId && (
                             <>
-                                <select 
+                                <select
                                     value={sessionType}
                                     onChange={(e) => setSessionType(e.target.value as SessionType)}
                                     className="px-3 py-2 border border-primary/20 rounded-sm bg-bg-primary text-primary"
@@ -976,8 +1002,8 @@ export default function Puzzles() {
                                             <div className="flex justify-between items-center mb-2">
                                                 <span className="font-serif text-primary font-medium">
                                                     Session in Progress
-                                                    {sessionSummary.session_type && sessionSummary.session_type !== 'standard' 
-                                                        ? ` (${sessionSummary.session_type.replace('_', ' ')})` 
+                                                    {sessionSummary.session_type && sessionSummary.session_type !== 'standard'
+                                                        ? ` (${sessionSummary.session_type.replace('_', ' ')})`
                                                         : ''}
                                                 </span>
                                                 <span className="text-sm font-mono text-primary/60">
@@ -1007,7 +1033,7 @@ export default function Puzzles() {
                                                     <span className="text-primary/80">Hints: {hintsUsed}</span>
                                                 </div>
                                             </div>
-                                            
+
                                             {/* Performance Visualization */}
                                             {performanceHistory.length > 0 && (
                                                 <div className="mt-3">
@@ -1017,8 +1043,8 @@ export default function Puzzles() {
                                                     </div>
                                                     <div className="flex h-2 rounded-full overflow-hidden bg-primary/10">
                                                         {performanceHistory.slice(-10).map((item, index) => (
-                                                            <div 
-                                                                key={index} 
+                                                            <div
+                                                                key={index}
                                                                 className={`flex-1 ${item.result === 'pass' ? 'bg-green-500' : 'bg-red-500'}`}
                                                                 title={`${item.result.toUpperCase()} - ${new Date(item.time).toLocaleTimeString()}`}
                                                             />
@@ -1026,13 +1052,12 @@ export default function Puzzles() {
                                                     </div>
                                                     <div className="flex justify-between text-xs text-primary/60 mt-1">
                                                         <span>
-                                                            Trend: 
-                                                            <span className={`ml-1 ${
-                                                                getPerformanceTrend(performanceHistory) === 'improving' ? 'text-green-500' :
+                                                            Trend:
+                                                            <span className={`ml-1 ${getPerformanceTrend(performanceHistory) === 'improving' ? 'text-green-500' :
                                                                 getPerformanceTrend(performanceHistory) === 'declining' ? 'text-red-500' : 'text-primary/60'
-                                                            }`}>
+                                                                }`}>
                                                                 {getPerformanceTrend(performanceHistory) === 'improving' ? '↗ Improving' :
-                                                                 getPerformanceTrend(performanceHistory) === 'declining' ? '↘ Declining' : '→ Stable'}
+                                                                    getPerformanceTrend(performanceHistory) === 'declining' ? '↘ Declining' : '→ Stable'}
                                                             </span>
                                                         </span>
                                                         <span>
@@ -1146,8 +1171,8 @@ export default function Puzzles() {
                                     <button
                                         type="button"
                                         onClick={activeSessionId ? handleUseHint : handleClue}
-                                        disabled={activeSessionId 
-                                            ? (!currentPuzzle?.best_move_uci || hintsUsed >= 3) 
+                                        disabled={activeSessionId
+                                            ? (!currentPuzzle?.best_move_uci || hintsUsed >= 3)
                                             : (!currentPuzzle?.best_move_uci || clueStage === 2)}
                                         className="px-6 py-4 border border-primary/20 text-primary rounded-sm font-serif text-lg transition-all km-interactive km-focus-visible disabled:opacity-50 disabled:cursor-default">
                                         {activeSessionId ? `Hint (${hintsUsed}/3)` : 'Clue'}
@@ -1168,7 +1193,7 @@ export default function Puzzles() {
                                             <div className="flex justify-between">
                                                 <span className="text-primary/60">Puzzle Stats:</span>
                                                 <span className="font-mono">
-                                                    {currentPuzzle.pass_count || 0}/{currentPuzzle.attempts || 0} 
+                                                    {currentPuzzle.pass_count || 0}/{currentPuzzle.attempts || 0}
                                                     {currentPuzzle.attempts ? ` (${Math.round(((currentPuzzle.pass_count || 0) / currentPuzzle.attempts) * 100)}%)` : ''}
                                                 </span>
                                             </div>
@@ -1182,7 +1207,7 @@ export default function Puzzles() {
                                             )}
                                         </div>
                                     )}
-                                    
+
                                     <button
                                         type="button"
                                         onClick={handleAdvancePuzzle}
@@ -1205,7 +1230,7 @@ export default function Puzzles() {
                                             <p className="text-red-500 font-sans">{lastFeedback}</p>
                                         </div>
                                     )}
-                                    
+
                                     <div className="grid grid-cols-2 gap-4">
                                         <button
                                             type="button"
@@ -1244,13 +1269,13 @@ export default function Puzzles() {
                         </div>
                         <h2 className="text-2xl font-serif text-primary">Session Successfully Recorded!</h2>
                     </div>
-                    
+
                     {sessionSummary.completed_at && (
                         <div className="text-sm text-primary/60 mb-4">
                             Completed on {new Date(sessionSummary.completed_at).toLocaleString()}
                         </div>
                     )}
-                    
+
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-6 mb-6">
                         <div className="text-center">
                             <div className="text-3xl font-serif text-green-600">{sessionSummary.pass_count}</div>
@@ -1273,7 +1298,7 @@ export default function Puzzles() {
                             <div className="text-xs uppercase tracking-widest text-primary/40 mt-1">Total Time</div>
                         </div>
                     </div>
-                    
+
                     {/* Enhanced Session Stats */}
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-6 mb-6">
                         <div className="text-center">
@@ -1295,15 +1320,15 @@ export default function Puzzles() {
                             </div>
                         )}
                     </div>
-                    
+
                     {/* Achievements Earned */}
                     {achievements.filter(a => a.earned).length > 0 && (
                         <div className="mb-6">
                             <h3 className="text-lg font-serif text-primary mb-3">Achievements Earned</h3>
                             <div className="flex flex-wrap gap-2">
                                 {achievements.filter(a => a.earned).map(achievement => (
-                                    <div 
-                                        key={achievement.id} 
+                                    <div
+                                        key={achievement.id}
                                         className="flex items-center bg-primary/10 border border-primary/20 rounded-full px-3 py-1"
                                         title={achievement.description}
                                     >
@@ -1314,7 +1339,7 @@ export default function Puzzles() {
                             </div>
                         </div>
                     )}
-                    
+
                     <button
                         type="button"
                         onClick={() => {
@@ -1360,19 +1385,18 @@ export default function Puzzles() {
                     </div>
                 </section>
             )}
-            
+
             {/* Achievements Progress */}
             <section className="bg-primary/5 border border-primary/10 rounded-sm p-6 backdrop-blur-sm">
                 <h3 className="text-lg font-serif text-primary mb-4">Achievements</h3>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                     {achievements.map(achievement => (
-                        <div 
-                            key={achievement.id} 
-                            className={`p-4 rounded-sm border ${
-                                achievement.earned 
-                                    ? 'bg-green-500/10 border-green-500/30' 
-                                    : 'bg-primary/5 border-primary/20'
-                            }`}
+                        <div
+                            key={achievement.id}
+                            className={`p-4 rounded-sm border ${achievement.earned
+                                ? 'bg-green-500/10 border-green-500/30'
+                                : 'bg-primary/5 border-primary/20'
+                                }`}
                         >
                             <div className="flex items-center">
                                 <span className="text-2xl mr-3">{achievement.icon}</span>
