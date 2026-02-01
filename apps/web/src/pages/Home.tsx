@@ -160,7 +160,7 @@ export default function Home() {
   };
 
   return (
-    <div className="space-y-20 animate-teedin">
+    <main className="space-y-20 animate-teedin">
       <section className="space-y-6">
         <h1 className="text-6xl md:text-8xl font-serif text-primary tracking-tight">
           KnightMind
@@ -187,9 +187,9 @@ export default function Home() {
           <div className="space-y-4">
             <div className="flex gap-4 border-b border-primary/20 pb-2 focus-within:border-primary/80 transition-colors">
               {username ? (
-                <div className="flex-1 flex items-center text-lg font-sans text-primary">
+                <div className="flex-1 flex items-center text-lg font-sans text-primary" role="status">
                   <span className="opacity-60 mr-2">Chess.com:</span>
-                  <span className="font-medium">{username}</span>
+                  <span className="font-medium" aria-label={`Current username: ${username}`}>{username}</span>
                 </div>
               ) : (
                 <div className="flex-1 flex items-center text-lg font-sans text-primary/40 italic">
@@ -200,6 +200,8 @@ export default function Home() {
                 type="button"
                 onClick={handleImport}
                 disabled={loading || !username}
+                aria-label={username ? `Sync games for ${username}` : 'Import games'}
+                aria-busy={loading}
                 className={`text-primary font-medium transition-opacity uppercase tracking-widest text-sm km-focus-visible rounded-sm px-2 py-1 ${loading || !username ? 'km-interactive-disabled disabled:opacity-30' : 'km-interactive'}`}
               >
                 {loading ? '...' : username ? 'Sync' : 'Import'}
@@ -227,7 +229,11 @@ export default function Home() {
             )}
 
             {status && (
-              <p className={`text-sm font-sans tracking-wide ${isError ? 'text-red-500/80' : 'text-primary/60'}`}>
+              <p
+                className={`text-sm font-sans tracking-wide ${isError ? 'text-red-500/80' : 'text-primary/60'}`}
+                role={isError ? 'alert' : 'status'}
+                aria-live="polite"
+              >
                 {status}
               </p>
             )}
@@ -289,6 +295,6 @@ export default function Home() {
           </p>
         </div>
       </Modal>
-    </div>
+    </main>
   );
 }
