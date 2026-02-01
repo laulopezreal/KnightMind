@@ -77,39 +77,64 @@ def upgrade() -> None:
     if "ix_puzzles_username" not in puzzles_indexes:
         op.create_index("ix_puzzles_username", "puzzles", ["username"])
 
-    puzzle_stats_fks = {fk["name"] for fk in inspector.get_foreign_keys("puzzle_stats")}
-    if "fk_puzzle_stats_puzzle_id" not in puzzle_stats_fks:
-        with op.batch_alter_table("puzzle_stats") as batch_op:
-            batch_op.create_foreign_key(
-                "fk_puzzle_stats_puzzle_id",
-                "puzzles",
-                ["puzzle_id"],
-                ["id"],
-            )
+    if inspector.has_table("puzzle_stats"):
+        puzzle_stats_fks = {fk["name"] for fk in inspector.get_foreign_keys("puzzle_stats")}
+        if "fk_puzzle_stats_puzzle_id" not in puzzle_stats_fks:
+            with op.batch_alter_table("puzzle_stats") as batch_op:
+                batch_op.create_foreign_key(
+                    "fk_puzzle_stats_puzzle_id",
+                    "puzzles",
+                    ["puzzle_id"],
+                    ["id"],
+                )
 
-    puzzle_reviews_fks = {fk["name"] for fk in inspector.get_foreign_keys("puzzle_reviews")}
-    if "fk_puzzle_reviews_puzzle_id" not in puzzle_reviews_fks:
-        with op.batch_alter_table("puzzle_reviews") as batch_op:
-            batch_op.create_foreign_key(
-                "fk_puzzle_reviews_puzzle_id",
-                "puzzles",
-                ["puzzle_id"],
-                ["id"],
-            )
+    if inspector.has_table("puzzle_reviews"):
+        puzzle_reviews_fks = {fk["name"] for fk in inspector.get_foreign_keys("puzzle_reviews")}
+        if "fk_puzzle_reviews_puzzle_id" not in puzzle_reviews_fks:
+            with op.batch_alter_table("puzzle_reviews") as batch_op:
+                batch_op.create_foreign_key(
+                    "fk_puzzle_reviews_puzzle_id",
+                    "puzzles",
+                    ["puzzle_id"],
+                    ["id"],
+                )
 
 
 def downgrade() -> None:
     """Downgrade schema."""
-    with op.batch_alter_table("puzzle_reviews") as batch_op:
-        batch_op.drop_constraint("fk_puzzle_reviews_puzzle_id", type_="foreignkey")
-    with op.batch_alter_table("puzzle_stats") as batch_op:
-        batch_op.drop_constraint("fk_puzzle_stats_puzzle_id", type_="foreignkey")
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
 
-    op.drop_index("ix_puzzles_username", table_name="puzzles")
-    op.drop_index("ix_puzzles_username_created_at", table_name="puzzles")
-    op.drop_table("puzzles")
+    # Drop foreign keys from puzzle_reviews if they exist
+    if inspector.has_table("puzzle_reviews"):
+        puzzle_reviews_fks = {fk["name"] for fk in inspector.get_foreign_keys("puzzle_reviews")}
+        if "fk_puzzle_reviews_puzzle_id" in puzzle_reviews_fks:
+            with op.batch_alter_table("puzzle_reviews") as batch_op:
+                batch_op.drop_constraint("fk_puzzle_reviews_puzzle_id", type_="foreignkey")
 
-    op.drop_index("ix_games_username", table_name="games")
-    op.drop_index("ix_games_game_id", table_name="games")
-    op.drop_index("ix_games_username_end_time", table_name="games")
-    op.drop_table("games")
+    # Drop foreign keys from puzzle_stats if they exist
+    if inspector.has_table("puzzle_stats"):
+        puzzle_stats_fks = {fk["name"] for fk in inspector.get_foreign_keys("puzzle_stats")}
+        if "fk_puzzle_stats_puzzle_id" in puzzle_stats_fks:
+            with op.batch_alter_table("puzzle_stats") as batch_op:
+                batch_op.drop_constraint("fk_puzzle_stats_puzzle_id", type_="foreignkey")
+
+    # Drop puzzles table and its indexes if they exist
+    if inspector.has_table("puzzles"):
+        puzzles_indexes = {index["name"] for index in inspector.get_indexes("puzzles")}
+        if "ix_puzzles_username" in puzzles_indexes:
+            op.drop_index("ix_puzzles_username", table_name="puzzles")
+        if "ix_puzzles_username_created_at" in puzzles_indexes:
+            op.drop_index("ix_puzzles_username_created_at", table_name="puzzles")
+        op.drop_table("puzzles")
+
+    # Drop games table and its indexes if they exist
+    if inspector.has_table("games"):
+        games_indexes = {index["name"] for index in inspector.get_indexes("games")}
+        if "ix_games_username" in games_indexes:
+            op.drop_index("ix_games_username", table_name="games")
+        if "ix_games_game_id" in games_indexes:
+            op.drop_index("ix_games_game_id", table_name="games")
+        if "ix_games_username_end_time" in games_indexes:
+            op.drop_index("ix_games_username_end_time", table_name="games")
+        op.drop_table("games")
