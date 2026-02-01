@@ -608,6 +608,17 @@ export default function Puzzles() {
         username
     ]);
 
+    const handleReviewPuzzleRef = useRef(handleReviewPuzzle);
+    const statusRef = useRef(status);
+
+    useEffect(() => {
+        handleReviewPuzzleRef.current = handleReviewPuzzle;
+    }, [handleReviewPuzzle]);
+
+    useEffect(() => {
+        statusRef.current = status;
+    }, [status]);
+
     const shouldShowJobStatusCard =
         !!job &&
         (job.status === 'queued' ||
@@ -684,7 +695,8 @@ export default function Puzzles() {
             setGame(new Chess(currentPuzzle.fen));
             setClueStage(0);
             // Start timer for this puzzle
-            setPuzzleStartTime(Date.now());
+            const startTime = Date.now();
+            setPuzzleStartTime(startTime);
             setCurrentPuzzleTime(0);
             
             // Set up timer for timed sessions
@@ -692,8 +704,8 @@ export default function Puzzles() {
                 if (puzzleTimerRef.current) clearTimeout(puzzleTimerRef.current);
                 puzzleTimerRef.current = setTimeout(() => {
                     // Auto-mark as failed if time runs out
-                    if (status === 'solving') {
-                        handleReviewPuzzle('fail');
+                    if (statusRef.current === 'solving') {
+                        handleReviewPuzzleRef.current('fail');
                         setStatus('incorrect');
                     }
                 }, 30000); // 30 seconds per puzzle in timed mode
@@ -702,9 +714,7 @@ export default function Puzzles() {
             // Set up puzzle time tracker
             if (puzzleTimeRef.current) clearInterval(puzzleTimeRef.current);
             puzzleTimeRef.current = setInterval(() => {
-                if (puzzleStartTime) {
-                    setCurrentPuzzleTime(Math.floor((Date.now() - puzzleStartTime) / 1000));
-                }
+                setCurrentPuzzleTime(Math.floor((Date.now() - startTime) / 1000));
             }, 1000);
         }
         
@@ -718,7 +728,7 @@ export default function Puzzles() {
                 puzzleTimeRef.current = null;
             }
         };
-    }, [currentPuzzle, sessionSummary, status, puzzleStartTime, handleReviewPuzzle]);
+    }, [currentPuzzle, sessionSummary]);
 
     const onPieceDrop = (sourceSquare: string, targetSquare: string) => {
         if (!currentPuzzle || status === 'correct' || status === 'revealed') return false;
