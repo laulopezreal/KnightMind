@@ -3,6 +3,7 @@ os.environ["KNIGHTMIND_WORKER_DISABLED"] = "true"
 import shutil
 import tempfile
 from unittest.mock import patch
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
@@ -11,8 +12,9 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from services.api.main import app, get_db
-from services.api.models import Base, Job, JobStatus
+from services.api.models import Base, Job, JobStatus, PuzzleStats, Game, Puzzle as PuzzleModel
 from services.api.storage import GameStorage
+from services.api.storage.puzzles import PuzzleStorage
 
 
 @pytest.fixture
@@ -28,6 +30,7 @@ def temp_storage():
 def client_with_temp_storage(temp_storage, db_session, monkeypatch):
     """Create a test client with temporary storage and db."""
     monkeypatch.setenv("KNIGHTMIND_STORAGE_MODE", "filesystem")
+    puzzle_storage = PuzzleStorage(temp_storage.base_path)
     app.dependency_overrides[get_db] = lambda: db_session
     with patch("services.api.main.GameRepository") as mock_repo:
         mock_repo.return_value.filesystem = temp_storage
@@ -37,8 +40,12 @@ def client_with_temp_storage(temp_storage, db_session, monkeypatch):
         mock_repo.return_value.store_game.side_effect = temp_storage.store_game
         mock_repo.return_value.get_all_metadata.side_effect = temp_storage.get_all_metadata
         mock_repo.return_value.get_pgn.side_effect = temp_storage.get_pgn
-        
-        yield TestClient(app)
+        with patch("services.api.main.PuzzleRepository") as mock_puzzle_repo:
+            mock_puzzle_repo.return_value.filesystem = puzzle_storage
+            mock_puzzle_repo.return_value.get_puzzle_count.side_effect = puzzle_storage.get_puzzle_count
+            mock_puzzle_repo.return_value.get_all_puzzles.side_effect = puzzle_storage.get_all_puzzles
+
+            yield TestClient(app)
     app.dependency_overrides.clear()
 
 @pytest.fixture
@@ -153,6 +160,177 @@ def test_get_users_list(client_with_temp_storage, temp_storage):
     response = client_with_temp_storage.get("/users")
     assert response.status_code == 200
     assert response.json() == {"users": []}
+
+
+def test_user_status_empty(client_with_temp_storage):
+    response = client_with_temp_storage.get("/users/testuser/status")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "username": "testuser",
+        "games_count": 0,
+        "puzzles_count": 0,
+        "due_count": 0,
+        "next_due_at": None,
+        "has_new_games": False,
+    }
+
+
+def test_user_status_games_without_puzzles(client_with_temp_storage, temp_storage):
+    temp_storage.store_game(
+        username="testuser",
+        url="https://www.chess.com/game/live/99999",
+        pgn='[Event "Test"]\n\n1. e4 e5 1/2-1/2',
+        white_username="testuser",
+        black_username="opponent",
+        white_result="draw",
+        black_result="draw",
+        time_control="600",
+        end_time=int(datetime.now(timezone.utc).timestamp()),
+        rated=True,
+    )
+
+    response = client_with_temp_storage.get("/users/testuser/status")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["games_count"] == 1
+    assert data["puzzles_count"] == 0
+    assert data["due_count"] == 0
+    assert data["next_due_at"] is None
+    assert data["has_new_games"] is True
+
+
+def test_user_status_with_due_puzzles(client_with_temp_storage, temp_storage, db_session):
+    _, game_id = temp_storage.store_game(
+        username="testuser",
+        url="https://www.chess.com/game/live/100000",
+        pgn='[Event "Test"]\n\n1. d4 d5 1/2-1/2',
+        white_username="testuser",
+        black_username="opponent",
+        white_result="draw",
+        black_result="draw",
+        time_control="600",
+        end_time=int(datetime.now(timezone.utc).timestamp() - 3600),
+        rated=True,
+    )
+    puzzle_storage = PuzzleStorage(temp_storage.base_path)
+    _, puzzle_id_one = puzzle_storage.save_puzzle(
+        username="testuser",
+        source_game_id=game_id,
+        ply=10,
+        fen="8/8/8/8/8/8/8/8 w - - 0 1",
+        side_to_move="white",
+        played_move_uci="e2e4",
+        best_move_uci="d2d4",
+        eval_before=0.2,
+        eval_after=-0.5,
+        swing=0.7,
+    )
+    _, puzzle_id_two = puzzle_storage.save_puzzle(
+        username="testuser",
+        source_game_id=game_id,
+        ply=12,
+        fen="8/8/8/8/8/8/8/8 w - - 0 1",
+        side_to_move="white",
+        played_move_uci="g1f3",
+        best_move_uci="c2c4",
+        eval_before=0.1,
+        eval_after=-0.3,
+        swing=0.4,
+    )
+
+    db_session.add(
+        Game(
+            game_id=game_id,
+            url="https://www.chess.com/game/live/100000",
+            username="testuser",
+            white_username="testuser",
+            black_username="opponent",
+            white_result="draw",
+            black_result="draw",
+            time_control="600",
+            end_time=int(datetime.now(timezone.utc).timestamp() - 3600),
+            rated=True,
+            imported_at=datetime.now(timezone.utc),
+        )
+    )
+    db_session.add_all(
+        [
+            PuzzleModel(
+                id=puzzle_id_one,
+                username="testuser",
+                source_game_id=game_id,
+                ply=10,
+                fen="8/8/8/8/8/8/8/8 w - - 0 1",
+                side_to_move="white",
+                played_move_uci="e2e4",
+                best_move_uci="d2d4",
+                eval_before=0.2,
+                eval_after=-0.5,
+                swing=0.7,
+                created_at=datetime.now(timezone.utc) - timedelta(days=2),
+                imported_at=datetime.now(timezone.utc) - timedelta(days=2),
+            ),
+            PuzzleModel(
+                id=puzzle_id_two,
+                username="testuser",
+                source_game_id=game_id,
+                ply=12,
+                fen="8/8/8/8/8/8/8/8 w - - 0 1",
+                side_to_move="white",
+                played_move_uci="g1f3",
+                best_move_uci="c2c4",
+                eval_before=0.1,
+                eval_after=-0.3,
+                swing=0.4,
+                created_at=datetime.now(timezone.utc) - timedelta(days=1),
+                imported_at=datetime.now(timezone.utc) - timedelta(days=1),
+            ),
+        ]
+    )
+
+    past_due = datetime.now(timezone.utc) - timedelta(days=1)
+    future_due = datetime.now(timezone.utc) + timedelta(days=2)
+    db_session.add_all(
+        [
+            PuzzleStats(
+                puzzle_id=puzzle_id_one,
+                username="testuser",
+                attempts=1,
+                pass_count=0,
+                fail_count=1,
+                last_reviewed_at=datetime.now(timezone.utc) - timedelta(days=3),
+                last_result="fail",
+                next_due_at=past_due,
+                interval_days=1,
+                ease_factor=2.0,
+            ),
+            PuzzleStats(
+                puzzle_id=puzzle_id_two,
+                username="testuser",
+                attempts=2,
+                pass_count=1,
+                fail_count=1,
+                last_reviewed_at=datetime.now(timezone.utc) - timedelta(days=1),
+                last_result="pass",
+                next_due_at=future_due,
+                interval_days=3,
+                ease_factor=2.1,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    response = client_with_temp_storage.get("/users/testuser/status")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["games_count"] == 1
+    assert data["puzzles_count"] == 2
+    assert data["due_count"] == 1
+    assert data["has_new_games"] is False
+    assert data["next_due_at"].startswith(future_due.date().isoformat())
 
 MOCK_ARCHIVES = ["https://api.chess.com/pub/player/testuser/games/2024/01"]
 

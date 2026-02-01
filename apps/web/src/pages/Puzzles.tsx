@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Chessboard } from 'react-chessboard';
 import { Chess } from 'chess.js';
-import { generatePuzzles, getDailyPuzzles, getDuePuzzles, cancelJob, ApiError, type Puzzle, startSession, completeSession, getRecentSessions, reviewPuzzle, getSession, type SessionSummary, useHint as requestHint } from '../api';
+import { generatePuzzles, getDailyPuzzles, getDuePuzzles, cancelJob, ApiError, type Puzzle, startSession, completeSession, getRecentSessions, reviewPuzzle, getSession, type SessionSummary, useHint as requestHint, getUserStatus, type UserStatus } from '../api';
 import { JobStatusCard } from '../components/JobStatusCard';
 import { useJobPolling } from '../hooks/useJobPolling';
 import { useChessUsername } from '../context/ChessUsernameContext';
@@ -115,6 +115,8 @@ export default function Puzzles() {
     const sessionTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const [timeRemaining, setTimeRemaining] = useState<number>(0);
     const puzzleTimeRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    const [userStatus, setUserStatus] = useState<UserStatus | null>(null);
+    const [isLoadingStatus, setIsLoadingStatus] = useState(false);
 
     const statusRef = useRef(status);
     statusRef.current = status;
@@ -206,6 +208,28 @@ export default function Puzzles() {
         loadSessionAndPuzzles();
         loadRecent();
         // eslint-disable-next-line react-hooks/exhaustive-deps -- run only on username change
+    }, [username]);
+
+    useEffect(() => {
+        if (!username) {
+            setUserStatus(null);
+            return;
+        }
+
+        const fetchStatus = async () => {
+            setIsLoadingStatus(true);
+            try {
+                const status = await getUserStatus(username);
+                setUserStatus(status);
+            } catch (err) {
+                console.warn('Unable to load user status:', err);
+                setUserStatus(null);
+            } finally {
+                setIsLoadingStatus(false);
+            }
+        };
+
+        fetchStatus();
     }, [username]);
 
     const { job, isPolling: isJobPolling } = useJobPolling(activeJobId, {
@@ -702,6 +726,12 @@ export default function Puzzles() {
             job.status === 'running' ||
             (!puzzlesAvailable && (job.status === 'succeeded' || job.status === 'failed')));
     const shouldShowErrorCard = sessionState === 'error' && !!error;
+    const shouldShowEmptyState =
+        !isLoading &&
+        !isGenerating &&
+        !puzzlesAvailable &&
+        !shouldShowJobStatusCard &&
+        !error;
 
 
     const handleCheckAnswer = () => {
@@ -956,6 +986,72 @@ export default function Puzzles() {
 
                 {/* Job Status / Error Area */}
                 <div className="mt-6">
+                    {shouldShowEmptyState && userStatus && (
+                        <div className="bg-primary/5 border border-primary/10 rounded-sm p-6 backdrop-blur-sm text-center space-y-4">
+                            {userStatus.games_count === 0 ? (
+                                <>
+                                    <h3 className="font-serif text-xl text-primary">No games imported yet</h3>
+                                    <p className="text-primary/60 font-sans">
+                                        Import your Chess.com games to generate personalized puzzles.
+                                    </p>
+                                    <Link
+                                        to="/"
+                                        className="inline-block px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-colors km-interactive km-focus-visible"
+                                    >
+                                        Go to Home
+                                    </Link>
+                                </>
+                            ) : userStatus.puzzles_count === 0 ? (
+                                <>
+                                    <h3 className="font-serif text-xl text-primary">Ready to generate puzzles</h3>
+                                    <p className="text-primary/60 font-sans">
+                                        We found {userStatus.games_count} games. Let&apos;s create training puzzles.
+                                    </p>
+                                    <button
+                                        type="button"
+                                        onClick={handleGeneratePuzzles}
+                                        disabled={controlsDisabled}
+                                        className={`px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-colors km-focus-visible ${controlsDisabled ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'}`}
+                                    >
+                                        Generate Puzzles
+                                    </button>
+                                </>
+                            ) : userStatus.due_count === 0 ? (
+                                <>
+                                    <h3 className="font-serif text-xl text-primary">All caught up</h3>
+                                    <p className="text-primary/60 font-sans">
+                                        {userStatus.next_due_at
+                                            ? `Next review on ${new Date(userStatus.next_due_at).toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' })}.`
+                                            : 'No puzzles are due for review yet.'}
+                                    </p>
+                                    {userStatus.has_new_games && (
+                                        <button
+                                            type="button"
+                                            onClick={handleGeneratePuzzles}
+                                            disabled={controlsDisabled}
+                                            className={`px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-colors km-focus-visible ${controlsDisabled ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'}`}
+                                        >
+                                            Generate from New Games
+                                        </button>
+                                    )}
+                                </>
+                            ) : (
+                                <>
+                                    <h3 className="font-serif text-xl text-primary">
+                                        {userStatus.due_count} puzzle{userStatus.due_count === 1 ? '' : 's'} ready
+                                    </h3>
+                                    <p className="text-primary/60 font-sans">
+                                        Start a session to review your due puzzles.
+                                    </p>
+                                </>
+                            )}
+                        </div>
+                    )}
+                    {shouldShowEmptyState && isLoadingStatus && (
+                        <div className="text-center text-primary/40 py-4">
+                            <span className="animate-pulse">Loading training status...</span>
+                        </div>
+                    )}
                     {shouldShowErrorCard && (
                         <JobStatusCard status="failed" error={error ?? 'Failed to generate puzzles'} />
                     )}

@@ -38,6 +38,15 @@ export interface ImportStatusResponse {
     last_new_games: number | null;
 }
 
+export interface UserStatus {
+    username: string;
+    games_count: number;
+    puzzles_count: number;
+    due_count: number;
+    next_due_at: string | null;
+    has_new_games: boolean;
+}
+
 export async function validateChessComUser(username: string): Promise<ValidateUserResponse> {
     // Keep validation requests routed through the same /api proxy for local/prod parity.
     return request<ValidateUserResponse>(`/users/validate?username=${encodeURIComponent(username)}`);
@@ -45,4 +54,8 @@ export async function validateChessComUser(username: string): Promise<ValidateUs
 
 export async function getImportStatus(username: string): Promise<ImportStatusResponse> {
     return request<ImportStatusResponse>(`/import/status?username=${encodeURIComponent(username)}`);
+}
+
+export async function getUserStatus(username: string): Promise<UserStatus> {
+    return request<UserStatus>(`/users/${encodeURIComponent(username)}/status`);
 }
