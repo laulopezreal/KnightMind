@@ -102,6 +102,11 @@ The frontend proxies `/api/*` requests to the backend automatically.
 For consistency (and to avoid CORS issues), frontend API calls should use the shared `/api` base in `apps/web/src/api/core.ts` rather than reaching directly for a raw backend URL.
 If an environment ever needs a different base, update `API_BASE` in `apps/web/src/api/core.ts` so every consumer stays aligned.
 
+## UX Assumptions
+
+- Once a user has set their Chess.com username, the home screen emphasizes exploration and treats game syncing as an optional “Sync” action rather than a primary prompt to import games.
+- Syncing reports “No new games found” when existing games are already in the database.
+
 ## Testing
 
 ### Frontend
