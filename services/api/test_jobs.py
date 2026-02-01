@@ -4,7 +4,7 @@ from unittest.mock import patch, MagicMock
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from services.api.db import Base, SessionLocal
+from services.api.db import Base, get_db
 from services.api.main import app
 from services.api.models import Job, JobStatus
 
@@ -32,25 +32,18 @@ def db_session(setup_db):
     finally:
         session.close()
 
-# Override dependency
-# Since main.py uses SessionLocal directly in endpoints (context manager style), 
-# we verify if we can patch it.
-# app.dependency_overrides won't work easily if we use `with SessionLocal() as db:` inside the function body.
-# We must patch services.api.main.SessionLocal
+# Override dependency so the API endpoints use the test session.
 
 @pytest.fixture
 def client(db_session):
     def override_get_db():
         yield db_session
-    
-    # Patch the SessionLocal in main.py to return our test session factory
-    # But wait, SessionLocal is a class/callable. 
-    # We can patch it to return a context manager that yields our session.
-    
-    with patch("services.api.main.SessionLocal") as mock_session_local:
-        mock_session_local.return_value.__enter__.return_value = db_session
-        mock_session_local.return_value.__exit__.return_value = None
+
+    app.dependency_overrides[get_db] = override_get_db
+    try:
         yield TestClient(app)
+    finally:
+        app.dependency_overrides.pop(get_db, None)
 
 def test_generate_puzzles_enqueues_job(client, db_session):
     # 1. Trigger job

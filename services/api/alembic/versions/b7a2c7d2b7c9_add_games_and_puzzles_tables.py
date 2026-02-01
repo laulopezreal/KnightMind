@@ -1,0 +1,94 @@
+"""add_games_and_puzzles_tables
+
+Revision ID: b7a2c7d2b7c9
+Revises: 794d3af3a02c
+Create Date: 2026-02-01 17:42:10.000000
+
+"""
+from typing import Sequence, Union
+
+from alembic import op
+import sqlalchemy as sa
+
+
+# revision identifiers, used by Alembic.
+revision: str = "b7a2c7d2b7c9"
+down_revision: Union[str, Sequence[str], None] = "794d3af3a02c"
+branch_labels: Union[str, Sequence[str], None] = None
+depends_on: Union[str, Sequence[str], None] = None
+
+
+def upgrade() -> None:
+    """Upgrade schema."""
+    op.create_table(
+        "games",
+        sa.Column("game_id", sa.String(), primary_key=True),
+        sa.Column("url", sa.Text(), nullable=False),
+        sa.Column("username", sa.String(), nullable=False),
+        sa.Column("white_username", sa.String(), nullable=False),
+        sa.Column("black_username", sa.String(), nullable=False),
+        sa.Column("white_result", sa.String(), nullable=False),
+        sa.Column("black_result", sa.String(), nullable=False),
+        sa.Column("time_control", sa.String(), nullable=False),
+        sa.Column("end_time", sa.Integer(), nullable=False),
+        sa.Column("rated", sa.Boolean(), server_default=sa.false(), nullable=False),
+        sa.Column("imported_at", sa.DateTime(), server_default=sa.func.now(), nullable=False),
+        sa.Column("source_path", sa.Text(), nullable=True),
+        sa.Column("pgn_blob", sa.Text(), nullable=True),
+    )
+    op.create_index("ix_games_username_end_time", "games", ["username", "end_time"])
+    op.create_index("ix_games_game_id", "games", ["game_id"])
+    op.create_index("ix_games_username", "games", ["username"])
+
+    op.create_table(
+        "puzzles",
+        sa.Column("id", sa.String(), primary_key=True),
+        sa.Column("username", sa.String(), nullable=False),
+        sa.Column("source_game_id", sa.String(), nullable=False),
+        sa.Column("ply", sa.Integer(), nullable=False),
+        sa.Column("fen", sa.Text(), nullable=False),
+        sa.Column("side_to_move", sa.String(), nullable=False),
+        sa.Column("played_move_uci", sa.String(), nullable=False),
+        sa.Column("best_move_uci", sa.String(), nullable=False),
+        sa.Column("eval_before", sa.Float(), nullable=False),
+        sa.Column("eval_after", sa.Float(), nullable=False),
+        sa.Column("swing", sa.Float(), nullable=False),
+        sa.Column("created_at", sa.DateTime(), server_default=sa.func.now(), nullable=False),
+        sa.Column("used_on", sa.Date(), nullable=True),
+        sa.Column("imported_at", sa.DateTime(), server_default=sa.func.now(), nullable=False),
+        sa.Column("source_path", sa.Text(), nullable=True),
+        sa.ForeignKeyConstraint(["source_game_id"], ["games.game_id"]),
+        sa.UniqueConstraint("username", "source_game_id", "ply", name="uq_puzzles_username_source_game_id_ply"),
+    )
+    op.create_index("ix_puzzles_username_created_at", "puzzles", ["username", "created_at"])
+    op.create_index("ix_puzzles_username", "puzzles", ["username"])
+
+    op.create_foreign_key(
+        "fk_puzzle_stats_puzzle_id",
+        "puzzle_stats",
+        "puzzles",
+        ["puzzle_id"],
+        ["id"],
+    )
+    op.create_foreign_key(
+        "fk_puzzle_reviews_puzzle_id",
+        "puzzle_reviews",
+        "puzzles",
+        ["puzzle_id"],
+        ["id"],
+    )
+
+
+def downgrade() -> None:
+    """Downgrade schema."""
+    op.drop_constraint("fk_puzzle_reviews_puzzle_id", "puzzle_reviews", type_="foreignkey")
+    op.drop_constraint("fk_puzzle_stats_puzzle_id", "puzzle_stats", type_="foreignkey")
+
+    op.drop_index("ix_puzzles_username", table_name="puzzles")
+    op.drop_index("ix_puzzles_username_created_at", table_name="puzzles")
+    op.drop_table("puzzles")
+
+    op.drop_index("ix_games_username", table_name="games")
+    op.drop_index("ix_games_game_id", table_name="games")
+    op.drop_index("ix_games_username_end_time", table_name="games")
+    op.drop_table("games")

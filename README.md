@@ -127,6 +127,21 @@ pytest            # Run tests
 
 ## Data Schema
 
+### Storage Modes (Games + Puzzles)
+
+KnightMind now supports database-backed metadata for games and puzzles with a dual-write migration path.
+Set `KNIGHTMIND_STORAGE_MODE` to control behavior:
+
+- `filesystem` (default): read/write from `data/` directories only.
+- `dual`: write to both filesystem and Postgres; read from DB first and fall back to filesystem when missing.
+- `database`: read/write from Postgres only (filesystem untouched).
+
+During migration, run `python scripts/backfill_storage.py` to ingest legacy `data/` files into Postgres and
+print a per-user parity report. For auditability, the database stores `imported_at` and `source_path` for
+every imported record.
+
+Assumption: PGN content is stored in `games.pgn_blob` when using database-backed storage.
+
 ### Games Storage
 
 Games are stored as PGN files with JSON metadata:
@@ -149,6 +164,7 @@ data/
 - `rated`: Boolean
 - `imported_at`: ISO timestamp
 
+Database table: `games` (includes `pgn_blob`, `imported_at`, and `source_path`).
 ### Import Status
 
 The API stores the last import timestamp and number of new games per user to surface sync status in the UI.
@@ -188,6 +204,8 @@ data/
 - `used_on`: Date when puzzle was used (YYYY-MM-DD), null if unused
 
 **Unique constraint:** `(username, source_game_id, ply)` prevents duplicate puzzles.
+
+Database table: `puzzles` (includes `created_at`, `used_on`, `imported_at`, and `source_path`).
 
 ### Spaced Repetition Data
 

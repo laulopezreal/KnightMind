@@ -39,12 +39,12 @@ def test_backfill_puzzle_identity(monkeypatch):
     # Mock db.scalars().all() return
     mock_db.scalars.return_value.all.return_value = [stat_needs_update]
     
-    # Mock puzzle storage get_puzzle
-    mock_storage = MagicMock()
+    # Mock puzzle repository get_puzzle
+    mock_repo = MagicMock()
     mock_puzzle = MagicMock()
-    mock_storage.get_puzzle.return_value = mock_puzzle
+    mock_repo.get_puzzle.return_value = mock_puzzle
     
-    monkeypatch.setattr("services.api.puzzles.identity.get_puzzle_storage", lambda: mock_storage)
+    monkeypatch.setattr("services.api.puzzles.identity.PuzzleRepository", lambda db: mock_repo)
     
     # Run backfill
     backfill_puzzle_identity(mock_db)

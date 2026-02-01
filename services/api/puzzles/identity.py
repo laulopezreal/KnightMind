@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from services.api.models import PuzzleStats
-from services.api.storage import get_puzzle_storage
+from services.api.storage import PuzzleRepository
 
 logger = logging.getLogger(__name__)
 
@@ -67,11 +67,11 @@ def backfill_puzzle_identity(db: Session):
         return
 
     count = 0
-    puzzle_storage = get_puzzle_storage()
+    puzzle_repository = PuzzleRepository(db)
 
     for stats in stats_to_update:
         # Load puzzle data to (potentially) determine motif
-        puzzle = puzzle_storage.get_puzzle(stats.username, stats.puzzle_id)
+        puzzle = puzzle_repository.get_puzzle(stats.username, stats.puzzle_id)
         
         # Determine motif
         motif = assign_primary_motif(puzzle)
