@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { Chessboard } from 'react-chessboard';
 import { Chess } from 'chess.js';
 import { generatePuzzles, getDailyPuzzles, getDuePuzzles, cancelJob, ApiError, type Puzzle, startSession, completeSession, getRecentSessions, reviewPuzzle, getSession, type SessionSummary, useHint as requestHint, getUserStatus, type UserStatus, getMotifPerformance, type MotifPerformanceResponse } from '../api';
