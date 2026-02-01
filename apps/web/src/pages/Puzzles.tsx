@@ -748,6 +748,8 @@ export default function Puzzles() {
     const handleAdvancePuzzle = async () => {
         if (status === 'correct') {
             await handleReviewPuzzle('pass');
+        } else if (status === 'revealed') {
+            await handleReviewPuzzle('fail');
         }
 
         if (!isFinalPuzzle) {
