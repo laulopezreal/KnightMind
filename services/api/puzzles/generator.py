@@ -12,7 +12,12 @@ from dataclasses import dataclass
 import chess
 import chess.pgn
 
-from services.api.engine import create_engine, get_or_compute_eval
+from services.api.engine import (
+    create_engine,
+    get_or_compute_eval,
+    StockfishNotFoundError,
+    StockfishError,
+)
 from services.api.storage import get_puzzle_storage, get_storage
 import logging
 
@@ -100,9 +105,10 @@ def generate_puzzles(
     # Create engine instance for the whole batch
     try:
         engine = create_engine()
-    except Exception:
-        # If engine creation fails, we can't generate anything
-        # (logging would be good here)
+    except (StockfishNotFoundError, StockfishError):
+        raise
+    except Exception as e:
+        logger.warning("Engine creation failed", exc_info=e)
         return GenerationResult(generated=0, skipped=0, analyzed_positions=0)
 
     generated = 0

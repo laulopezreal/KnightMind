@@ -7,6 +7,7 @@ Uses game URL as unique identifier to prevent duplicates.
 
 import hashlib
 import json
+import os
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -181,9 +182,10 @@ class GameStorage:
 _default_storage: GameStorage | None = None
 
 
-def get_storage(base_path: str | Path = "data") -> GameStorage:
-    """Get or create the default storage instance."""
+def get_storage(base_path: str | Path | None = None) -> GameStorage:
+    """Get or create the default storage instance. Uses GAME_STORAGE_PATH env if set."""
     global _default_storage
     if _default_storage is None:
-        _default_storage = GameStorage(base_path)
+        path = base_path if base_path is not None else os.environ.get("GAME_STORAGE_PATH", "data")
+        _default_storage = GameStorage(path)
     return _default_storage
