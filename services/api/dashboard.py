@@ -144,36 +144,40 @@ def calculate_training_streak(db: Session, username: str) -> int:
     Returns:
         Number of consecutive days with training
     """
-    # Get all completed sessions ordered by completion date
+    # Get all unique completed session dates, ordered descending
     stmt = (
-        select(TrainingSession)
+        select(func.date(TrainingSession.completed_at))
         .where(
             TrainingSession.username == username,
             TrainingSession.completed_at.isnot(None)
         )
-        .order_by(desc(TrainingSession.completed_at))
+        .distinct()
+        .order_by(desc(func.date(TrainingSession.completed_at)))
     )
 
-    sessions = db.scalars(stmt).all()
+    session_dates_iter = db.scalars(stmt)
 
-    if not sessions:
+    try:
+        latest_session_date = next(session_dates_iter)
+    except StopIteration:
         return 0
 
-    # Track unique dates with sessions
-    session_dates = set()
-    for session in sessions:
-        if session.completed_at:
-            date = session.completed_at.date()
-            session_dates.add(date)
-
-    # Count consecutive days from today
     today = datetime.now(timezone.utc).date()
-    streak = 0
-    current_date = today
 
-    while current_date in session_dates:
-        streak += 1
-        current_date -= timedelta(days=1)
+    # A current streak must include today or yesterday.
+    if latest_session_date not in [today, today - timedelta(days=1)]:
+        return 0
+
+    streak = 1
+    expected_date = latest_session_date - timedelta(days=1)
+
+    for session_date in session_dates_iter:
+        if session_date == expected_date:
+            streak += 1
+            expected_date -= timedelta(days=1)
+        else:
+            # Gap in dates, streak is broken.
+            break
 
     return streak
 
