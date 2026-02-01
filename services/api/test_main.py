@@ -624,8 +624,8 @@ def test_get_daily_puzzles_success(client_with_temp_puzzle_storage):
         )
     
     # Get daily puzzles
-    response = client.get("/puzzles/daily?username=testuser&n=3")
-    
+    response = client.post("/daily-puzzle-sessions", json={"username": "testuser", "n": 3})
+
     assert response.status_code == 200
     data = response.json()
     assert data["count"] == 3
@@ -669,8 +669,8 @@ def test_get_daily_puzzles_rotation(client_with_temp_puzzle_storage):
     puzzle_storage.mark_puzzles_used("testuser", used_puzzle_ids, yesterday_date)
     
     # Request 4 puzzles - should get 3 unused + 1 used
-    response = client.get("/puzzles/daily?username=testuser&n=4")
-    
+    response = client.post("/daily-puzzle-sessions", json={"username": "testuser", "n": 4})
+
     assert response.status_code == 200
     data = response.json()
     assert data["count"] == 4
@@ -684,9 +684,9 @@ def test_get_daily_puzzles_rotation(client_with_temp_puzzle_storage):
 def test_get_daily_puzzles_no_puzzles(client_with_temp_puzzle_storage):
     """Test 404 when user has no puzzles."""
     client, _ = client_with_temp_puzzle_storage
-    
-    response = client.get("/puzzles/daily?username=unknownuser&n=5")
-    
+
+    response = client.post("/daily-puzzle-sessions", json={"username": "unknownuser", "n": 5})
+
     assert response.status_code == 404
     assert "no puzzles" in response.json()["detail"].lower()
     assert "generate puzzles first" in response.json()["detail"].lower()
@@ -695,16 +695,16 @@ def test_get_daily_puzzles_no_puzzles(client_with_temp_puzzle_storage):
 def test_get_daily_puzzles_validation():
     """Test parameter validation for daily puzzles endpoint."""
     # Missing username
-    response = client.get("/puzzles/daily")
+    response = client.post("/daily-puzzle-sessions", json={})
     assert response.status_code == 422
-    
+
     # n too small
-    response = client.get("/puzzles/daily?username=test&n=0")
-    assert response.status_code == 422
-    
+    response = client.post("/daily-puzzle-sessions", json={"username": "test", "n": 0})
+    assert response.status_code == 400
+
     # n too large
-    response = client.get("/puzzles/daily?username=test&n=21")
-    assert response.status_code == 422
+    response = client.post("/daily-puzzle-sessions", json={"username": "test", "n": 21})
+    assert response.status_code == 400
 
 
 def test_get_daily_puzzles_idempotent(client_with_temp_puzzle_storage):
@@ -729,12 +729,12 @@ def test_get_daily_puzzles_idempotent(client_with_temp_puzzle_storage):
         )
     
     # First call
-    response1 = client.get("/puzzles/daily?username=testuser&n=3")
+    response1 = client.post("/daily-puzzle-sessions", json={"username": "testuser", "n": 3})
     assert response1.status_code == 200
     puzzle_ids_1 = {p["id"] for p in response1.json()["puzzles"]}
-    
+
     # Second call - should return same puzzles (already marked for today)
-    response2 = client.get("/puzzles/daily?username=testuser&n=3")
+    response2 = client.post("/daily-puzzle-sessions", json={"username": "testuser", "n": 3})
     assert response2.status_code == 200
     puzzle_ids_2 = {p["id"] for p in response2.json()["puzzles"]}
     
