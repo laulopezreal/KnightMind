@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { importChessComGames, getImportStatus, ApiError } from '../api';
+import { importChessComGames, getImportStatus, validateChessComUser, ApiError } from '../api';
 import { useChessUsername } from '../context/ChessUsernameContext';
 
 
@@ -80,18 +80,38 @@ export default function Home() {
       setIsError(true);
       return;
     }
+
+    // Validate username exists on Chess.com before importing
     setLoading(true);
-    setStatus('Fetching games...');
+    setStatus('Validating username...');
     setIsError(false);
+
+    try {
+      const validation = await validateChessComUser(username.trim());
+      if (!validation.valid) {
+        setStatus('Username not found on Chess.com. Please check spelling.');
+        setIsError(true);
+        setLoading(false);
+        return;
+      }
+    } catch (err) {
+      setStatus('Could not validate username. Continuing with import...');
+      // Continue anyway if validation fails
+    }
+
+    setStatus('Fetching games...');
 
     try {
       const result = await importChessComGames(username);
       if (result.games_count === 0) {
         setStatus('No games found.');
       } else if (result.new_games === 0) {
-        setStatus('No new games found.');
+        setStatus(`No new games found. You have ${result.games_count} total games.`);
       } else {
-        setStatus(`Imported ${result.new_games} new games.`);
+        const duplicateMsg = result.skipped_duplicates > 0
+          ? ` (${result.skipped_duplicates} duplicate${result.skipped_duplicates === 1 ? '' : 's'} skipped)`
+          : '';
+        setStatus(`Imported ${result.new_games} new game${result.new_games === 1 ? '' : 's'}${duplicateMsg}. Ready to generate puzzles!`);
       }
       setImportStatus({
         lastImportedAt: new Date().toISOString(),
@@ -164,15 +184,22 @@ export default function Home() {
                   <span className="text-red-500/80">{statusError}</span>
                 )}
                 {!statusLoading && !statusError && importStatus.lastImportedAt && (
-                  <span>Last synced: {formatLastSynced(importStatus.lastImportedAt)}</span>
-                )}
-                {!statusLoading && !statusError && (importStatus.lastNewGames ?? 0) > 0 && (
-                  <Link
-                    to="/puzzles"
-                    className="text-primary hover:text-primary/80 transition-colors"
-                  >
-                    See new games →
-                  </Link>
+                  <>
+                    <span>Last synced: {formatLastSynced(importStatus.lastImportedAt)}</span>
+                    {(importStatus.lastNewGames ?? 0) > 0 && (
+                      <>
+                        <span className="text-green-600">
+                          {importStatus.lastNewGames} new game{importStatus.lastNewGames === 1 ? '' : 's'} imported
+                        </span>
+                        <Link
+                          to="/puzzles"
+                          className="text-primary hover:text-primary/80 transition-colors underline"
+                        >
+                          → Generate puzzles
+                        </Link>
+                      </>
+                    )}
+                  </>
                 )}
               </div>
             )}
