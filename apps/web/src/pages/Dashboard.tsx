@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { getDashboardSummary, getMotifPerformance, getMotifTrends, type DashboardSummary, type MotifPerformanceResponse, type TrendsResponse } from '../api/users';
 import { getRecentSessions, type SessionSummary } from '../api/sessions';
@@ -19,7 +19,7 @@ export default function Dashboard() {
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
     const [error, setError] = useState<string | null>(null);
-    const [isFetching, setIsFetching] = useState(false);
+    const isFetchingRef = useRef(false);
 
     // Redirect if no username
     useEffect(() => {
@@ -31,9 +31,9 @@ export default function Dashboard() {
     // Load all dashboard data - extracted for reusability
     const loadDashboardData = useCallback(async (isRefresh = false) => {
         // Guard against concurrent fetches
-        if (!username || isFetching) return;
+        if (!username || isFetchingRef.current) return;
 
-        setIsFetching(true);
+        isFetchingRef.current = true;
         try {
             if (isRefresh) {
                 setRefreshing(true);
@@ -59,9 +59,9 @@ export default function Dashboard() {
         } finally {
             setLoading(false);
             setRefreshing(false);
-            setIsFetching(false);
+            isFetchingRef.current = false;
         }
-    }, [username, isFetching]);
+    }, [username]);
 
     // Initial load
     useEffect(() => {
