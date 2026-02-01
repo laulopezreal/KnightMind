@@ -190,6 +190,10 @@ export default function Home() {
         <div className="space-y-8">
           <h3 className="text-2xl font-serif text-primary">Explore</h3>
           <div className="flex flex-col gap-6 font-sans text-lg">
+            <Link to="/dashboard" className="group flex items-center justify-between border-b border-primary/10 py-4 hover:border-primary/40 transition-colors">
+              <span className="group-hover:translate-x-2 transition-transform duration-500">Dashboard</span>
+              <span className="opacity-0 group-hover:opacity-100 transition-opacity">→</span>
+            </Link>
             <Link to="/puzzles" className="group flex items-center justify-between border-b border-primary/10 py-4 hover:border-primary/40 transition-colors">
               <span className="group-hover:translate-x-2 transition-transform duration-500">Daily Puzzles</span>
               <span className="opacity-0 group-hover:opacity-100 transition-opacity">→</span>
