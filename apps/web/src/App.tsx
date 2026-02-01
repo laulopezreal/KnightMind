@@ -4,6 +4,7 @@ import Openings from './pages/Openings';
 import Engine from './pages/Engine';
 import Puzzles from './pages/Puzzles';
 import RatingInsights from './pages/RatingInsights';
+import Ops from './pages/Ops';
 import Layout from './components/Layout';
 import { ChessUsernameProvider } from './context/ChessUsernameContext';
 
@@ -18,6 +19,7 @@ function App() {
             <Route path="/engine" element={<Engine />} />
             <Route path="/puzzles" element={<Puzzles />} />
             <Route path="/rating-insights" element={<RatingInsights />} />
+            <Route path="/ops" element={<Ops />} />
           </Routes>
         </Layout>
       </BrowserRouter>
