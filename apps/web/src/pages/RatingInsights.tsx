@@ -369,7 +369,7 @@ export default function RatingInsights() {
                                 {hasGames ? (
                                     <>
                                         {data.drivers.length > 0 ? (
-                                            {(() => {
+                                            (() => {
                                                 const prefix = confidence === 'low' ? 'Early signal: ' : confidence === 'medium' ? 'Likely contributed: ' : 'Key driver: ';
                                                 return (
                                                     <ul className="space-y-4">
@@ -381,7 +381,7 @@ export default function RatingInsights() {
                                                         ))}
                                                     </ul>
                                                 );
-                                            })()}
+                                            })()
                                         ) : (
                                             <p className="text-primary/50 font-sans italic">No clear drivers yet. Play a few games and this will explain what influenced your rating most.</p>
                                         )}
