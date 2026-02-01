@@ -1032,14 +1032,14 @@ export default function Puzzles() {
                                 <button
                                     type="button"
                                     onClick={handleStartSession}
-                                    disabled={controlsDisabled || !!(userStatus && userStatus.due_count === 0)}
+                                    disabled={controlsDisabled || !userStatus || userStatus.puzzles_count === 0 || userStatus.due_count === 0}
                                     title={
                                         !username ? 'Set username to continue' :
                                         userStatus?.puzzles_count === 0 ? 'Generate puzzles first' :
                                         userStatus?.due_count === 0 ? 'No puzzles due for review right now' :
                                         'Start a new training session'
                                     }
-                                    className={`px-6 py-2 bg-accent text-bg-primary rounded-sm font-serif transition-colors km-focus-visible ${(controlsDisabled || (userStatus && userStatus.due_count === 0)) ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'}`}>
+                                    className={`px-6 py-2 bg-accent text-bg-primary rounded-sm font-serif transition-colors km-focus-visible ${(controlsDisabled || !userStatus || userStatus.puzzles_count === 0 || userStatus.due_count === 0) ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'}`}>
                                     Start Session
                                 </button>
                             </>
