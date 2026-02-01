@@ -42,12 +42,14 @@ def upgrade() -> None:
         )
 
     games_indexes = {index["name"] for index in inspector.get_indexes("games")}
-    if "ix_games_username_end_time" not in games_indexes:
-        op.create_index("ix_games_username_end_time", "games", ["username", "end_time"])
-    if "ix_games_game_id" not in games_indexes:
-        op.create_index("ix_games_game_id", "games", ["game_id"])
-    if "ix_games_username" not in games_indexes:
-        op.create_index("ix_games_username", "games", ["username"])
+    indexes_to_create = {
+        "ix_games_username_end_time": ["username", "end_time"],
+        "ix_games_game_id": ["game_id"],
+        "ix_games_username": ["username"],
+    }
+    for name, columns in indexes_to_create.items():
+        if name not in games_indexes:
+            op.create_index(name, "games", columns)
 
     if not inspector.has_table("puzzles"):
         op.create_table(
