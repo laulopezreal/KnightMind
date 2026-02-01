@@ -307,7 +307,15 @@ export default function Puzzles() {
                     // Merge with default achievements to ensure all are present
                     const merged = ACHIEVEMENTS.map(defaultAchievement => {
                         const saved = parsed.find((a: Achievement) => a.id === defaultAchievement.id);
-                        return saved ? { ...defaultAchievement, ...saved } : defaultAchievement;
+                        if (saved) {
+                            // Convert earnedAt string back to Date object
+                            return {
+                                ...defaultAchievement,
+                                ...saved,
+                                earnedAt: saved.earnedAt ? new Date(saved.earnedAt) : undefined
+                            };
+                        }
+                        return defaultAchievement;
                     });
                     setAchievements(merged);
                 } catch (e) {
@@ -847,7 +855,7 @@ export default function Puzzles() {
                 puzzleTimeRef.current = null;
             }
         };
-    }, [currentPuzzle, handleReviewPuzzle, puzzleStartTime, sessionSummary, status]);
+    }, [currentPuzzle, sessionSummary]);
 
     const onPieceDrop = (sourceSquare: string, targetSquare: string) => {
         if (!currentPuzzle || status === 'correct' || status === 'revealed') return false;
@@ -1062,6 +1070,14 @@ export default function Puzzles() {
                     {shouldShowEmptyState && isLoadingStatus && (
                         <div className="text-center text-primary/40 py-4">
                             <span className="animate-pulse">Loading training status...</span>
+                        </div>
+                    )}
+                    {shouldShowEmptyState && !userStatus && !isLoadingStatus && (
+                        <div className="bg-primary/5 border border-primary/10 rounded-sm p-6 backdrop-blur-sm text-center space-y-4">
+                            <h3 className="font-serif text-xl text-primary">Ready to train</h3>
+                            <p className="text-primary/60 font-sans">
+                                Click &quot;Load Puzzles&quot; to start a training session, or &quot;Generate New&quot; to create fresh puzzles from your games.
+                            </p>
                         </div>
                     )}
                     {shouldShowErrorCard && (

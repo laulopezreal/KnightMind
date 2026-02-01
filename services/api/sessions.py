@@ -97,6 +97,50 @@ async def start_session(
     )
 
 
+@router.get("/recent", response_model=list[SessionSummary])
+async def get_recent_sessions(
+    username: str,
+    limit: int = 10,
+    db: Session = Depends(get_db)
+):
+    """
+    Get recent training sessions for a user.
+
+    Returns sessions ordered by created_at descending.
+    Limit: default 10, max 50.
+    """
+    # Enforce max limit
+    limit = min(limit, 50)
+
+    stmt = (
+        select(TrainingSession)
+        .where(TrainingSession.username == username)
+        .order_by(desc(TrainingSession.created_at))
+        .limit(limit)
+    )
+
+    sessions = db.scalars(stmt).all()
+
+    return [
+        SessionSummary(
+            session_id=s.id,
+            requested_n=s.requested_n,
+            pass_count=s.pass_count,
+            fail_count=s.fail_count,
+            total_time_ms=s.total_time_ms,
+            created_at=s.created_at,
+            completed_at=s.completed_at,
+            session_type=s.session_type,
+            target_accuracy=s.target_accuracy,
+            target_time_minutes=s.target_time_minutes,
+            current_streak=s.current_streak,
+            best_streak=s.best_streak,
+            hints_used=s.hints_used
+        )
+        for s in sessions
+    ]
+
+
 @router.get("/{session_id}", response_model=SessionSummary)
 async def get_session(
     session_id: str,
@@ -104,15 +148,15 @@ async def get_session(
 ):
     """
     Get session details by ID.
-    
+
     Used for validating sessions on page load.
     """
     stmt = select(TrainingSession).where(TrainingSession.id == session_id)
     session = db.scalars(stmt).first()
-    
+
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-    
+
     return SessionSummary(
         session_id=session.id,
         requested_n=session.requested_n,
@@ -138,25 +182,25 @@ async def complete_session(
 ):
     """
     Mark a session as complete.
-    
+
     Idempotent - returns existing summary if already completed.
     """
     # Fetch session
     stmt = select(TrainingSession).where(TrainingSession.id == session_id)
     session = db.scalars(stmt).first()
-    
+
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-    
+
     if session.username != request.username:
         raise HTTPException(status_code=403, detail="Session belongs to different user")
-    
+
     # If not already completed, set completed_at
     if session.completed_at is None:
         session.completed_at = datetime.now(timezone.utc)
         db.commit()
         db.refresh(session)
-    
+
     return SessionSummary(
         session_id=session.id,
         requested_n=session.requested_n,
@@ -172,50 +216,6 @@ async def complete_session(
         best_streak=session.best_streak,
         hints_used=session.hints_used
     )
-
-
-@router.get("/recent", response_model=list[SessionSummary])
-async def get_recent_sessions(
-    username: str,
-    limit: int = 10,
-    db: Session = Depends(get_db)
-):
-    """
-    Get recent training sessions for a user.
-    
-    Returns sessions ordered by created_at descending.
-    Limit: default 10, max 50.
-    """
-    # Enforce max limit
-    limit = min(limit, 50)
-    
-    stmt = (
-        select(TrainingSession)
-        .where(TrainingSession.username == username)
-        .order_by(desc(TrainingSession.created_at))
-        .limit(limit)
-    )
-    
-    sessions = db.scalars(stmt).all()
-    
-    return [
-        SessionSummary(
-            session_id=s.id,
-            requested_n=s.requested_n,
-            pass_count=s.pass_count,
-            fail_count=s.fail_count,
-            total_time_ms=s.total_time_ms,
-            created_at=s.created_at,
-            completed_at=s.completed_at,
-            session_type=s.session_type,
-            target_accuracy=s.target_accuracy,
-            target_time_minutes=s.target_time_minutes,
-            current_streak=s.current_streak,
-            best_streak=s.best_streak,
-            hints_used=s.hints_used
-        )
-        for s in sessions
-    ]
 
 
 @router.post("/{session_id}/use_hint", response_model=SessionSummary)
