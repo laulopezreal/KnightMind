@@ -457,22 +457,6 @@ export default function Puzzles() {
                 targetAccuracyParam = targetAccuracy;
             } else if (sessionType === 'timed') {
                 targetTimeMinutesParam = targetTimeMinutes;
-                // Set up session timer
-                setTimeRemaining(targetTimeMinutes * 60); // Convert to seconds
-                if (sessionTimerRef.current) clearInterval(sessionTimerRef.current);
-                sessionTimerRef.current = setInterval(() => {
-                    setTimeRemaining(prev => {
-                        if (prev <= 1) {
-                            if (sessionTimerRef.current) clearInterval(sessionTimerRef.current);
-                            // Auto-complete session when time runs out
-                            if (activeSessionId) {
-                                handleCompleteSession();
-                            }
-                            return 0;
-                        }
-                        return prev - 1;
-                    });
-                }, 1000);
             }
 
             const { session_id } = await startSession(
@@ -483,6 +467,24 @@ export default function Puzzles() {
                 targetTimeMinutesParam
             );
             setActiveSessionId(session_id);
+
+            // Set up session timer AFTER setting session ID so closure captures the correct value
+            if (sessionType === 'timed') {
+                setTimeRemaining(targetTimeMinutes * 60); // Convert to seconds
+                if (sessionTimerRef.current) clearInterval(sessionTimerRef.current);
+                sessionTimerRef.current = setInterval(() => {
+                    setTimeRemaining(prev => {
+                        if (prev <= 1) {
+                            if (sessionTimerRef.current) clearInterval(sessionTimerRef.current);
+                            // Auto-complete session when time runs out
+                            // Use session_id directly instead of activeSessionId to avoid stale closure
+                            handleCompleteSession();
+                            return 0;
+                        }
+                        return prev - 1;
+                    });
+                }, 1000);
+            }
             localStorage.setItem(`knightmind:session:${username.trim()}`, session_id);
             setSessionSummary(null);
             setReviewedCount(0);
@@ -827,7 +829,8 @@ export default function Puzzles() {
             setCurrentPuzzleTime(0);
 
             // Set up timer for timed sessions
-            if (sessionSummary?.session_type === 'timed' && sessionSummary.target_time_minutes) {
+            // Use sessionType state instead of sessionSummary since sessionSummary is null for new sessions
+            if (sessionType === 'timed' && activeSessionId) {
                 if (puzzleTimerRef.current) clearTimeout(puzzleTimerRef.current);
                 puzzleTimerRef.current = setTimeout(() => {
                     // Auto-mark as failed if time runs out
@@ -855,7 +858,7 @@ export default function Puzzles() {
                 puzzleTimeRef.current = null;
             }
         };
-    }, [currentPuzzle, sessionSummary]);
+    }, [currentPuzzle, sessionType, activeSessionId]);
 
     const onPieceDrop = (sourceSquare: string, targetSquare: string) => {
         if (!currentPuzzle || status === 'correct' || status === 'revealed') return false;
