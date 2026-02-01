@@ -149,6 +149,12 @@ export default function RatingInsights() {
     const isState1 = data && hasSnapshots && !hasGames;
     const isState2 = data && hasSnapshots && hasGames;
 
+    const N = data?.stats.games ?? 0;
+    const confidence = N < 10 ? 'low' : N < 20 ? 'medium' : 'high';
+    const timeControlLabel = timeControl === 'rapid' ? 'Rapid' : 'Blitz';
+    const windowLabel = N >= 20 ? `Last 20 ${timeControlLabel} games` : `Last ${N} ${timeControlLabel} games`;
+    const confidenceQualifier = confidence === 'low' ? 'Very small sample — insights are indicative only.' : confidence === 'medium' ? 'Moderate sample — trends may still be noisy.' : undefined;
+
     return (
         <div className="space-y-12 animate-teedin pb-20">
             <section className="flex flex-col md:flex-row justify-between items-end gap-6">
@@ -326,7 +332,8 @@ export default function RatingInsights() {
                                     value={hasGames && data.rating.net_change !== null
                                         ? (data.rating.net_change > 0 ? `+${data.rating.net_change}` : `${data.rating.net_change}`)
                                         : "—"}
-                                    sub={data.window.source === 'session' ? "Since last session" : "In selected window"}
+                                    sub={windowLabel}
+                                    helper={confidenceQualifier}
                                     highlight={hasGames && data.rating.net_change !== null && data.rating.net_change !== 0}
                                     positive={hasGames && data.rating.net_change !== null && (data.rating.net_change || 0) > 0}
                                 />
@@ -359,12 +366,15 @@ export default function RatingInsights() {
                                     <>
                                         {data.drivers.length > 0 ? (
                                             <ul className="space-y-4">
-                                                {data.drivers.map((driver, i) => (
-                                                    <li key={i} className="flex items-start gap-3 text-lg font-sans text-primary/80">
-                                                        <span className="mt-2 w-1.5 h-1.5 rounded-full bg-primary/40" />
-                                                        {driver}
-                                                    </li>
-                                                ))}
+                                                {data.drivers.map((driver, i) => {
+                                                    const prefix = confidence === 'low' ? 'Early signal: ' : confidence === 'medium' ? 'Likely contributed: ' : 'Key driver: ';
+                                                    return (
+                                                        <li key={i} className="flex items-start gap-3 text-lg font-sans text-primary/80">
+                                                            <span className="mt-2 w-1.5 h-1.5 rounded-full bg-primary/40" />
+                                                            {prefix}{driver}
+                                                        </li>
+                                                    );
+                                                })}
                                             </ul>
                                         ) : (
                                             <p className="text-primary/50 font-sans italic">No clear drivers yet. Play a few games and this will explain what influenced your rating most.</p>
