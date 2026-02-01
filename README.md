@@ -31,11 +31,13 @@ npm install
 ### Backend (services/api)
 
 ```bash
-cd services/api
+cd /path/to/KnightMind
 python -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
-pip install -r requirements.txt
+pip install .[dev]
 ```
+
+The backend and ingest services both install dependencies from the root `pyproject.toml` to keep a single source of truth. If you prefer editable installs during development, use `pip install -e .[dev]`.
 
 ### Stockfish Engine
 
@@ -59,20 +61,46 @@ Download from https://stockfishchess.org/download/ and add to PATH.
 stockfish --version
 ```
 
-**Configuration (optional):**
+**Stockfish as a separate service (recommended):**
+
+Run Stockfish as its own process so the API talks to it over HTTP. Start the service first, then the API with `STOCKFISH_SERVICE_URL` set.
+
+```bash
+# Terminal 1: Stockfish service (port 8001)
+cd services/stockfish
+pip install -r requirements.txt
+uvicorn main:app --port 8001
+```
+
+In `services/api/.env` (or env):
+```bash
+STOCKFISH_SERVICE_URL=http://localhost:8001
+```
+
+The Stockfish service uses `STOCKFISH_PATH` and `STOCKFISH_DEPTH`; ensure the binary is on PATH or set `STOCKFISH_PATH`.
+
+**Local binary (optional):** If `STOCKFISH_SERVICE_URL` is unset, the API spawns Stockfish itself. Then:
 ```bash
 export STOCKFISH_PATH=/path/to/stockfish  # Custom binary path
-export STOCKFISH_DEPTH=12                  # Analysis depth (default: 12)
-export STOCKFISH_MOVETIME_MS=200           # Or use movetime instead of depth
+export STOCKFISH_DEPTH=12
 ```
 
 ## Running Locally
 
+### Start the Stockfish service (if using separate service)
+
+```bash
+cd services/stockfish
+uvicorn main:app --port 8001
+```
+
+Stockfish service will be at http://localhost:8001
+
 ### Start the API server
 
 ```bash
-cd services/api
 source venv/bin/activate
+cd services/api
 uvicorn main:app --reload --port 8000
 ```
 
