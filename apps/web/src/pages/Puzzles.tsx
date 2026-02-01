@@ -39,11 +39,8 @@ export default function Puzzles() {
     const currentPuzzle = puzzles[currentIndex];
     const puzzlesAvailable = puzzles.length > 0;
     const isFinalPuzzle = puzzlesAvailable && currentIndex >= puzzles.length - 1;
-    const showPuzzleBoard = (sessionState === 'active' || sessionState === 'completing') && !!currentPuzzle;
-    const isAdvanceVisible = status === 'correct' || status === 'revealed';
     const finishButtonDisabled = isFinalPuzzle ? sessionState !== 'active' : false;
     const controlsEnabled = sessionState === 'idle' || sessionState === 'error';
-    const controlsDisabled = !controlsEnabled || isLoading || isGenerating;
 
     // Load persisted job and session from local storage on mount or username change
     useEffect(() => {
@@ -119,6 +116,7 @@ export default function Puzzles() {
 
         loadSessionAndPuzzles();
         loadRecent();
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- run only on username change
     }, [username]);
 
     const { job, isPolling: isJobPolling } = useJobPolling(activeJobId, {
@@ -167,6 +165,9 @@ export default function Puzzles() {
             }
         }
     });
+
+    const isGenerating = isJobPolling || (job?.status === 'queued' || job?.status === 'running');
+    const controlsDisabled = !controlsEnabled || isLoading || isGenerating;
 
     // Sync job status to local isGenerating for backwards compat with other UI if needed, 
     // but better to rely on 'job' object.
@@ -364,8 +365,6 @@ export default function Puzzles() {
         }
     };
 
-    // Helper to determine active state
-    const isGenerating = isJobPolling || (job?.status === 'queued' || job?.status === 'running');
     const shouldShowJobStatusCard =
         !!job &&
         (job.status === 'queued' ||
