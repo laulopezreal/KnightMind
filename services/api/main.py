@@ -29,9 +29,10 @@ from services.api.engine import (
 )
 from services.api.openings import build_opening_tree
 from services.api.puzzles import generate_puzzles
-from services.api.storage import GameRepository, PuzzleRepository, get_storage, get_puzzle_storage
+from services.api.storage import GameRepository, PuzzleRepository
 from services.api.storage.spaced_repetition import (
     get_adaptive_puzzles,
+    get_all_puzzle_stats,
     get_due_puzzles,
     insert_puzzle_review,
     update_puzzle_stats
@@ -143,12 +144,85 @@ class ImportStatusResponse(BaseModel):
     last_new_games: int | None
 
 
+class UserStatusResponse(BaseModel):
+    username: str
+    games_count: int
+    puzzles_count: int
+    due_count: int
+    next_due_at: datetime | None
+    has_new_games: bool
+
+
 @app.get("/users")
 async def get_users(db: Session = Depends(get_db)):
     """Get list of users who have imported games."""
     game_repository = GameRepository(db)
     users = game_repository.get_users()
     return {"users": users}
+
+
+@app.get("/users/{username}/status", response_model=UserStatusResponse)
+async def get_user_status(username: str, db: Session = Depends(get_db)):
+    """Get training status for a user to support empty states."""
+    game_repository = GameRepository(db)
+    puzzle_repository = PuzzleRepository(db)
+
+    games_count = game_repository.get_game_count(username)
+    puzzles_count = puzzle_repository.get_puzzle_count(username)
+
+    metadata = game_repository.get_all_metadata(username)
+    latest_game_time = (
+        datetime.fromtimestamp(metadata[0].end_time, tz=timezone.utc) if metadata else None
+    )
+
+    latest_puzzle_time = None
+    if puzzles_count > 0:
+        all_puzzles = puzzle_repository.get_all_puzzles(username)
+        puzzle_times = [
+            datetime.fromisoformat(p.created_at.replace("Z", "+00:00"))
+            for p in all_puzzles
+            if p.created_at
+        ]
+        if puzzle_times:
+            latest_puzzle_time = max(puzzle_times)
+
+    has_new_games = False
+    if latest_game_time:
+        if latest_puzzle_time is None or latest_game_time > latest_puzzle_time:
+            has_new_games = True
+
+    due_count = 0
+    next_due_at = None
+    if puzzles_count > 0:
+        all_stats = get_all_puzzle_stats(db, username)
+        now = datetime.now(timezone.utc)
+        due_dates = []
+        for stats in all_stats.values():
+            if stats.next_due_at:
+                due_dt = (
+                    stats.next_due_at.replace(tzinfo=timezone.utc)
+                    if stats.next_due_at.tzinfo is None
+                    else stats.next_due_at
+                )
+                due_dates.append(due_dt)
+                if due_dt <= now:
+                    due_count += 1
+
+        future_dues = [due for due in due_dates if due > now]
+        if future_dues:
+            next_due_at = min(future_dues)
+
+        if not all_stats:
+            due_count = puzzles_count
+
+    return UserStatusResponse(
+        username=username,
+        games_count=games_count,
+        puzzles_count=puzzles_count,
+        due_count=due_count,
+        next_due_at=next_due_at,
+        has_new_games=has_new_games,
+    )
 
 
 @app.get("/users/validate")

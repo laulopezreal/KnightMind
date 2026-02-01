@@ -53,6 +53,12 @@ def get_puzzle_stats(db: Session, puzzle_id: str, username: str) -> PuzzleStats 
     return db.scalars(stmt).first()
 
 
+def get_all_puzzle_stats(db: Session, username: str) -> dict[str, PuzzleStats]:
+    """Get statistics for all puzzles belonging to a user."""
+    stmt = select(PuzzleStats).where(PuzzleStats.username == username)
+    return {stats.puzzle_id: stats for stats in db.scalars(stmt).all()}
+
+
 def insert_puzzle_review(
     db: Session,
     puzzle_id: str,
