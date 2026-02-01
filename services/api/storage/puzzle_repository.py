@@ -2,7 +2,7 @@ import uuid
 from datetime import date, datetime, timezone
 from pathlib import Path
 
-from sqlalchemy import select, update
+from sqlalchemy import select, update, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 

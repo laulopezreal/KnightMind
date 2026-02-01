@@ -1,3 +1,5 @@
+import os
+os.environ["KNIGHTMIND_WORKER_DISABLED"] = "true"
 import shutil
 import tempfile
 from unittest.mock import patch
@@ -8,7 +10,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from services.api.main import app
+from services.api.main import app, get_db
 from services.api.models import Base, Job, JobStatus
 from services.api.storage import GameStorage
 
@@ -23,10 +25,21 @@ def temp_storage():
 
 
 @pytest.fixture
-def client_with_temp_storage(temp_storage):
-    """Create a test client with temporary storage."""
-    with patch("services.api.main.get_storage", return_value=temp_storage):
+def client_with_temp_storage(temp_storage, db_session, monkeypatch):
+    """Create a test client with temporary storage and db."""
+    monkeypatch.setenv("KNIGHTMIND_STORAGE_MODE", "filesystem")
+    app.dependency_overrides[get_db] = lambda: db_session
+    with patch("services.api.main.GameRepository") as mock_repo:
+        mock_repo.return_value.filesystem = temp_storage
+        # Proxy calls to filesystem methods that endpoints use
+        mock_repo.return_value.get_users.side_effect = temp_storage.get_users
+        mock_repo.return_value.get_game_count.side_effect = temp_storage.get_game_count
+        mock_repo.return_value.store_game.side_effect = temp_storage.store_game
+        mock_repo.return_value.get_all_metadata.side_effect = temp_storage.get_all_metadata
+        mock_repo.return_value.get_pgn.side_effect = temp_storage.get_pgn
+        
         yield TestClient(app)
+    app.dependency_overrides.clear()
 
 @pytest.fixture
 def db_session():
@@ -47,10 +60,9 @@ def db_session():
 @pytest.fixture
 def client_with_db(db_session, monkeypatch):
     monkeypatch.setenv("KNIGHTMIND_WORKER_DISABLED", "true")
-    with patch("services.api.main.SessionLocal") as mock_session_local:
-        mock_session_local.return_value.__enter__.return_value = db_session
-        mock_session_local.return_value.__exit__.return_value = None
-        yield TestClient(app)
+    app.dependency_overrides[get_db] = lambda: db_session
+    yield TestClient(app)
+    app.dependency_overrides.clear()
 
 
 client = TestClient(app)
@@ -124,19 +136,20 @@ def test_get_openings_no_games(client_with_temp_storage):
     assert "no games" in response.json()["detail"].lower()
 
 
-@patch("services.api.storage.GameStorage.get_users")
-def test_get_users_list(mock_get_users, client_with_temp_storage):
+def test_get_users_list(client_with_temp_storage, temp_storage):
     """Test retrieving list of users."""
-    mock_get_users.return_value = ["user1", "user2"]
+    # Add some indices to temp_storage to simulate users
+    (temp_storage.index_path / "user1.json").write_text('["game1"]')
+    (temp_storage.index_path / "user2.json").write_text('["game2"]')
     
     response = client_with_temp_storage.get("/users")
     
     assert response.status_code == 200
     assert response.json() == {"users": ["user1", "user2"]}
-    mock_get_users.assert_called_once()
     
     # Test empty list
-    mock_get_users.return_value = []
+    for index_file in temp_storage.index_path.glob("*.json"):
+        index_file.unlink()
     response = client_with_temp_storage.get("/users")
     assert response.status_code == 200
     assert response.json() == {"users": []}
@@ -367,9 +380,15 @@ def temp_puzzle_storage():
 
 
 @pytest.fixture
-def client_with_temp_puzzle_storage(temp_puzzle_storage):
+def client_with_temp_puzzle_storage(temp_puzzle_storage, monkeypatch):
     """Create a test client with temporary puzzle storage."""
-    with patch("services.api.main.get_puzzle_storage", return_value=temp_puzzle_storage):
+    monkeypatch.setenv("KNIGHTMIND_STORAGE_MODE", "filesystem")
+    with patch("services.api.main.PuzzleRepository") as mock_repo:
+        mock_repo.return_value.filesystem = temp_puzzle_storage
+        mock_repo.return_value.get_daily_puzzles.side_effect = temp_puzzle_storage.get_daily_puzzles
+        mock_repo.return_value.mark_puzzles_used.side_effect = temp_puzzle_storage.mark_puzzles_used
+        mock_repo.return_value.get_puzzle.side_effect = temp_puzzle_storage.get_puzzle
+        
         yield TestClient(app), temp_puzzle_storage
 
 

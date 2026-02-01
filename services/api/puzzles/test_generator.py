@@ -27,16 +27,20 @@ def temp_storage():
             patch("services.api.puzzles.generator.GameRepository") as mock_game_repository,
             patch("services.api.puzzles.generator.PuzzleRepository") as mock_puzzle_repository,
         ):
-            from services.api.storage.games import GameStorage
-            from services.api.storage.puzzles import PuzzleStorage
+            # Reset global storage instances to ensure they use the new tmpdir
+            import services.api.storage.games as games_module
+            import services.api.storage.puzzles as puzzles_module
+            games_module._default_storage = None
+            puzzles_module._default_puzzle_storage = None
 
-            storage = GameStorage(base_path=tmpdir)
-            puzzle_storage = PuzzleStorage(base_path=tmpdir)
+            storage = games_module.GameStorage(base_path=tmpdir)
+            puzzle_storage = puzzles_module.PuzzleStorage(base_path=tmpdir)
 
             mock_session = MagicMock()
             mock_session_local.return_value.__enter__.return_value = mock_session
             mock_session_local.return_value.__exit__.return_value = None
 
+            # Patch repositories to use the same tmpdir
             mock_game_repository.side_effect = lambda db: GameRepository(db, base_path=tmpdir)
             mock_puzzle_repository.side_effect = lambda db: PuzzleRepository(db, base_path=tmpdir)
 
