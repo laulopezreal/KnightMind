@@ -28,11 +28,11 @@ jobs:
       with:
         node-version: ${{ matrix.node-version }}
         cache: 'npm'
-        cache-dependency-path: apps/web/package-lock.json
+        cache-dependency-path: apps/web/package.json
 
     - name: Install dependencies
       working-directory: ./apps/web
-      run: npm ci
+      run: npm install
 
     - name: Lint
       working-directory: ./apps/web
