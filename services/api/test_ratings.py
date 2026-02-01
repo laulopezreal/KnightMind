@@ -128,7 +128,7 @@ def test_explain_rating_changes_basic(client_with_db, db_session, tmp_path, monk
             white_username="testuser",
             black_username="opponent",
             white_result="win",
-            black_result="lose",
+            black_result="loss",
             time_control="rapid",
             end_time=int((since_time + timedelta(hours=2 + i)).timestamp()),
             rated=True,
