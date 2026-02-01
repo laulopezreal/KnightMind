@@ -211,7 +211,7 @@ async def import_chesscom_games(username: str, db: Session = Depends(get_db)):
             else:
                 skipped += 1
                 
-        storage.record_import_summary(username, new_games)
+        game_repository.filesystem.record_import_summary(username, new_games)
 
         return ImportResponse(
             message=f"Successfully processed {count} games for {username}",
@@ -237,12 +237,12 @@ async def import_chesscom_games(username: str, db: Session = Depends(get_db)):
 
 
 @app.get("/import/status", response_model=ImportStatusResponse)
-async def get_import_status(username: str):
+async def get_import_status(username: str, db: Session = Depends(get_db)):
     """Get the last import summary for a user."""
     if not username:
         raise HTTPException(status_code=400, detail="Username is required")
-    storage = get_storage()
-    summary = storage.get_last_import_summary(username)
+    game_repository = GameRepository(db)
+    summary = game_repository.filesystem.get_last_import_summary(username)
     if not summary:
         return ImportStatusResponse(last_imported_at=None, last_new_games=None)
     return ImportStatusResponse(
