@@ -6,7 +6,8 @@ from services.api.models import Base
 from services.api.storage.spaced_repetition import (
     insert_puzzle_review,
     update_puzzle_stats,
-    get_puzzle_stats
+    get_puzzle_stats,
+    get_adaptive_puzzles,
 )
 
 # Use in-memory SQLite for tests
@@ -75,3 +76,44 @@ def test_sequential_reviews(db_session):
 def test_get_puzzle_stats_none(db_session):
     stats = get_puzzle_stats(db_session, "non-existent", "testuser")
     assert stats is None
+
+
+def test_get_adaptive_puzzles_accuracy_goal_sorting(db_session):
+    from datetime import timedelta
+    from services.api.models import PuzzleStats
+
+    now = datetime.now(timezone.utc)
+
+    stats_high_accuracy = PuzzleStats(
+        puzzle_id="p1",
+        username="testuser",
+        attempts=10,
+        pass_count=9,
+        fail_count=1,
+        ease_factor=2.0,
+        interval_days=1,
+        next_due_at=now - timedelta(days=1)
+    )
+    stats_low_accuracy = PuzzleStats(
+        puzzle_id="p2",
+        username="testuser",
+        attempts=10,
+        pass_count=5,
+        fail_count=5,
+        ease_factor=2.0,
+        interval_days=1,
+        next_due_at=now - timedelta(days=1)
+    )
+    db_session.add_all([stats_high_accuracy, stats_low_accuracy])
+    db_session.commit()
+
+    ordered_ids, _ = get_adaptive_puzzles(
+        db_session,
+        "testuser",
+        ["p1", "p2"],
+        n=2,
+        session_type="accuracy_goal",
+        target_accuracy=80
+    )
+
+    assert ordered_ids == ["p1", "p2"]

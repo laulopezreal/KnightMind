@@ -4,8 +4,12 @@ from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from services.api.main import app
+from services.api.models import Base, Job, JobStatus
 from services.api.storage import GameStorage
 
 
@@ -22,6 +26,30 @@ def temp_storage():
 def client_with_temp_storage(temp_storage):
     """Create a test client with temporary storage."""
     with patch("services.api.main.get_storage", return_value=temp_storage):
+        yield TestClient(app)
+
+@pytest.fixture
+def db_session():
+    engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(bind=engine)
+    SessionLocal = sessionmaker(bind=engine)
+    session = SessionLocal()
+    try:
+        yield session
+    finally:
+        session.close()
+        Base.metadata.drop_all(bind=engine)
+
+@pytest.fixture
+def client_with_db(db_session, monkeypatch):
+    monkeypatch.setenv("KNIGHTMIND_WORKER_DISABLED", "true")
+    with patch("services.api.main.SessionLocal") as mock_session_local:
+        mock_session_local.return_value.__enter__.return_value = db_session
+        mock_session_local.return_value.__exit__.return_value = None
         yield TestClient(app)
 
 
@@ -262,29 +290,27 @@ def test_import_chesscom_no_games(mock_import_games, client_with_temp_storage):
 
 # --- Puzzle generation endpoint tests ---
 
-@patch("services.api.main.generate_puzzles")
-def test_generate_puzzles_success(mock_generate, client_with_temp_storage):
-    """Test successful puzzle generation."""
-    """Test successful puzzle generation enqueuing."""
-    # This endpoint now returns JobStatusResponse
-    # mocking generate_puzzles is not needed because it's called by worker, not endpoint
-    # endpoint only inserts into DB.
-    # But we need to patch SessionLocal in main to use temp db.
-    pass
+def test_generate_puzzles_success(client_with_db, db_session):
+    """Test puzzle generation enqueues a job with default params."""
+    response = client_with_db.post("/puzzles/generate?username=testuser")
+    assert response.status_code == 200
+    data = response.json()
 
-def test_generate_puzzles_success_placeholder():
-# We skip this here because test_jobs.py covers it properly with DB mocks.
-    pass
+    job = db_session.get(Job, data["job_id"])
+    assert job is not None
+    assert job.status == JobStatus.QUEUED
+    assert job.params == {"max_games": 30, "max_puzzles": 30}
 
 
-@patch("services.api.main.generate_puzzles")
-def test_generate_puzzles_no_games(mock_generate, client_with_temp_storage):
-    """Test puzzle generation when user has no games."""
-    # Since endpoint sends to queue, validation happens in worker.
-    # Endpoint returns 200 with job_id.
-    # We can check if job is failed? No, worker runs async.
-    # So this test is no longer valid as-is for the endpoint synchronously.
-    pass
+def test_generate_puzzles_custom_params(client_with_db, db_session):
+    """Test puzzle generation stores custom params on the job."""
+    response = client_with_db.post("/puzzles/generate?username=testuser&max_games=5&max_puzzles=7")
+    assert response.status_code == 200
+    data = response.json()
+
+    job = db_session.get(Job, data["job_id"])
+    assert job is not None
+    assert job.params == {"max_games": 5, "max_puzzles": 7}
 
 
 def test_generate_puzzles_missing_username():
@@ -472,4 +498,31 @@ def test_get_daily_puzzles_idempotent(client_with_temp_puzzle_storage):
     # Should be the same puzzles
     assert puzzle_ids_1 == puzzle_ids_2
 
+
+@patch("services.api.main.is_engine_available")
+def test_engine_status_available(mock_available):
+    mock_available.return_value = (True, "Stockfish is ready")
+    response = client.get("/engine/status")
+    assert response.status_code == 200
+    assert response.json() == {"available": True, "message": "Stockfish is ready"}
+
+
+@patch("services.api.main.get_or_compute_eval")
+def test_engine_eval_invalid_fen(mock_eval):
+    from services.api.engine import InvalidFenError
+
+    mock_eval.side_effect = InvalidFenError("Invalid FEN")
+    response = client.post("/engine/eval", json={"fen": "invalid"})
+    assert response.status_code == 400
+    assert "Invalid FEN" in response.json()["detail"]
+
+
+@patch("services.api.main.get_or_compute_eval")
+def test_engine_eval_unavailable(mock_eval):
+    from services.api.engine import EngineNotAvailableError
+
+    mock_eval.side_effect = EngineNotAvailableError("Engine not available")
+    response = client.post("/engine/eval", json={"fen": "any"})
+    assert response.status_code == 503
+    assert "Engine not available" in response.json()["detail"]
 

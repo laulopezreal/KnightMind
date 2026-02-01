@@ -92,6 +92,35 @@ def test_get_job_status(client, db_session):
     assert data["status"] == JobStatus.RUNNING
     assert data["progress"] == 50
 
+
+def test_cancel_job_success(client, db_session):
+    job = Job(username="cancelme", status=JobStatus.QUEUED)
+    db_session.add(job)
+    db_session.commit()
+
+    resp = client.post(f"/jobs/{job.id}/cancel")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == JobStatus.CANCELED
+
+    db_session.refresh(job)
+    assert job.status == JobStatus.CANCELED
+
+
+def test_cancel_job_invalid_status(client, db_session):
+    job = Job(username="done", status=JobStatus.SUCCEEDED)
+    db_session.add(job)
+    db_session.commit()
+
+    resp = client.post(f"/jobs/{job.id}/cancel")
+    assert resp.status_code == 400
+    assert "cannot cancel" in resp.json()["detail"].lower()
+
+
+def test_cancel_job_not_found(client):
+    resp = client.post("/jobs/missing-id/cancel")
+    assert resp.status_code == 404
+
 async def run_sync_in_thread(func, *args, **kwargs):
     return func(*args, **kwargs)
 

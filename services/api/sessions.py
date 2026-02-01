@@ -21,16 +21,16 @@ class StartSessionRequest(BaseModel):
     username: str
     n: int
     session_type: str = "standard"  # "standard", "timed", "accuracy_goal"
-    target_accuracy: float = None  # Target accuracy percentage (0.0-100.0)
-    target_time_minutes: int = None  # Target session time in minutes
+    target_accuracy: float | None = None  # Target accuracy percentage (0.0-100.0)
+    target_time_minutes: int | None = None  # Target session time in minutes
 
 
 class StartSessionResponse(BaseModel):
     session_id: str
     requested_n: int
-    session_type: str = None
-    target_accuracy: float = None
-    target_time_minutes: int = None
+    session_type: str | None = None
+    target_accuracy: float | None = None
+    target_time_minutes: int | None = None
 
 
 class CompleteSessionRequest(BaseModel):
@@ -46,9 +46,9 @@ class SessionSummary(BaseModel):
     created_at: datetime
     completed_at: datetime | None
     # Enhanced session fields
-    session_type: str = None
-    target_accuracy: float = None
-    target_time_minutes: int = None
+    session_type: str | None = None
+    target_accuracy: float | None = None
+    target_time_minutes: int | None = None
     current_streak: int = 0
     best_streak: int = 0
     hints_used: int = 0
