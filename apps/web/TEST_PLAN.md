@@ -37,6 +37,38 @@ export default defineConfig({
 
 ---
 
+## Important Testing Note: Mock Hoisting
+
+**CRITICAL**: All `vi.mock()` calls in the test examples below are shown inline for brevity, but in actual implementation, they **MUST** be defined at the top level of the test file, outside any `describe` or `it` blocks.
+
+Vitest hoists `vi.mock()` calls to the top of the file during transformation. Placing them inside test blocks can lead to unexpected behavior where mocks apply to all tests in the file, not just the intended one.
+
+**Correct Pattern:**
+```typescript
+// At the top of the test file, outside all blocks
+import { vi } from 'vitest';
+
+const getDashboardSummaryMock = vi.fn();
+const getMotifPerformanceMock = vi.fn();
+
+vi.mock('../api/users', () => ({
+  getDashboardSummary: getDashboardSummaryMock,
+  getMotifPerformance: getMotifPerformanceMock,
+}));
+
+// Then in your tests
+describe('Dashboard', () => {
+  it('should load data', async () => {
+    getDashboardSummaryMock.mockResolvedValue({...});
+    // test implementation
+  });
+});
+```
+
+For complete examples of correct mock usage, see the test at line 348 which includes detailed comments.
+
+---
+
 ## 1. TacticalRadar Component Tests
 
 ### 1.1 Empty State Tests
