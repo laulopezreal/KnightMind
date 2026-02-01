@@ -50,6 +50,12 @@ export default function Ops() {
     const activeJob = opsStatus?.active_job;
     const recentJobs = opsStatus?.recent_jobs || [];
     const metrics = opsStatus?.metrics?.last_24h;
+    const backendIssue = Boolean(error) || (health ? !health.ok : false);
+    const backendIssueDetails = health ? [
+        health.db !== 'ok' ? 'Database' : null,
+        health.worker !== 'ok' ? 'Worker' : null,
+        health.stockfish !== 'ok' ? 'Stockfish' : null,
+    ].filter(Boolean).join(', ') : null;
 
     return (
         <div className="w-full font-sans text-primary/80 space-y-12 pb-20">
@@ -58,10 +64,17 @@ export default function Ops() {
                 <p className="text-sm opacity-50 uppercase tracking-widest px-1">System Health & Telemetry</p>
             </header>
 
-            {error && (
+            {backendIssue && (
                 <div className="bg-red-500/10 border border-red-500/20 text-red-500 p-6 rounded-sm font-sans text-sm flex flex-col gap-2">
-                    <span className="font-bold uppercase tracking-widest text-[10px]">Error Detected</span>
-                    <span>{error}</span>
+                    <span className="font-bold uppercase tracking-widest text-[10px]">Backend Unavailable</span>
+                    <span>
+                        {error ? error : 'Backend health checks reported degraded services.'}
+                    </span>
+                    {backendIssueDetails && (
+                        <span className="text-[10px] uppercase tracking-widest opacity-70">
+                            Affected: {backendIssueDetails}
+                        </span>
+                    )}
                     <button
                         type="button"
                         onClick={() => { setLoading(true); fetchData(); }}
