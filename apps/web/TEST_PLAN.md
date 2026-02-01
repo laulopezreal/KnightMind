@@ -37,38 +37,6 @@ export default defineConfig({
 
 ---
 
-## Important Testing Note: Mock Hoisting
-
-**CRITICAL**: All `vi.mock()` calls in the test examples below are shown inline for brevity, but in actual implementation, they **MUST** be defined at the top level of the test file, outside any `describe` or `it` blocks.
-
-Vitest hoists `vi.mock()` calls to the top of the file during transformation. Placing them inside test blocks can lead to unexpected behavior where mocks apply to all tests in the file, not just the intended one.
-
-**Correct Pattern:**
-```typescript
-// At the top of the test file, outside all blocks
-import { vi } from 'vitest';
-
-const getDashboardSummaryMock = vi.fn();
-const getMotifPerformanceMock = vi.fn();
-
-vi.mock('../api/users', () => ({
-  getDashboardSummary: getDashboardSummaryMock,
-  getMotifPerformance: getMotifPerformanceMock,
-}));
-
-// Then in your tests
-describe('Dashboard', () => {
-  it('should load data', async () => {
-    getDashboardSummaryMock.mockResolvedValue({...});
-    // test implementation
-  });
-});
-```
-
-For complete examples of correct mock usage, see the test at line 348 which includes detailed comments.
-
----
-
 ## 1. TacticalRadar Component Tests
 
 ### 1.1 Empty State Tests
@@ -378,35 +346,20 @@ describe('Dashboard - Refresh Mechanism', () => {
   });
 
   it('should call all dashboard APIs when refresh is triggered', async () => {
-    // Note: In actual implementation, these mocks should be defined at the top level
-    // of the test file, outside any describe/it blocks, as vi.mock is hoisted.
-    // Example structure:
-    //
-    // import { vi } from 'vitest';
-    //
-    // const getDashboardSummaryMock = vi.fn();
-    // const getMotifPerformanceMock = vi.fn();
-    // const getRecentSessionsMock = vi.fn();
-    // const getMotifTrendsMock = vi.fn();
-    //
-    // vi.mock('../api/users', () => ({
-    //   getDashboardSummary: getDashboardSummaryMock,
-    //   getMotifPerformance: getMotifPerformanceMock,
-    //   getMotifTrends: getMotifTrendsMock,
-    // }));
-    //
-    // vi.mock('../api/sessions', () => ({
-    //   getRecentSessions: getRecentSessionsMock,
-    // }));
-    //
-    // describe('Dashboard - Refresh Mechanism', () => {
-    //   it('should call all dashboard APIs when refresh is triggered', async () => {
+    const getDashboardSummaryMock = vi.fn().mockResolvedValue({...});
+    const getMotifPerformanceMock = vi.fn().mockResolvedValue({...});
+    const getRecentSessionsMock = vi.fn().mockResolvedValue([]);
+    const getMotifTrendsMock = vi.fn().mockResolvedValue({...});
 
-    // Configure mock return values for this specific test
-    getDashboardSummaryMock.mockResolvedValue({...});
-    getMotifPerformanceMock.mockResolvedValue({...});
-    getRecentSessionsMock.mockResolvedValue([]);
-    getMotifTrendsMock.mockResolvedValue({...});
+    vi.mock('../api/users', () => ({
+      getDashboardSummary: getDashboardSummaryMock,
+      getMotifPerformance: getMotifPerformanceMock,
+      getMotifTrends: getMotifTrendsMock,
+    }));
+
+    vi.mock('../api/sessions', () => ({
+      getRecentSessions: getRecentSessionsMock,
+    }));
 
     const { getByRole } = render(<Dashboard />);
 
@@ -788,33 +741,25 @@ describe('Edge Cases - Race Conditions', () => {
   });
 
   it('should handle rapid username changes', async () => {
-    // Mock the useChessUsername hook to simulate username changes
-    const usernameRef = { current: 'user1' };
-
-    vi.mock('../context/ChessUsernameContext', () => ({
-      useChessUsername: () => ({
-        username: usernameRef.current,
-        setUsername: (newUsername: string) => { usernameRef.current = newUsername; }
-      })
-    }));
-
     const { rerender } = render(<Dashboard />);
 
-    // Simulate rapid username changes by updating the mock ref
-    usernameRef.current = 'user2';
-    rerender(<Dashboard />);
+    // Simulate rapid username changes
+    act(() => {
+      rerender(<ChessUsernameProvider value="user1"><Dashboard /></ChessUsernameProvider>);
+    });
 
-    usernameRef.current = 'user3';
-    rerender(<Dashboard />);
+    act(() => {
+      rerender(<ChessUsernameProvider value="user2"><Dashboard /></ChessUsernameProvider>);
+    });
 
-    // Should trigger data load for the final username
-    // Note: In reality, the context would trigger re-renders when username changes
+    act(() => {
+      rerender(<ChessUsernameProvider value="user3"><Dashboard /></ChessUsernameProvider>);
+    });
+
+    // Should only load data for final username
     await waitFor(() => {
       expect(getDashboardSummaryMock).toHaveBeenLastCalledWith('user3');
     });
-
-    // Alternative approach: Test that the useEffect cleanup prevents stale updates
-    // by checking that cancelled requests don't update state
   });
 });
 ```
