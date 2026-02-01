@@ -23,6 +23,7 @@ export default function Sidebar() {
                 {/* Navigation */}
                 <nav className="space-y-6 font-sans">
                     <NavItem to="/" label="Home" isActive={location.pathname === '/'} />
+                    <NavItem to="/dashboard" label="Dashboard" isActive={location.pathname === '/dashboard'} />
                     <NavItem to="/openings" label="Openings" isActive={location.pathname === '/openings'} />
                     <NavItem to="/engine" label="Engine" isActive={location.pathname === '/engine'} />
                     <NavItem to="/puzzles" label="Puzzles" isActive={location.pathname === '/puzzles'} />

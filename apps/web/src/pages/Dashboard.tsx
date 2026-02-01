@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { getDashboardSummary, getMotifPerformance, getMotifTrends, type DashboardSummary, type MotifPerformanceResponse, type TrendsResponse } from '../api/users';
 import { getRecentSessions, type SessionSummary } from '../api/sessions';
@@ -17,6 +17,7 @@ export default function Dashboard() {
     const [recentSessions, setRecentSessions] = useState<SessionSummary[]>([]);
     const [trends, setTrends] = useState<TrendsResponse | null>(null);
     const [loading, setLoading] = useState(true);
+    const [refreshing, setRefreshing] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
     // Redirect if no username
@@ -26,33 +27,55 @@ export default function Dashboard() {
         }
     }, [username, navigate]);
 
-    // Load all dashboard data
-    useEffect(() => {
-        if (!username) return;
+    // Load all dashboard data - extracted for reusability
+    const loadDashboardData = useCallback(async (isRefresh = false) => {
+        // Guard against concurrent fetches
+        if (!username || loading || refreshing) return;
 
-        const loadDashboardData = async () => {
-            try {
-                const [dashboard, motifs, sessions, trendsData] = await Promise.all([
-                    getDashboardSummary(username),
-                    getMotifPerformance(username),
-                    getRecentSessions(username, 5),
-                    getMotifTrends(username, 30)
-                ]);
-
-                setDashboardData(dashboard);
-                setMotifPerformance(motifs);
-                setRecentSessions(sessions);
-                setTrends(trendsData);
-            } catch (err) {
-                console.error('Failed to load dashboard:', err);
-                setError(err instanceof Error ? err.message : 'Failed to load dashboard data');
-            } finally {
-                setLoading(false);
+        try {
+            if (isRefresh) {
+                setRefreshing(true);
+            } else {
+                setLoading(true);
             }
+            setError(null);
+
+            const [dashboard, motifs, sessions, trendsData] = await Promise.all([
+                getDashboardSummary(username),
+                getMotifPerformance(username),
+                getRecentSessions(username, 5),
+                getMotifTrends(username, 30)
+            ]);
+
+            setDashboardData(dashboard);
+            setMotifPerformance(motifs);
+            setRecentSessions(sessions);
+            setTrends(trendsData);
+        } catch (err) {
+            console.error('Failed to load dashboard:', err);
+            setError(err instanceof Error ? err.message : 'Failed to load dashboard data');
+        } finally {
+            setLoading(false);
+            setRefreshing(false);
+        }
+    }, [username, loading, refreshing]);
+
+    // Initial load
+    useEffect(() => {
+        loadDashboardData();
+    }, [loadDashboardData]);
+
+    // Auto-refresh on window focus
+    useEffect(() => {
+        const handleFocus = () => {
+            loadDashboardData(true);
         };
 
-        loadDashboardData();
-    }, [username]);
+        window.addEventListener('focus', handleFocus);
+        return () => {
+            window.removeEventListener('focus', handleFocus);
+        };
+    }, [loadDashboardData]);
 
     const handleMotifClick = (motif: string) => {
         // Navigate to puzzles page with motif filter
@@ -97,9 +120,32 @@ export default function Dashboard() {
                             Your chess training overview
                         </p>
                     </div>
-                    <Link to="/" className="text-primary/60 hover:text-primary text-sm">
-                        ← Home
-                    </Link>
+                    <div className="flex items-center gap-4">
+                        <button
+                            type="button"
+                            onClick={() => loadDashboardData(true)}
+                            disabled={refreshing}
+                            title="Refresh dashboard data"
+                            className={`px-4 py-2 border border-primary/20 rounded-sm font-sans text-sm transition-all km-focus-visible ${
+                                refreshing ? 'km-interactive-disabled' : 'km-interactive'
+                            }`}
+                        >
+                            {refreshing ? (
+                                <>
+                                    <span className="animate-spin inline-block h-4 w-4 border-2 border-primary/20 border-t-primary rounded-full mr-2"></span>
+                                    Refreshing...
+                                </>
+                            ) : (
+                                <>
+                                    <span className="inline-block mr-2">↻</span>
+                                    Refresh
+                                </>
+                            )}
+                        </button>
+                        <Link to="/" className="text-primary/60 hover:text-primary text-sm">
+                            ← Home
+                        </Link>
+                    </div>
                 </div>
             </section>
 

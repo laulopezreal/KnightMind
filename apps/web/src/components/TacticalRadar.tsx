@@ -26,6 +26,32 @@ export function TacticalRadar({ motifs, onMotifClick }: TacticalRadarProps) {
         );
     }, [motifs]);
 
+    // Check if all motifs are mastered (>85% accuracy)
+    const allMastered = useMemo(() => {
+        if (motifs.length === 0) return false;
+        return motifs.every(m => m.accuracy >= 0.85);
+    }, [motifs]);
+
+    // Empty state: No motifs at all
+    if (motifs.length === 0) {
+        return (
+            <section className="bg-primary/5 border border-primary/10 rounded-sm p-8">
+                <h2 className="text-2xl font-serif text-primary mb-2 text-center">
+                    🎯 Tactical Vision
+                </h2>
+                <p className="text-primary/60 text-center mb-6">
+                    Your chess pattern mastery
+                </p>
+                <div className="text-center py-12">
+                    <p className="text-primary/60 font-sans">
+                        No motif data yet. Complete your first training session to start tracking your tactical patterns!
+                    </p>
+                </div>
+            </section>
+        );
+    }
+
+    // Empty state: Not enough motifs for radar
     if (motifs.length < 3) {
         return (
             <section className="bg-primary/5 border border-primary/10 rounded-sm p-8">
@@ -78,7 +104,28 @@ export function TacticalRadar({ motifs, onMotifClick }: TacticalRadarProps) {
                 </ResponsiveContainer>
             </div>
 
-            {weakest && (
+            {/* Celebration state: All motifs mastered */}
+            {allMastered && (
+                <div className="mt-6 text-center bg-green-500/10 border border-green-500/30 rounded-sm p-6 animate-teedin">
+                    <div className="flex items-center justify-center mb-3">
+                        <div className="flex-shrink-0 h-10 w-10 rounded-full bg-green-500 flex items-center justify-center mr-3">
+                            <svg className="h-6 w-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                            </svg>
+                        </div>
+                        <p className="text-2xl font-serif text-green-600">
+                            All Motifs Mastered!
+                        </p>
+                    </div>
+                    <p className="text-primary/60 text-sm font-sans">
+                        Congratulations! You've achieved 85%+ accuracy on all tactical patterns.
+                        Keep training to maintain your mastery!
+                    </p>
+                </div>
+            )}
+
+            {/* Weakest area: Show only if not all mastered */}
+            {!allMastered && weakest && (
                 <div className="mt-6 text-center">
                     <p className="text-primary/60 text-sm mb-2">
                         Your weakest area:
@@ -89,7 +136,15 @@ export function TacticalRadar({ motifs, onMotifClick }: TacticalRadarProps) {
                     <button
                         type="button"
                         onClick={() => onMotifClick(weakest.name)}
-                        className="px-6 py-3 bg-primary text-bg-primary rounded-sm km-interactive km-focus-visible"
+                        disabled={weakest.total_puzzles === 0}
+                        title={
+                            weakest.total_puzzles === 0
+                                ? 'No puzzles available for this motif yet'
+                                : `Practice ${weakest.name} to improve your weakest area`
+                        }
+                        className={`px-6 py-3 bg-primary text-bg-primary rounded-sm font-serif transition-colors km-focus-visible ${
+                            weakest.total_puzzles === 0 ? 'km-interactive-disabled' : 'km-interactive'
+                        }`}
                     >
                         Practice {weakest.name} Now
                     </button>
