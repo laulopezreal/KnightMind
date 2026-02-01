@@ -150,8 +150,6 @@ export default function RatingInsights() {
     const hasSnapshots = data?.rating.end !== null;
     const hasGames = (data?.stats.games || 0) > 0;
     const isState0 = data && !hasGames;
-    const isState1 = data && hasGames && !hasSnapshots;
-    const isState2 = data && hasGames && hasSnapshots;
 
     const N = data?.stats.games ?? 0;
     const confidence = N < LOW_CONFIDENCE_THRESHOLD ? 'low' : N < HIGH_CONFIDENCE_THRESHOLD ? 'medium' : 'high';
