@@ -149,6 +149,19 @@ data/
 - `rated`: Boolean
 - `imported_at`: ISO timestamp
 
+### Import Status
+
+The API stores the last import timestamp and number of new games per user to surface sync status in the UI.
+
+```
+data/
+  imports/<username>.json
+```
+
+**Import status fields:**
+- `last_imported_at`: ISO timestamp
+- `last_new_games`: integer count of new games in the last import
+
 ### Puzzles Storage
 
 Puzzles are generated from user blunders and stored as JSON:

@@ -49,11 +49,13 @@ class GameStorage:
         self.pgn_path = self.base_path / "pgn"
         self.metadata_path = self.base_path / "metadata"
         self.index_path = self.base_path / "index"
+        self.imports_path = self.base_path / "imports"
 
         # Ensure directories exist
         self.pgn_path.mkdir(parents=True, exist_ok=True)
         self.metadata_path.mkdir(parents=True, exist_ok=True)
         self.index_path.mkdir(parents=True, exist_ok=True)
+        self.imports_path.mkdir(parents=True, exist_ok=True)
 
     def _game_id_from_url(self, url: str) -> str:
         """Generate a unique game ID from the Chess.com game URL."""
@@ -151,6 +153,30 @@ class GameStorage:
     def get_game_count(self, username: str) -> int:
         """Get the number of games stored for a user."""
         return len(self._get_user_index(username.lower()))
+
+    def record_import_summary(self, username: str, new_games: int, imported_at: str | None = None) -> None:
+        """Store the last import summary for a user."""
+        username_lower = username.lower()
+        summary_file = self.imports_path / f"{username_lower}.json"
+        if imported_at is None:
+            imported_at = datetime.now(timezone.utc).isoformat()
+        with open(summary_file, "w") as f:
+            json.dump(
+                {
+                    "last_imported_at": imported_at,
+                    "last_new_games": new_games,
+                },
+                f,
+                indent=2,
+            )
+
+    def get_last_import_summary(self, username: str) -> dict[str, str | int] | None:
+        """Get the last import summary for a user, if available."""
+        summary_file = self.imports_path / f"{username.lower()}.json"
+        if not summary_file.exists():
+            return None
+        with open(summary_file, "r") as f:
+            return json.load(f)
 
     def get_all_metadata(self, username: str) -> list[GameMetadata]:
         """Get metadata for all games stored for a user."""

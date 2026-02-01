@@ -197,6 +197,41 @@ def test_import_chesscom_success(mock_import_games, client_with_temp_storage):
 
 
 @patch("services.api.main.import_all_games")
+def test_import_status_after_import(mock_import_games, client_with_temp_storage):
+    """Test import status before and after an import."""
+    async def mock_generator(username):
+        from services.ingest import ChessGame
+        for game_data in MOCK_GAMES:
+            yield ChessGame(
+                url=game_data["url"],
+                pgn=game_data["pgn"],
+                time_control=game_data["time_control"],
+                end_time=game_data["end_time"],
+                rated=game_data["rated"],
+                white_username=game_data["white"]["username"],
+                black_username=game_data["black"]["username"],
+                white_result=game_data["white"]["result"],
+                black_result=game_data["black"]["result"],
+            )
+
+    response = client_with_temp_storage.get("/import/status?username=testuser")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["last_imported_at"] is None
+    assert data["last_new_games"] is None
+
+    mock_import_games.side_effect = mock_generator
+    import_response = client_with_temp_storage.post("/import/chesscom?username=testuser")
+    assert import_response.status_code == 200
+
+    response = client_with_temp_storage.get("/import/status?username=testuser")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["last_imported_at"] is not None
+    assert isinstance(data["last_new_games"], int)
+
+
+@patch("services.api.main.import_all_games")
 def test_import_chesscom_deduplication(mock_import_games, client_with_temp_storage):
     """Test that duplicate games are not re-imported."""
     # Mock async generator (reusable)
@@ -525,4 +560,3 @@ def test_engine_eval_unavailable(mock_eval):
     response = client.post("/engine/eval", json={"fen": "any"})
     assert response.status_code == 503
     assert "Engine not available" in response.json()["detail"]
-
