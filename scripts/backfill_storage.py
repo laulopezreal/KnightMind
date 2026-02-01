@@ -98,8 +98,10 @@ def backfill_games(game_repository: GameRepository, base_path: Path) -> dict:
         imported = 0
         invalid = 0
         missing_pgn = 0
+        files_seen = 0
         invalid_samples: list[dict] = []
         for metadata_file in metadata_path.glob("*.json"):
+            files_seen += 1
             with metadata_file.open("r") as handle:
                 metadata = json.load(handle)
 
@@ -137,7 +139,7 @@ def backfill_games(game_repository: GameRepository, base_path: Path) -> dict:
 
         results[user_lower] = {
             "imported_games": imported,
-            "files_seen": len(list(metadata_path.glob("*.json"))),
+            "files_seen": files_seen,
             "invalid_games": invalid,
             "missing_pgn": missing_pgn,
             "invalid_samples": invalid_samples,
