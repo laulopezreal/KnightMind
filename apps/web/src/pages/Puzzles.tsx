@@ -116,6 +116,11 @@ export default function Puzzles() {
     const [timeRemaining, setTimeRemaining] = useState<number>(0);
     const puzzleTimeRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+    const statusRef = useRef(status);
+    statusRef.current = status;
+
+    const handleReviewPuzzleRef = useRef<((result: 'pass' | 'fail', timeMs?: number) => Promise<void>)>(async () => { });
+
     // Mock progress for now until we hook up real polling
     // const mockProgress = 0; 
 
