@@ -24,6 +24,8 @@ export default function Home() {
       const result = await importChessComGames(username);
       if (result.games_count === 0) {
         setStatus('No games found.');
+      } else if (result.new_games === 0) {
+        setStatus('No new games found.');
       } else {
         setStatus(`Imported ${result.new_games} new games.`);
       }
@@ -55,8 +57,14 @@ export default function Home() {
       <section className="grid grid-cols-1 md:grid-cols-2 gap-16">
         <div className="space-y-8">
           <div className="prose">
-            <h3 className="text-2xl font-serif text-primary">Begin Analysis</h3>
-            <p className="font-sans text-primary/60">Import your games from Chess.com to generate personalized puzzles and insights.</p>
+            <h3 className="text-2xl font-serif text-primary">
+              {username ? 'Welcome Back' : 'Begin Analysis'}
+            </h3>
+            <p className="font-sans text-primary/60">
+              {username
+                ? 'Have you played more? Sync to import your newest games, or jump straight into insights.'
+                : 'Import your games from Chess.com to generate personalized puzzles and insights.'}
+            </p>
           </div>
 
           <div className="space-y-4">
@@ -77,7 +85,7 @@ export default function Home() {
                 disabled={loading || !username}
                 className={`text-primary font-medium transition-opacity uppercase tracking-widest text-sm km-focus-visible rounded-sm px-2 py-1 ${loading || !username ? 'km-interactive-disabled disabled:opacity-30' : 'km-interactive'}`}
               >
-                {loading ? '...' : 'Import'}
+                {loading ? '...' : username ? 'Sync' : 'Import'}
               </button>
             </div>
 

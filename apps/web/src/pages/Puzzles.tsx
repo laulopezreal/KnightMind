@@ -1,8 +1,8 @@
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { Chessboard } from 'react-chessboard';
 import { Chess } from 'chess.js';
-import { generatePuzzles, getDailyPuzzles, getDuePuzzles, cancelJob, ApiError, type Puzzle, startSession, completeSession, getRecentSessions, reviewPuzzle, getSession, type SessionSummary, useHint } from '../api';
+import { generatePuzzles, getDailyPuzzles, getDuePuzzles, cancelJob, ApiError, type Puzzle, startSession, completeSession, getRecentSessions, reviewPuzzle, getSession, type SessionSummary, useHint as requestHint } from '../api';
 import { JobStatusCard } from '../components/JobStatusCard';
 import { useJobPolling } from '../hooks/useJobPolling';
 import { useChessUsername } from '../context/ChessUsernameContext';
@@ -12,6 +12,11 @@ type PuzzleStatus = 'solving' | 'correct' | 'incorrect' | 'revealed';
 type ClueStage = 0 | 1 | 2;
 type SessionState = 'idle' | 'loading' | 'active' | 'completing' | 'completed' | 'error';
 type SessionType = 'standard' | 'timed' | 'accuracy_goal';
+
+const calculateAccuracy = (passCount: number, failCount: number): number => {
+    const total = passCount + failCount;
+    return total > 0 ? Math.round((passCount / total) * 100) : 0;
+};
 
 // Achievement types
 interface Achievement {
@@ -479,7 +484,7 @@ export default function Puzzles() {
         }
     };
 
-    const handleCompleteSession = async () => {
+    const handleCompleteSession = useCallback(async () => {
         if (!activeSessionId || !username.trim()) return;
 
         setSessionState('completing');
@@ -519,9 +524,18 @@ export default function Puzzles() {
             setError(errorMessage);
             setSessionState('active');
         }
-    };
+    }, [
+        activeSessionId,
+        checkSessionAchievements,
+        setActiveSessionId,
+        setError,
+        setRecentSessions,
+        setSessionState,
+        setSessionSummary,
+        username
+    ]);
 
-    const handleReviewPuzzle = async (result: 'pass' | 'fail', timeMs?: number) => {
+    const handleReviewPuzzle = useCallback(async (result: 'pass' | 'fail', timeMs?: number) => {
         if (!currentPuzzle || !username.trim()) return;
 
         // Calculate time spent on this puzzle if not provided
@@ -575,7 +589,24 @@ export default function Puzzles() {
             console.error('Failed to review puzzle:', err);
             setError(err instanceof Error ? err.message : 'Failed to review puzzle');
         }
-    };
+    }, [
+        activeSessionId,
+        bestStreak,
+        checkAchievements,
+        currentPuzzle,
+        handleCompleteSession,
+        puzzleStartTime,
+        puzzles.length,
+        reviewedCount,
+        setBestStreak,
+        setLastFeedback,
+        setPerformanceHistory,
+        setReviewedCount,
+        setStreak,
+        setError,
+        streak,
+        username
+    ]);
 
     const shouldShowJobStatusCard =
         !!job &&
@@ -611,7 +642,7 @@ export default function Puzzles() {
         if (!activeSessionId || !username.trim()) return;
         
         try {
-            const updatedSession = await useHint(activeSessionId, username.trim());
+            const updatedSession = await requestHint(activeSessionId, username.trim());
             setHintsUsed(updatedSession.hints_used);
             setSessionSummary(updatedSession);
         } catch (err) {
@@ -687,7 +718,7 @@ export default function Puzzles() {
                 puzzleTimeRef.current = null;
             }
         };
-    }, [currentPuzzle, sessionSummary, status, puzzleStartTime]);
+    }, [currentPuzzle, sessionSummary, status, puzzleStartTime, handleReviewPuzzle]);
 
     const onPieceDrop = (sourceSquare: string, targetSquare: string) => {
         if (!currentPuzzle || status === 'correct' || status === 'revealed') return false;
@@ -725,12 +756,6 @@ export default function Puzzles() {
     };
 
 
-    // Helper function to calculate accuracy percentage
-    const calculateAccuracy = (passCount: number, failCount: number): number => {
-        const total = passCount + failCount;
-        return total > 0 ? Math.round((passCount / total) * 100) : 0;
-    };
-    
     // Helper function to calculate recent performance
     const calculateRecentPerformance = (history: Array<{time: number, result: 'pass' | 'fail'}>, minutes: number = 5): number => {
         const cutoffTime = Date.now() - (minutes * 60 * 1000);
@@ -757,7 +782,7 @@ export default function Puzzles() {
     };
     
     // Helper function to check and award achievements
-    const checkAchievements = (newAchievements: Achievement[] = achievements) => {
+    const checkAchievements = useCallback((newAchievements: Achievement[] = achievements) => {
         const updatedAchievements = [...newAchievements];
         let achievementsChanged = false;
         
@@ -795,10 +820,10 @@ export default function Puzzles() {
         }
         
         return updatedAchievements;
-    };
+    }, [achievements, currentPuzzleTime, setAchievements, streak]);
     
     // Helper function to check session completion achievements
-    const checkSessionAchievements = () => {
+    const checkSessionAchievements = useCallback(() => {
         const updatedAchievements = [...achievements];
         let achievementsChanged = false;
         
@@ -840,7 +865,7 @@ export default function Puzzles() {
         }
         
         return updatedAchievements;
-    };
+    }, [achievements, sessionSummary, setAchievements]);
 
     return (
         <div className="space-y-12 animate-teedin">
