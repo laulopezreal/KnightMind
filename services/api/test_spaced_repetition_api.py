@@ -156,3 +156,9 @@ def test_review_endpoint(client, db_session, mock_puzzles):
     assert data["interval_days"] == 3 # pass after 1 = 3
     assert data["ease_factor"] == pytest.approx(2.1)
     assert data["stats"]["attempts"] == 2
+
+
+def test_due_puzzles_no_puzzles_returns_404(client, mock_puzzles):
+    response = client.get("/puzzles/due?username=missinguser&n=2")
+    assert response.status_code == 404
+    assert "no puzzles found" in response.json()["detail"].lower()

@@ -15,8 +15,10 @@ from services.api.sessions import (
     complete_session,
     get_recent_sessions,
     get_session,
+    use_hint,
     StartSessionRequest,
-    CompleteSessionRequest
+    CompleteSessionRequest,
+    UseHintRequest,
 )
 from services.api.storage.spaced_repetition import insert_puzzle_review
 
@@ -267,3 +269,64 @@ async def test_get_session_not_found(db_session):
         await get_session("nonexistent", db_session)
     
     assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_use_hint_increments_counter(db_session):
+    """Test using a hint increments hint counter."""
+    session_id = str(uuid.uuid4())
+    session = TrainingSession(
+        id=session_id,
+        username="testuser",
+        requested_n=5
+    )
+    db_session.add(session)
+    db_session.commit()
+
+    request = UseHintRequest(username="testuser")
+    response = await use_hint(session_id, request, db_session)
+
+    assert response.hints_used == 1
+
+
+@pytest.mark.asyncio
+async def test_use_hint_wrong_user(db_session):
+    """Test using a hint with the wrong user."""
+    from fastapi import HTTPException
+
+    session_id = str(uuid.uuid4())
+    session = TrainingSession(
+        id=session_id,
+        username="owner",
+        requested_n=5
+    )
+    db_session.add(session)
+    db_session.commit()
+
+    request = UseHintRequest(username="intruder")
+    with pytest.raises(HTTPException) as exc_info:
+        await use_hint(session_id, request, db_session)
+
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_use_hint_completed_session(db_session):
+    """Test using a hint on a completed session fails."""
+    from fastapi import HTTPException
+
+    session_id = str(uuid.uuid4())
+    session = TrainingSession(
+        id=session_id,
+        username="testuser",
+        requested_n=5,
+        completed_at=datetime.now(timezone.utc)
+    )
+    db_session.add(session)
+    db_session.commit()
+
+    request = UseHintRequest(username="testuser")
+    with pytest.raises(HTTPException) as exc_info:
+        await use_hint(session_id, request, db_session)
+
+    assert exc_info.value.status_code == 400

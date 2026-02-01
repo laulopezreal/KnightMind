@@ -126,12 +126,34 @@ def test_generate_puzzles_swing_calculation(mock_get_ply_range, mock_create_engi
 
 @patch("services.api.puzzles.generator.create_engine")
 def test_generate_puzzles_with_mocked_engine(mock_create_engine, temp_storage):
-    """Test generation with mocked engine creation."""
-    mock_engine = Mock()
-    mock_create_engine.return_value = mock_engine
-    
-    # ... logic allows testing the flow without real engine ...
-    pass
+    """Test generation returns empty result when engine creation fails."""
+    storage, _ = temp_storage
+    mock_create_engine.side_effect = RuntimeError("Engine unavailable")
+
+    pgn = """[Event "Test Game"]
+[White "testuser"]
+[Black "opponent"]
+
+1. e4 e5 2. Nf3 Nc6"""
+
+    storage.store_game(
+        username="testuser",
+        url="https://chess.com/game/test",
+        pgn=pgn,
+        white_username="testuser",
+        black_username="opponent",
+        white_result="win",
+        black_result="loss",
+        time_control="600",
+        end_time=1234567890,
+        rated=True,
+    )
+
+    result = generate_puzzles("testuser", max_games=1, max_puzzles=10)
+
+    assert result.generated == 0
+    assert result.skipped == 0
+    assert result.analyzed_positions == 0
 
 
 @patch("services.api.puzzles.generator.create_engine")

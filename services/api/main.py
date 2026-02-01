@@ -31,6 +31,7 @@ from services.api.openings import build_opening_tree
 from services.api.puzzles import generate_puzzles
 from services.api.storage import get_puzzle_storage, get_storage
 from services.api.storage.spaced_repetition import (
+    get_adaptive_puzzles,
     get_due_puzzles,
     insert_puzzle_review,
     update_puzzle_stats
