@@ -1,5 +1,4 @@
 ---
-description: 
 alwaysApply: true
 ---
 
@@ -41,6 +40,9 @@ A platform for analyzing chess games, tracking progress, and gaining insights us
   - First run a discovery-only step.
   - Do not implement or edit files during discovery.
   - Wait for explicit approval of the file list before modifying code.
+  - The agent must end Discovery with exactly:
+  WAITING FOR FILE SELECTION.
+
 
 ## Commands to Run
 
