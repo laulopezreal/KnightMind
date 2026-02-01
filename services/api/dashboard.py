@@ -11,7 +11,7 @@ Provides comprehensive dashboard data including:
 from datetime import datetime, timezone, timedelta
 from typing import Literal
 from sqlalchemy.orm import Session
-from sqlalchemy import select, desc, func
+from sqlalchemy import select, desc, func, case
 from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -288,9 +288,9 @@ async def get_motif_trends(
     stmt = (
         select(
             PuzzleStats.primary_motif,
-            func.date_trunc('week', PuzzleReview.reviewed_at).label('week'),
+            func.date(PuzzleReview.reviewed_at).label('week'),
             func.count(PuzzleReview.id).label('total'),
-            func.sum(func.cast(PuzzleReview.result == 'pass', func.Integer())).label('passed')
+            func.sum(case((PuzzleReview.result == 'pass', 1), else_=0)).label('passed')
         )
         .join(PuzzleStats, PuzzleReview.puzzle_id == PuzzleStats.puzzle_id)
         .where(
@@ -298,8 +298,8 @@ async def get_motif_trends(
             PuzzleReview.reviewed_at >= cutoff_date,
             PuzzleStats.primary_motif.isnot(None)
         )
-        .group_by(PuzzleStats.primary_motif, func.date_trunc('week', PuzzleReview.reviewed_at))
-        .order_by(PuzzleStats.primary_motif, func.date_trunc('week', PuzzleReview.reviewed_at))
+        .group_by(PuzzleStats.primary_motif, func.date(PuzzleReview.reviewed_at))
+        .order_by(PuzzleStats.primary_motif, func.date(PuzzleReview.reviewed_at))
     )
 
     results = db.execute(stmt).all()

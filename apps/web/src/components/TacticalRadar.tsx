@@ -19,12 +19,12 @@ export function TacticalRadar({ motifs, onMotifClick }: TacticalRadarProps) {
     );
 
     // Find weakest motif
-    const weakest = useMemo(() =>
-        motifs.reduce((min, m) =>
+    const weakest = useMemo(() => {
+        if (motifs.length === 0) return null;
+        return motifs.reduce((min, m) =>
             m.accuracy < min.accuracy ? m : min
-        ),
-        [motifs]
-    );
+        );
+    }, [motifs]);
 
     if (motifs.length < 3) {
         return (
@@ -57,42 +57,44 @@ export function TacticalRadar({ motifs, onMotifClick }: TacticalRadarProps) {
             <div className="h-96">
                 <ResponsiveContainer width="100%" height="100%">
                     <RadarChart data={radarData}>
-                        <PolarGrid stroke="rgba(var(--color-primary-rgb, 0, 0, 0), 0.1)" />
+                        <PolarGrid stroke="var(--border-primary)" strokeOpacity={0.2} />
                         <PolarAngleAxis
                             dataKey="motif"
-                            tick={{ fill: 'var(--color-primary)', fontSize: 12 }}
+                            tick={{ fill: 'var(--text-primary)', fontSize: 12 }}
                         />
                         <PolarRadiusAxis
                             angle={90}
                             domain={[0, 100]}
-                            tick={{ fill: 'rgba(var(--color-primary-rgb, 0, 0, 0), 0.4)' }}
+                            tick={{ fill: 'var(--text-primary)', opacity: 0.4 }}
                         />
                         <Radar
                             name="Accuracy"
                             dataKey="accuracy"
-                            stroke="var(--color-primary)"
-                            fill="var(--color-primary)"
+                            stroke="var(--text-primary)"
+                            fill="var(--text-primary)"
                             fillOpacity={0.3}
                         />
                     </RadarChart>
                 </ResponsiveContainer>
             </div>
 
-            <div className="mt-6 text-center">
-                <p className="text-primary/60 text-sm mb-2">
-                    Your weakest area:
-                </p>
-                <p className="text-xl font-serif text-red-500 mb-4">
-                    {weakest.name} ({Math.round(weakest.accuracy * 100)}%)
-                </p>
-                <button
-                    type="button"
-                    onClick={() => onMotifClick(weakest.name)}
-                    className="px-6 py-3 bg-primary text-bg-primary rounded-sm km-interactive km-focus-visible"
-                >
-                    Practice {weakest.name} Now
-                </button>
-            </div>
+            {weakest && (
+                <div className="mt-6 text-center">
+                    <p className="text-primary/60 text-sm mb-2">
+                        Your weakest area:
+                    </p>
+                    <p className="text-xl font-serif text-red-500 mb-4">
+                        {weakest.name} ({Math.round(weakest.accuracy * 100)}%)
+                    </p>
+                    <button
+                        type="button"
+                        onClick={() => onMotifClick(weakest.name)}
+                        className="px-6 py-3 bg-primary text-bg-primary rounded-sm km-interactive km-focus-visible"
+                    >
+                        Practice {weakest.name} Now
+                    </button>
+                </div>
+            )}
         </section>
     );
 }
