@@ -4,6 +4,7 @@ import { getDashboardSummary, getMotifPerformance, getMotifTrends, type Dashboar
 import { getRecentSessions, type SessionSummary } from '../api/sessions';
 import { useChessUsername } from '../context/ChessUsernameContext';
 import { TacticalRadar } from '../components/TacticalRadar';
+import { MotifTrends } from '../components/MotifTrends';
 import { RecentSessionsCard } from '../components/RecentSessionsCard';
 
 export default function Dashboard() {
@@ -138,6 +139,11 @@ export default function Dashboard() {
             {/* Tactical Radar */}
             {motifPerformance && motifPerformance.motifs.length > 0 && (
                 <TacticalRadar motifs={motifPerformance.motifs} onMotifClick={handleMotifClick} />
+            )}
+
+            {/* Motif Trends */}
+            {trends && trends.motif_trends.length > 0 && (
+                <MotifTrends trends={trends.motif_trends} windowDays={trends.window_days} />
             )}
 
             {/* Stats Grid */}
