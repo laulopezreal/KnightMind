@@ -149,9 +149,9 @@ export default function RatingInsights() {
 
     const hasSnapshots = data?.rating.end !== null;
     const hasGames = (data?.stats.games || 0) > 0;
-    const isState0 = data && !hasSnapshots;
-    const isState1 = data && hasSnapshots && !hasGames;
-    const isState2 = data && hasSnapshots && hasGames;
+    const isState0 = data && !hasGames;
+    const isState1 = data && hasGames && !hasSnapshots;
+    const isState2 = data && hasGames && hasSnapshots;
 
     const N = data?.stats.games ?? 0;
     const confidence = N < LOW_CONFIDENCE_THRESHOLD ? 'low' : N < HIGH_CONFIDENCE_THRESHOLD ? 'medium' : 'high';
@@ -282,7 +282,7 @@ export default function RatingInsights() {
 
             {data && (
                 <>
-                    {/* STATE 0: No snapshots */}
+                    {/* STATE 0: No games */}
                     {isState0 && (
                         <div className="max-w-xl mx-auto bg-primary/5 border border-primary/10 p-12 rounded-sm space-y-10">
                             <div>
@@ -316,30 +316,23 @@ export default function RatingInsights() {
                         </div>
                     )}
 
-                    {/* STATE 1 & 2: Snapshots exist */}
-                    {hasSnapshots && (
+                    {/* STATE 1 & 2: Games exist */}
+                    {hasGames && (
                         <>
-                            {/* STATE 1 Callout */}
-                            {isState1 && (
-                                <div className="p-6 border border-primary/10 bg-primary/5 rounded-sm mb-12">
-                                    <h3 className="text-lg font-serif text-primary mb-1">No games found in this window</h3>
-                                    <p className="text-sm text-primary/60 font-sans">
-                                        Play a few games on Chess.com, then return to see drivers and highlights.
-                                    </p>
-                                </div>
-                            )}
+                            {/* STATE 1 Callout - no longer needed since hasGames is the gate */}
 
                             {/* Summary Cards */}
                             <section className="grid grid-cols-1 md:grid-cols-4 gap-6">
                                 <Card
                                     label="Net Change"
-                                    value={hasGames && data.rating.net_change !== null
+                                    value={hasSnapshots && data.rating.net_change !== null
                                         ? (data.rating.net_change > 0 ? `+${data.rating.net_change}` : `${data.rating.net_change}`)
                                         : "—"}
                                     sub={windowLabel}
                                     helper={confidenceQualifier}
-                                    highlight={hasGames && data.rating.net_change !== null && data.rating.net_change !== 0}
-                                    positive={hasGames && data.rating.net_change !== null && (data.rating.net_change || 0) > 0}
+                                    highlight={hasSnapshots && data.rating.net_change !== null && data.rating.net_change !== 0}
+                                    positive={hasSnapshots && data.rating.net_change !== null && (data.rating.net_change || 0) > 0}
+                                    extra={!hasSnapshots && "Record a snapshot to track rating change."}
                                 />
                                 <Card
                                     label="Performance"
@@ -362,6 +355,13 @@ export default function RatingInsights() {
                                     sub="Average opponent rating vs your reference rating."
                                 />
                             </section>
+
+                            {/* Reference rating note when estimated */}
+                            {!hasSnapshots && data.rating.reference_is_approx && (
+                                <p className="text-xs text-primary/40 font-sans italic mt-4">
+                                    Reference rating is estimated from opponents.
+                                </p>
+                            )}
 
                             {/* Drivers */}
                             <section className="border-t border-primary/10 pt-8">
@@ -399,8 +399,8 @@ export default function RatingInsights() {
                                 )}
                             </section>
 
-                            {/* Highlights - Only show if insights available and items exist */}
-                            {isState2 && (data.highlights.worst_surprises.length > 0 || data.highlights.best_surprises.length > 0) && (
+                            {/* Highlights - Only show if items exist */}
+                            {hasGames && (data.highlights.worst_surprises.length > 0 || data.highlights.best_surprises.length > 0) && (
                                 <section className="grid grid-cols-1 md:grid-cols-2 gap-12 border-t border-primary/10 pt-8">
                                     {data.highlights.worst_surprises.length > 0 && (
                                         <div>
@@ -439,7 +439,7 @@ export default function RatingInsights() {
     );
 }
 
-const Card = ({ label, value, sub, helper, highlight, positive }: { label: string, value: string, sub?: string, helper?: string, highlight?: boolean, positive?: boolean }) => (
+const Card = ({ label, value, sub, helper, highlight, positive, extra }: { label: string, value: string, sub?: string, helper?: string, highlight?: boolean, positive?: boolean, extra?: string }) => (
     <div className="p-6 bg-primary/5 rounded-sm border border-primary/10">
         <div className="text-xs font-sans uppercase tracking-widest text-primary/40 mb-2">{label}</div>
         <div className={`text-3xl font-serif mb-1 ${highlight ? (positive ? 'text-emerald-600' : 'text-red-500') : 'text-primary'}`}>
@@ -447,6 +447,7 @@ const Card = ({ label, value, sub, helper, highlight, positive }: { label: strin
         </div>
         {sub && <div className="text-xs font-sans text-primary/50 mb-1">{sub}</div>}
         {helper && <div className="text-xs font-sans text-primary/40 italic">{helper}</div>}
+        {extra && <div className="text-xs font-sans text-primary/60 mt-2">{extra}</div>}
     </div>
 );
 
