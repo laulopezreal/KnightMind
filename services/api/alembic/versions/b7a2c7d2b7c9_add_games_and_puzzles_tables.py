@@ -74,10 +74,13 @@ def upgrade() -> None:
         )
 
     puzzles_indexes = {index["name"] for index in inspector.get_indexes("puzzles")}
-    if "ix_puzzles_username_created_at" not in puzzles_indexes:
-        op.create_index("ix_puzzles_username_created_at", "puzzles", ["username", "created_at"])
-    if "ix_puzzles_username" not in puzzles_indexes:
-        op.create_index("ix_puzzles_username", "puzzles", ["username"])
+    indexes_to_create = {
+        "ix_puzzles_username_created_at": ["username", "created_at"],
+        "ix_puzzles_username": ["username"],
+    }
+    for name, columns in indexes_to_create.items():
+        if name not in puzzles_indexes:
+            op.create_index(name, "puzzles", columns)
 
     if inspector.has_table("puzzle_stats"):
         puzzle_stats_fks = {fk["name"] for fk in inspector.get_foreign_keys("puzzle_stats")}
