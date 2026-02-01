@@ -321,6 +321,7 @@ export default function Puzzles() {
         if (!activeSessionId || !username.trim()) return;
 
         setSessionState('completing');
+        setError(null); // Clear any previous errors
 
         try {
             const summary = await completeSession(activeSessionId, username.trim());
@@ -334,7 +335,8 @@ export default function Puzzles() {
             setRecentSessions(recent);
         } catch (err) {
             console.error('Failed to complete session:', err);
-            setError(err instanceof Error ? err.message : 'Failed to complete session');
+            const errorMessage = err instanceof Error ? err.message : 'Failed to complete session. Please try again.';
+            setError(errorMessage);
             setSessionState('active');
         }
     };
@@ -681,9 +683,14 @@ export default function Puzzles() {
                                 <button
                                     type="button"
                                     onClick={handleAdvancePuzzle}
-                                    disabled={finishButtonDisabled}
-                                    className={`w-full px-6 py-4 bg-green-600 text-white rounded-sm font-serif text-lg transition-all shadow-lg shadow-green-900/20 km-focus-visible ${finishButtonDisabled ? 'km-interactive-disabled' : 'km-interactive'}`}>
-                                    {isFinalPuzzle ? 'All Done' : 'Next Puzzle →'}
+                                    disabled={finishButtonDisabled || sessionState === 'completing'}
+                                    className={`w-full px-6 py-4 bg-green-600 text-white rounded-sm font-serif text-lg transition-all shadow-lg shadow-green-900/20 km-focus-visible ${finishButtonDisabled || sessionState === 'completing' ? 'km-interactive-disabled' : 'km-interactive'} flex items-center justify-center`}>
+                                    {sessionState === 'completing' ? (
+                                        <>
+                                            <span className="animate-spin h-5 w-5 border-2 border-white/20 border-t-white rounded-full mr-2"></span>
+                                            Recording Session...
+                                        </>
+                                    ) : isFinalPuzzle ? 'All Done' : 'Next Puzzle →'}
                                 </button>
                             )}
                             {status === 'incorrect' && (
@@ -709,8 +716,22 @@ export default function Puzzles() {
 
             {/* Session Summary */}
             {sessionSummary && (
-                <section className="bg-primary/5 border border-primary/10 rounded-sm p-8 backdrop-blur-sm animate-teedin">
-                    <h2 className="text-2xl font-serif text-primary mb-6">Session Complete!</h2>
+                <section className="bg-primary/5 border border-green-500/30 rounded-sm p-8 backdrop-blur-sm animate-teedin">
+                    <div className="flex items-center mb-6">
+                        <div className="flex-shrink-0 h-8 w-8 rounded-full bg-green-500 flex items-center justify-center mr-3">
+                            <svg className="h-5 w-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                            </svg>
+                        </div>
+                        <h2 className="text-2xl font-serif text-primary">Session Successfully Recorded!</h2>
+                    </div>
+                    
+                    {sessionSummary.completed_at && (
+                        <div className="text-sm text-primary/60 mb-4">
+                            Completed on {new Date(sessionSummary.completed_at).toLocaleString()}
+                        </div>
+                    )}
+                    
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-6 mb-6">
                         <div className="text-center">
                             <div className="text-3xl font-serif text-green-600">{sessionSummary.pass_count}</div>
