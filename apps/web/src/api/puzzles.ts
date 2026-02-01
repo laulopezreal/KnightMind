@@ -108,16 +108,21 @@ export async function getDuePuzzles(
     username: string,
     n: number = 5,
     sessionType: string = "standard",
-    targetAccuracy?: number
+    targetAccuracy?: number,
+    motif?: string
 ): Promise<DuePuzzlesResponse> {
     const params = new URLSearchParams({
         username,
         n: n.toString(),
         session_type: sessionType,
     });
-    
+
     if (targetAccuracy !== undefined) {
         params.append('target_accuracy', targetAccuracy.toString());
+    }
+
+    if (motif) {
+        params.append('motif', motif);
     }
 
     try {
