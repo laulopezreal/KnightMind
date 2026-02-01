@@ -54,7 +54,7 @@ export function TacticalRadar({ motifs, onMotifClick }: TacticalRadarProps) {
                 Your chess pattern mastery
             </p>
 
-            <div className="h-96">
+            <div className="h-64 md:h-96">
                 <ResponsiveContainer width="100%" height="100%">
                     <RadarChart data={radarData}>
                         <PolarGrid stroke="var(--border-primary)" strokeOpacity={0.2} />

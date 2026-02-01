@@ -39,7 +39,7 @@ class ScheduleData(BaseModel):
     next_review_at: datetime | None
 
 
-class DashboardSummaryResponse(BaseModel):
+class DashboardSummary(BaseModel):
     """Complete dashboard summary."""
     username: str
     last_session_at: datetime | None
@@ -182,7 +182,7 @@ def calculate_training_streak(db: Session, username: str) -> int:
     return streak
 
 
-@router.get("/{username}/dashboard", response_model=DashboardSummaryResponse)
+@router.get("/{username}/dashboard", response_model=DashboardSummary)
 async def get_dashboard_summary(
     username: str,
     db: Session = Depends(get_db)
@@ -257,7 +257,7 @@ async def get_dashboard_summary(
         next_review_at=next_review
     )
 
-    return DashboardSummaryResponse(
+    return DashboardSummary(
         username=username,
         last_session_at=last_session_at,
         days_since_last_session=days_since_last,
