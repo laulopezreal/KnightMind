@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Chessboard } from 'react-chessboard';
 import { Chess } from 'chess.js';
-import { generatePuzzles, getDailyPuzzles, getDuePuzzles, cancelJob, ApiError, type Puzzle, startSession, completeSession, getRecentSessions, reviewPuzzle, getSession, type SessionSummary, useHint as requestHint, getUserStatus, type UserStatus } from '../api';
+import { generatePuzzles, getDailyPuzzles, getDuePuzzles, cancelJob, ApiError, type Puzzle, startSession, completeSession, getRecentSessions, reviewPuzzle, getSession, type SessionSummary, useHint as requestHint, getUserStatus, type UserStatus, getMotifPerformance, type MotifPerformanceResponse } from '../api';
 import { JobStatusCard } from '../components/JobStatusCard';
 import { useJobPolling } from '../hooks/useJobPolling';
 import { useChessUsername } from '../context/ChessUsernameContext';
@@ -117,6 +117,7 @@ export default function Puzzles() {
     const puzzleTimeRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const [userStatus, setUserStatus] = useState<UserStatus | null>(null);
     const [isLoadingStatus, setIsLoadingStatus] = useState(false);
+    const [motifPerformance, setMotifPerformance] = useState<MotifPerformanceResponse | null>(null);
 
     const statusRef = useRef(status);
     statusRef.current = status;
@@ -238,6 +239,35 @@ export default function Puzzles() {
         };
 
         fetchStatus();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [username]);
+
+    useEffect(() => {
+        if (!username) {
+            setMotifPerformance(null);
+            return;
+        }
+
+        let cancelled = false;
+
+        const fetchMotifs = async () => {
+            try {
+                const performance = await getMotifPerformance(username);
+                if (!cancelled) {
+                    setMotifPerformance(performance);
+                }
+            } catch (err) {
+                if (!cancelled) {
+                    console.warn('Unable to load motif performance:', err);
+                    setMotifPerformance(null);
+                }
+            }
+        };
+
+        fetchMotifs();
 
         return () => {
             cancelled = true;
@@ -661,6 +691,14 @@ export default function Puzzles() {
             // Refresh recent sessions
             const recent = await getRecentSessions(username.trim(), 5);
             setRecentSessions(recent);
+
+            // Refresh motif performance
+            try {
+                const updated = await getMotifPerformance(username.trim());
+                setMotifPerformance(updated);
+            } catch (motifErr) {
+                console.warn('Failed to refresh motif performance:', motifErr);
+            }
         } catch (err) {
             console.error('Failed to complete session:', err);
             const errorMessage = err instanceof Error ? err.message : 'Failed to complete session. Please try again.';
@@ -1101,6 +1139,35 @@ export default function Puzzles() {
                 </div>
             </section>
 
+            {/* Weak Areas Card */}
+            {motifPerformance && motifPerformance.weakest_motifs.length > 0 && (
+                <section className="bg-primary/5 border border-primary/10 rounded-sm p-6 backdrop-blur-sm">
+                    <h3 className="text-lg font-serif text-primary mb-4">
+                        Your Weak Areas
+                    </h3>
+                    <div className="space-y-2">
+                        {motifPerformance.motifs
+                            .filter(m => m.rank === 'needs_work')
+                            .map(motif => (
+                                <div key={motif.name} className="flex justify-between items-center p-3 bg-red-500/10 rounded-sm">
+                                    <div>
+                                        <span className="font-serif text-primary">{motif.name}</span>
+                                        <span className="text-xs text-primary/60 ml-2">
+                                            {motif.passed}/{motif.total_puzzles} correct
+                                        </span>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                        <span className="text-red-500 font-mono text-sm">
+                                            {Math.round(motif.accuracy * 100)}%
+                                        </span>
+                                        <span className="text-xs text-primary/40">needs work</span>
+                                    </div>
+                                </div>
+                            ))}
+                    </div>
+                </section>
+            )}
+
             {currentPuzzle && ( // Make sure currentPuzzle is defined or access checked
                 <section className="grid lg:grid-cols-2 gap-12 lg:gap-24">
                     {/* Chessboard */}
@@ -1212,12 +1279,19 @@ export default function Puzzles() {
                                     )}
 
                                     <div className="flex justify-between items-center">
-                                        <span className="font-serif text-xl text-primary">
-                                            {currentPuzzle.title || "Puzzle"}
-                                            <span className="text-base font-normal opacity-50 ml-2 font-sans">
-                                                {currentIndex + 1} / {puzzles.length}
+                                        <div className="flex items-center gap-2">
+                                            <span className="font-serif text-xl text-primary">
+                                                {currentPuzzle.title || "Puzzle"}
+                                                <span className="text-base font-normal opacity-50 ml-2 font-sans">
+                                                    {currentIndex + 1} / {puzzles.length}
+                                                </span>
                                             </span>
-                                        </span>
+                                            {currentPuzzle.primary_motif && (
+                                                <span className="text-sm font-sans text-primary/60 px-2 py-1 bg-primary/10 rounded-sm">
+                                                    {currentPuzzle.primary_motif}
+                                                </span>
+                                            )}
+                                        </div>
                                     </div>
                                 </div>
                                 <span className="font-sans text-sm tracking-wide uppercase text-primary/60">
@@ -1543,6 +1617,53 @@ export default function Puzzles() {
                     ))}
                 </div>
             </section>
+
+            {/* Chess Pattern Mastery */}
+            {motifPerformance && motifPerformance.motifs.length > 0 && (
+                <section className="bg-primary/5 border border-primary/10 rounded-sm p-6 backdrop-blur-sm">
+                    <h3 className="text-lg font-serif text-primary mb-4">Chess Pattern Mastery</h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                        {motifPerformance.motifs.map(motif => (
+                            <div
+                                key={motif.name}
+                                className={`p-4 rounded-sm border ${
+                                    motif.rank === 'mastered'
+                                        ? 'bg-green-500/10 border-green-500/30'
+                                        : motif.rank === 'learning'
+                                        ? 'bg-yellow-500/10 border-yellow-500/30'
+                                        : 'bg-red-500/10 border-red-500/30'
+                                }`}
+                            >
+                                <h4 className="font-serif text-primary mb-1">{motif.name}</h4>
+                                <div className="flex justify-between text-sm">
+                                    <span className="text-primary/60">
+                                        {motif.passed}/{motif.total_puzzles} solved
+                                    </span>
+                                    <span className={`font-mono ${
+                                        motif.rank === 'mastered' ? 'text-green-600' :
+                                        motif.rank === 'learning' ? 'text-yellow-600' :
+                                        'text-red-500'
+                                    }`}>
+                                        {Math.round(motif.accuracy * 100)}%
+                                    </span>
+                                </div>
+
+                                {/* Progress bar */}
+                                <div className="mt-2 h-2 bg-primary/10 rounded-full overflow-hidden">
+                                    <div
+                                        className={`h-full ${
+                                            motif.rank === 'mastered' ? 'bg-green-500' :
+                                            motif.rank === 'learning' ? 'bg-yellow-500' :
+                                            'bg-red-500'
+                                        }`}
+                                        style={{ width: `${motif.accuracy * 100}%` }}
+                                    />
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </section>
+            )}
         </div>
     );
 }

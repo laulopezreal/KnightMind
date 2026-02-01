@@ -57,6 +57,7 @@ from services.api.models import Job, JobStatus, PuzzleStats, PuzzleReview, Puzzl
 
 from services.api.puzzles.identity import backfill_puzzle_identity
 from services.api.jobs.cleanup_sessions import cleanup_abandoned_sessions
+from services.api.motifs import get_user_motif_performance, MotifPerformanceResponse
 import asyncio
 
 CLEANUP_INTERVAL_SECONDS = 3600
@@ -207,6 +208,12 @@ async def get_user_status(username: str, db: Session = Depends(get_db)):
         next_due_at=next_due_at,
         has_new_games=has_new_games,
     )
+
+
+@app.get("/users/{username}/motifs/performance", response_model=MotifPerformanceResponse)
+async def get_motif_performance(username: str, db: Session = Depends(get_db)):
+    """Get user's performance breakdown across all chess tactical patterns/motifs."""
+    return get_user_motif_performance(db, username)
 
 
 @app.get("/users/validate")
@@ -559,10 +566,23 @@ async def get_daily_puzzles(
     # Reload specific puzzles to get updated used_on field
     updated_puzzles = [puzzle_repository.get_puzzle(username, pid) for pid in puzzle_ids]
     updated_puzzles = [p for p in updated_puzzles if p is not None]
-    
-    # Convert to dict format for response
-    puzzles_dict = [asdict(p) for p in updated_puzzles]
-    
+
+    # Get puzzle stats to include primary_motif
+    all_stats = get_all_puzzle_stats(db, username)
+
+    # Convert to dict format for response and merge with stats
+    puzzles_dict = []
+    for p in updated_puzzles:
+        p_dict = asdict(p)
+        stats = all_stats.get(p.id)
+        if stats:
+            p_dict["primary_motif"] = stats.primary_motif
+            p_dict["title"] = stats.title
+        else:
+            p_dict["primary_motif"] = None
+            p_dict["title"] = None
+        puzzles_dict.append(p_dict)
+
     return DailyPuzzlesResponse(
         puzzles=puzzles_dict,
         count=len(puzzles_dict)
