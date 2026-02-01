@@ -244,6 +244,16 @@ export default function Puzzles() {
         };
     }, [username]);
 
+    const refreshUserStatus = useCallback(async () => {
+        if (!username) return;
+        try {
+            const status = await getUserStatus(username);
+            setUserStatus(status);
+        } catch (err) {
+            console.warn('Unable to refresh user status:', err);
+        }
+    }, [username]);
+
     const { job, isPolling: isJobPolling } = useJobPolling(activeJobId, {
         enabled: !!activeJobId,
         onSuccess: async () => {
@@ -276,6 +286,9 @@ export default function Puzzles() {
             // If we clear it immediately, the card disappears. We probably want the card to stay "Success".
             // We can clear localStorage but keep activeJobId in state for this session.
             localStorage.removeItem(`knightmind:lastJob:${username}`);
+
+            // Refresh user status to update has_new_games flag
+            await refreshUserStatus();
         },
         onError: (err) => {
             // Similarly clear storage on hard failure so we don't get stuck
@@ -293,8 +306,10 @@ export default function Puzzles() {
 
     const isGenerating = isJobPolling || (job?.status === 'queued' || job?.status === 'running');
     const controlsDisabled = !controlsEnabled || isLoading || isGenerating;
+    const generateNewDisabled = !controlsEnabled || isLoading || isGenerating || !userStatus?.has_new_games;
+    const loadPuzzlesDisabled = !username || isLoading || isGenerating || (sessionState !== 'idle' && sessionState !== 'error' && sessionState !== 'completed');
 
-    // Sync job status to local isGenerating for backwards compat with other UI if needed, 
+    // Sync job status to local isGenerating for backwards compat with other UI if needed,
     // but better to rely on 'job' object.
 
     // Initialize achievements from localStorage
@@ -365,7 +380,12 @@ export default function Puzzles() {
         } catch (err) {
             if (err instanceof ApiError) {
                 if (err.statusCode === 404) {
-                    setError('No games found. Please import games first.');
+                    // Differentiate between no games at all vs no new games
+                    if (userStatus?.games_count === 0) {
+                        setError('No games found. Please import games first.');
+                    } else {
+                        setError('No new games available. All current games have been used for puzzles. Import more games to generate new puzzles.');
+                    }
                 } else {
                     setError(err.detail || err.message);
                 }
@@ -407,7 +427,7 @@ export default function Puzzles() {
         } catch (err) {
             if (err instanceof ApiError) {
                 if (err.statusCode === 404) {
-                    setError('No puzzles found. Generate puzzles first.');
+                    setError('No puzzles found. Generate puzzles first or check back later when more are due.');
                 } else {
                     setError(err.detail || err.message);
                 }
@@ -441,6 +461,22 @@ export default function Puzzles() {
     const handleStartSession = async () => {
         if (!username.trim()) {
             setError('Please enter a username');
+            return;
+        }
+
+        // Validate puzzles are available before creating session
+        if (!userStatus) {
+            setError('Loading user status...');
+            return;
+        }
+
+        if (userStatus.puzzles_count === 0) {
+            setError('No puzzles available. Generate puzzles first.');
+            return;
+        }
+
+        if (userStatus.due_count === 0) {
+            setError('No puzzles are due for review right now. Check back later or generate more puzzles.');
             return;
         }
 
@@ -888,6 +924,9 @@ export default function Puzzles() {
     const handleAdvancePuzzle = async () => {
         if (status === 'correct') {
             await handleReviewPuzzle('pass');
+        } else if (status === 'revealed') {
+            // If solution was revealed, mark as fail before completing
+            await handleReviewPuzzle('fail');
         }
 
         if (!isFinalPuzzle) {
@@ -990,21 +1029,67 @@ export default function Puzzles() {
                                         placeholder="Minutes"
                                     />
                                 )}
-                                <button type="button" onClick={handleStartSession} disabled={controlsDisabled}
-                                    className={`px-6 py-2 bg-accent text-bg-primary rounded-sm font-serif transition-colors km-focus-visible ${controlsDisabled ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'}`}>
+                                <button
+                                    type="button"
+                                    onClick={handleStartSession}
+                                    disabled={controlsDisabled || !!(userStatus && userStatus.due_count === 0)}
+                                    title={
+                                        !username ? 'Set username to continue' :
+                                        userStatus?.puzzles_count === 0 ? 'Generate puzzles first' :
+                                        userStatus?.due_count === 0 ? 'No puzzles due for review right now' :
+                                        'Start a new training session'
+                                    }
+                                    className={`px-6 py-2 bg-accent text-bg-primary rounded-sm font-serif transition-colors km-focus-visible ${(controlsDisabled || (userStatus && userStatus.due_count === 0)) ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'}`}>
                                     Start Session
                                 </button>
                             </>
                         )}
-                        <button type="button" onClick={handleLoadPuzzles} disabled={controlsDisabled}
-                            className={`px-6 py-2 border border-primary/20 text-primary rounded-sm font-serif transition-all km-focus-visible ${controlsDisabled ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'}`}>
+                        <button
+                            type="button"
+                            onClick={handleLoadPuzzles}
+                            disabled={loadPuzzlesDisabled}
+                            title={
+                                !username ? 'Set username to continue' :
+                                isLoading ? 'Loading puzzles...' :
+                                isGenerating ? 'Wait for generation to complete' :
+                                sessionState === 'active' ? 'Finish current session to reload puzzles' :
+                                userStatus?.puzzles_count === 0 ? 'Generate puzzles first' :
+                                'Load puzzles for training'
+                            }
+                            className={`px-6 py-2 border border-primary/20 text-primary rounded-sm font-serif transition-all km-focus-visible ${loadPuzzlesDisabled ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'}`}>
                             {isLoading ? 'Loading...' : 'Load Puzzles'}
                         </button>
-                        <button type="button" onClick={handleGeneratePuzzles} disabled={controlsDisabled}
-                            className={`px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-colors km-focus-visible ${controlsDisabled ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'}`}>
+                        <button
+                            type="button"
+                            onClick={handleGeneratePuzzles}
+                            disabled={generateNewDisabled}
+                            title={
+                                !username ? 'Set username to continue' :
+                                isGenerating ? 'Generation in progress...' :
+                                !userStatus?.has_new_games ? 'No new games available for puzzle generation' :
+                                'Generate puzzles from new games'
+                            }
+                            className={`px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-colors km-focus-visible ${generateNewDisabled ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'}`}>
                             {isGenerating ? 'Generating...' : 'Generate New'}
                         </button>
                     </div>
+
+                    {/* Status Indicator for Generate New availability */}
+                    {username && userStatus && !isLoadingStatus && (
+                        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm font-sans text-primary/60 mt-4">
+                            <span>Games: {userStatus.games_count}</span>
+                            <span>Puzzles: {userStatus.puzzles_count}</span>
+                            {userStatus.has_new_games ? (
+                                <span className="text-green-600">
+                                    ✓ New games available for puzzles
+                                </span>
+                            ) : userStatus.games_count > 0 ? (
+                                <span className="text-primary/40">
+                                    All games used for puzzles
+                                </span>
+                            ) : null}
+                        </div>
+                    )}
                 </div>
 
                 {/* Job Status / Error Area */}
@@ -1378,6 +1463,27 @@ export default function Puzzles() {
                                             Show Solution
                                         </button>
                                     </div>
+
+                                    {/* Special button for completing session when final puzzle is failed */}
+                                    {isFinalPuzzle && (
+                                        <button
+                                            type="button"
+                                            onClick={async () => {
+                                                await handleReviewPuzzle('fail');
+                                                // Session will auto-complete via handleCompleteSession in handleReviewPuzzle
+                                            }}
+                                            disabled={sessionState === 'completing'}
+                                            className="w-full px-6 py-4 bg-orange-600 text-white rounded-sm font-serif text-lg transition-all km-focus-visible km-interactive mt-4">
+                                            {sessionState === 'completing' ? (
+                                                <>
+                                                    <span className="animate-spin h-5 w-5 border-2 border-white/20 border-t-white rounded-full mr-2 inline-block"></span>
+                                                    Recording Session...
+                                                </>
+                                            ) : (
+                                                'Mark as Failed & Complete Session'
+                                            )}
+                                        </button>
+                                    )}
                                 </div>
                             )}
                         </div>
