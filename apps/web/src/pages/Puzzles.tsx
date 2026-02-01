@@ -167,6 +167,25 @@ export default function Puzzles() {
                 setActiveSessionId(session.session_id);
                 setSessionSummary(session);
                 setReviewedCount(session.pass_count + session.fail_count);
+                setHintsUsed(session.hints_used || 0);
+
+                // Restore streak and performance from localStorage if available
+                const savedState = localStorage.getItem(`knightmind:sessionState:${username}`);
+                if (savedState) {
+                    try {
+                        const state = JSON.parse(savedState);
+                        if (state.sessionId === session.session_id) {
+                            // Restore streak and performance (index is restored after puzzles load)
+                            setStreak(state.streak || 0);
+                            setBestStreak(state.bestStreak || 0);
+                            if (state.performanceHistory) {
+                                setPerformanceHistory(state.performanceHistory);
+                            }
+                        }
+                    } catch (e) {
+                        console.error('Failed to parse saved session state', e);
+                    }
+                }
 
                 setSessionState('loading');
                 setError(null);
@@ -174,7 +193,23 @@ export default function Puzzles() {
                 try {
                     const response = await getDuePuzzles(username, session.requested_n);
                     setPuzzles(response.puzzles);
-                    setCurrentIndex(0);
+
+                    // Restore current index from saved state, with bounds checking
+                    const savedState = localStorage.getItem(`knightmind:sessionState:${username}`);
+                    let restoredIndex = 0;
+                    if (savedState) {
+                        try {
+                            const state = JSON.parse(savedState);
+                            if (state.sessionId === session.session_id && state.currentIndex !== undefined) {
+                                // Ensure index is within bounds
+                                restoredIndex = Math.min(state.currentIndex, response.puzzles.length - 1);
+                                restoredIndex = Math.max(0, restoredIndex);
+                            }
+                        } catch (e) {
+                            console.error('Failed to restore puzzle index', e);
+                        }
+                    }
+                    setCurrentIndex(restoredIndex);
                     setStatus('solving');
                     if (response.puzzles.length > 0) {
                         setSessionState('active');
@@ -365,6 +400,20 @@ export default function Puzzles() {
         }
     }, [achievements, username]);
 
+    // Save session state to localStorage for recovery after refresh
+    useEffect(() => {
+        if (username && activeSessionId) {
+            const state = {
+                sessionId: activeSessionId,
+                currentIndex,
+                streak,
+                bestStreak,
+                performanceHistory,
+            };
+            localStorage.setItem(`knightmind:sessionState:${username}`, JSON.stringify(state));
+        }
+    }, [username, activeSessionId, currentIndex, streak, bestStreak, performanceHistory]);
+
     // Cleanup timers on unmount
     useEffect(() => {
         return () => {
@@ -519,11 +568,13 @@ export default function Puzzles() {
                 }, 1000);
             }
             localStorage.setItem(`knightmind:session:${username.trim()}`, session_id);
+            localStorage.removeItem(`knightmind:sessionState:${username.trim()}`); // Clear any old state
             setSessionSummary(null);
             setReviewedCount(0);
             setStreak(0);
             setBestStreak(0);
             setHintsUsed(0);
+            setPerformanceHistory([]);
 
             // Load puzzles
             // FIX: Use getDuePuzzles for session training
@@ -681,6 +732,7 @@ export default function Puzzles() {
             setSessionSummary(summary);
             setActiveSessionId(null);
             localStorage.removeItem(`knightmind:session:${username.trim()}`);
+            localStorage.removeItem(`knightmind:sessionState:${username.trim()}`);
             setSessionState('completed');
 
             // Check for session completion achievements
