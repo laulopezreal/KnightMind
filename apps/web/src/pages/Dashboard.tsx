@@ -19,6 +19,7 @@ export default function Dashboard() {
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [isFetching, setIsFetching] = useState(false);
 
     // Redirect if no username
     useEffect(() => {
@@ -30,8 +31,9 @@ export default function Dashboard() {
     // Load all dashboard data - extracted for reusability
     const loadDashboardData = useCallback(async (isRefresh = false) => {
         // Guard against concurrent fetches
-        if (!username || loading || refreshing) return;
+        if (!username || isFetching) return;
 
+        setIsFetching(true);
         try {
             if (isRefresh) {
                 setRefreshing(true);
@@ -57,8 +59,9 @@ export default function Dashboard() {
         } finally {
             setLoading(false);
             setRefreshing(false);
+            setIsFetching(false);
         }
-    }, [username, loading, refreshing]);
+    }, [username, isFetching]);
 
     // Initial load
     useEffect(() => {
