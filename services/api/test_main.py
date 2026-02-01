@@ -569,16 +569,19 @@ def temp_puzzle_storage():
 
 
 @pytest.fixture
-def client_with_temp_puzzle_storage(temp_puzzle_storage, monkeypatch):
-    """Create a test client with temporary puzzle storage."""
+def client_with_temp_puzzle_storage(temp_puzzle_storage, db_session, monkeypatch):
+    """Create a test client with temporary puzzle storage and database."""
     monkeypatch.setenv("KNIGHTMIND_STORAGE_MODE", "filesystem")
+    app.dependency_overrides[get_db] = lambda: db_session
     with patch("services.api.main.PuzzleRepository") as mock_repo:
         mock_repo.return_value.filesystem = temp_puzzle_storage
         mock_repo.return_value.get_daily_puzzles.side_effect = temp_puzzle_storage.get_daily_puzzles
         mock_repo.return_value.mark_puzzles_used.side_effect = temp_puzzle_storage.mark_puzzles_used
         mock_repo.return_value.get_puzzle.side_effect = temp_puzzle_storage.get_puzzle
-        
+
         yield TestClient(app), temp_puzzle_storage
+
+    app.dependency_overrides.clear()
 
 
 def test_get_daily_puzzles_success(client_with_temp_puzzle_storage):
