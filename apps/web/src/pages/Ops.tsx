@@ -104,7 +104,12 @@ export default function Ops() {
                 <HealthCard label="API" status={health?.ok ? 'up' : 'down'} value={health?.ok ? 'UP' : 'DOWN'} />
                 <HealthCard label="DB" status={health?.db === 'ok' ? 'up' : 'down'} value={health?.db === 'ok' ? 'CONNECTED' : 'ERROR'} />
                 <HealthCard label="Worker" status={health?.worker === 'ok' ? 'up' : 'down'} value={health?.worker === 'ok' ? 'RUNNING' : 'OFFLINE'} />
-                <HealthCard label="Stockfish" status={health?.stockfish === 'ok' ? 'up' : 'down'} value={health?.stockfish === 'ok' ? 'AVAILABLE' : 'MISSING'} />
+                <div className="flex flex-col gap-2">
+                    <HealthCard label="Stockfish" status={health?.stockfish === 'ok' ? 'up' : 'down'} value={health?.stockfish === 'ok' ? 'AVAILABLE' : 'MISSING'} />
+                    {health?.stockfish !== 'ok' && health?.stockfish_hint && (
+                        <p className="text-[10px] text-primary/60 px-4 -mt-1">{health.stockfish_hint}</p>
+                    )}
+                </div>
             </div>
 
             {/* Version Info (Pinned to bottom or side, now more subtle) */}

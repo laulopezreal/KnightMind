@@ -22,6 +22,10 @@ dependencies = [
     "uvicorn[standard]>=0.27.0",
 ]
 
+[project.scripts]
+start-backend = "scripts.start_backend:main"
+kill-backends = "scripts.kill_backends:main"
+
 [project.optional-dependencies]
 dev = [
     "black",

@@ -106,6 +106,13 @@ uvicorn main:app --reload --port 8000
 
 API will be available at http://localhost:8000
 
+### uv commands (from repo root)
+
+After `uv sync`, you can use:
+
+- **Start the backend:** `uv run start-backend` — runs the API on port 8000 (with reload).
+- **Kill backends:** `uv run kill-backends` — sends SIGTERM to processes on ports 8000 and 8001 (API and Stockfish).
+
 ### CORS configuration
 
 The API reads allowed CORS origins from `KNIGHTMIND_CORS_ORIGINS` as a comma-separated list. If this value is unset or empty, the API does not allow cross-origin browser requests (same-origin is still allowed).

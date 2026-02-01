@@ -5,6 +5,7 @@ export interface HealthResponse {
     db: string;
     worker: string;
     stockfish: string;
+    stockfish_hint?: string | null;
     version: {
         sha: string;
         built_at: string;

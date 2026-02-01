@@ -14,6 +14,11 @@ import os
 import re
 import sys
 
+# Load .env from this package directory so STOCKFISH_*, KNIGHTMIND_*, etc. are set
+from dotenv import load_dotenv
+_env_path = os.path.abspath(os.path.join(os.path.dirname(__file__), ".env"))
+load_dotenv(_env_path)
+
 # Add project root to path to verify imports work even if CWD is services/api
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 

@@ -26,6 +26,13 @@ def get_health(db: Session = Depends(get_db)):
     # 3. Check Stockfish
     engine_ok, _ = is_engine_available()
     stockfish_status = "ok" if engine_ok else "missing"
+    stockfish_hint = None
+    if stockfish_status != "ok":
+        url = (os.environ.get("STOCKFISH_SERVICE_URL") or "").strip()
+        if url:
+            stockfish_hint = f"Stockfish service at {url} unreachable. Start it: cd services/stockfish && uvicorn main:app --port 8001"
+        else:
+            stockfish_hint = "Set STOCKFISH_SERVICE_URL in services/api/.env (e.g. http://localhost:8001) and start: cd services/stockfish && uvicorn main:app --port 8001"
 
     # 4. Version Info
     version = {
@@ -38,6 +45,7 @@ def get_health(db: Session = Depends(get_db)):
         "db": db_status,
         "worker": worker_status,
         "stockfish": stockfish_status,
+        "stockfish_hint": stockfish_hint,
         "version": version
     }
 

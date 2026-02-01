@@ -9,11 +9,15 @@ from typing import AsyncIterator
 import ssl
 
 import httpx
-import truststore
 
-# Configure truststore to use system certificates
-truststore.inject_into_ssl()
-SSL_CONTEXT = truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+# Configure truststore to use system certificates (optional, falls back to standard SSL)
+try:
+    import truststore
+    truststore.inject_into_ssl()
+    SSL_CONTEXT = truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+except ImportError:
+    # Fall back to standard SSL if truststore is not available
+    SSL_CONTEXT = ssl.create_default_context()
 
 
 class ImportError(Exception):

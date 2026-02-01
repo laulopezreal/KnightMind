@@ -3,6 +3,9 @@ Stockfish engine wrapper for position evaluation.
 
 Provides a simple interface to evaluate chess positions using Stockfish,
 returning the best move and evaluation in pawns from the side-to-move perspective.
+
+When STOCKFISH_SERVICE_URL is set, the API calls a separate Stockfish HTTP service
+instead of spawning the binary locally.
 """
 
 import os
@@ -17,10 +20,21 @@ try:
 except ImportError:
     StockfishEngine = None
 
+try:
+    import httpx
+except ImportError:
+    httpx = None
+
 from services.api.db import SessionLocal
 from services.api.models import FenEvalCache
 
 logger = logging.getLogger(__name__)
+
+
+def _stockfish_service_url() -> Optional[str]:
+    """Base URL of the Stockfish service (no trailing slash), or None to use local engine."""
+    url = os.environ.get("STOCKFISH_SERVICE_URL", "").strip()
+    return url or None
 
 
 class StockfishNotFoundError(Exception):
@@ -102,6 +116,35 @@ def evaluate_fen(fen: str, engine: Optional["StockfishEngine"] = None) -> EvalRe
         StockfishNotFoundError: If Stockfish is not available
         StockfishError: If evaluation fails
     """
+    url = _stockfish_service_url()
+    if url and httpx:
+        try:
+            r = httpx.post(
+                f"{url.rstrip('/')}/eval",
+                json={"fen": fen},
+                timeout=60.0,
+            )
+            if r.status_code == 503:
+                raise StockfishNotFoundError("Stockfish service not available")
+            r.raise_for_status()
+            data = r.json()
+            return EvalResult(
+                best_move_uci=data["best_move_uci"],
+                eval=float(data["eval"]),
+            )
+        except StockfishNotFoundError:
+            raise
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 400:
+                try:
+                    detail = e.response.json().get("detail", "Invalid FEN")
+                except Exception:
+                    detail = "Invalid FEN"
+                raise StockfishError(detail)
+            raise StockfishError(f"Evaluation failed: {e}")
+        except Exception as e:
+            raise StockfishError(f"Evaluation failed: {e}")
+
     should_close_engine = False
     if engine is None:
         engine = create_engine()
@@ -182,10 +225,20 @@ def _convert_eval_to_pawns(evaluation: dict) -> float:
 
 
 def is_stockfish_available() -> bool:
-    """Check if Stockfish is available and working."""
+    """Check if Stockfish is available and working (local binary or remote service)."""
+    url = _stockfish_service_url()
+    if url and httpx:
+        try:
+            r = httpx.get(f"{url.rstrip('/')}/status", timeout=5.0)
+            if r.status_code == 200:
+                data = r.json()
+                return data.get("available", False)
+            return False
+        except Exception as e:
+            logger.warning("Stockfish service check failed (is the service running on %s?): %s", url, e)
+            return False
     try:
         engine = create_engine()
-        # Quick test
         engine.set_fen_position("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1")
         return True
     except (StockfishNotFoundError, StockfishError):
