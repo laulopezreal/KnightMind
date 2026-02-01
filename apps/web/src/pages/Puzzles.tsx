@@ -3,7 +3,6 @@ import { Link } from 'react-router-dom';
 import { Chessboard } from 'react-chessboard';
 import { Chess } from 'chess.js';
 import { generatePuzzles, getDailyPuzzles, getDuePuzzles, cancelJob, ApiError, type Puzzle, startSession, completeSession, getRecentSessions, reviewPuzzle, getSession, type SessionSummary, useHint as requestHint } from '../api';
-import { generatePuzzles, getDailyPuzzles, getDuePuzzles, cancelJob, ApiError, type Puzzle, startSession, completeSession, getRecentSessions, reviewPuzzle, getSession, type SessionSummary, useHint as requestHint } from '../api';
 import { JobStatusCard } from '../components/JobStatusCard';
 import { useJobPolling } from '../hooks/useJobPolling';
 import { useChessUsername } from '../context/ChessUsernameContext';
@@ -116,6 +115,17 @@ export default function Puzzles() {
     const sessionTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const [timeRemaining, setTimeRemaining] = useState<number>(0);
     const puzzleTimeRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+    // Refs for accessing latest state in timers
+    const statusRef = useRef(status);
+    statusRef.current = status;
+
+    const handleReviewPuzzleRef = useRef<(result: 'pass' | 'fail', timeMs?: number) => Promise<void>>(async () => { });
+
+    const statusRef = useRef(status);
+    statusRef.current = status;
+
+    const handleReviewPuzzleRef = useRef<((result: 'pass' | 'fail', timeMs?: number) => Promise<void>)>(async () => { });
 
     // Mock progress for now until we hook up real polling
     // const mockProgress = 0; 
@@ -527,10 +537,10 @@ export default function Puzzles() {
     }, [achievements, currentPuzzleTime, streak]);
 
     // Helper function to calculate accuracy percentage
-    const calculateAccuracy = (passCount: number, failCount: number): number => {
-        const total = passCount + failCount;
-        return total > 0 ? Math.round((passCount / total) * 100) : 0;
-    };
+    // const calculateAccuracy = (passCount: number, failCount: number): number => {
+    //     const total = passCount + failCount;
+    //     return total > 0 ? Math.round((passCount / total) * 100) : 0;
+    // };
 
     // Helper function to check session completion achievements
     const checkSessionAchievements = useCallback(() => {
@@ -685,6 +695,13 @@ export default function Puzzles() {
         streak,
         username,
     ]);
+
+    // Keep ref in sync
+    useEffect(() => {
+        handleReviewPuzzleRef.current = handleReviewPuzzle;
+    }, [handleReviewPuzzle]);
+
+    handleReviewPuzzleRef.current = handleReviewPuzzle;
 
     const shouldShowJobStatusCard =
         !!job &&
@@ -1044,7 +1061,7 @@ export default function Puzzles() {
                                                         <span>
                                                             Trend:
                                                             <span className={`ml-1 ${getPerformanceTrend(performanceHistory) === 'improving' ? 'text-green-500' :
-                                                                    getPerformanceTrend(performanceHistory) === 'declining' ? 'text-red-500' : 'text-primary/60'
+                                                                getPerformanceTrend(performanceHistory) === 'declining' ? 'text-red-500' : 'text-primary/60'
                                                                 }`}>
                                                                 {getPerformanceTrend(performanceHistory) === 'improving' ? '↗ Improving' :
                                                                     getPerformanceTrend(performanceHistory) === 'declining' ? '↘ Declining' : '→ Stable'}
@@ -1384,8 +1401,8 @@ export default function Puzzles() {
                         <div
                             key={achievement.id}
                             className={`p-4 rounded-sm border ${achievement.earned
-                                    ? 'bg-green-500/10 border-green-500/30'
-                                    : 'bg-primary/5 border-primary/20'
+                                ? 'bg-green-500/10 border-green-500/30'
+                                : 'bg-primary/5 border-primary/20'
                                 }`}
                         >
                             <div className="flex items-center">
