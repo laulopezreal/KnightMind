@@ -52,9 +52,9 @@ export default function Ops() {
     const metrics = opsStatus?.metrics?.last_24h;
     const backendIssue = !!error || (health && !health.ok);
     const backendIssueDetails = health ? [
-        health.db !== 'ok' ? 'Database' : null,
-        health.worker !== 'ok' ? 'Worker' : null,
-        health.stockfish !== 'ok' ? 'Stockfish' : null,
+        health.db !== 'ok' && 'Database',
+        health.worker !== 'ok' && 'Worker',
+        health.stockfish !== 'ok' && 'Stockfish',
     ].filter(Boolean).join(', ') : null;
 
     return (
