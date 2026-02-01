@@ -29,7 +29,8 @@ export default function Dashboard() {
 
     // Load all dashboard data - extracted for reusability
     const loadDashboardData = useCallback(async (isRefresh = false) => {
-        if (!username) return;
+        // Guard against concurrent fetches
+        if (!username || loading || refreshing) return;
 
         try {
             if (isRefresh) {
@@ -57,7 +58,7 @@ export default function Dashboard() {
             setLoading(false);
             setRefreshing(false);
         }
-    }, [username]);
+    }, [username, loading, refreshing]);
 
     // Initial load
     useEffect(() => {
