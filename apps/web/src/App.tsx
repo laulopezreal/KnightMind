@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import Home from './pages/Home';
+import Dashboard from './pages/Dashboard';
 import Openings from './pages/Openings';
 import Engine from './pages/Engine';
 import Puzzles from './pages/Puzzles';
@@ -15,6 +16,7 @@ function App() {
         <Layout>
           <Routes>
             <Route path="/" element={<Home />} />
+            <Route path="/dashboard" element={<Dashboard />} />
             <Route path="/openings" element={<Openings />} />
             <Route path="/engine" element={<Engine />} />
             <Route path="/puzzles" element={<Puzzles />} />

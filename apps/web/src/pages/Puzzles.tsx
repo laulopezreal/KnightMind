@@ -88,6 +88,10 @@ export default function Puzzles() {
     const [showUciInput, setShowUciInput] = useState(false);
     const [activeJobId, setActiveJobId] = useState<string | null>(null);
 
+    // Get motif filter from URL query params
+    const urlParams = new URLSearchParams(window.location.search);
+    const motifFilter = urlParams.get('motif');
+
     // Session state
     const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
     const [sessionSummary, setSessionSummary] = useState<SessionSummary | null>(null);
@@ -191,7 +195,7 @@ export default function Puzzles() {
                 setError(null);
                 setIsLoading(true);
                 try {
-                    const response = await getDuePuzzles(username, session.requested_n);
+                    const response = await getDuePuzzles(username, session.requested_n, 'standard', undefined, motifFilter || undefined);
                     setPuzzles(response.puzzles);
 
                     // Restore current index from saved state, with bounds checking
@@ -620,7 +624,8 @@ export default function Puzzles() {
                     username.trim(),
                     5,
                     sessionType,
-                    sessionType === 'accuracy_goal' ? targetAccuracy : undefined
+                    sessionType === 'accuracy_goal' ? targetAccuracy : undefined,
+                    motifFilter || undefined
                 );
                 setPuzzles(response.puzzles);
                 setCurrentIndex(0);
@@ -1056,13 +1061,17 @@ export default function Puzzles() {
     return (
         <div className="space-y-12 animate-teedin">
             <section>
-                <Link to="/" className="text-primary/40 hover:text-primary mb-4 inline-block font-sans text-sm tracking-widest uppercase transition-colors">
-                    ← Return Home
+                <Link to="/dashboard" className="text-primary/40 hover:text-primary mb-4 inline-block font-sans text-sm tracking-widest uppercase transition-colors">
+                    ← Back to Dashboard
                 </Link>
                 <div className="flex justify-between items-end">
                     <div>
-                        <h1 className="text-4xl md:text-5xl font-serif text-primary mb-2">Daily Puzzles</h1>
-                        <p className="text-lg text-primary/60 font-sans">Tactical patterns from your own games.</p>
+                        <h1 className="text-4xl md:text-5xl font-serif text-primary mb-2">
+                            {motifFilter ? `${motifFilter} Puzzles` : 'Daily Puzzles'}
+                        </h1>
+                        <p className="text-lg text-primary/60 font-sans">
+                            {motifFilter ? `Practice ${motifFilter} tactical patterns` : 'Tactical patterns from your own games.'}
+                        </p>
                     </div>
                 </div>
             </section>

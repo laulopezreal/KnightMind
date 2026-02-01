@@ -77,3 +77,55 @@ export interface MotifPerformanceResponse {
 export async function getMotifPerformance(username: string): Promise<MotifPerformanceResponse> {
     return request<MotifPerformanceResponse>(`/users/${encodeURIComponent(username)}/motifs/performance`);
 }
+
+// Dashboard Types
+export interface RecentFormData {
+    last_20_results: ('pass' | 'fail')[];
+    accuracy: number;
+    trend: 'up' | 'down' | 'steady';
+}
+
+export interface ScheduleData {
+    due_now: number;
+    due_in_4h: number;
+    next_review_at: string | null;
+}
+
+export interface DashboardSummary {
+    username: string;
+    last_session_at: string | null;
+    days_since_last_session: number;
+    total_sessions: number;
+    training_streak_days: number;
+    recent_form: RecentFormData;
+    schedule: ScheduleData;
+    needs_warmup: boolean;
+}
+
+export interface TrendDataPoint {
+    date: string;  // ISO date string
+    accuracy: number;
+}
+
+export interface MotifTrend {
+    motif: string;
+    start_accuracy: number;
+    end_accuracy: number;
+    change: number;
+    trend: 'up' | 'down' | 'steady';
+    data_points: TrendDataPoint[];
+}
+
+export interface TrendsResponse {
+    window_days: number;
+    motif_trends: MotifTrend[];
+}
+
+// Dashboard API Functions
+export async function getDashboardSummary(username: string): Promise<DashboardSummary> {
+    return request<DashboardSummary>(`/users/${encodeURIComponent(username)}/dashboard`);
+}
+
+export async function getMotifTrends(username: string, windowDays: number = 30): Promise<TrendsResponse> {
+    return request<TrendsResponse>(`/users/${encodeURIComponent(username)}/trends?window=${windowDays}`);
+}

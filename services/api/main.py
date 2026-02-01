@@ -120,6 +120,9 @@ app.include_router(ops_router)
 from services.api.sessions import router as sessions_router
 app.include_router(sessions_router)
 
+from services.api.dashboard import router as dashboard_router
+app.include_router(dashboard_router)
+
 def get_allowed_origins() -> list[str]:
     origins = os.environ.get("KNIGHTMIND_CORS_ORIGINS", "")
     return [origin.strip() for origin in origins.split(",") if origin.strip()]
@@ -609,25 +612,48 @@ async def get_due_puzzles_endpoint(
     n: int = Query(5, ge=1, le=20, description="Number of puzzles to return"),
     session_type: str = Query("standard", description="Session type for adaptive selection"),
     target_accuracy: float = Query(None, description="Target accuracy for adaptive selection"),
+    motif: str = Query(None, description="Filter puzzles by specific motif (e.g., 'Fork', 'Pin')"),
     db: Session = Depends(get_db)
 ):
     """
     Get puzzles due for review, followed by new puzzles.
     Supports adaptive selection based on session type and target accuracy.
+    Optionally filter by specific chess motif.
     """
     puzzle_repository = PuzzleRepository(db)
-    
+
     # 1. Load index to get all candidate IDs
     puzzles = puzzle_repository.get_all_puzzles(username)
     puzzle_ids = [p.id for p in puzzles]
-    
+
     if not puzzle_ids:
         raise HTTPException(
-            status_code=404, 
+            status_code=404,
             detail=f"No puzzles found for user '{username}'. Generate puzzles first."
         )
-    
-    # 2. Get prioritized IDs and their stats using adaptive selection
+
+    # 2. Filter by motif if specified
+    if motif:
+        # Query stats to filter by primary_motif
+        motif_stmt = (
+            select(PuzzleStats.puzzle_id)
+            .where(
+                PuzzleStats.username == username,
+                PuzzleStats.primary_motif == motif,
+                PuzzleStats.puzzle_id.in_(puzzle_ids)
+            )
+        )
+        filtered_ids = db.scalars(motif_stmt).all()
+
+        if not filtered_ids:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No puzzles found for motif '{motif}'. Try a different motif."
+            )
+
+        puzzle_ids = list(filtered_ids)
+
+    # 3. Get prioritized IDs and their stats using adaptive selection
     due_ids, all_stats = get_adaptive_puzzles(db, username, puzzle_ids, n, session_type, target_accuracy)
     
     # 3. Load content and merge with stats
