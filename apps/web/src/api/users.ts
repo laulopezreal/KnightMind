@@ -121,6 +121,18 @@ export interface TrendsResponse {
     motif_trends: MotifTrend[];
 }
 
+export interface TrickyPuzzle {
+    puzzle_id: string;
+    title: string;
+    fail_count: number;
+    last_attempted_at: string;
+}
+
+export interface TrickyPuzzlesResponse {
+    puzzles: TrickyPuzzle[];
+    total_count: number;
+}
+
 // Dashboard API Functions
 export async function getDashboardSummary(username: string): Promise<DashboardSummary> {
     return request<DashboardSummary>(`/users/${encodeURIComponent(username)}/dashboard`);
@@ -128,4 +140,8 @@ export async function getDashboardSummary(username: string): Promise<DashboardSu
 
 export async function getMotifTrends(username: string, windowDays: number = 30): Promise<TrendsResponse> {
     return request<TrendsResponse>(`/users/${encodeURIComponent(username)}/trends?window=${windowDays}`);
+}
+
+export async function getTrickyPuzzles(username: string, limit: number = 5): Promise<TrickyPuzzlesResponse> {
+    return request<TrickyPuzzlesResponse>(`/users/${encodeURIComponent(username)}/puzzles/tricky?limit=${limit}`);
 }
