@@ -58,6 +58,7 @@ from services.api.models import Job, JobStatus, PuzzleStats, PuzzleReview, Puzzl
 from services.api.puzzles.identity import backfill_puzzle_identity
 from services.api.jobs.cleanup_sessions import cleanup_abandoned_sessions
 from services.api.motifs import get_user_motif_performance, MotifPerformanceResponse
+from services.api.time_control import classify_time_control
 import asyncio
 
 CLEANUP_INTERVAL_SECONDS = 3600
@@ -971,7 +972,7 @@ async def explain_rating_changes(
     for meta in all_metadata:
         if count >= limit_games:
             break
-        if meta.time_control.lower() != time_control.lower():
+        if classify_time_control(meta.time_control) != time_control.lower():
             continue
         if meta.end_time < start_ts:
             break
