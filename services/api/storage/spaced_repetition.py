@@ -7,6 +7,7 @@ from datetime import datetime, timezone, timedelta
 from sqlalchemy.orm import Session
 from sqlalchemy import select, func
 from services.api.models import PuzzleStats, PuzzleReview, PuzzleResult
+from services.api.puzzles.identity import assign_primary_motif, generate_puzzle_title
 
 
 def calculate_next_interval(
@@ -130,13 +131,17 @@ def update_puzzle_stats(
     res_enum = result if isinstance(result, PuzzleResult) else PuzzleResult(result)
     
     if not stats:
+        motif = assign_primary_motif(None)
+        title = generate_puzzle_title(motif)
         stats = PuzzleStats(
             puzzle_id=puzzle_id,
             username=username,
             attempts=0,
             pass_count=0,
             fail_count=0,
-            ease_factor=2.0
+            ease_factor=2.0,
+            primary_motif=motif,
+            title=title,
         )
         db.add(stats)
     
