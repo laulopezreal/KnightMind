@@ -429,6 +429,12 @@ async def get_openings(
         if pgn:
             pgn_texts.append(pgn)
 
+    if metadata_list and not pgn_texts:
+        raise HTTPException(
+            status_code=503,
+            detail="Games found but PGN content is missing. Re-import games to populate PGN data."
+        )
+
     # Build the opening tree
     tree = build_opening_tree(
         pgn_texts=pgn_texts,

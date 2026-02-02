@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import * as d3 from 'd3';
 import { getOpenings, ApiError, type OpeningNode, type ColorFilter } from '../api';
 import { useChessUsername } from '../context/ChessUsernameContext';
@@ -41,19 +42,23 @@ export default function Openings() {
     fetchOpenings(username, colorFilter);
   };
 
+  // Auto-fetch when page loads with username or when username/color filter changes
   useEffect(() => {
-    if (treeData && svgRef.current) {
+    if (username.trim()) {
+      fetchOpenings(username, colorFilter);
+    }
+  }, [username, colorFilter, fetchOpenings]);
+
+  useEffect(() => {
+    if (!treeData || !svgRef.current) return;
+    try {
       renderTree(treeData);
+      setError((prev) => (prev?.startsWith('Failed to draw') ? null : prev));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to draw opening tree.');
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [treeData]);
-
-  useEffect(() => {
-    if (username.trim() && treeData) {
-      fetchOpenings(username, colorFilter);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [colorFilter]);
 
   const renderTree = (data: OpeningNode) => {
     if (!svgRef.current) return;
@@ -113,14 +118,11 @@ export default function Openings() {
       .attr('stroke-width', 2)
       .on('mouseenter', function (event, d) {
         d3.select(this).attr('stroke-width', 3);
-        const rect = containerRef.current?.getBoundingClientRect();
-        if (rect) {
-          setTooltip({
-            x: event.clientX - rect.left + 10,
-            y: event.clientY - rect.top - 10,
-            data: d.data
-          });
-        }
+        setTooltip({
+          x: event.clientX + 10,
+          y: event.clientY - 10,
+          data: d.data
+        });
       })
       .on('mouseleave', function () {
         d3.select(this).attr('stroke-width', 2);
@@ -230,8 +232,8 @@ export default function Openings() {
 
       {error && <p className="text-red-500/80 font-sans">{error}</p>}
 
-      {/* Visualization */}
-      <section ref={containerRef} className="relative overflow-hidden min-h-[500px] border-t border-primary/10 pt-8">
+      {/* Visualization: overflow-auto so tree can scroll vertically and horizontally */}
+      <section ref={containerRef} className="relative min-h-[500px] border-t border-primary/10 pt-8 overflow-auto">
         {!treeData && !loading && (
           <div className="absolute inset-0 flex items-center justify-center opacity-20 pointer-events-none">
             <span className="text-9xl font-serif">♔</span>
@@ -244,31 +246,33 @@ export default function Openings() {
           </div>
         )}
 
-        <div className="overflow-x-auto">
+        <div className="min-w-0 min-h-0">
           <svg ref={svgRef} className="text-primary block mx-auto"></svg>
         </div>
 
-        {/* Custom Tooltip */}
-        {tooltip && (
-          <div
-            className="absolute z-50 bg-bg-primary border border-primary/20 p-4 shadow-2xl rounded-sm pointer-events-none min-w-[200px]"
-            style={{ left: tooltip.x, top: tooltip.y }}
-          >
-            <div className="font-serif text-xl text-primary mb-2 border-b border-primary/10 pb-2">
-              {tooltip.data.move_san === 'Start' ? 'Start' : tooltip.data.move_san}
-            </div>
-            <div className="space-y-1 font-sans text-sm text-primary/80">
-              <div className="flex justify-between"><span>Games</span> <span>{tooltip.data.games_count}</span></div>
-              <div className="flex justify-between text-green-600"><span>Won</span> <span>{tooltip.data.wins}</span></div>
-              <div className="flex justify-between text-gray-500"><span>Draw</span> <span>{tooltip.data.draws}</span></div>
-              <div className="flex justify-between text-red-500"><span>Lost</span> <span>{tooltip.data.losses}</span></div>
-              <div className="pt-2 border-t border-primary/10 flex justify-between font-medium">
-                <span>Win Rate</span>
-                <span style={{ color: getWinRateColor(tooltip.data.win_rate) }}>{tooltip.data.win_rate}%</span>
+        {/* Tooltip in portal so it is not clipped by overflow */}
+        {tooltip &&
+          createPortal(
+            <div
+              className="fixed z-[9999] bg-bg-primary border border-primary/20 p-4 shadow-2xl rounded-sm pointer-events-none min-w-[200px]"
+              style={{ left: tooltip.x, top: tooltip.y }}
+            >
+              <div className="font-serif text-xl text-primary mb-2 border-b border-primary/10 pb-2">
+                {tooltip.data.move_san === 'Start' ? 'Start' : tooltip.data.move_san}
               </div>
-            </div>
-          </div>
-        )}
+              <div className="space-y-1 font-sans text-sm text-primary/80">
+                <div className="flex justify-between"><span>Games</span> <span>{tooltip.data.games_count}</span></div>
+                <div className="flex justify-between text-green-600"><span>Won</span> <span>{tooltip.data.wins}</span></div>
+                <div className="flex justify-between text-gray-500"><span>Draw</span> <span>{tooltip.data.draws}</span></div>
+                <div className="flex justify-between text-red-500"><span>Lost</span> <span>{tooltip.data.losses}</span></div>
+                <div className="pt-2 border-t border-primary/10 flex justify-between font-medium">
+                  <span>Win Rate</span>
+                  <span style={{ color: getWinRateColor(tooltip.data.win_rate) }}>{tooltip.data.win_rate}%</span>
+                </div>
+              </div>
+            </div>,
+            document.body
+          )}
       </section>
     </div >
   );
