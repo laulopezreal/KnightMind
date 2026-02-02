@@ -12,6 +12,7 @@ import { useJobPolling } from '../hooks/useJobPolling';
 import { useChessUsername } from '../context/ChessUsernameContext';
 import { usePuzzleMode } from '../context/PuzzleModeContext';
 import { useClue } from '../hooks/useClue';
+import { usePuzzleTimer } from '../hooks/usePuzzleTimer';
 
 type PuzzleStatus = 'solving' | 'correct' | 'incorrect' | 'revealed';
 type SessionState = 'idle' | 'loading' | 'active' | 'completing' | 'completed' | 'error';
@@ -105,23 +106,16 @@ export default function Puzzles() {
     const [reviewedCount, setReviewedCount] = useState(0);
     const [isResumingSession, setIsResumingSession] = useState(false);
     const [sessionState, setSessionState] = useState<SessionState>('idle');
-    const [puzzleStartTime, setPuzzleStartTime] = useState<number | null>(null);
     const [streak, setStreak] = useState(0);
     const [bestStreak, setBestStreak] = useState(0);
     const [hintsUsed, setHintsUsed] = useState(0);
 
     // Performance tracking
     const [performanceHistory, setPerformanceHistory] = useState<Array<{ time: number, result: 'pass' | 'fail' }>>([]);
-    const [currentPuzzleTime, setCurrentPuzzleTime] = useState<number>(0);
 
     // Achievements
     const [achievements, setAchievements] = useState<Achievement[]>(ACHIEVEMENTS);
 
-    // Timer for timed sessions
-    const puzzleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-    const sessionTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-    const [timeRemaining, setTimeRemaining] = useState<number>(0);
-    const puzzleTimeRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const [userStatus, setUserStatus] = useState<UserStatus | null>(null);
     const [isLoadingStatus, setIsLoadingStatus] = useState(false);
     const [motifPerformance, setMotifPerformance] = useState<MotifPerformanceResponse | null>(null);
@@ -140,6 +134,18 @@ export default function Puzzles() {
     const currentPuzzle = puzzles[currentIndex];
     const clue = useClue(currentPuzzle?.best_move_uci ?? '', currentPuzzle?.fen ?? '');
     const clueReset = clue.reset;
+
+    const timer = usePuzzleTimer({
+        sessionType,
+        activeSessionId,
+        onPuzzleTimeout: () => {
+            if (statusRef.current === 'solving') {
+                handleReviewPuzzleRef.current('fail');
+                setStatus('incorrect');
+            }
+        },
+    });
+    const timerCleanup = timer.cleanup;
     const puzzlesAvailable = puzzles.length > 0;
     const isFinalPuzzle = puzzlesAvailable && currentIndex >= puzzles.length - 1;
     const finishButtonDisabled = isFinalPuzzle ? sessionState !== 'active' : false;
@@ -497,20 +503,6 @@ export default function Puzzles() {
         }
     }, [username, activeSessionId, currentIndex, streak, performanceHistory]);
 
-    // Cleanup timers on unmount
-    useEffect(() => {
-        return () => {
-            if (puzzleTimerRef.current) {
-                clearTimeout(puzzleTimerRef.current);
-            }
-            if (sessionTimerRef.current) {
-                clearInterval(sessionTimerRef.current);
-            }
-            if (puzzleTimeRef.current) {
-                clearInterval(puzzleTimeRef.current);
-            }
-        };
-    }, []);
 
     // ... (keep logic same as original, just updating UI)
     // ... (keep logic same as original, just updating UI)
@@ -655,22 +647,9 @@ export default function Puzzles() {
             );
             setActiveSessionId(session_id);
 
-            // Set up session timer AFTER setting session ID so closure captures the correct value
+            // Set up session timer for timed sessions
             if (sessionType === 'timed') {
-                setTimeRemaining(targetTimeMinutes * 60); // Convert to seconds
-                if (sessionTimerRef.current) clearInterval(sessionTimerRef.current);
-                sessionTimerRef.current = setInterval(() => {
-                    setTimeRemaining(prev => {
-                        if (prev <= 1) {
-                            if (sessionTimerRef.current) clearInterval(sessionTimerRef.current);
-                            // Auto-complete session when time runs out
-                            // Use session_id directly instead of activeSessionId to avoid stale closure
-                            handleCompleteSession();
-                            return 0;
-                        }
-                        return prev - 1;
-                    });
-                }, 1000);
+                timer.startSessionTimer(targetTimeMinutes * 60, handleCompleteSession);
             }
             localStorage.setItem(`knightmind:session:${username.trim()}`, session_id);
             localStorage.removeItem(`knightmind:sessionState:${username.trim()}`); // Clear any old state
@@ -761,7 +740,7 @@ export default function Puzzles() {
         }
 
         // Check for speed achievement
-        if (currentPuzzleTime < 10 && !updatedAchievements.find(a => a.id === 'speed_demon')?.earned) {
+        if (timer.currentPuzzleTime < 10 && !updatedAchievements.find(a => a.id === 'speed_demon')?.earned) {
             const achievement = updatedAchievements.find(a => a.id === 'speed_demon');
             if (achievement) {
                 achievement.earned = true;
@@ -775,7 +754,7 @@ export default function Puzzles() {
         }
 
         return updatedAchievements;
-    }, [achievements, currentPuzzleTime, streak]);
+    }, [achievements, timer.currentPuzzleTime, streak]);
 
     // Helper function to calculate accuracy percentage
     // const calculateAccuracy = (passCount: number, failCount: number): number => {
@@ -835,14 +814,7 @@ export default function Puzzles() {
         setError(null); // Clear any previous errors
 
         // Clean up timers
-        if (puzzleTimerRef.current) {
-            clearTimeout(puzzleTimerRef.current);
-            puzzleTimerRef.current = null;
-        }
-        if (sessionTimerRef.current) {
-            clearInterval(sessionTimerRef.current);
-            sessionTimerRef.current = null;
-        }
+        timerCleanup();
 
         try {
             const summary = await completeSession(activeSessionId, username.trim());
@@ -877,15 +849,15 @@ export default function Puzzles() {
             setError(errorMessage);
             setSessionState('active');
         }
-    }, [activeSessionId, checkSessionAchievements, username]);
+    }, [activeSessionId, checkSessionAchievements, timerCleanup, username]);
 
     const handleReviewPuzzle = useCallback(async (result: 'pass' | 'fail', timeMs?: number) => {
         if (!currentPuzzle || !username.trim()) return;
 
         // Calculate time spent on this puzzle if not provided
         let timeSpent = timeMs;
-        if (!timeSpent && puzzleStartTime) {
-            timeSpent = Date.now() - puzzleStartTime;
+        if (!timeSpent && timer.puzzleStartTime) {
+            timeSpent = Date.now() - timer.puzzleStartTime;
         }
 
         try {
@@ -939,7 +911,7 @@ export default function Puzzles() {
         checkAchievements,
         currentPuzzle,
         handleCompleteSession,
-        puzzleStartTime,
+        timer.puzzleStartTime,
         puzzles.length,
         reviewedCount,
         streak,
@@ -1045,42 +1017,10 @@ export default function Puzzles() {
         if (currentPuzzle) {
             setGame(new Chess(currentPuzzle.fen));
             clueReset();
-            // Start timer for this puzzle
-            const startTime = Date.now();
-            setPuzzleStartTime(startTime);
-            setCurrentPuzzleTime(0);
-
-            // Set up timer for timed sessions
-            // Use sessionType state instead of sessionSummary since sessionSummary is null for new sessions
-            if (sessionType === 'timed' && activeSessionId) {
-                if (puzzleTimerRef.current) clearTimeout(puzzleTimerRef.current);
-                puzzleTimerRef.current = setTimeout(() => {
-                    // Auto-mark as failed if time runs out
-                    if (statusRef.current === 'solving') {
-                        handleReviewPuzzleRef.current('fail');
-                        setStatus('incorrect');
-                    }
-                }, 30000); // 30 seconds per puzzle in timed mode
-            }
-
-            // Set up puzzle time tracker
-            if (puzzleTimeRef.current) clearInterval(puzzleTimeRef.current);
-            puzzleTimeRef.current = setInterval(() => {
-                setCurrentPuzzleTime(Math.floor((Date.now() - startTime) / 1000));
-            }, 1000);
+            timer.startPuzzleTimer();
         }
-
-        return () => {
-            if (puzzleTimerRef.current) {
-                clearTimeout(puzzleTimerRef.current);
-                puzzleTimerRef.current = null;
-            }
-            if (puzzleTimeRef.current) {
-                clearInterval(puzzleTimeRef.current);
-                puzzleTimeRef.current = null;
-            }
-        };
-    }, [currentPuzzle, sessionType, activeSessionId, clueReset]);
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- timer.startPuzzleTimer is stable
+    }, [currentPuzzle, clueReset]);
 
     const onPieceDrop = (sourceSquare: string, targetSquare: string) => {
         if (!currentPuzzle || status === 'correct' || status === 'revealed') return false;
@@ -1578,17 +1518,17 @@ export default function Puzzles() {
                                                             </span>
                                                         </span>
                                                         <span>
-                                                            Time: {currentPuzzleTime}s
+                                                            Time: {timer.currentPuzzleTime}s
                                                         </span>
                                                     </div>
                                                 </div>
                                             )}
 
                                             {/* Timed Session Timer */}
-                                            {sessionSummary.session_type === 'timed' && timeRemaining > 0 && (
+                                            {sessionSummary.session_type === 'timed' && timer.timeRemaining > 0 && (
                                                 <div className="mt-2 text-center">
-                                                    <span className={`font-mono text-sm ${timeRemaining < 60 ? 'text-red-500' : 'text-primary/80'}`}>
-                                                        Time Remaining: {Math.floor(timeRemaining / 60)}:{(timeRemaining % 60).toString().padStart(2, '0')}
+                                                    <span className={`font-mono text-sm ${timer.timeRemaining < 60 ? 'text-red-500' : 'text-primary/80'}`}>
+                                                        Time Remaining: {Math.floor(timer.timeRemaining / 60)}:{(timer.timeRemaining % 60).toString().padStart(2, '0')}
                                                     </span>
                                                 </div>
                                             )}
