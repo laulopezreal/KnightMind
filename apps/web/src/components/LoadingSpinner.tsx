@@ -21,7 +21,6 @@ export function LoadingSpinner({ size = 'md', label }: LoadingSpinnerProps) {
         role="status"
         aria-label={label || 'Loading...'}
       />
-      {label && <span className="sr-only">{label}</span>}
     </div>
   );
 }
