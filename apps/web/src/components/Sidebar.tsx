@@ -14,7 +14,7 @@ export default function Sidebar() {
     const location = useLocation();
 
     return (
-        <aside className="fixed left-0 top-0 h-full w-24 md:w-64 flex flex-col justify-between p-8 md:p-12 z-50">
+        <aside className="fixed left-0 top-0 h-full w-24 md:w-64 flex flex-col justify-between p-8 md:p-12 z-50" role="navigation" aria-label="Main navigation">
             <div>
                 {/* Logo / Brand */}
                 <Link to="/" className="block mb-20 km-interactive km-focus-visible rounded-full w-8 h-8 inline-block" aria-label="KnightMind home">
