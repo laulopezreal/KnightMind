@@ -161,8 +161,7 @@ export default function Engine() {
     return 'text-primary';
   };
 
-<<<<<<< HEAD
-  const bestMoveParsed = useMemo(() => {
+const bestMoveParsed = useMemo(() => {
     if (!evaluation?.bestMove) return { from: '', to: '' };
     return parseBestMoveUci(evaluation.bestMove);
   }, [evaluation?.bestMove]);
@@ -178,11 +177,6 @@ export default function Engine() {
     }
     return from ? { [from]: highlight } : {};
   }, [bestMoveParsed, clueStage, evaluation?.bestMove]);
-
-  const handleClue = () => {
-    if (!evaluation?.bestMove) return;
-    setClueStage(prev => (prev + 1) as ClueStage);
-  };
 
   return (
     <div className="space-y-12 animate-teedin">
@@ -318,30 +312,6 @@ export default function Engine() {
               </div>
             )}
 
-<<<<<<< HEAD
-            {evaluation && clueStage === 1 && (
-              <div className="pt-2">
-                <p className="text-primary/80 font-sans text-sm">
-                  {evaluation.bestMove
-                    ? getPieceNameAtSquare(fen, bestMoveParsed.from)
-                    : 'Move the correct piece'
-                  }
-                </p>
-              </div>
-            )}
-
-            {evaluation && (
-              <button
-                type="button"
-                onClick={handleClue}
-                disabled={!evaluation.bestMove || clueStage === 2}
-                className="w-full py-2 mt-4 bg-primary/10 border border-primary/20 text-primary rounded-sm font-sans text-sm uppercase tracking-widest transition-all km-interactive km-focus-visible disabled:opacity-50 disabled:cursor-default"
-              >
-                {clueStage === 0 ? 'Clue' : clueStage === 1 ? 'Reveal squares' : 'Clue used'}
-              </button>
-            )}
-
-=======
             {evaluation && (
               <div className="flex justify-between items-center pt-2">
                 <span className="font-sans text-sm text-primary/60 uppercase tracking-widest">Best Move</span>
@@ -379,7 +349,6 @@ export default function Engine() {
                 {clueStage === 0 ? 'Clue' : clueStage === 1 ? 'Reveal squares' : 'Clue used'}
               </button>
             )}
->>>>>>> dev
           </div>
         </div>
       </section>
