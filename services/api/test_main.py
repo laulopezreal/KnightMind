@@ -929,10 +929,6 @@ def test_tricky_puzzles_title_fallback(client_with_db, db_session):
     """Puzzles with no title get 'Untitled Puzzle' as fallback."""
     _create_puzzle_stats(db_session, "p-no-title", "testuser", fail_count=2,
                          last_reviewed_at=datetime.now(timezone.utc), title=None)
-    # Manually null-out the title that the helper set
-    stat = db_session.get(PuzzleStats, "p-no-title")
-    stat.title = None
-    db_session.commit()
 
     response = client_with_db.get("/users/testuser/puzzles/tricky")
     assert response.status_code == 200
