@@ -70,6 +70,12 @@ SIGNIFICANT_WINS_VS_HIGHER_THRESHOLD = 2
 SIGNIFICANT_LOSSES_VS_LOWER_THRESHOLD = 2
 OPPONENT_RATING_STD_DEV_THRESHOLD = 150
 
+# Chess.com draw result values
+DRAW_RESULTS = frozenset([
+    "repetition", "agreed", "timevsinsufficient",
+    "stalemate", "insufficient", "50move",
+])
+
 
 async def run_session_cleanup():
     """Background task to cleanup abandoned sessions periodically."""
@@ -908,7 +914,7 @@ class DriverStats(BaseModel):
     avg_opponent_rating: int | None
     expected_total: float | None
     actual_total: float | None
-    expected_minus_actual: float | None
+    actual_minus_expected: float | None
     missing_opponent_rating_games: int
 
 
@@ -1025,10 +1031,10 @@ async def explain_rating_changes(
         result_score = 0.0
         if user_is_white:
              if meta.white_result == "win": result_score = 1.0
-             elif meta.white_result in ["repetition", "agreed", "timevsinsufficient", "stalemate", "insufficient"]: result_score = 0.5
+             elif meta.white_result in DRAW_RESULTS: result_score = 0.5
         else:
              if meta.black_result == "win": result_score = 1.0
-             elif meta.black_result in ["repetition", "agreed", "timevsinsufficient", "stalemate", "insufficient"]: result_score = 0.5
+             elif meta.black_result in DRAW_RESULTS: result_score = 0.5
 
         if result_score == 1.0: wins += 1
         elif result_score == 0.5: draws += 1
@@ -1112,11 +1118,15 @@ async def explain_rating_changes(
     def get_surprise_val(h: HighlightGame):
         act = 1.0 if h.result == "Win" else 0.5 if h.result == "Draw" else 0.0
         return act - h.expected_score
-        
+
     surprises.sort(key=get_surprise_val, reverse=True)
-    best_surprises = surprises[:3]
-    worst_surprises = surprises[-3:]
+    best_surprises = [s for s in surprises if get_surprise_val(s) > 0][:3]
+    worst_surprises = [s for s in surprises if get_surprise_val(s) < 0][-3:]
     worst_surprises.reverse()
+
+    # Deduplicate: a game should not appear in both lists
+    best_ids = {s.game_id for s in best_surprises}
+    worst_surprises = [s for s in worst_surprises if s.game_id not in best_ids]
     
     start_rating_val = earliest_snapshot.rating if earliest_snapshot else None
     
@@ -1149,7 +1159,7 @@ async def explain_rating_changes(
             avg_opponent_rating=avg_opp,
             expected_total=expected_total if opp_rating_count > 0 else None,
             actual_total=actual_total_rated if opp_rating_count > 0 else None,
-            expected_minus_actual=diff if opp_rating_count > 0 else None,
+            actual_minus_expected=diff if opp_rating_count > 0 else None,
             missing_opponent_rating_games=missing_ratings
         ),
         drivers=drivers,

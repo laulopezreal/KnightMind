@@ -341,8 +341,8 @@ export default function RatingInsights() {
                                 />
                                 <Card
                                     label="Performance vs Expectation"
-                                    value={hasGames && data.stats.expected_minus_actual !== null
-                                        ? (data.stats.expected_minus_actual > 0 ? `+${(data.stats.expected_minus_actual || 0).toFixed(1)}` : `${(data.stats.expected_minus_actual || 0).toFixed(1)}`)
+                                    value={hasGames && data.stats.actual_minus_expected !== null
+                                        ? (data.stats.actual_minus_expected > 0 ? `+${(data.stats.actual_minus_expected || 0).toFixed(1)}` : `${(data.stats.actual_minus_expected || 0).toFixed(1)}`)
                                         : "—"}
                                     sub="Expectation gap"
                                     helper="Positive means you outperformed expectations. Negative means you underperformed."
