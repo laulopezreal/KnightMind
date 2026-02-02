@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams, useNavigate } from 'react-router-dom';
 import { Chessboard } from 'react-chessboard';
 import { Chess } from 'chess.js';
 import { generatePuzzles, getDailyPuzzles, getDuePuzzles, cancelJob, ApiError, type Puzzle, startSession, completeSession, getRecentSessions, reviewPuzzle, getSession, type SessionSummary, useHint as requestHint, getUserStatus, type UserStatus, getMotifPerformance, type MotifPerformanceResponse } from '../api';
 import { JobStatusCard } from '../components/JobStatusCard';
 import { SessionSummaryCard } from '../components/SessionSummaryCard';
+import { WarmupSummary } from '../components/WarmupSummary';
 import { AchievementsList } from '../components/AchievementsList';
 import { RecentSessionsCard } from '../components/RecentSessionsCard';
 import { useJobPolling } from '../hooks/useJobPolling';
@@ -79,6 +80,7 @@ const ACHIEVEMENTS: Achievement[] = [
 
 export default function Puzzles() {
     const { username, setEditorOpen } = useChessUsername();
+    const navigate = useNavigate();
     const [puzzles, setPuzzles] = useState<Puzzle[]>([]);
     const [currentIndex, setCurrentIndex] = useState(0);
     const [userMove, setUserMove] = useState('');
@@ -88,9 +90,13 @@ export default function Puzzles() {
     const [showUciInput, setShowUciInput] = useState(false);
     const [activeJobId, setActiveJobId] = useState<string | null>(null);
 
-    // Get motif filter from URL query params
+    // Get motif filter and warmup mode from URL query params
     const [searchParams] = useSearchParams();
     const motifFilter = searchParams.get('motif');
+    const isWarmupMode = searchParams.get('warmup') === 'true';
+
+    // Warmup state
+    const [warmupMode, setWarmupMode] = useState(isWarmupMode);
 
     // Session state
     const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
@@ -544,7 +550,7 @@ export default function Puzzles() {
     };
 
     // Session handlers
-    const handleStartSession = async () => {
+    const handleStartSession = useCallback(async () => {
         if (!username.trim()) {
             setError('Please enter a username');
             return;
@@ -586,7 +592,8 @@ export default function Puzzles() {
                 5,
                 sessionType,
                 targetAccuracyParam,
-                targetTimeMinutesParam
+                targetTimeMinutesParam,
+                warmupMode ? { is_warmup: true } : undefined
             );
             setActiveSessionId(session_id);
 
@@ -658,7 +665,19 @@ export default function Puzzles() {
                 setError(message);
             }
         }
-    };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [
+        username,
+        userStatus,
+        sessionType,
+        targetAccuracy,
+        targetTimeMinutes,
+        warmupMode,
+        puzzles,
+        motifFilter,
+        // Note: handleCompleteSession is stable (wrapped in useCallback) and declared later,
+        // so it's intentionally excluded from dependencies to avoid circular reference
+    ]);
 
     // Helper function to check and award achievements
     const checkAchievements = useCallback((newAchievements: Achievement[] = achievements) => {
@@ -875,6 +894,13 @@ export default function Puzzles() {
         handleReviewPuzzleRef.current = handleReviewPuzzle;
     }, [handleReviewPuzzle]);
 
+    // Auto-start warmup session when in warmup mode
+    useEffect(() => {
+        if (warmupMode && sessionState === 'idle' && username && userStatus && !isResumingSession) {
+            // Automatically start a warmup session with 5 puzzles
+            handleStartSession();
+        }
+    }, [warmupMode, sessionState, username, userStatus, isResumingSession, handleStartSession]);
 
     const shouldShowJobStatusCard =
         !!job &&
@@ -1317,6 +1343,22 @@ export default function Puzzles() {
                 </section>
             )}
 
+            {/* Warmup Diagnostic Banner */}
+            {warmupMode && sessionState === 'active' && (
+                <div
+                    className="bg-blue-500/10 border border-blue-500/20 rounded-sm p-4 mb-6 text-center animate-teedin"
+                    role="status"
+                    aria-live="polite"
+                >
+                    <p className="text-primary font-serif">
+                        🎯 Warmup Diagnostic Session
+                    </p>
+                    <p className="text-primary/60 text-sm font-sans">
+                        Complete 5 puzzles to see what stuck while you were away
+                    </p>
+                </div>
+            )}
+
             {currentPuzzle && ( // Make sure currentPuzzle is defined or access checked
                 <section className="grid lg:grid-cols-2 gap-12 lg:gap-24">
                     {/* Chessboard */}
@@ -1631,15 +1673,27 @@ export default function Puzzles() {
 
             {/* Session Summary */}
             {sessionSummary && (
-                <SessionSummaryCard
-                    sessionSummary={sessionSummary}
-                    achievements={achievements}
-                    onStartNewSession={() => {
-                        setSessionSummary(null);
-                        setLastFeedback('');
-                        handleStartSession();
-                    }}
-                />
+                <>
+                    {warmupMode ? (
+                        <WarmupSummary
+                            sessionSummary={sessionSummary}
+                            onContinue={() => {
+                                setWarmupMode(false);
+                                navigate('/dashboard');
+                            }}
+                        />
+                    ) : (
+                        <SessionSummaryCard
+                            sessionSummary={sessionSummary}
+                            achievements={achievements}
+                            onStartNewSession={() => {
+                                setSessionSummary(null);
+                                setLastFeedback('');
+                                handleStartSession();
+                            }}
+                        />
+                    )}
+                </>
             )}
 
             {/* Recent Sessions */}

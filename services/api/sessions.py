@@ -23,6 +23,7 @@ class StartSessionRequest(BaseModel):
     session_type: str = "standard"  # "standard", "timed", "accuracy_goal"
     target_accuracy: float | None = None  # Target accuracy percentage (0.0-100.0)
     target_time_minutes: int | None = None  # Target session time in minutes
+    session_data: dict | None = None  # Flexible storage for session-specific data (e.g., warmup flag)
 
 
 class StartSessionResponse(BaseModel):
@@ -82,7 +83,8 @@ async def start_session(
         target_time_minutes=request.target_time_minutes,
         current_streak=0,
         best_streak=0,
-        hints_used=0
+        hints_used=0,
+        session_data=request.session_data or {}
     )
     
     db.add(session)

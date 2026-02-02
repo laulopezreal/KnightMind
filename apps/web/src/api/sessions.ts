@@ -22,21 +22,23 @@ export async function getSession(sessionId: string): Promise<SessionSummary> {
 }
 
 export async function startSession(
-    username: string, 
+    username: string,
     n: number = 5,
     sessionType: string = "standard",
     targetAccuracy?: number,
-    targetTimeMinutes?: number
+    targetTimeMinutes?: number,
+    sessionData?: Record<string, unknown>
 ): Promise<{ session_id: string; requested_n: number; session_type?: string; target_accuracy?: number; target_time_minutes?: number }> {
     return await request<{ session_id: string; requested_n: number; session_type?: string; target_accuracy?: number; target_time_minutes?: number }>(`/sessions/start`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-            username, 
+        body: JSON.stringify({
+            username,
             n,
             session_type: sessionType,
             target_accuracy: targetAccuracy,
-            target_time_minutes: targetTimeMinutes
+            target_time_minutes: targetTimeMinutes,
+            session_data: sessionData
         }),
     });
 }
