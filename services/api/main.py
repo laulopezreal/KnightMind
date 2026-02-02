@@ -889,17 +889,21 @@ async def get_rating_history(
     limit: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db)
 ):
-    """Return chronological rating snapshot history for charting."""
+    """Return chronological rating snapshot history for charting.
+
+    Fetches the most recent `limit` snapshots (desc) then reverses to
+    chronological order so the frontend chart always shows the latest window.
+    """
     stmt = (
         select(RatingSnapshot)
         .where(
             RatingSnapshot.username == username,
             RatingSnapshot.time_control == time_control,
         )
-        .order_by(RatingSnapshot.recorded_at.asc())
+        .order_by(RatingSnapshot.recorded_at.desc())
         .limit(limit)
     )
-    snapshots = db.scalars(stmt).all()
+    snapshots = list(reversed(db.scalars(stmt).all()))
     return [
         SnapshotHistoryItem(rating=s.rating, recorded_at=s.recorded_at)
         for s in snapshots

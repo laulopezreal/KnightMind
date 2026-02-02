@@ -242,6 +242,33 @@ def test_rating_history_returns_snapshots(client_with_db, db_session):
     assert items[2]["rating"] == 1415
 
 
+def test_rating_history_returns_most_recent(client_with_db, db_session):
+    """GET /ratings/history with limit returns the most recent snapshots, not oldest."""
+    now = datetime.now(timezone.utc)
+    # Create 5 snapshots: ratings 1400..1440
+    for i in range(5):
+        db_session.add(RatingSnapshot(
+            username="testuser",
+            source="chesscom",
+            time_control="rapid",
+            rating=1400 + i * 10,
+            recorded_at=now - timedelta(days=5 - i),
+        ))
+    db_session.commit()
+
+    # Request only 3 — should get the 3 most recent (1420, 1430, 1440) in chrono order
+    response = client_with_db.get(
+        "/ratings/history",
+        params={"username": "testuser", "time_control": "rapid", "limit": "3"},
+    )
+    assert response.status_code == 200
+    items = response.json()
+    assert len(items) == 3
+    assert items[0]["rating"] == 1420
+    assert items[1]["rating"] == 1430
+    assert items[2]["rating"] == 1440
+
+
 def test_rating_history_empty(client_with_db):
     """GET /ratings/history returns empty list when no snapshots exist."""
     response = client_with_db.get(
