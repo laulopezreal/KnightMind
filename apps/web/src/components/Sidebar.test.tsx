@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import Sidebar from './Sidebar';
 
 const mockSetSessionType = vi.fn();
-let mockSessionType = 'standard';
+const mockSessionType = 'standard';
 let mockPathname = '/';
 
 vi.mock('react-router-dom', () => ({

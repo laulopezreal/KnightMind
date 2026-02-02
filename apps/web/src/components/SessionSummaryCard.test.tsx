@@ -5,11 +5,14 @@ import { SessionSummaryCard } from './SessionSummaryCard';
 
 const mockSessionSummary = {
   session_id: 'session-1',
+  requested_n: 10,
   pass_count: 8,
   fail_count: 2,
   total_time_ms: 125000, // 2m 5s
+  current_streak: 3,
   best_streak: 5,
   hints_used: 1,
+  created_at: '2025-01-15T11:58:00Z',
   completed_at: '2025-01-15T12:00:00Z',
   session_type: 'standard' as const,
 };

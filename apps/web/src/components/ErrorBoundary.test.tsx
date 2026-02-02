@@ -101,7 +101,7 @@ describe('ErrorBoundary', () => {
   });
 
   it('should show generic message when error has no message', () => {
-    function ThrowGeneric() {
+    function ThrowGeneric(): React.ReactNode {
       throw new Error();
     }
 

@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import Openings from './Openings';
 
 let mockUsername = 'testplayer';
@@ -40,8 +39,6 @@ vi.mock('d3', () => ({
 }));
 
 describe('Openings', () => {
-  const user = userEvent.setup();
-
   beforeEach(() => {
     vi.clearAllMocks();
     mockUsername = 'testplayer';

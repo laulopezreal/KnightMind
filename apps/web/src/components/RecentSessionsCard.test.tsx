@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { RecentSessionsCard } from './RecentSessionsCard';
@@ -6,9 +6,11 @@ import { RecentSessionsCard } from './RecentSessionsCard';
 const mockSessions = [
   {
     session_id: 's1',
+    requested_n: 10,
     pass_count: 8,
     fail_count: 2,
     total_time_ms: 120000,
+    current_streak: 3,
     best_streak: 5,
     hints_used: 0,
     created_at: '2025-01-15T12:00:00Z',
@@ -16,9 +18,11 @@ const mockSessions = [
   },
   {
     session_id: 's2',
+    requested_n: 10,
     pass_count: 6,
     fail_count: 4,
     total_time_ms: 180000,
+    current_streak: 1,
     best_streak: 3,
     hints_used: 1,
     created_at: '2025-01-14T12:00:00Z',
