@@ -13,7 +13,8 @@ export default function Engine() {
   const [fenInput, setFenInput] = useState(STARTING_FEN);
   const [evaluation, setEvaluation] = useState<{ bestMove: string; eval: number } | null>(null);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [fenError, setFenError] = useState<string | null>(null);
+  const [evaluationError, setEvaluationError] = useState<string | null>(null);
   const [engineAvailable, setEngineAvailable] = useState<boolean | null>(null);
   const [showBestMove, setShowBestMove] = useState(false);
   const [clueStage, setClueStage] = useState<ClueStage>(0);
@@ -28,7 +29,8 @@ export default function Engine() {
 
   const handleEvaluate = useCallback(async () => {
     setLoading(true);
-    setError(null);
+    setFenError(null);
+    setEvaluationError(null);
     setEvaluation(null);
     setShowBestMove(false);
     setClueStage(0);
@@ -40,9 +42,9 @@ export default function Engine() {
       lastEvaluatedFen.current = fen;
     } catch (err) {
       if (err instanceof ApiError) {
-        setError(err.detail || err.message);
+        setEvaluationError(err.detail || err.message);
       } else {
-        setError(err instanceof Error ? err.message : 'Evaluation failed');
+        setEvaluationError(err instanceof Error ? err.message : 'Evaluation failed');
       }
     } finally {
       setLoading(false);
@@ -70,7 +72,8 @@ export default function Engine() {
     setFenInput(STARTING_FEN);
     setEvaluation(null);
     setShowBestMove(false);
-    setError(null);
+    setFenError(null);
+    setEvaluationError(null);
     setClueStage(0);
     setFenHistory([STARTING_FEN]);
     setHistoryIndex(0);
@@ -82,13 +85,14 @@ export default function Engine() {
       setFen(fenInput);
       setEvaluation(null);
       setShowBestMove(false);
-      setError(null);
+      setFenError(null);
+      setEvaluationError(null);
       setClueStage(0);
       const nextHistory = [...fenHistory.slice(0, historyIndex + 1), fenInput];
       setFenHistory(nextHistory);
       setHistoryIndex(nextHistory.length - 1);
     } catch {
-      setError('Invalid FEN string');
+      setFenError('Invalid FEN string');
     }
   };
 
@@ -119,7 +123,8 @@ export default function Engine() {
     setFenInput(previousFen);
     setEvaluation(null);
     setShowBestMove(false);
-    setError(null);
+    setFenError(null);
+    setEvaluationError(null);
     setClueStage(0);
   };
 
@@ -132,7 +137,8 @@ export default function Engine() {
     setFenInput(nextFen);
     setEvaluation(null);
     setShowBestMove(false);
-    setError(null);
+    setFenError(null);
+    setEvaluationError(null);
     setClueStage(0);
   };
 
@@ -151,23 +157,21 @@ export default function Engine() {
     return parseBestMoveUci(evaluation.bestMove);
   }, [evaluation?.bestMove]);
 
-  const clueSquareStyles: Record<string, { backgroundColor: string }> =
-    evaluation?.bestMove && clueStage >= 1
-      ? (() => {
-        const { from, to } = bestMoveParsed;
-        const highlight = { backgroundColor: 'rgba(255, 235, 59, 0.45)' };
-        if (clueStage === 2 && to) return { [from]: highlight, [to]: highlight };
-        return from ? { [from]: highlight } : {};
-      })()
-      : {};
+  const clueSquareStyles: Record<string, { backgroundColor: string }> = useMemo(() => {
+    if (!evaluation?.bestMove || clueStage < 1) {
+      return {};
+    }
+    const { from, to } = bestMoveParsed;
+    const highlight = { backgroundColor: 'rgba(255, 235, 59, 0.45)' };
+    if (clueStage === 2 && to) {
+      return { [from]: highlight, [to]: highlight };
+    }
+    return from ? { [from]: highlight } : {};
+  }, [bestMoveParsed, clueStage, evaluation?.bestMove]);
 
   const handleClue = () => {
     if (!evaluation?.bestMove) return;
-    if (clueStage === 0) {
-      setClueStage(1);
-    } else if (clueStage === 1) {
-      setClueStage(2);
-    }
+    setClueStage(prev => (prev + 1) as ClueStage);
   };
 
   return (
@@ -280,7 +284,7 @@ export default function Engine() {
                 Load
               </button>
             </div>
-            {error && <p className="text-red-500 text-xs font-sans">{error}</p>}
+            {fenError && <p className="text-red-500 text-xs font-sans">{fenError}</p>}
           </div>
 
           {/* Analysis Box */}
@@ -298,9 +302,9 @@ export default function Engine() {
               )}
             </div>
 
-            {error && (
+            {evaluationError && (
               <div className="rounded-sm border border-red-500/20 bg-red-500/5 px-4 py-3 text-xs font-sans text-red-500">
-                {error}
+                {evaluationError}
               </div>
             )}
 
