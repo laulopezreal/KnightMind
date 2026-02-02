@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from services.api.db import get_db
 from services.api.models import Base, RatingSnapshot
 from services.api.storage.games import GameStorage
+from services.api.time_control import classify_time_control
 
 client = TestClient(app)
 
@@ -30,12 +31,54 @@ def test_pgn_parsing():
 def test_expected_score_logic():
     # If opp=1400, ref=1400 -> 1 / (1 + 1) = 0.5
     assert calculate_expected_score(1400, 1400) == 0.5
-    
+
     # If opp=1800, ref=1400 -> diff=400 -> 1 / (1 + 10^1) = 1/11 = 0.09
     assert round(calculate_expected_score(1400, 1800), 2) == 0.09
-    
+
     # If opp=1000, ref=1400 -> diff=-400 -> 1 / (1 + 10^-1) = 1/1.1 = 0.909
     assert round(calculate_expected_score(1400, 1000), 3) == 0.909
+
+
+def test_classify_time_control_bullet():
+    assert classify_time_control("60") == "bullet"
+    assert classify_time_control("30") == "bullet"
+    assert classify_time_control("120") == "bullet"
+    assert classify_time_control("60+0") == "bullet"
+    assert classify_time_control("60+1") == "bullet"  # 60 + 40*1 = 100 < 180
+
+
+def test_classify_time_control_blitz():
+    assert classify_time_control("180") == "blitz"
+    assert classify_time_control("300") == "blitz"
+    assert classify_time_control("180+0") == "blitz"
+    assert classify_time_control("180+2") == "blitz"  # 180 + 40*2 = 260 < 600
+    assert classify_time_control("300+0") == "blitz"
+    assert classify_time_control("300+5") == "blitz"  # 300 + 40*5 = 500 < 600
+
+
+def test_classify_time_control_rapid():
+    assert classify_time_control("600") == "rapid"
+    assert classify_time_control("900") == "rapid"
+    assert classify_time_control("1800") == "rapid"
+    assert classify_time_control("600+0") == "rapid"
+    assert classify_time_control("600+5") == "rapid"  # 600 + 40*5 = 800
+    assert classify_time_control("300+10") == "rapid"  # 300 + 40*10 = 700 >= 600
+
+
+def test_classify_time_control_passthrough():
+    """Already-classified strings should pass through unchanged."""
+    assert classify_time_control("rapid") == "rapid"
+    assert classify_time_control("blitz") == "blitz"
+    assert classify_time_control("bullet") == "bullet"
+    assert classify_time_control("Rapid") == "rapid"
+
+
+def test_classify_time_control_edge_cases():
+    """Boundary cases."""
+    assert classify_time_control("179") == "bullet"   # just under 180
+    assert classify_time_control("180") == "blitz"     # exactly 180
+    assert classify_time_control("599") == "blitz"     # just under 600
+    assert classify_time_control("600") == "rapid"     # exactly 600
 
 
 @pytest.fixture
@@ -136,7 +179,7 @@ def test_explain_rating_changes_basic(client_with_db, db_session, tmp_path, monk
                 black_username="opponent",
                 white_result="win",
                 black_result="loss",
-                time_control="rapid",
+                time_control="600",
                 end_time=int((since_time + timedelta(hours=2 + i)).timestamp()),
                 rated=True,
             )
