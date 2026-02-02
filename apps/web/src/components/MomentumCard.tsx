@@ -14,11 +14,9 @@ export function MomentumCard({ recentForm }: MomentumCardProps) {
     ? 'Slight dip'
     : 'Steady';
 
-  const trendIcon = trend === 'up' ? '↗' : trend === 'down' ? '↘' : '→';
-
   return (
     <section
-      className="bg-primary/5 border border-primary/10 rounded-sm p-6"
+      className="bg-primary/5 border border-primary/5 rounded-sm p-6"
       aria-labelledby="momentum-title"
     >
       <h3 id="momentum-title" className="text-xl md:text-2xl font-serif text-primary mb-4">
@@ -54,8 +52,7 @@ export function MomentumCard({ recentForm }: MomentumCardProps) {
         {/* Trend indicator (informational, not judgmental) */}
         <div className="flex items-center gap-2 text-sm">
           <span className="text-primary/60 font-sans">Trend:</span>
-          <span className="text-primary/80 font-sans flex items-center gap-1">
-            <span aria-hidden="true">{trendIcon}</span>
+          <span className="text-primary/80 font-sans">
             {trendText}
           </span>
         </div>
