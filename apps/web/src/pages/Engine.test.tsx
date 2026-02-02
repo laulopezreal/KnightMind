@@ -51,6 +51,8 @@ const STARTING_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
 const ALT_FEN = 'rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1';
 
 describe('Engine - Clue Functionality', () => {
+  const user = userEvent.setup();
+
   beforeEach(() => {
     vi.resetAllMocks();
     mockGetEngineStatus.mockResolvedValue({ available: true, message: 'Engine ready' });
@@ -60,7 +62,7 @@ describe('Engine - Clue Functionality', () => {
   // Helper: load a new FEN to trigger auto-evaluation (no manual evaluate button in new UI).
   // Uses fireEvent.change for the FEN input because userEvent.type would type 56 chars
   // one-by-one, causing excessive re-renders with no additional behavioral coverage.
-  async function evaluatePosition(user: ReturnType<typeof userEvent.setup>) {
+  async function evaluatePosition() {
     const fenInput = screen.getByDisplayValue(STARTING_FEN);
     fireEvent.change(fenInput, { target: { value: ALT_FEN } });
     await user.click(screen.getByText('Load'));
@@ -73,10 +75,9 @@ describe('Engine - Clue Functionality', () => {
 
   describe('Clue Stage Transitions', () => {
     it('should start with clueStage = 0', async () => {
-      const user = userEvent.setup();
       render(<Engine />);
 
-      await evaluatePosition(user);
+      await evaluatePosition();
 
       await waitFor(() => {
         expect(screen.getByText('Clue')).toBeInTheDocument();
@@ -84,10 +85,9 @@ describe('Engine - Clue Functionality', () => {
     });
 
     it('should transition from stage 0 to stage 1 on first clue click', async () => {
-      const user = userEvent.setup();
       render(<Engine />);
 
-      await evaluatePosition(user);
+      await evaluatePosition();
 
       await waitFor(() => {
         expect(screen.getByText('Clue')).toBeInTheDocument();
@@ -101,10 +101,9 @@ describe('Engine - Clue Functionality', () => {
     });
 
     it('should transition from stage 1 to stage 2 on second clue click', async () => {
-      const user = userEvent.setup();
       render(<Engine />);
 
-      await evaluatePosition(user);
+      await evaluatePosition();
 
       await waitFor(() => {
         expect(screen.getByText('Clue')).toBeInTheDocument();
@@ -124,10 +123,9 @@ describe('Engine - Clue Functionality', () => {
     });
 
     it('should cycle back to stage 0 from stage 2 on click', async () => {
-      const user = userEvent.setup();
       render(<Engine />);
 
-      await evaluatePosition(user);
+      await evaluatePosition();
 
       await user.click(screen.getByText('Clue'));
 
@@ -155,10 +153,9 @@ describe('Engine - Clue Functionality', () => {
 
   describe('Button States', () => {
     it('should not disable clue button in any stage', async () => {
-      const user = userEvent.setup();
       render(<Engine />);
 
-      await evaluatePosition(user);
+      await evaluatePosition();
 
       // Stage 0
       await waitFor(() => {
@@ -181,10 +178,9 @@ describe('Engine - Clue Functionality', () => {
 
   describe('Piece Name Display', () => {
     it('should show hint prompt in stage 0', async () => {
-      const user = userEvent.setup();
       render(<Engine />);
 
-      await evaluatePosition(user);
+      await evaluatePosition();
 
       await waitFor(() => {
         expect(screen.getByText('Tap for a small hint.')).toBeInTheDocument();
@@ -192,10 +188,9 @@ describe('Engine - Clue Functionality', () => {
     });
 
     it('should display correct piece name in stage 1', async () => {
-      const user = userEvent.setup();
       render(<Engine />);
 
-      await evaluatePosition(user);
+      await evaluatePosition();
 
       await waitFor(() => {
         expect(screen.getByText('Clue')).toBeInTheDocument();
@@ -209,10 +204,9 @@ describe('Engine - Clue Functionality', () => {
     });
 
     it('should not show piece name in stage 2', async () => {
-      const user = userEvent.setup();
       render(<Engine />);
 
-      await evaluatePosition(user);
+      await evaluatePosition();
 
       await user.click(screen.getByText('Clue'));
 
@@ -231,10 +225,9 @@ describe('Engine - Clue Functionality', () => {
     it('should show default hint when piece cannot be determined', async () => {
       mockEvaluateFen.mockResolvedValue({ best_move_uci: 'x9y0', eval: 0.5 });
 
-      const user = userEvent.setup();
       render(<Engine />);
 
-      await evaluatePosition(user);
+      await evaluatePosition();
 
       await waitFor(() => {
         expect(screen.getByText('Clue')).toBeInTheDocument();
@@ -250,10 +243,9 @@ describe('Engine - Clue Functionality', () => {
 
   describe('Board Highlighting', () => {
     it('should highlight only source square in stage 1', async () => {
-      const user = userEvent.setup();
       render(<Engine />);
 
-      await evaluatePosition(user);
+      await evaluatePosition();
 
       await waitFor(() => {
         expect(screen.getByText('Clue')).toBeInTheDocument();
@@ -271,10 +263,9 @@ describe('Engine - Clue Functionality', () => {
     });
 
     it('should highlight both source and target squares in stage 2', async () => {
-      const user = userEvent.setup();
       render(<Engine />);
 
-      await evaluatePosition(user);
+      await evaluatePosition();
 
       await waitFor(() => {
         expect(screen.getByText('Clue')).toBeInTheDocument();
@@ -299,10 +290,9 @@ describe('Engine - Clue Functionality', () => {
     });
 
     it('should clear highlighting when position is reset', async () => {
-      const user = userEvent.setup();
       render(<Engine />);
 
-      await evaluatePosition(user);
+      await evaluatePosition();
 
       await user.click(screen.getByText('Clue'));
 
@@ -352,7 +342,6 @@ describe('Engine - Clue Functionality', () => {
       // Make evaluateFen hang indefinitely so we can observe the loading state
       mockEvaluateFen.mockReturnValue(new Promise(() => {}));
 
-      const user = userEvent.setup();
       render(<Engine />);
 
       // Load a new FEN to trigger auto-evaluation
@@ -366,10 +355,9 @@ describe('Engine - Clue Functionality', () => {
     });
 
     it('should reset clues when new positions are loaded', async () => {
-      const user = userEvent.setup();
       render(<Engine />);
 
-      await evaluatePosition(user);
+      await evaluatePosition();
 
       await waitFor(() => {
         expect(screen.getByText('Clue')).toBeInTheDocument();
@@ -393,10 +381,9 @@ describe('Engine - Clue Functionality', () => {
     });
 
     it('should reset clues when reloading position', async () => {
-      const user = userEvent.setup();
       render(<Engine />);
 
-      await evaluatePosition(user);
+      await evaluatePosition();
 
       await user.click(screen.getByText('Clue'));
 
@@ -418,7 +405,6 @@ describe('Engine - Clue Functionality', () => {
     it('should handle empty bestMove gracefully', async () => {
       mockEvaluateFen.mockResolvedValue({ best_move_uci: '', eval: 0.5 });
 
-      const user = userEvent.setup();
       render(<Engine />);
 
       // Load position to trigger eval
@@ -444,10 +430,9 @@ describe('Engine - Clue Functionality', () => {
     it('should handle malformed UCI strings gracefully', async () => {
       mockEvaluateFen.mockResolvedValue({ best_move_uci: 'invalid', eval: 0.5 });
 
-      const user = userEvent.setup();
       render(<Engine />);
 
-      await evaluatePosition(user);
+      await evaluatePosition();
 
       await waitFor(() => {
         expect(screen.getByText('Clue')).toBeInTheDocument();
@@ -463,10 +448,9 @@ describe('Engine - Clue Functionality', () => {
     it('should reset clues on evaluation errors', async () => {
       mockEvaluateFen.mockResolvedValueOnce({ best_move_uci: 'e2e4', eval: 0.5 });
 
-      const user = userEvent.setup();
       render(<Engine />);
 
-      await evaluatePosition(user);
+      await evaluatePosition();
 
       await waitFor(() => {
         expect(screen.getByText('Clue')).toBeInTheDocument();
@@ -494,10 +478,9 @@ describe('Engine - Clue Functionality', () => {
 
   describe('Accessibility', () => {
     it('should have proper button roles and labels', async () => {
-      const user = userEvent.setup();
       render(<Engine />);
 
-      await evaluatePosition(user);
+      await evaluatePosition();
 
       await waitFor(() => {
         const clueButton = screen.getByText('Clue');
@@ -506,10 +489,9 @@ describe('Engine - Clue Functionality', () => {
     });
 
     it('should maintain keyboard focus during clue transitions', async () => {
-      const user = userEvent.setup();
       render(<Engine />);
 
-      await evaluatePosition(user);
+      await evaluatePosition();
 
       await waitFor(() => {
         expect(screen.getByText('Clue')).toBeInTheDocument();

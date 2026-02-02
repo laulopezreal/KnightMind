@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { Modal } from './Modal';
 
 // Mock focus-trap-react to avoid focus trap issues in test environment
@@ -8,6 +9,7 @@ vi.mock('focus-trap-react', () => ({
 }));
 
 describe('Modal', () => {
+  const user = userEvent.setup();
   const onClose = vi.fn();
 
   beforeEach(() => {
@@ -46,29 +48,29 @@ describe('Modal', () => {
     expect(dialog).toHaveAttribute('aria-modal', 'true');
   });
 
-  it('should call onClose when Escape key is pressed', () => {
+  it('should call onClose when Escape key is pressed', async () => {
     render(
       <Modal isOpen={true} onClose={onClose}>
         <div>Content</div>
       </Modal>
     );
 
-    fireEvent.keyDown(document, { key: 'Escape' });
+    await user.keyboard('{Escape}');
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it('should not close on Escape when closeOnEscape is false', () => {
+  it('should not close on Escape when closeOnEscape is false', async () => {
     render(
       <Modal isOpen={true} onClose={onClose} closeOnEscape={false}>
         <div>Content</div>
       </Modal>
     );
 
-    fireEvent.keyDown(document, { key: 'Escape' });
+    await user.keyboard('{Escape}');
     expect(onClose).not.toHaveBeenCalled();
   });
 
-  it('should call onClose when clicking overlay', () => {
+  it('should call onClose when clicking overlay', async () => {
     render(
       <Modal isOpen={true} onClose={onClose}>
         <div>Content</div>
@@ -76,11 +78,11 @@ describe('Modal', () => {
     );
 
     const overlay = screen.getByRole('dialog');
-    fireEvent.click(overlay);
+    await user.click(overlay);
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it('should not close on overlay click when closeOnOverlayClick is false', () => {
+  it('should not close on overlay click when closeOnOverlayClick is false', async () => {
     render(
       <Modal isOpen={true} onClose={onClose} closeOnOverlayClick={false}>
         <div>Content</div>
@@ -88,18 +90,18 @@ describe('Modal', () => {
     );
 
     const overlay = screen.getByRole('dialog');
-    fireEvent.click(overlay);
+    await user.click(overlay);
     expect(onClose).not.toHaveBeenCalled();
   });
 
-  it('should not close when clicking modal content', () => {
+  it('should not close when clicking modal content', async () => {
     render(
       <Modal isOpen={true} onClose={onClose}>
         <div>Content</div>
       </Modal>
     );
 
-    fireEvent.click(screen.getByText('Content'));
+    await user.click(screen.getByText('Content'));
     expect(onClose).not.toHaveBeenCalled();
   });
 
