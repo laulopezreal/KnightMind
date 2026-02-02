@@ -37,7 +37,7 @@ export default function Dashboard() {
     }, [username, navigate]);
 
     // Load all dashboard data - extracted for reusability
-    const loadDashboardData = useCallback(async (isRefresh = false) => {
+    const loadDashboardData = useCallback(async () => {
         // Guard against concurrent fetches
         if (!username || isFetchingRef.current) return;
 
@@ -78,7 +78,7 @@ export default function Dashboard() {
     // Auto-refresh on window focus
     useEffect(() => {
         const handleFocus = () => {
-            loadDashboardData(true);
+            loadDashboardData();
         };
 
         window.addEventListener('focus', handleFocus);
