@@ -1,13 +1,9 @@
 import { type SessionSummary } from '../api';
+import { calculateAccuracy } from '../utils/accuracy';
 
 interface RecentSessionsCardProps {
     sessions: SessionSummary[];
 }
-
-const calculateAccuracy = (passCount: number, failCount: number): number => {
-    const total = passCount + failCount;
-    return total > 0 ? Math.round((passCount / total) * 100) : 0;
-};
 
 export function RecentSessionsCard({ sessions }: RecentSessionsCardProps) {
     if (sessions.length === 0) {
