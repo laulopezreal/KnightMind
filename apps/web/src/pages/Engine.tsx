@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { Chessboard } from 'react-chessboard';
 import { Chess } from 'chess.js';
@@ -17,12 +17,16 @@ export default function Engine() {
   const [engineAvailable, setEngineAvailable] = useState<boolean | null>(null);
   const [showBestMove, setShowBestMove] = useState(false);
   const [clueStage, setClueStage] = useState<ClueStage>(0);
+  const [fenHistory, setFenHistory] = useState([STARTING_FEN]);
+  const [historyIndex, setHistoryIndex] = useState(0);
+  const lastEvaluatedFen = useRef<string | null>(null);
+  const autoEvalTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     getEngineStatus().then(s => setEngineAvailable(s.available)).catch(() => setEngineAvailable(false));
   }, []);
 
-  const handleEvaluate = async () => {
+  const handleEvaluate = useCallback(async () => {
     setLoading(true);
     setError(null);
     setEvaluation(null);
@@ -33,6 +37,7 @@ export default function Engine() {
       const result = await evaluateFen(fen);
       setEvaluation({ bestMove: result.best_move_uci, eval: result.eval });
       setClueStage(0);
+      lastEvaluatedFen.current = fen;
     } catch (err) {
       if (err instanceof ApiError) {
         setError(err.detail || err.message);
@@ -42,7 +47,23 @@ export default function Engine() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [fen]);
+
+  useEffect(() => {
+    if (!engineAvailable || loading) return;
+    if (lastEvaluatedFen.current === fen) return;
+    if (autoEvalTimeoutRef.current) {
+      clearTimeout(autoEvalTimeoutRef.current);
+    }
+    autoEvalTimeoutRef.current = setTimeout(() => {
+      handleEvaluate();
+    }, 500);
+    return () => {
+      if (autoEvalTimeoutRef.current) {
+        clearTimeout(autoEvalTimeoutRef.current);
+      }
+    };
+  }, [engineAvailable, fen, handleEvaluate, loading]);
 
   const handleReset = () => {
     setFen(STARTING_FEN);
@@ -51,6 +72,8 @@ export default function Engine() {
     setShowBestMove(false);
     setError(null);
     setClueStage(0);
+    setFenHistory([STARTING_FEN]);
+    setHistoryIndex(0);
   };
 
   const handleFenSubmit = () => {
@@ -61,6 +84,9 @@ export default function Engine() {
       setShowBestMove(false);
       setError(null);
       setClueStage(0);
+      const nextHistory = [...fenHistory.slice(0, historyIndex + 1), fenInput];
+      setFenHistory(nextHistory);
+      setHistoryIndex(nextHistory.length - 1);
     } catch {
       setError('Invalid FEN string');
     }
@@ -77,8 +103,37 @@ export default function Engine() {
       setEvaluation(null);
       setShowBestMove(false);
       setClueStage(0);
+      const nextHistory = [...fenHistory.slice(0, historyIndex + 1), newFen];
+      setFenHistory(nextHistory);
+      setHistoryIndex(nextHistory.length - 1);
       return true;
     } catch { return false; }
+  };
+
+  const handleBack = () => {
+    if (historyIndex <= 0) return;
+    const nextIndex = historyIndex - 1;
+    const previousFen = fenHistory[nextIndex];
+    setHistoryIndex(nextIndex);
+    setFen(previousFen);
+    setFenInput(previousFen);
+    setEvaluation(null);
+    setShowBestMove(false);
+    setError(null);
+    setClueStage(0);
+  };
+
+  const handleForward = () => {
+    if (historyIndex >= fenHistory.length - 1) return;
+    const nextIndex = historyIndex + 1;
+    const nextFen = fenHistory[nextIndex];
+    setHistoryIndex(nextIndex);
+    setFen(nextFen);
+    setFenInput(nextFen);
+    setEvaluation(null);
+    setShowBestMove(false);
+    setError(null);
+    setClueStage(0);
   };
 
   const formatEval = (v: number) => {
@@ -150,14 +205,14 @@ export default function Engine() {
                 disabled={loading || !engineAvailable}
                 className={`w-full py-4 bg-primary text-bg-primary rounded-sm font-serif text-lg transition-all km-focus-visible ${loading || !engineAvailable ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'}`}
               >
-                {loading ? 'Analyzing...' : 'Evaluate Position'}
+                {loading ? 'Analyzing...' : 'Re-run Analysis'}
               </button>
               <p className="text-xs font-sans text-primary/40">
                 {loading
                   ? 'Stockfish is calculating the best continuation.'
                   : engineAvailable === false
                     ? 'Engine is offline. Try again in a moment.'
-                    : 'One click to get the eval and best move.'}
+                    : 'Analysis runs after each move. Re-run anytime.'}
               </p>
             </div>
           </div>
@@ -180,8 +235,28 @@ export default function Engine() {
               }}
             />
           </div>
-          <div className="mt-8 flex justify-center">
-            <button type="button" onClick={handleReset} className="km-interactive km-focus-visible px-6 py-2 text-primary/50 font-sans text-xs uppercase tracking-widest transition-colors rounded-sm">
+          <div className="mt-8 flex justify-center gap-3">
+            <button
+              type="button"
+              onClick={handleBack}
+              disabled={historyIndex <= 0}
+              className="km-interactive km-focus-visible border border-primary/20 px-4 py-2 text-primary/60 font-sans text-xs uppercase tracking-widest transition-colors rounded-sm disabled:opacity-40"
+            >
+              ←
+            </button>
+            <button
+              type="button"
+              onClick={handleForward}
+              disabled={historyIndex >= fenHistory.length - 1}
+              className="km-interactive km-focus-visible border border-primary/20 px-4 py-2 text-primary/60 font-sans text-xs uppercase tracking-widest transition-colors rounded-sm disabled:opacity-40"
+            >
+              →
+            </button>
+            <button
+              type="button"
+              onClick={handleReset}
+              className="km-interactive km-focus-visible px-6 py-2 text-primary/50 font-sans text-xs uppercase tracking-widest transition-colors rounded-sm"
+            >
               Reset Position
             </button>
           </div>
@@ -226,7 +301,7 @@ export default function Engine() {
             )}
 
             {evaluation ? (
-              <div className="space-y-4 pt-2">
+              <div className="space-y-3 pt-2">
                 <div className="flex justify-between items-center">
                   <span className="font-sans text-sm text-primary/60 uppercase tracking-widest">Best Move</span>
                   <div className="flex gap-4 items-center">
@@ -240,23 +315,18 @@ export default function Engine() {
                     </button>
                   </div>
                 </div>
-                <div className="flex items-center justify-between rounded-sm border border-primary/10 bg-primary/5 px-4 py-3">
-                  <div className="space-y-1">
-                    <p className="text-xs font-sans uppercase tracking-widest text-primary/40">Clue</p>
-                    <p className="text-sm font-sans text-primary/70">
-                      {clueStage === 0
-                        ? 'Need a hint?'
-                        : getPieceNameAtSquare(fen, bestMoveParsed.from)}
-                    </p>
-                  </div>
+                <div className="flex flex-wrap items-center gap-3 text-xs font-sans text-primary/60">
                   <button
                     type="button"
                     onClick={handleClue}
                     disabled={clueStage === 2}
-                    className="km-interactive km-focus-visible border border-primary/20 px-4 py-2 text-xs font-serif uppercase tracking-widest text-primary transition-colors disabled:opacity-50"
+                    className="km-interactive km-focus-visible border border-primary/20 px-3 py-1 text-[10px] font-serif uppercase tracking-widest text-primary transition-colors disabled:opacity-50"
                   >
                     {clueStage === 0 ? 'Clue' : clueStage === 1 ? 'Reveal squares' : 'Clue used'}
                   </button>
+                  <span>
+                    {clueStage === 0 ? 'Tap for a small hint.' : getPieceNameAtSquare(fen, bestMoveParsed.from)}
+                  </span>
                 </div>
               </div>
             ) : (
