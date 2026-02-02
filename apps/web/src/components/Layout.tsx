@@ -10,10 +10,10 @@ interface LayoutProps {
 
 export default function Layout({ children }: LayoutProps) {
     return (
-        <div className="min-h-screen font-serif selection:bg-chess-brown-700 selection:text-chess-cream-100">
+        <div className="relative min-h-screen font-serif selection:bg-chess-brown-700 selection:text-chess-cream-100">
             <Sidebar />
 
-            <div className="absolute top-8 right-8 z-50 flex items-center gap-4">
+            <div className="absolute top-8 right-8 z-50 flex items-center gap-4 shrink-0">
                 <UsernameDisplay />
                 <ThemeToggle />
             </div>
