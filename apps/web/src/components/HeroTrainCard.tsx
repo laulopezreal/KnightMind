@@ -67,10 +67,7 @@ export function HeroTrainCard({
       <button
         type="button"
         onClick={onStartSession}
-        disabled={isZeroDue && !needsWarmup}
-        className={`px-8 py-3 bg-accent text-bg-primary rounded-sm font-serif text-lg transition-colors km-focus-visible ${
-          isZeroDue && !needsWarmup ? 'km-interactive-disabled opacity-50' : 'km-interactive'
-        }`}
+        className="px-8 py-3 bg-accent text-bg-primary rounded-sm font-serif text-lg transition-colors km-focus-visible km-interactive"
         aria-label={buttonText}
       >
         {buttonText}
