@@ -27,6 +27,11 @@ export default function Engine() {
     getEngineStatus().then(s => setEngineAvailable(s.available)).catch(() => setEngineAvailable(false));
   }, []);
 
+  // Don't auto-evaluate on initial load so we show "Waiting for position"
+  useEffect(() => {
+    lastEvaluatedFen.current = STARTING_FEN;
+  }, []);
+
   const handleEvaluate = useCallback(async () => {
     setLoading(true);
     setFenError(null);
@@ -39,7 +44,6 @@ export default function Engine() {
       const result = await evaluateFen(fen);
       setEvaluation({ bestMove: result.best_move_uci, eval: result.eval });
       setClueStage(0);
-      lastEvaluatedFen.current = fen;
     } catch (err) {
       if (err instanceof ApiError) {
         setEvaluationError(err.detail || err.message);
@@ -47,12 +51,13 @@ export default function Engine() {
         setEvaluationError(err instanceof Error ? err.message : 'Evaluation failed');
       }
     } finally {
+      lastEvaluatedFen.current = fen;
       setLoading(false);
     }
   }, [fen]);
 
   useEffect(() => {
-    if (!engineAvailable || loading) return;
+    if (!engineAvailable) return;
     if (lastEvaluatedFen.current === fen) return;
     if (autoEvalTimeoutRef.current) {
       clearTimeout(autoEvalTimeoutRef.current);
@@ -77,13 +82,14 @@ export default function Engine() {
     setClueStage(0);
     setFenHistory([STARTING_FEN]);
     setHistoryIndex(0);
+    lastEvaluatedFen.current = STARTING_FEN;
   };
 
   const handleFenSubmit = () => {
     try {
       new Chess(fenInput);
       setFen(fenInput);
-      setEvaluation(null);
+      setLoading(true);
       setShowBestMove(false);
       setFenError(null);
       setEvaluationError(null);
@@ -96,15 +102,6 @@ export default function Engine() {
     }
   };
 
-  const handleClue = () => {
-    if (!evaluation?.bestMove) return;
-    if (clueStage === 0) {
-      setClueStage(1);
-    } else if (clueStage === 1) {
-      setClueStage(2);
-    }
-  };
-
   const onDrop = (sourceSquare: string, targetSquare: string) => {
     const gameCopy = new Chess(fen);
     try {
@@ -113,8 +110,11 @@ export default function Engine() {
       const newFen = gameCopy.fen();
       setFen(newFen);
       setFenInput(newFen);
+      setLoading(true);
       setEvaluation(null);
       setShowBestMove(false);
+      setFenError(null);
+      setEvaluationError(null);
       setClueStage(0);
       const nextHistory = [...fenHistory.slice(0, historyIndex + 1), newFen];
       setFenHistory(nextHistory);
@@ -161,22 +161,31 @@ export default function Engine() {
     return 'text-primary';
   };
 
-const bestMoveParsed = useMemo(
-    () => (evaluation?.bestMove ? parseBestMoveUci(evaluation.bestMove) : { from: '', to: '' }),
-    [evaluation?.bestMove]
-  );
+  const bestMoveParsed = useMemo(() => {
+    if (!evaluation?.bestMove) return { from: '', to: '' };
+    return parseBestMoveUci(evaluation.bestMove);
+  }, [evaluation?.bestMove]);
 
-  const CLUE_HIGHLIGHT_STYLE = { backgroundColor: 'rgba(255, 235, 59, 0.45)' };
-
-  const clueSquareStyles = useMemo(() => {
-    if (clueStage < 1 || !bestMoveParsed.from) {
+  const clueSquareStyles: Record<string, { backgroundColor: string }> = useMemo(() => {
+    if (!evaluation?.bestMove || clueStage < 1) {
       return {};
     }
-    if (clueStage === 2 && bestMoveParsed.to) {
-      return { [bestMoveParsed.from]: CLUE_HIGHLIGHT_STYLE, [bestMoveParsed.to]: CLUE_HIGHLIGHT_STYLE };
+    const { from, to } = bestMoveParsed;
+    const highlight = { backgroundColor: 'rgba(255, 235, 59, 0.45)' };
+    if (clueStage === 2 && to) {
+      return { [from]: highlight, [to]: highlight };
     }
-    return { [bestMoveParsed.from]: CLUE_HIGHLIGHT_STYLE };
-  }, [clueStage, bestMoveParsed, CLUE_HIGHLIGHT_STYLE]);
+    return from ? { [from]: highlight } : {};
+  }, [bestMoveParsed, clueStage, evaluation?.bestMove]);
+
+  const handleClue = () => {
+    if (!evaluation?.bestMove) return;
+    if (clueStage === 2) {
+      setClueStage(0);
+      return;
+    }
+    setClueStage(prev => (prev + 1) as ClueStage);
+  };
 
   return (
     <div className="space-y-12 animate-teedin">
@@ -184,45 +193,21 @@ const bestMoveParsed = useMemo(
         <Link to="/" className="km-interactive km-focus-visible km-inline-link text-primary/40 inline-block font-sans text-sm tracking-widest uppercase transition-colors">
           ← Return Home
         </Link>
-        <div className="bg-primary/5 border border-primary/10 rounded-sm p-8 lg:p-10">
-          <div className="flex flex-col gap-8 lg:flex-row lg:items-center lg:justify-between">
-            <div className="space-y-3">
-              <h1 className="text-4xl md:text-5xl font-serif text-primary">Engine Analysis</h1>
-              <p className="text-lg text-primary/60 font-sans max-w-xl">
-                Evaluate the current position and surface the best next move in seconds.
-              </p>
-              <div className="flex flex-wrap items-center gap-4 text-xs font-sans uppercase tracking-widest text-primary/40">
-                <span>{engineAvailable === null ? 'Checking engine status...' : engineAvailable ? 'Engine ready' : 'Engine offline'}</span>
-                <span className="hidden sm:inline">•</span>
-                <span>Drag pieces or load a FEN</span>
-              </div>
-            </div>
-            <div className="w-full max-w-sm space-y-4">
-              <div className="flex items-center justify-between text-xs font-sans uppercase tracking-widest text-primary/40">
-                <span>Primary action</span>
-                <span className="flex items-center gap-2 rounded-full border border-primary/10 bg-primary/5 px-3 py-1 text-[10px] font-medium text-primary/60">
-                  <span
-                    className={`h-2 w-2 rounded-full ${engineAvailable === null ? 'bg-primary/40 animate-pulse' : engineAvailable ? 'bg-green-500' : 'bg-red-500'}`}
-                  />
-                  {engineAvailable === null ? 'Checking' : engineAvailable ? 'Engine ready' : 'Engine offline'}
-                </span>
-              </div>
-              <button
-                type="button"
-                onClick={handleEvaluate}
-                disabled={loading || !engineAvailable}
-                className={`w-full py-4 bg-primary text-bg-primary rounded-sm font-serif text-lg transition-all km-focus-visible ${loading || !engineAvailable ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'}`}
-              >
-                {loading ? 'Analyzing...' : 'Re-run Analysis'}
-              </button>
-              <p className="text-xs font-sans text-primary/40">
-                {loading
-                  ? 'Stockfish is calculating the best continuation.'
-                  : engineAvailable === false
-                    ? 'Engine is offline. Try again in a moment.'
-                    : 'Analysis runs after each move. Re-run anytime.'}
-              </p>
-            </div>
+        <div className="relative bg-primary/5 border border-primary/10 rounded-sm p-8 lg:p-10">
+          <div className="absolute top-8 right-8 lg:top-10 lg:right-10 flex items-center gap-2 rounded-full border border-primary/10 bg-primary/5 px-3 py-1.5 text-[10px] font-sans font-medium text-primary/60 uppercase tracking-widest">
+            <span
+              className={`h-2 w-2 rounded-full shrink-0 ${engineAvailable === null ? 'bg-primary/40 animate-pulse' : engineAvailable ? 'bg-green-500' : 'bg-red-500'}`}
+            />
+            {engineAvailable === null ? 'Checking' : engineAvailable ? 'Engine ready' : 'Engine offline'}
+          </div>
+          <div className="space-y-4 pr-32">
+            <h1 className="text-4xl md:text-5xl font-serif text-primary">Engine Analysis</h1>
+            <p className="text-sm text-primary/60 font-sans max-w-xl leading-relaxed">
+              Evaluate any position and surface the best next move.
+            </p>
+            <p className="text-xs font-sans uppercase tracking-widest text-primary/40">
+              Drag pieces or paste a FEN position
+            </p>
           </div>
         </div>
       </section>
@@ -277,22 +262,8 @@ const bestMoveParsed = useMemo(
         {/* Controls */}
         <div className="order-1 lg:order-2 space-y-8 flex flex-col justify-center">
 
-          {/* FEN */}
-          <div className="space-y-2">
-            <label className="block text-xs font-sans uppercase tracking-widest text-primary/40">FEN Position</label>
-            <div className="flex gap-4 border-b border-primary/20 pb-2 focus-within:border-primary/60 transition-colors">
-              <input type="text" value={fenInput} onChange={(e) => setFenInput(e.target.value)}
-                className="flex-1 bg-transparent border-none outline-none text-primary font-mono text-sm placeholder-primary/30"
-              />
-              <button type="button" onClick={handleFenSubmit} className="km-interactive km-focus-visible text-xs font-sans uppercase tracking-widest text-primary transition-colors">
-                Load
-              </button>
-            </div>
-            {fenError && <p className="text-red-500 text-xs font-sans">{fenError}</p>}
-          </div>
-
-          {/* Analysis Box */}
-          <div className="bg-primary/5 border border-primary/10 rounded-sm p-8 space-y-6">
+          {/* Evaluation */}
+          <div className="bg-primary/5 border border-primary/10 rounded-sm p-8 space-y-6 min-h-[220px] flex flex-col">
             <div className="flex justify-between items-center border-b border-primary/10 pb-4">
               <span className="font-serif text-xl text-primary">Evaluation</span>
               {evaluation ? (
@@ -302,7 +273,7 @@ const bestMoveParsed = useMemo(
               ) : loading ? (
                 <span className="text-primary/40 font-serif italic animate-pulse">Calculating…</span>
               ) : (
-                <span className="text-primary/40 font-serif italic">Awaiting analysis</span>
+                <span className="text-primary/40 font-serif italic">Waiting for position</span>
               )}
             </div>
 
@@ -312,40 +283,53 @@ const bestMoveParsed = useMemo(
               </div>
             )}
 
-            {evaluation && (
-              <div className="flex justify-between items-center pt-2">
-                <span className="font-sans text-sm text-primary/60 uppercase tracking-widest">Best Move</span>
-                <div className="flex gap-4 items-center">
-                  {showBestMove ? (
-                    <span className="font-mono text-primary text-lg">{evaluation.bestMove}</span>
-                  ) : (
-                    <span className="text-primary/40 italic text-sm">Hidden</span>
-                  )}
-                  <button type="button" onClick={() => setShowBestMove(!showBestMove)} className="km-interactive km-focus-visible text-primary text-xs uppercase tracking-widest border border-primary/20 px-3 py-1 rounded-sm transition-colors">
-                    {showBestMove ? 'Hide' : 'Show'}
+            {evaluation ? (
+              <div className="space-y-3 pt-2">
+                <div className="flex justify-between items-center">
+                  <span className="font-sans text-sm text-primary/60 uppercase tracking-widest">Best Move</span>
+                  <div className="flex gap-4 items-center">
+                    {showBestMove ? (
+                      <span className="font-mono text-primary text-lg">{evaluation.bestMove}</span>
+                    ) : (
+                      <span className="text-primary/40 italic text-sm">Hidden</span>
+                    )}
+                    <button type="button" onClick={() => setShowBestMove(!showBestMove)} className="km-interactive km-focus-visible text-primary text-xs uppercase tracking-widest border border-primary/20 px-3 py-1 rounded-sm transition-colors">
+                      {showBestMove ? 'Hide' : 'Show'}
+                    </button>
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-3 text-xs font-sans text-primary/60">
+                  <button
+                    type="button"
+                    onClick={handleClue}
+                    className="km-interactive km-focus-visible border border-primary/20 px-3 py-1 text-[10px] font-serif uppercase tracking-widest text-primary transition-colors disabled:opacity-50"
+                  >
+                    {clueStage === 0 ? 'Clue' : clueStage === 1 ? 'Reveal squares' : 'Hide clues and reset'}
                   </button>
+                  <span>
+                    {clueStage === 0 ? 'Tap for a small hint.' : getPieceNameAtSquare(fen, bestMoveParsed.from)}
+                  </span>
                 </div>
               </div>
+            ) : (
+              <p className="text-primary/50 font-sans text-sm">
+                {loading ? 'Waiting for Stockfish output…' : 'Set or paste a position to analyze.'}
+              </p>
             )}
+          </div>
 
-            {evaluation && clueStage === 1 && (
-              <div className="pt-2">
-                <p className="text-primary/80 font-sans text-sm">
-                  {getPieceNameAtSquare(fen, bestMoveParsed.from)}
-                </p>
-              </div>
-            )}
-
-            {evaluation && (
-              <button
-                type="button"
-                onClick={handleClue}
-                disabled={!evaluation.bestMove || clueStage === 2}
-                className="w-full py-2 mt-4 bg-primary/10 border border-primary/20 text-primary rounded-sm font-sans text-sm uppercase tracking-widest transition-all km-interactive km-focus-visible disabled:opacity-50 disabled:cursor-default"
-              >
-                {clueStage === 0 ? 'Clue' : clueStage === 1 ? 'Reveal squares' : 'Clue used'}
+          {/* FEN */}
+          <div className="space-y-2">
+            <label className="block text-xs font-sans uppercase tracking-widest text-primary/40">Or paste FEN position</label>
+            <div className="flex gap-4 border-b border-primary/20 pb-2 focus-within:border-primary/60 transition-colors">
+              <input type="text" value={fenInput} onChange={(e) => setFenInput(e.target.value)}
+                className="flex-1 bg-transparent border-none outline-none text-primary font-mono text-sm placeholder-primary/30"
+              />
+              <button type="button" onClick={handleFenSubmit} className="km-interactive km-focus-visible text-xs font-sans uppercase tracking-widest text-primary transition-colors">
+                Load
               </button>
-            )}
+            </div>
+            {fenError && <p className="text-red-500 text-xs font-sans">{fenError}</p>}
           </div>
         </div>
       </section>
