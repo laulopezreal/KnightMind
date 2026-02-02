@@ -10,6 +10,7 @@ from sqlalchemy import select, or_, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+import anyio
 import os
 import re
 import sys
@@ -97,9 +98,13 @@ async def lifespan(app: FastAPI):
     if os.environ.get("KNIGHTMIND_WORKER_DISABLED") != "true":
         worker.start()
         
-    # Backfill identity (title/motif) for any existing puzzles missing them
-    with SessionLocal() as db:
-        backfill_puzzle_identity(db)
+    # Backfill identity (title/motif) for any existing puzzles missing them.
+    # Run in a thread to avoid blocking the async event loop.
+    def _run_backfill():
+        with SessionLocal() as db:
+            backfill_puzzle_identity(db)
+
+    await anyio.to_thread.run_sync(_run_backfill)
         
     # Start session cleanup background task if not disabled
     cleanup_task = None
