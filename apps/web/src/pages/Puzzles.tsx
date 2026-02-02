@@ -298,9 +298,9 @@ export default function Puzzles() {
         try {
             const status = await getUserStatus(username);
             setUserStatus(status);
-            setInsightsError(null);
         } catch (err) {
             console.warn('Unable to refresh user status:', err);
+            setUserStatus(null);
             setInsightsError(err instanceof Error ? err.message : 'Unable to refresh user status');
         }
     }, [username]);
