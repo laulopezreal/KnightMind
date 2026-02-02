@@ -34,9 +34,11 @@ describe('MotifTrends', () => {
         motif: 'Fork',
         trend: 'up' as const,
         change: 0.15,
+        start_accuracy: 0.7,
+        end_accuracy: 0.85,
         data_points: [
-          { date: '2025-01-10', accuracy: 0.7, count: 5 },
-          { date: '2025-01-15', accuracy: 0.85, count: 8 },
+          { date: '2025-01-10', accuracy: 0.7 },
+          { date: '2025-01-15', accuracy: 0.85 },
         ],
       },
     ];
@@ -48,8 +50,8 @@ describe('MotifTrends', () => {
 
   it('should show trend summaries for up to 3 motifs', () => {
     const trends = [
-      { motif: 'Fork', trend: 'up' as const, change: 0.15, data_points: [{ date: '2025-01-15', accuracy: 0.85, count: 5 }] },
-      { motif: 'Pin', trend: 'down' as const, change: -0.1, data_points: [{ date: '2025-01-15', accuracy: 0.6, count: 3 }] },
+      { motif: 'Fork', trend: 'up' as const, change: 0.15, start_accuracy: 0.7, end_accuracy: 0.85, data_points: [{ date: '2025-01-15', accuracy: 0.85 }] },
+      { motif: 'Pin', trend: 'down' as const, change: -0.1, start_accuracy: 0.7, end_accuracy: 0.6, data_points: [{ date: '2025-01-15', accuracy: 0.6 }] },
     ];
 
     render(<MotifTrends trends={trends} windowDays={30} />);

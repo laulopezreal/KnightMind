@@ -5,11 +5,14 @@ import { WarmupSummary } from './WarmupSummary';
 
 const mockSessionSummary = {
   session_id: 'warmup-1',
+  requested_n: 5,
   pass_count: 4,
   fail_count: 1,
   total_time_ms: 60000,
+  current_streak: 4,
   best_streak: 4,
   hints_used: 0,
+  created_at: '2025-01-15T11:59:00Z',
   completed_at: '2025-01-15T12:00:00Z',
 };
 

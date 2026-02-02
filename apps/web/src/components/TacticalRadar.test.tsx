@@ -25,8 +25,8 @@ describe('TacticalRadar', () => {
 
   it('should show "not enough motifs" when fewer than 3', () => {
     const motifs = [
-      { name: 'Fork', accuracy: 0.8, total_puzzles: 10, correct: 8 },
-      { name: 'Pin', accuracy: 0.7, total_puzzles: 5, correct: 4 },
+      { name: 'Fork', accuracy: 0.8, total_puzzles: 10, passed: 8, rank: 'mastered' as const },
+      { name: 'Pin', accuracy: 0.7, total_puzzles: 5, passed: 4, rank: 'learning' as const },
     ];
 
     render(<TacticalRadar motifs={motifs} onMotifClick={onMotifClick} />);
@@ -36,9 +36,9 @@ describe('TacticalRadar', () => {
 
   it('should render radar chart with 3+ motifs', () => {
     const motifs = [
-      { name: 'Fork', accuracy: 0.8, total_puzzles: 10, correct: 8 },
-      { name: 'Pin', accuracy: 0.7, total_puzzles: 5, correct: 4 },
-      { name: 'Skewer', accuracy: 0.6, total_puzzles: 8, correct: 5 },
+      { name: 'Fork', accuracy: 0.8, total_puzzles: 10, passed: 8, rank: 'mastered' as const },
+      { name: 'Pin', accuracy: 0.7, total_puzzles: 5, passed: 4, rank: 'learning' as const },
+      { name: 'Skewer', accuracy: 0.6, total_puzzles: 8, passed: 5, rank: 'learning' as const },
     ];
 
     render(<TacticalRadar motifs={motifs} onMotifClick={onMotifClick} />);
@@ -48,9 +48,9 @@ describe('TacticalRadar', () => {
 
   it('should show weakest motif with practice button', () => {
     const motifs = [
-      { name: 'Fork', accuracy: 0.8, total_puzzles: 10, correct: 8 },
-      { name: 'Pin', accuracy: 0.5, total_puzzles: 5, correct: 3 },
-      { name: 'Skewer', accuracy: 0.9, total_puzzles: 8, correct: 7 },
+      { name: 'Fork', accuracy: 0.8, total_puzzles: 10, passed: 8, rank: 'mastered' as const },
+      { name: 'Pin', accuracy: 0.5, total_puzzles: 5, passed: 3, rank: 'needs_work' as const },
+      { name: 'Skewer', accuracy: 0.9, total_puzzles: 8, passed: 7, rank: 'mastered' as const },
     ];
 
     render(<TacticalRadar motifs={motifs} onMotifClick={onMotifClick} />);
@@ -61,9 +61,9 @@ describe('TacticalRadar', () => {
 
   it('should call onMotifClick when practice button is clicked', async () => {
     const motifs = [
-      { name: 'Fork', accuracy: 0.8, total_puzzles: 10, correct: 8 },
-      { name: 'Pin', accuracy: 0.5, total_puzzles: 5, correct: 3 },
-      { name: 'Skewer', accuracy: 0.9, total_puzzles: 8, correct: 7 },
+      { name: 'Fork', accuracy: 0.8, total_puzzles: 10, passed: 8, rank: 'mastered' as const },
+      { name: 'Pin', accuracy: 0.5, total_puzzles: 5, passed: 3, rank: 'needs_work' as const },
+      { name: 'Skewer', accuracy: 0.9, total_puzzles: 8, passed: 7, rank: 'mastered' as const },
     ];
 
     render(<TacticalRadar motifs={motifs} onMotifClick={onMotifClick} />);
@@ -74,9 +74,9 @@ describe('TacticalRadar', () => {
 
   it('should show mastery celebration when all motifs >= 85%', () => {
     const motifs = [
-      { name: 'Fork', accuracy: 0.9, total_puzzles: 10, correct: 9 },
-      { name: 'Pin', accuracy: 0.85, total_puzzles: 5, correct: 4 },
-      { name: 'Skewer', accuracy: 0.95, total_puzzles: 8, correct: 8 },
+      { name: 'Fork', accuracy: 0.9, total_puzzles: 10, passed: 9, rank: 'mastered' as const },
+      { name: 'Pin', accuracy: 0.85, total_puzzles: 5, passed: 4, rank: 'mastered' as const },
+      { name: 'Skewer', accuracy: 0.95, total_puzzles: 8, passed: 8, rank: 'mastered' as const },
     ];
 
     render(<TacticalRadar motifs={motifs} onMotifClick={onMotifClick} />);
