@@ -771,3 +771,167 @@ def test_engine_eval_unavailable(mock_eval):
     response = client.post("/engine/eval", json={"fen": "any"})
     assert response.status_code == 503
     assert "Engine not available" in response.json()["detail"]
+
+
+# --- Tricky Puzzles Endpoint Tests ---
+
+
+_SENTINEL = object()
+
+def _create_puzzle_stats(db_session, puzzle_id, username, fail_count, last_reviewed_at=None, title=_SENTINEL):
+    """Helper to create a PuzzleStats record with required Puzzle and Game parents."""
+    from services.api.models import Game, Puzzle as PuzzleModel
+    game_id = f"game-{puzzle_id}"
+    # Create parent Game if not exists
+    existing_game = db_session.get(Game, game_id)
+    if not existing_game:
+        db_session.add(Game(
+            game_id=game_id,
+            url=f"https://chess.com/game/{game_id}",
+            username=username,
+            white_username=username,
+            black_username="opponent",
+            white_result="win",
+            black_result="lose",
+            time_control="600",
+            end_time=int(datetime.now(timezone.utc).timestamp()),
+            rated=True,
+            imported_at=datetime.now(timezone.utc),
+        ))
+    # Create parent Puzzle if not exists
+    existing_puzzle = db_session.get(PuzzleModel, puzzle_id)
+    if not existing_puzzle:
+        db_session.add(PuzzleModel(
+            id=puzzle_id,
+            username=username,
+            source_game_id=game_id,
+            ply=10,
+            fen="8/8/8/8/8/8/8/8 w - - 0 1",
+            side_to_move="white",
+            played_move_uci="e2e4",
+            best_move_uci="d2d4",
+            eval_before=0.2,
+            eval_after=-0.5,
+            swing=0.7,
+            created_at=datetime.now(timezone.utc),
+        ))
+    db_session.add(PuzzleStats(
+        puzzle_id=puzzle_id,
+        username=username,
+        title=f"Puzzle {puzzle_id}" if title is _SENTINEL else title,
+        attempts=fail_count + 1,
+        pass_count=1,
+        fail_count=fail_count,
+        last_reviewed_at=last_reviewed_at,
+        last_result="fail",
+        next_due_at=datetime.now(timezone.utc),
+        interval_days=1,
+        ease_factor=2.0,
+    ))
+    db_session.commit()
+
+
+def test_tricky_puzzles_empty(client_with_db):
+    """Returns empty list when user has no tricky puzzles."""
+    response = client_with_db.get("/users/testuser/puzzles/tricky")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["puzzles"] == []
+    assert data["total_count"] == 0
+
+
+def test_tricky_puzzles_filters_below_threshold(client_with_db, db_session):
+    """Puzzles with fewer than 2 failures are excluded."""
+    _create_puzzle_stats(db_session, "p-1fail", "testuser", fail_count=1,
+                         last_reviewed_at=datetime.now(timezone.utc))
+    response = client_with_db.get("/users/testuser/puzzles/tricky")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["puzzles"] == []
+    assert data["total_count"] == 0
+
+
+def test_tricky_puzzles_includes_at_threshold(client_with_db, db_session):
+    """Puzzles with exactly 2 failures are included."""
+    reviewed_at = datetime.now(timezone.utc) - timedelta(hours=1)
+    _create_puzzle_stats(db_session, "p-2fail", "testuser", fail_count=2,
+                         last_reviewed_at=reviewed_at, title="Fork Tactic")
+    response = client_with_db.get("/users/testuser/puzzles/tricky")
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data["puzzles"]) == 1
+    assert data["puzzles"][0]["puzzle_id"] == "p-2fail"
+    assert data["puzzles"][0]["title"] == "Fork Tactic"
+    assert data["puzzles"][0]["fail_count"] == 2
+    assert data["total_count"] == 1
+
+
+def test_tricky_puzzles_sorted_by_fail_count_desc(client_with_db, db_session):
+    """Puzzles are sorted by fail_count descending, then by last_reviewed_at descending."""
+    now = datetime.now(timezone.utc)
+    _create_puzzle_stats(db_session, "p-low", "testuser", fail_count=2,
+                         last_reviewed_at=now - timedelta(hours=1))
+    _create_puzzle_stats(db_session, "p-high", "testuser", fail_count=5,
+                         last_reviewed_at=now - timedelta(hours=2))
+    _create_puzzle_stats(db_session, "p-mid", "testuser", fail_count=3,
+                         last_reviewed_at=now)
+
+    response = client_with_db.get("/users/testuser/puzzles/tricky")
+    assert response.status_code == 200
+    ids = [p["puzzle_id"] for p in response.json()["puzzles"]]
+    assert ids == ["p-high", "p-mid", "p-low"]
+
+
+def test_tricky_puzzles_respects_limit(client_with_db, db_session):
+    """The limit parameter caps the number of returned puzzles."""
+    now = datetime.now(timezone.utc)
+    for i in range(5):
+        _create_puzzle_stats(db_session, f"p-limit-{i}", "testuser", fail_count=3,
+                             last_reviewed_at=now - timedelta(hours=i))
+
+    response = client_with_db.get("/users/testuser/puzzles/tricky?limit=2")
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data["puzzles"]) == 2
+    # total_count reflects all matching puzzles, not just returned ones
+    assert data["total_count"] == 5
+
+
+def test_tricky_puzzles_excludes_null_last_reviewed(client_with_db, db_session):
+    """Puzzles with null last_reviewed_at are excluded even if fail_count >= 2."""
+    _create_puzzle_stats(db_session, "p-null-date", "testuser", fail_count=3,
+                         last_reviewed_at=None)
+    _create_puzzle_stats(db_session, "p-has-date", "testuser", fail_count=2,
+                         last_reviewed_at=datetime.now(timezone.utc))
+
+    response = client_with_db.get("/users/testuser/puzzles/tricky")
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data["puzzles"]) == 1
+    assert data["puzzles"][0]["puzzle_id"] == "p-has-date"
+    assert data["total_count"] == 1
+
+
+def test_tricky_puzzles_scoped_to_username(client_with_db, db_session):
+    """Tricky puzzles for one user don't leak into another user's results."""
+    now = datetime.now(timezone.utc)
+    _create_puzzle_stats(db_session, "p-alice", "alice", fail_count=4,
+                         last_reviewed_at=now)
+    _create_puzzle_stats(db_session, "p-bob", "bob", fail_count=3,
+                         last_reviewed_at=now)
+
+    response = client_with_db.get("/users/alice/puzzles/tricky")
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data["puzzles"]) == 1
+    assert data["puzzles"][0]["puzzle_id"] == "p-alice"
+
+
+def test_tricky_puzzles_title_fallback(client_with_db, db_session):
+    """Puzzles with no title get 'Untitled Puzzle' as fallback."""
+    _create_puzzle_stats(db_session, "p-no-title", "testuser", fail_count=2,
+                         last_reviewed_at=datetime.now(timezone.utc), title=None)
+
+    response = client_with_db.get("/users/testuser/puzzles/tricky")
+    assert response.status_code == 200
+    assert response.json()["puzzles"][0]["title"] == "Untitled Puzzle"

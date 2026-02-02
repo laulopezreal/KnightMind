@@ -73,6 +73,20 @@ class TrendsResponse(BaseModel):
     motif_trends: list[MotifTrend]
 
 
+class TrickyPuzzle(BaseModel):
+    """A puzzle the user has struggled with."""
+    puzzle_id: str
+    title: str
+    fail_count: int
+    last_attempted_at: datetime
+
+
+class TrickyPuzzlesResponse(BaseModel):
+    """Response containing tricky puzzles."""
+    puzzles: list[TrickyPuzzle]
+    total_count: int
+
+
 def calculate_recent_form(db: Session, username: str) -> RecentFormData:
     """
     Calculate recent form from last 20 puzzle reviews.
@@ -375,4 +389,60 @@ async def get_motif_trends(
     return TrendsResponse(
         window_days=window,
         motif_trends=trends
+    )
+
+
+@router.get("/{username}/puzzles/tricky", response_model=TrickyPuzzlesResponse)
+async def get_tricky_puzzles(
+    username: str,
+    limit: int = Query(5, ge=1, le=20, description="Maximum number of puzzles to return"),
+    db: Session = Depends(get_db)
+):
+    """
+    Get puzzles the user has failed multiple times.
+
+    Returns puzzles with 2+ failures, sorted by:
+    1. Fail count (descending)
+    2. Most recently attempted
+
+    Args:
+        username: Username to query
+        limit: Maximum number of puzzles to return (default 5, max 20)
+
+    Returns:
+        List of tricky puzzles with fail counts and last attempt timestamps
+    """
+    # Base filter for tricky puzzles (shared by count and result queries)
+    base_query = select(PuzzleStats).where(
+        PuzzleStats.username == username,
+        PuzzleStats.fail_count >= 2,
+        PuzzleStats.last_reviewed_at.isnot(None)
+    )
+
+    # Count total tricky puzzles
+    total_count = db.scalar(
+        select(func.count()).select_from(base_query.subquery())
+    ) or 0
+
+    # Get paginated and sorted results
+    stats = db.scalars(
+        base_query.order_by(
+            desc(PuzzleStats.fail_count),
+            desc(PuzzleStats.last_reviewed_at)
+        ).limit(limit)
+    ).all()
+
+    puzzles = [
+        TrickyPuzzle(
+            puzzle_id=stat.puzzle_id,
+            title=stat.title or "Untitled Puzzle",
+            fail_count=stat.fail_count,
+            last_attempted_at=stat.last_reviewed_at
+        )
+        for stat in stats
+    ]
+
+    return TrickyPuzzlesResponse(
+        puzzles=puzzles,
+        total_count=total_count
     )

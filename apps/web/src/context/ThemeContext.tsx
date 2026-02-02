@@ -1,6 +1,11 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 
-type Theme = 'night' | 'day';
+const THEMES = ['night', 'day'] as const;
+type Theme = (typeof THEMES)[number];
+
+function isTheme(value: unknown): value is Theme {
+    return typeof value === 'string' && (THEMES as readonly string[]).includes(value);
+}
 
 interface ThemeContextType {
     theme: Theme;
@@ -8,19 +13,20 @@ interface ThemeContextType {
 }
 
 const STORAGE_KEY = 'knightmind:theme';
+const DARK_MQ = '(prefers-color-scheme: dark)';
 
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 
 function getSystemPreference(): Theme {
     if (typeof window === 'undefined') return 'night';
-    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'night' : 'day';
+    return window.matchMedia(DARK_MQ).matches ? 'night' : 'day';
 }
 
 function getInitialTheme(): Theme {
     if (typeof window === 'undefined') return 'night';
     try {
         const stored = window.localStorage.getItem(STORAGE_KEY);
-        if (stored === 'night' || stored === 'day') return stored;
+        if (isTheme(stored)) return stored;
     } catch {
         // localStorage unavailable
     }
@@ -37,7 +43,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 
     // Listen for OS-level preference changes when the user hasn't stored a preference
     useEffect(() => {
-        const mq = window.matchMedia('(prefers-color-scheme: dark)');
+        const mq = window.matchMedia(DARK_MQ);
         const handler = (e: MediaQueryListEvent) => {
             const hasStoredPref = window.localStorage.getItem(STORAGE_KEY) !== null;
             if (!hasStoredPref) {
@@ -50,7 +56,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 
     const toggleTheme = () => {
         setTheme((prev) => {
-            const next = prev === 'night' ? 'day' : 'night';
+            const next: Theme = prev === 'night' ? 'day' : 'night';
             try {
                 window.localStorage.setItem(STORAGE_KEY, next);
             } catch {

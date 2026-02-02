@@ -42,8 +42,14 @@ export interface DriverStats {
     avg_opponent_rating: number | null;
     expected_total: number | null;
     actual_total: number | null;
-    expected_minus_actual: number | null;
+    actual_minus_expected: number | null;
     missing_opponent_rating_games: number;
+}
+
+export interface Driver {
+    text: string;
+    severity: 'major' | 'moderate' | 'minor';
+    direction: 'up' | 'down' | 'neutral';
 }
 
 export interface ExplainResponse {
@@ -51,9 +57,23 @@ export interface ExplainResponse {
     window: RatingWindow;
     rating: RatingInfo;
     stats: DriverStats;
-    drivers: string[];
+    drivers: Driver[];
     highlights: Highlights;
 }
+
+export interface SnapshotHistoryItem {
+    rating: number;
+    recorded_at: string;
+}
+
+export const getRatingHistory = (
+    username: string,
+    timeControl: string = 'rapid',
+    limit: number = 50
+): Promise<SnapshotHistoryItem[]> => {
+    const params = new URLSearchParams({ username, time_control: timeControl, limit: limit.toString() });
+    return request<SnapshotHistoryItem[]>(`/ratings/history?${params.toString()}`);
+};
 
 export const createSnapshot = (username: string, timeControl: string): Promise<SnapshotResponse> => {
     return request<SnapshotResponse>('/ratings/snapshot', {

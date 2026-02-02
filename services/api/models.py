@@ -64,7 +64,10 @@ class FenEvalCache(Base):
 
 class PuzzleStats(Base):
     __tablename__ = "puzzle_stats"
-    __table_args__ = {"extend_existing": True}
+    __table_args__ = (
+        Index("ix_puzzle_stats_tricky_puzzles", "username", "fail_count", "last_reviewed_at"),
+        {"extend_existing": True},
+    )
 
     puzzle_id: Mapped[str] = mapped_column(String, ForeignKey("puzzles.id"), primary_key=True)
     username: Mapped[str] = mapped_column(String, index=True)

@@ -58,6 +58,7 @@ from services.api.models import Job, JobStatus, PuzzleStats, PuzzleReview, Puzzl
 from services.api.puzzles.identity import backfill_puzzle_identity
 from services.api.jobs.cleanup_sessions import cleanup_abandoned_sessions
 from services.api.motifs import get_user_motif_performance, MotifPerformanceResponse
+from services.api.time_control import classify_time_control
 import asyncio
 
 CLEANUP_INTERVAL_SECONDS = 3600
@@ -68,6 +69,12 @@ RATING_DIFFERENCE_THRESHOLD = 100
 SIGNIFICANT_WINS_VS_HIGHER_THRESHOLD = 2
 SIGNIFICANT_LOSSES_VS_LOWER_THRESHOLD = 2
 OPPONENT_RATING_STD_DEV_THRESHOLD = 150
+
+# Chess.com draw result values
+DRAW_RESULTS = frozenset([
+    "repetition", "agreed", "timevsinsufficient",
+    "stalemate", "insufficient", "50move",
+])
 
 
 async def run_session_cleanup():
@@ -870,6 +877,39 @@ async def create_rating_snapshot(request: SnapshotRequest, db: Session = Depends
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class SnapshotHistoryItem(BaseModel):
+    rating: int
+    recorded_at: datetime
+
+
+@app.get("/ratings/history", response_model=list[SnapshotHistoryItem])
+async def get_rating_history(
+    username: str,
+    time_control: str = "rapid",
+    limit: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db)
+):
+    """Return chronological rating snapshot history for charting.
+
+    Fetches the most recent `limit` snapshots (desc) then reverses to
+    chronological order so the frontend chart always shows the latest window.
+    """
+    stmt = (
+        select(RatingSnapshot)
+        .where(
+            RatingSnapshot.username == username,
+            RatingSnapshot.time_control == time_control,
+        )
+        .order_by(RatingSnapshot.recorded_at.desc())
+        .limit(limit)
+    )
+    snapshots = list(reversed(db.scalars(stmt).all()))
+    return [
+        SnapshotHistoryItem(rating=s.rating, recorded_at=s.recorded_at)
+        for s in snapshots
+    ]
+
+
 class HighlightGame(BaseModel):
     opponent_rating: int | None
     result: str
@@ -907,8 +947,14 @@ class DriverStats(BaseModel):
     avg_opponent_rating: int | None
     expected_total: float | None
     actual_total: float | None
-    expected_minus_actual: float | None
+    actual_minus_expected: float | None
     missing_opponent_rating_games: int
+
+
+class Driver(BaseModel):
+    text: str
+    severity: Literal["major", "moderate", "minor"]
+    direction: Literal["up", "down", "neutral"]
 
 
 class ExplainResponse(BaseModel):
@@ -916,7 +962,7 @@ class ExplainResponse(BaseModel):
     window: RatingWindow
     rating: RatingInfo
     stats: DriverStats
-    drivers: list[str]
+    drivers: list[Driver]
     highlights: Highlights
 
 
@@ -971,7 +1017,7 @@ async def explain_rating_changes(
     for meta in all_metadata:
         if count >= limit_games:
             break
-        if meta.time_control.lower() != time_control.lower():
+        if classify_time_control(meta.time_control) != time_control.lower():
             continue
         if meta.end_time < start_ts:
             break
@@ -992,27 +1038,29 @@ async def explain_rating_changes(
     game_details = [] 
     opp_ratings = []
     
+    # Snapshot closest to (but before or at) window start — best reference anchor
     stmt = select(RatingSnapshot).where(
-        RatingSnapshot.username == username, 
+        RatingSnapshot.username == username,
+        RatingSnapshot.time_control == time_control,
+        RatingSnapshot.recorded_at <= window_start
+    ).order_by(RatingSnapshot.recorded_at.desc())
+    pre_window_snapshot = db.scalars(stmt).first()
+
+    # Earliest snapshot inside the window
+    stmt = select(RatingSnapshot).where(
+        RatingSnapshot.username == username,
         RatingSnapshot.time_control == time_control,
         RatingSnapshot.recorded_at >= window_start
     ).order_by(RatingSnapshot.recorded_at.asc())
     earliest_snapshot = db.scalars(stmt).first()
-    
-    stmt = select(RatingSnapshot).where(
-         RatingSnapshot.username == username, 
-         RatingSnapshot.time_control == time_control,
-         RatingSnapshot.recorded_at < now
-    ).order_by(RatingSnapshot.recorded_at.desc())
-    latest_snapshot = db.scalars(stmt).first()
 
     reference_rating = 0
     reference_is_approx = False
-    
-    if earliest_snapshot:
+
+    if pre_window_snapshot:
+        reference_rating = pre_window_snapshot.rating
+    elif earliest_snapshot:
         reference_rating = earliest_snapshot.rating
-    elif latest_snapshot:
-        reference_rating = latest_snapshot.rating
     
     for meta in relevant_games:
         pgn = game_repository.get_pgn(username, meta.game_id)
@@ -1024,10 +1072,10 @@ async def explain_rating_changes(
         result_score = 0.0
         if user_is_white:
              if meta.white_result == "win": result_score = 1.0
-             elif meta.white_result in ["repetition", "agreed", "timevsinsufficient", "stalemate", "insufficient"]: result_score = 0.5
+             elif meta.white_result in DRAW_RESULTS: result_score = 0.5
         else:
              if meta.black_result == "win": result_score = 1.0
-             elif meta.black_result in ["repetition", "agreed", "timevsinsufficient", "stalemate", "insufficient"]: result_score = 0.5
+             elif meta.black_result in DRAW_RESULTS: result_score = 0.5
 
         if result_score == 1.0: wins += 1
         elif result_score == 0.5: draws += 1
@@ -1086,48 +1134,76 @@ async def explain_rating_changes(
             
     avg_opp = int(total_opp_rating / opp_rating_count) if opp_rating_count > 0 else None
     
-    drivers = []
+    drivers: list[Driver] = []
     diff = actual_total_rated - expected_total
-    
+
     if diff > PERFORMANCE_DIFF_THRESHOLD:
-        drivers.append("You outperformed expectations overall (upward pressure).")
+        severity = "major" if abs(diff) > 2.0 else "moderate" if abs(diff) > 1.0 else "minor"
+        drivers.append(Driver(
+            text=f"You outperformed expectations by {diff:+.1f} points (upward pressure).",
+            severity=severity, direction="up"
+        ))
     elif diff < -PERFORMANCE_DIFF_THRESHOLD:
-        drivers.append("You underperformed expectations overall (downward pressure).")
-        
+        severity = "major" if abs(diff) > 2.0 else "moderate" if abs(diff) > 1.0 else "minor"
+        drivers.append(Driver(
+            text=f"You underperformed expectations by {diff:+.1f} points (downward pressure).",
+            severity=severity, direction="down"
+        ))
+
     wins_vs_higher = sum(1 for g in game_details if g["opp_rating"] and g["opp_rating"] >= reference_rating + RATING_DIFFERENCE_THRESHOLD and g["actual"] == 1.0)
     if wins_vs_higher >= SIGNIFICANT_WINS_VS_HIGHER_THRESHOLD:
-        drivers.append("Wins against higher-rated opponents likely offset losses.")
-        
+        drivers.append(Driver(
+            text=f"{wins_vs_higher} wins against higher-rated opponents likely offset losses.",
+            severity="moderate" if wins_vs_higher >= 4 else "minor", direction="up"
+        ))
+
     losses_vs_lower = sum(1 for g in game_details if g["opp_rating"] and g["opp_rating"] <= reference_rating - RATING_DIFFERENCE_THRESHOLD and g["actual"] == 0.0)
     if losses_vs_lower >= SIGNIFICANT_LOSSES_VS_LOWER_THRESHOLD:
-        drivers.append("Losses against lower-rated opponents likely drove most of the drop.")
-        
+        drivers.append(Driver(
+            text=f"{losses_vs_lower} losses against lower-rated opponents likely drove most of the drop.",
+            severity="moderate" if losses_vs_lower >= 4 else "minor", direction="down"
+        ))
+
     if len(opp_ratings) >= 5:
         variance = sum((x - avg_opp) ** 2 for x in opp_ratings) / len(opp_ratings)
         std_dev = variance ** 0.5
         if std_dev > OPPONENT_RATING_STD_DEV_THRESHOLD:
-            drivers.append("Wide opponent rating range increased volatility.")
+            drivers.append(Driver(
+                text="Wide opponent rating range increased volatility.",
+                severity="minor", direction="neutral"
+            ))
+
+    # Sort drivers by severity (major first)
+    severity_order = {"major": 0, "moderate": 1, "minor": 2}
+    drivers.sort(key=lambda d: severity_order[d.severity])
 
     def get_surprise_val(h: HighlightGame):
         act = 1.0 if h.result == "Win" else 0.5 if h.result == "Draw" else 0.0
         return act - h.expected_score
-        
+
     surprises.sort(key=get_surprise_val, reverse=True)
-    best_surprises = surprises[:3]
-    worst_surprises = surprises[-3:]
+    best_surprises = [s for s in surprises if get_surprise_val(s) > 0][:3]
+    worst_surprises = [s for s in surprises if get_surprise_val(s) < 0][-3:]
     worst_surprises.reverse()
-    
-    start_rating_val = earliest_snapshot.rating if earliest_snapshot else None
-    
+
+    # Start: prefer pre-window snapshot, fall back to earliest in-window
+    start_rating_val = (
+        pre_window_snapshot.rating if pre_window_snapshot
+        else earliest_snapshot.rating if earliest_snapshot
+        else None
+    )
+
+    # End: latest snapshot within the window period
     stmt = select(RatingSnapshot).where(
         RatingSnapshot.username == username,
-        RatingSnapshot.time_control == time_control
+        RatingSnapshot.time_control == time_control,
+        RatingSnapshot.recorded_at >= window_start
     ).order_by(RatingSnapshot.recorded_at.desc())
-    latest_any = db.scalars(stmt).first()
-    end_rating_val = latest_any.rating if latest_any else None
-    
+    latest_in_window = db.scalars(stmt).first()
+    end_rating_val = latest_in_window.rating if latest_in_window else None
+
     net_change = None
-    if start_rating_val and end_rating_val:
+    if start_rating_val is not None and end_rating_val is not None:
         net_change = end_rating_val - start_rating_val
 
     return ExplainResponse(
@@ -1148,7 +1224,7 @@ async def explain_rating_changes(
             avg_opponent_rating=avg_opp,
             expected_total=expected_total if opp_rating_count > 0 else None,
             actual_total=actual_total_rated if opp_rating_count > 0 else None,
-            expected_minus_actual=diff if opp_rating_count > 0 else None,
+            actual_minus_expected=diff if opp_rating_count > 0 else None,
             missing_opponent_rating_games=missing_ratings
         ),
         drivers=drivers,
