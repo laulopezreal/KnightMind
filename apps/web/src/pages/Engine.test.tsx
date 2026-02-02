@@ -57,7 +57,9 @@ describe('Engine - Clue Functionality', () => {
     mockEvaluateFen.mockResolvedValue({ best_move_uci: 'e2e4', eval: 0.5 });
   });
 
-  // Helper: load a new FEN to trigger auto-evaluation (no manual evaluate button in new UI)
+  // Helper: load a new FEN to trigger auto-evaluation (no manual evaluate button in new UI).
+  // Uses fireEvent.change for the FEN input because userEvent.type would type 56 chars
+  // one-by-one, causing excessive re-renders with no additional behavioral coverage.
   async function evaluatePosition(user: ReturnType<typeof userEvent.setup>) {
     const fenInput = screen.getByDisplayValue(STARTING_FEN);
     fireEvent.change(fenInput, { target: { value: ALT_FEN } });
@@ -143,6 +145,10 @@ describe('Engine - Clue Functionality', () => {
 
       await waitFor(() => {
         expect(screen.getByText('Clue')).toBeInTheDocument();
+        // Verify square highlights are also cleared
+        const chessboard = screen.getByTestId('chessboard');
+        const options = JSON.parse(chessboard.getAttribute('data-options') || '{}');
+        expect(options.squareStyles).toEqual({});
       });
     });
   });
@@ -199,6 +205,26 @@ describe('Engine - Clue Functionality', () => {
 
       await waitFor(() => {
         expect(screen.getByText('Move the pawn')).toBeInTheDocument();
+      });
+    });
+
+    it('should not show piece name in stage 2', async () => {
+      const user = userEvent.setup();
+      render(<Engine />);
+
+      await evaluatePosition(user);
+
+      await user.click(screen.getByText('Clue'));
+
+      await waitFor(() => {
+        expect(screen.getByText('Move the pawn')).toBeInTheDocument();
+      });
+
+      await user.click(screen.getByText('Reveal squares'));
+
+      await waitFor(() => {
+        expect(screen.getByText('Hide clues and reset')).toBeInTheDocument();
+        expect(screen.queryByText('Move the pawn')).not.toBeInTheDocument();
       });
     });
 
@@ -320,6 +346,23 @@ describe('Engine - Clue Functionality', () => {
         expect(screen.getByText('Waiting for position')).toBeInTheDocument();
         expect(screen.getByText('Set or paste a position to analyze.')).toBeInTheDocument();
       });
+    });
+
+    it('should show loading text while evaluating', async () => {
+      // Make evaluateFen hang indefinitely so we can observe the loading state
+      mockEvaluateFen.mockReturnValue(new Promise(() => {}));
+
+      const user = userEvent.setup();
+      render(<Engine />);
+
+      // Load a new FEN to trigger auto-evaluation
+      const fenInput = screen.getByDisplayValue(STARTING_FEN);
+      fireEvent.change(fenInput, { target: { value: ALT_FEN } });
+      await user.click(screen.getByText('Load'));
+
+      await waitFor(() => {
+        expect(screen.getByText(/Waiting for Stockfish output/)).toBeInTheDocument();
+      }, { timeout: 2000 });
     });
 
     it('should reset clues when new positions are loaded', async () => {
