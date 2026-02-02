@@ -102,15 +102,16 @@ export default function Dashboard() {
 
     if (loading) {
         return (
-            <div className="flex items-center justify-center min-h-screen">
-                <div className="animate-spin h-12 w-12 border-4 border-primary/20 border-t-primary rounded-full" />
+            <div className="flex items-center justify-center min-h-screen" role="status" aria-live="polite">
+                <div className="animate-spin h-12 w-12 border-4 border-primary/20 border-t-primary rounded-full" aria-hidden="true" />
+                <span className="sr-only">Loading dashboard...</span>
             </div>
         );
     }
 
     if (error || !dashboardData) {
         return (
-            <div className="max-w-md mx-auto mt-32 text-center">
+            <div className="max-w-md mx-auto mt-32 text-center" role="alert" aria-live="assertive">
                 <p className="text-red-500 mb-4">
                     {error || 'Failed to load dashboard data'}
                 </p>
@@ -118,6 +119,7 @@ export default function Dashboard() {
                     type="button"
                     onClick={() => window.location.reload()}
                     className="px-6 py-2 border border-primary/20 rounded-sm km-interactive km-focus-visible"
+                    aria-label="Retry loading dashboard"
                 >
                     Retry
                 </button>
@@ -126,7 +128,7 @@ export default function Dashboard() {
     }
 
     return (
-        <div className="container mx-auto p-6 space-y-8">
+        <main className="container mx-auto p-6 space-y-8">
             {/* Header */}
             <section>
                 <div className="flex justify-between items-end">
@@ -144,18 +146,20 @@ export default function Dashboard() {
                             onClick={() => loadDashboardData(true)}
                             disabled={refreshing}
                             title="Refresh dashboard data"
+                            aria-label="Refresh dashboard data"
+                            aria-busy={refreshing}
                             className={`px-4 py-2 border border-primary/20 rounded-sm font-sans text-sm transition-all km-focus-visible ${
                                 refreshing ? 'km-interactive-disabled' : 'km-interactive'
                             }`}
                         >
                             {refreshing ? (
                                 <>
-                                    <span className="animate-spin inline-block h-4 w-4 border-2 border-primary/20 border-t-primary rounded-full mr-2"></span>
+                                    <span className="animate-spin inline-block h-4 w-4 border-2 border-primary/20 border-t-primary rounded-full mr-2" aria-hidden="true"></span>
                                     Refreshing...
                                 </>
                             ) : (
                                 <>
-                                    <span className="inline-block mr-2">↻</span>
+                                    <span className="inline-block mr-2" aria-hidden="true">↻</span>
                                     Refresh
                                 </>
                             )}
@@ -313,6 +317,6 @@ export default function Dashboard() {
             {recentSessions.length > 0 && (
                 <RecentSessionsCard sessions={recentSessions} />
             )}
-        </div>
+        </main>
     );
 }

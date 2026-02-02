@@ -57,8 +57,8 @@ export function MotifTrends({ trends, windowDays }: MotifTrendsProps) {
 
     if (trends.length === 0) {
         return (
-            <section className="bg-primary/5 border border-primary/10 rounded-sm p-8">
-                <h2 className="text-2xl font-serif text-primary mb-2 text-center">
+            <section className="bg-primary/5 border border-primary/10 rounded-sm p-8" aria-labelledby="motif-trends-heading">
+                <h2 id="motif-trends-heading" className="text-2xl font-serif text-primary mb-2 text-center">
                     📈 Progress Trends
                 </h2>
                 <p className="text-primary/60 text-center mb-6">
@@ -75,15 +75,19 @@ export function MotifTrends({ trends, windowDays }: MotifTrendsProps) {
     }
 
     return (
-        <section className="bg-primary/5 border border-primary/10 rounded-sm p-8">
-            <h2 className="text-2xl font-serif text-primary mb-2 text-center">
+        <section className="bg-primary/5 border border-primary/10 rounded-sm p-8" aria-labelledby="motif-trends-heading">
+            <h2 id="motif-trends-heading" className="text-2xl font-serif text-primary mb-2 text-center">
                 📈 Progress Trends
             </h2>
             <p className="text-primary/60 text-center mb-6">
                 Last {windowDays} days of training
             </p>
 
-            <div className="h-80">
+            <div
+                className="h-80"
+                role="img"
+                aria-label="Line chart showing accuracy trends over time for different tactical patterns"
+            >
                 <ResponsiveContainer width="100%" height="100%">
                     <LineChart data={chartData}>
                         <CartesianGrid strokeDasharray="3 3" stroke="var(--border-primary)" opacity={0.2} />

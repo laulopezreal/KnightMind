@@ -53,7 +53,7 @@ export function Modal({
       }
 
       // Prevent body scroll
-      document.body.style.overflow = 'hidden';
+      document.body.classList.add('overflow-hidden');
     } else {
       // Restore focus when modal closes
       if (previousFocusRef.current) {
@@ -61,11 +61,11 @@ export function Modal({
       }
 
       // Restore body scroll
-      document.body.style.overflow = '';
+      document.body.classList.remove('overflow-hidden');
     }
 
     return () => {
-      document.body.style.overflow = '';
+      document.body.classList.remove('overflow-hidden');
     };
   }, [isOpen]);
 
