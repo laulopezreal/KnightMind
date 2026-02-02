@@ -999,27 +999,29 @@ async def explain_rating_changes(
     game_details = [] 
     opp_ratings = []
     
+    # Snapshot closest to (but before or at) window start — best reference anchor
     stmt = select(RatingSnapshot).where(
-        RatingSnapshot.username == username, 
+        RatingSnapshot.username == username,
+        RatingSnapshot.time_control == time_control,
+        RatingSnapshot.recorded_at <= window_start
+    ).order_by(RatingSnapshot.recorded_at.desc())
+    pre_window_snapshot = db.scalars(stmt).first()
+
+    # Earliest snapshot inside the window
+    stmt = select(RatingSnapshot).where(
+        RatingSnapshot.username == username,
         RatingSnapshot.time_control == time_control,
         RatingSnapshot.recorded_at >= window_start
     ).order_by(RatingSnapshot.recorded_at.asc())
     earliest_snapshot = db.scalars(stmt).first()
-    
-    stmt = select(RatingSnapshot).where(
-         RatingSnapshot.username == username, 
-         RatingSnapshot.time_control == time_control,
-         RatingSnapshot.recorded_at < now
-    ).order_by(RatingSnapshot.recorded_at.desc())
-    latest_snapshot = db.scalars(stmt).first()
 
     reference_rating = 0
     reference_is_approx = False
-    
-    if earliest_snapshot:
+
+    if pre_window_snapshot:
+        reference_rating = pre_window_snapshot.rating
+    elif earliest_snapshot:
         reference_rating = earliest_snapshot.rating
-    elif latest_snapshot:
-        reference_rating = latest_snapshot.rating
     
     for meta in relevant_games:
         pgn = game_repository.get_pgn(username, meta.game_id)
@@ -1128,17 +1130,24 @@ async def explain_rating_changes(
     best_ids = {s.game_id for s in best_surprises}
     worst_surprises = [s for s in worst_surprises if s.game_id not in best_ids]
     
-    start_rating_val = earliest_snapshot.rating if earliest_snapshot else None
-    
+    # Start: prefer pre-window snapshot, fall back to earliest in-window
+    start_rating_val = (
+        pre_window_snapshot.rating if pre_window_snapshot
+        else earliest_snapshot.rating if earliest_snapshot
+        else None
+    )
+
+    # End: latest snapshot within the window period
     stmt = select(RatingSnapshot).where(
         RatingSnapshot.username == username,
-        RatingSnapshot.time_control == time_control
+        RatingSnapshot.time_control == time_control,
+        RatingSnapshot.recorded_at >= window_start
     ).order_by(RatingSnapshot.recorded_at.desc())
-    latest_any = db.scalars(stmt).first()
-    end_rating_val = latest_any.rating if latest_any else None
-    
+    latest_in_window = db.scalars(stmt).first()
+    end_rating_val = latest_in_window.rating if latest_in_window else None
+
     net_change = None
-    if start_rating_val and end_rating_val:
+    if start_rating_val is not None and end_rating_val is not None:
         net_change = end_rating_val - start_rating_val
 
     return ExplainResponse(
