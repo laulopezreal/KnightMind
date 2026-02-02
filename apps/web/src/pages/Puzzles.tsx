@@ -414,12 +414,40 @@ export default function Puzzles() {
         }
     }, [username]);
 
+    // Initialize persistent streak stats from localStorage
+    useEffect(() => {
+        if (!username) {
+            setBestStreak(0);
+            return;
+        }
+
+        const savedStats = localStorage.getItem(`knightmind:puzzleStats:${username}`);
+        if (savedStats) {
+            try {
+                const parsed = JSON.parse(savedStats);
+                setBestStreak(parsed.bestStreak || 0);
+            } catch (e) {
+                console.error('Failed to parse saved puzzle stats', e);
+            }
+        }
+    }, [username]);
+
     // Save achievements to localStorage when they change
     useEffect(() => {
         if (username && achievements.some(a => a.earned)) {
             localStorage.setItem(`knightmind:achievements:${username}`, JSON.stringify(achievements));
         }
     }, [achievements, username]);
+
+    // Persist best streak per user
+    useEffect(() => {
+        if (username) {
+            const stats = {
+                bestStreak,
+            };
+            localStorage.setItem(`knightmind:puzzleStats:${username}`, JSON.stringify(stats));
+        }
+    }, [bestStreak, username]);
 
     // Save session state to localStorage for recovery after refresh
     useEffect(() => {
@@ -615,7 +643,6 @@ export default function Puzzles() {
             setSessionSummary(null);
             setReviewedCount(0);
             setStreak(0);
-            setBestStreak(0);
             setHintsUsed(0);
             setPerformanceHistory([]);
 
