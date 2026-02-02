@@ -161,22 +161,22 @@ export default function Engine() {
     return 'text-primary';
   };
 
-const bestMoveParsed = useMemo(() => {
-    if (!evaluation?.bestMove) return { from: '', to: '' };
-    return parseBestMoveUci(evaluation.bestMove);
-  }, [evaluation?.bestMove]);
+const bestMoveParsed = useMemo(
+    () => (evaluation?.bestMove ? parseBestMoveUci(evaluation.bestMove) : { from: '', to: '' }),
+    [evaluation?.bestMove]
+  );
 
-  const clueSquareStyles: Record<string, { backgroundColor: string }> = useMemo(() => {
-    if (!evaluation?.bestMove || clueStage < 1) {
+  const CLUE_HIGHLIGHT_STYLE = { backgroundColor: 'rgba(255, 235, 59, 0.45)' };
+
+  const clueSquareStyles = useMemo(() => {
+    if (clueStage < 1 || !bestMoveParsed.from) {
       return {};
     }
-    const { from, to } = bestMoveParsed;
-    const highlight = { backgroundColor: 'rgba(255, 235, 59, 0.45)' };
-    if (clueStage === 2 && to) {
-      return { [from]: highlight, [to]: highlight };
+    if (clueStage === 2 && bestMoveParsed.to) {
+      return { [bestMoveParsed.from]: CLUE_HIGHLIGHT_STYLE, [bestMoveParsed.to]: CLUE_HIGHLIGHT_STYLE };
     }
-    return from ? { [from]: highlight } : {};
-  }, [bestMoveParsed, clueStage, evaluation?.bestMove]);
+    return { [bestMoveParsed.from]: CLUE_HIGHLIGHT_STYLE };
+  }, [clueStage, bestMoveParsed]);
 
   return (
     <div className="space-y-12 animate-teedin">
@@ -331,10 +331,7 @@ const bestMoveParsed = useMemo(() => {
             {evaluation && clueStage === 1 && (
               <div className="pt-2">
                 <p className="text-primary/80 font-sans text-sm">
-                  {evaluation.bestMove
-                    ? getPieceNameAtSquare(fen, bestMoveParsed.from)
-                    : 'Move the correct piece'
-                  }
+                  {getPieceNameAtSquare(fen, bestMoveParsed.from)}
                 </p>
               </div>
             )}

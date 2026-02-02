@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { Chess } from 'chess.js';
 import Engine from './Engine';
@@ -95,7 +95,7 @@ describe('Engine - Clue Functionality', () => {
       });
     });
 
-    it('should reset to stage 0 on third click attempt', async () => {
+    it('should reach final stage and be disabled after two clicks', async () => {
       render(<Engine />);
 
       // Evaluate and get evaluation
