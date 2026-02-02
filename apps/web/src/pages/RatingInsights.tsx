@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceDot } from 'recharts';
 import { useChessUsername } from '../context/ChessUsernameContext';
@@ -182,6 +182,24 @@ export default function RatingInsights() {
         ? { label: 'Medium confidence', color: 'bg-amber-500/10 text-amber-600' }
         : { label: 'High confidence', color: 'bg-emerald-500/10 text-emerald-600' };
 
+    // Memoize chart data to avoid re-creating objects on every render.
+    // Uses index-based labels to guarantee unique X-axis keys even when
+    // multiple snapshots fall on the same calendar day.
+    const chartData = useMemo(() => {
+        const dateCounts = new Map<string, number>();
+        return history.map(h => {
+            const base = new Date(h.recorded_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+            const count = (dateCounts.get(base) ?? 0) + 1;
+            dateCounts.set(base, count);
+            return { label: count > 1 ? `${base} (${count})` : base, rating: h.rating };
+        });
+    }, [history]);
+
+    const chartTrendColor = useMemo(() => {
+        if (history.length < 2) return '#059669';
+        return history[history.length - 1].rating >= history[0].rating ? '#059669' : '#ef4444';
+    }, [history]);
+
     return (
         <div className="space-y-12 animate-teedin pb-20">
             <section className="flex flex-col md:flex-row justify-between items-end gap-6">
@@ -359,15 +377,12 @@ export default function RatingInsights() {
                             </div>
 
                             {/* Rating Trend Chart */}
-                            {history.length >= 2 && (
+                            {chartData.length >= 2 && (
                                 <section className="p-6 bg-primary/5 rounded-sm border border-primary/10">
                                     <h2 className="text-sm font-sans uppercase tracking-widest text-primary/40 mb-4">Rating Over Time</h2>
                                     <ResponsiveContainer width="100%" height={220}>
-                                        <LineChart data={history.map(h => ({
-                                            date: new Date(h.recorded_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
-                                            rating: h.rating,
-                                        }))}>
-                                            <XAxis dataKey="date" tick={{ fontSize: 11 }} stroke="currentColor" strokeOpacity={0.2} />
+                                        <LineChart data={chartData}>
+                                            <XAxis dataKey="label" tick={{ fontSize: 11 }} stroke="currentColor" strokeOpacity={0.2} />
                                             <YAxis domain={['dataMin - 20', 'dataMax + 20']} tick={{ fontSize: 11 }} stroke="currentColor" strokeOpacity={0.2} width={45} />
                                             <Tooltip
                                                 contentStyle={{ fontSize: 12, borderRadius: 4, border: '1px solid rgba(0,0,0,0.1)' }}
@@ -376,25 +391,21 @@ export default function RatingInsights() {
                                             <Line
                                                 type="monotone"
                                                 dataKey="rating"
-                                                stroke={
-                                                    history[history.length - 1].rating >= history[0].rating
-                                                        ? '#059669'
-                                                        : '#ef4444'
-                                                }
+                                                stroke={chartTrendColor}
                                                 strokeWidth={2}
                                                 dot={false}
                                                 activeDot={{ r: 4 }}
                                             />
                                             <ReferenceDot
-                                                x={new Date(history[0].recorded_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
-                                                y={history[0].rating}
+                                                x={chartData[0].label}
+                                                y={chartData[0].rating}
                                                 r={4}
                                                 fill="currentColor"
                                                 fillOpacity={0.4}
                                             />
                                             <ReferenceDot
-                                                x={new Date(history[history.length - 1].recorded_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
-                                                y={history[history.length - 1].rating}
+                                                x={chartData[chartData.length - 1].label}
+                                                y={chartData[chartData.length - 1].rating}
                                                 r={4}
                                                 fill="currentColor"
                                                 fillOpacity={0.8}

@@ -81,6 +81,13 @@ def test_classify_time_control_edge_cases():
     assert classify_time_control("600") == "rapid"     # exactly 600
 
 
+def test_classify_time_control_unrecognized():
+    """Unrecognized formats should return None instead of silently defaulting."""
+    assert classify_time_control("daily") is None
+    assert classify_time_control("1/259200") is None
+    assert classify_time_control("unknown") is None
+
+
 @pytest.fixture
 def db_session():
     engine = create_engine(
@@ -200,3 +207,148 @@ def test_explain_rating_changes_basic(client_with_db, db_session, tmp_path, monk
     assert data["rating"]["reference_rating"] == 1400
     assert data["rating"]["reference_is_approx"] is False
     assert any("outperformed" in driver["text"].lower() for driver in data["drivers"])
+
+
+def test_rating_history_returns_snapshots(client_with_db, db_session):
+    """GET /ratings/history returns snapshots in chronological order."""
+    now = datetime.now(timezone.utc)
+    for i, rating in enumerate([1400, 1420, 1415]):
+        db_session.add(RatingSnapshot(
+            username="testuser",
+            source="chesscom",
+            time_control="rapid",
+            rating=rating,
+            recorded_at=now - timedelta(days=3 - i),
+        ))
+    # Different time control — should not appear
+    db_session.add(RatingSnapshot(
+        username="testuser",
+        source="chesscom",
+        time_control="blitz",
+        rating=1300,
+        recorded_at=now,
+    ))
+    db_session.commit()
+
+    response = client_with_db.get(
+        "/ratings/history",
+        params={"username": "testuser", "time_control": "rapid"},
+    )
+    assert response.status_code == 200
+    items = response.json()
+    assert len(items) == 3
+    assert items[0]["rating"] == 1400
+    assert items[1]["rating"] == 1420
+    assert items[2]["rating"] == 1415
+
+
+def test_rating_history_empty(client_with_db):
+    """GET /ratings/history returns empty list when no snapshots exist."""
+    response = client_with_db.get(
+        "/ratings/history",
+        params={"username": "nobody", "time_control": "rapid"},
+    )
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+@patch("services.api.sessions.get_player_stats")
+def test_auto_snapshot_skips_unchanged_rating(mock_stats, client_with_db, db_session):
+    """_auto_snapshot should not create a duplicate when rating hasn't changed."""
+    from services.api.models import TrainingSession
+
+    # Seed a snapshot with rating 1500 for rapid
+    db_session.add(RatingSnapshot(
+        username="testuser",
+        source="chesscom",
+        time_control="rapid",
+        rating=1500,
+        recorded_at=datetime.now(timezone.utc) - timedelta(hours=1),
+    ))
+    # Create a session
+    session = TrainingSession(
+        id="sess-dup-test",
+        username="testuser",
+        requested_n=5,
+        pass_count=3,
+        fail_count=2,
+        total_time_ms=60000,
+    )
+    db_session.add(session)
+    db_session.commit()
+
+    # Chess.com returns the same rating
+    mock_stats.return_value = {
+        "chess_rapid": {"last": {"rating": 1500}},
+        "chess_blitz": {"last": {"rating": 1200}},
+        "chess_bullet": {"last": {"rating": 1000}},
+    }
+
+    response = client_with_db.post(
+        "/sessions/sess-dup-test/complete",
+        json={"username": "testuser"},
+    )
+    assert response.status_code == 200
+
+    # Rapid should still have only 1 snapshot (duplicate skipped)
+    stmt = select(RatingSnapshot).where(
+        RatingSnapshot.username == "testuser",
+        RatingSnapshot.time_control == "rapid",
+    )
+    rapid_snapshots = db_session.scalars(stmt).all()
+    assert len(rapid_snapshots) == 1
+
+    # Blitz should have 1 new snapshot (rating 1200 is new)
+    stmt = select(RatingSnapshot).where(
+        RatingSnapshot.username == "testuser",
+        RatingSnapshot.time_control == "blitz",
+    )
+    blitz_snapshots = db_session.scalars(stmt).all()
+    assert len(blitz_snapshots) == 1
+    assert blitz_snapshots[0].rating == 1200
+
+
+@patch("services.api.sessions.get_player_stats")
+def test_auto_snapshot_creates_on_changed_rating(mock_stats, client_with_db, db_session):
+    """_auto_snapshot should create a new snapshot when rating has changed."""
+    from services.api.models import TrainingSession
+
+    db_session.add(RatingSnapshot(
+        username="testuser",
+        source="chesscom",
+        time_control="rapid",
+        rating=1500,
+        recorded_at=datetime.now(timezone.utc) - timedelta(hours=1),
+    ))
+    session = TrainingSession(
+        id="sess-change-test",
+        username="testuser",
+        requested_n=5,
+        pass_count=4,
+        fail_count=1,
+        total_time_ms=50000,
+    )
+    db_session.add(session)
+    db_session.commit()
+
+    # Rating changed from 1500 -> 1520
+    mock_stats.return_value = {
+        "chess_rapid": {"last": {"rating": 1520}},
+        "chess_blitz": {"last": {"rating": 1200}},
+        "chess_bullet": {"last": {"rating": 1000}},
+    }
+
+    response = client_with_db.post(
+        "/sessions/sess-change-test/complete",
+        json={"username": "testuser"},
+    )
+    assert response.status_code == 200
+
+    stmt = select(RatingSnapshot).where(
+        RatingSnapshot.username == "testuser",
+        RatingSnapshot.time_control == "rapid",
+    ).order_by(RatingSnapshot.recorded_at.asc())
+    rapid_snapshots = db_session.scalars(stmt).all()
+    assert len(rapid_snapshots) == 2
+    assert rapid_snapshots[0].rating == 1500
+    assert rapid_snapshots[1].rating == 1520
