@@ -3,6 +3,9 @@ import { Link } from 'react-router-dom';
 import { Chessboard } from 'react-chessboard';
 import { Chess } from 'chess.js';
 import { evaluateFen, getEngineStatus, ApiError } from '../api';
+import { parseBestMoveUci, getPieceNameAtSquare } from '../utils/puzzle-clue';
+
+type ClueStage = 0 | 1 | 2;
 
 const STARTING_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
 
@@ -14,6 +17,7 @@ export default function Engine() {
   const [error, setError] = useState<string | null>(null);
   const [engineAvailable, setEngineAvailable] = useState<boolean | null>(null);
   const [showBestMove, setShowBestMove] = useState(false);
+  const [clueStage, setClueStage] = useState<ClueStage>(0);
 
   useEffect(() => {
     getEngineStatus().then(s => setEngineAvailable(s.available)).catch(() => setEngineAvailable(false));
@@ -24,6 +28,7 @@ export default function Engine() {
     setError(null);
     setEvaluation(null);
     setShowBestMove(false);
+    setClueStage(0);
 
     try {
       const result = await evaluateFen(fen);
@@ -59,6 +64,15 @@ export default function Engine() {
     }
   };
 
+  const handleClue = () => {
+    if (!evaluation?.bestMove) return;
+    if (clueStage === 0) {
+      setClueStage(1);
+    } else if (clueStage === 1) {
+      setClueStage(2);
+    }
+  };
+
   const onDrop = (sourceSquare: string, targetSquare: string) => {
     const gameCopy = new Chess(fen);
     try {
@@ -69,6 +83,7 @@ export default function Engine() {
       setFenInput(newFen);
       setEvaluation(null);
       setShowBestMove(false);
+      setClueStage(0);
       return true;
     } catch { return false; }
   };
@@ -82,6 +97,18 @@ export default function Engine() {
     if (v >= 1) return 'text-green-600'; if (v <= -1) return 'text-red-500';
     return 'text-primary';
   };
+
+  const bestMoveParsed = evaluation?.bestMove ? parseBestMoveUci(evaluation.bestMove) : { from: '', to: '' };
+
+  const clueSquareStyles: Record<string, { backgroundColor: string }> =
+    evaluation?.bestMove && clueStage >= 1
+      ? (() => {
+          const { from, to } = bestMoveParsed;
+          const highlight = { backgroundColor: 'rgba(255, 235, 59, 0.45)' };
+          if (clueStage === 2 && to) return { [from]: highlight, [to]: highlight };
+          return from ? { [from]: highlight } : {};
+        })()
+      : {};
 
   return (
     <div className="space-y-12 animate-teedin">
@@ -110,6 +137,7 @@ export default function Engine() {
                 position: fen,
                 onPieceDrop: ({ sourceSquare, targetSquare }) => targetSquare ? onDrop(sourceSquare, targetSquare) : false,
                 arrows: showBestMove && evaluation ? [{ startSquare: evaluation.bestMove.slice(0, 2), endSquare: evaluation.bestMove.slice(2, 4), color: 'rgba(16, 185, 129, 0.8)' }] : [],
+                squareStyles: clueSquareStyles,
                 boardOrientation: "white",
                 darkSquareStyle: { backgroundColor: 'var(--color-chess-brown-700)' },
                 lightSquareStyle: { backgroundColor: 'var(--color-chess-cream-300)' },
@@ -167,6 +195,28 @@ export default function Engine() {
                   </button>
                 </div>
               </div>
+            )}
+
+            {evaluation && clueStage === 1 && (
+              <div className="pt-2">
+                <p className="text-primary/80 font-sans text-sm">
+                  {evaluation.bestMove
+                    ? getPieceNameAtSquare(fen, bestMoveParsed.from)
+                    : 'Move the correct piece'
+                  }
+                </p>
+              </div>
+            )}
+
+            {evaluation && (
+              <button
+                type="button"
+                onClick={handleClue}
+                disabled={!evaluation.bestMove || clueStage === 2}
+                className="w-full py-2 mt-4 bg-primary/10 border border-primary/20 text-primary rounded-sm font-sans text-sm uppercase tracking-widest transition-all km-interactive km-focus-visible disabled:opacity-50 disabled:cursor-default"
+              >
+                {clueStage === 0 ? 'Clue' : clueStage === 1 ? 'Reveal squares' : 'Clue used'}
+              </button>
             )}
 
             <button type="button" onClick={handleEvaluate} disabled={loading || !engineAvailable}
