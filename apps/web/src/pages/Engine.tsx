@@ -240,6 +240,8 @@ export default function Engine() {
               type="button"
               onClick={handleBack}
               disabled={historyIndex <= 0}
+              aria-label="Go back a position"
+              title="Go back"
               className="km-interactive km-focus-visible border border-primary/20 px-4 py-2 text-primary/60 font-sans text-xs uppercase tracking-widest transition-colors rounded-sm disabled:opacity-40"
             >
               ←
@@ -248,6 +250,8 @@ export default function Engine() {
               type="button"
               onClick={handleForward}
               disabled={historyIndex >= fenHistory.length - 1}
+              aria-label="Go forward a position"
+              title="Go forward"
               className="km-interactive km-focus-visible border border-primary/20 px-4 py-2 text-primary/60 font-sans text-xs uppercase tracking-widest transition-colors rounded-sm disabled:opacity-40"
             >
               →
