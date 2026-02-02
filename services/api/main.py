@@ -877,6 +877,35 @@ async def create_rating_snapshot(request: SnapshotRequest, db: Session = Depends
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class SnapshotHistoryItem(BaseModel):
+    rating: int
+    recorded_at: datetime
+
+
+@app.get("/ratings/history", response_model=list[SnapshotHistoryItem])
+async def get_rating_history(
+    username: str,
+    time_control: str = "rapid",
+    limit: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db)
+):
+    """Return chronological rating snapshot history for charting."""
+    stmt = (
+        select(RatingSnapshot)
+        .where(
+            RatingSnapshot.username == username,
+            RatingSnapshot.time_control == time_control,
+        )
+        .order_by(RatingSnapshot.recorded_at.asc())
+        .limit(limit)
+    )
+    snapshots = db.scalars(stmt).all()
+    return [
+        SnapshotHistoryItem(rating=s.rating, recorded_at=s.recorded_at)
+        for s in snapshots
+    ]
+
+
 class HighlightGame(BaseModel):
     opponent_rating: int | None
     result: str

@@ -55,6 +55,20 @@ export interface ExplainResponse {
     highlights: Highlights;
 }
 
+export interface SnapshotHistoryItem {
+    rating: number;
+    recorded_at: string;
+}
+
+export const getRatingHistory = (
+    username: string,
+    timeControl: string = 'rapid',
+    limit: number = 50
+): Promise<SnapshotHistoryItem[]> => {
+    const params = new URLSearchParams({ username, time_control: timeControl, limit: limit.toString() });
+    return request<SnapshotHistoryItem[]>(`/ratings/history?${params.toString()}`);
+};
+
 export const createSnapshot = (username: string, timeControl: string): Promise<SnapshotResponse> => {
     return request<SnapshotResponse>('/ratings/snapshot', {
         method: 'POST',
