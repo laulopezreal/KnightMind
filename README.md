@@ -106,6 +106,7 @@ If an environment ever needs a different base, update `API_BASE` in `apps/web/sr
 
 - Once a user has set their Chess.com username, the home screen emphasizes exploration and treats game syncing as an optional “Sync” action rather than a primary prompt to import games.
 - Syncing reports “No new games found” when existing games are already in the database.
+- Engine Analysis “Clue” mirrors the puzzle flow: first reveals which piece to move, then highlights the from/to squares for the best move.
 
 ## Admin Ops Utilities
 
