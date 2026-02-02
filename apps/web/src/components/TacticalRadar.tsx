@@ -35,8 +35,8 @@ export function TacticalRadar({ motifs, onMotifClick }: TacticalRadarProps) {
     // Empty state: No motifs at all
     if (motifs.length === 0) {
         return (
-            <section className="bg-primary/5 border border-primary/10 rounded-sm p-8">
-                <h2 className="text-2xl font-serif text-primary mb-2 text-center">
+            <section className="bg-primary/5 border border-primary/10 rounded-sm p-8" aria-labelledby="tactical-radar-heading">
+                <h2 id="tactical-radar-heading" className="text-2xl font-serif text-primary mb-2 text-center">
                     🎯 Tactical Vision
                 </h2>
                 <p className="text-primary/60 text-center mb-6">
@@ -54,8 +54,8 @@ export function TacticalRadar({ motifs, onMotifClick }: TacticalRadarProps) {
     // Empty state: Not enough motifs for radar
     if (motifs.length < 3) {
         return (
-            <section className="bg-primary/5 border border-primary/10 rounded-sm p-8">
-                <h2 className="text-2xl font-serif text-primary mb-2 text-center">
+            <section className="bg-primary/5 border border-primary/10 rounded-sm p-8" aria-labelledby="tactical-radar-heading">
+                <h2 id="tactical-radar-heading" className="text-2xl font-serif text-primary mb-2 text-center">
                     🎯 Tactical Vision
                 </h2>
                 <p className="text-primary/60 text-center mb-6">
@@ -72,15 +72,19 @@ export function TacticalRadar({ motifs, onMotifClick }: TacticalRadarProps) {
     }
 
     return (
-        <section className="bg-primary/5 border border-primary/10 rounded-sm p-8">
-            <h2 className="text-2xl font-serif text-primary mb-2 text-center">
+        <section className="bg-primary/5 border border-primary/10 rounded-sm p-8" aria-labelledby="tactical-radar-heading">
+            <h2 id="tactical-radar-heading" className="text-2xl font-serif text-primary mb-2 text-center">
                 🎯 Tactical Vision
             </h2>
-            <p className="text-primary/60 text-center mb-6">
+            <p className="text-primary/60 text-center mb-6" id="tactical-radar-desc">
                 Your chess pattern mastery
             </p>
 
-            <div className="h-64 md:h-96">
+            <div
+                className="h-64 md:h-96"
+                role="img"
+                aria-label={`Radar chart showing accuracy across different tactical motifs: ${motifs.map(m => `${m.name} ${Math.round(m.accuracy * 100)}%`).join(', ')}`}
+            >
                 <ResponsiveContainer width="100%" height="100%">
                     <RadarChart data={radarData}>
                         <PolarGrid stroke="var(--border-primary)" strokeOpacity={0.2} />
@@ -137,6 +141,8 @@ export function TacticalRadar({ motifs, onMotifClick }: TacticalRadarProps) {
                         type="button"
                         onClick={() => onMotifClick(weakest.name)}
                         disabled={weakest.total_puzzles === 0}
+                        aria-label={`Practice ${weakest.name} tactical patterns`}
+                        aria-disabled={weakest.total_puzzles === 0}
                         title={
                             weakest.total_puzzles === 0
                                 ? 'No puzzles available for this motif yet'
