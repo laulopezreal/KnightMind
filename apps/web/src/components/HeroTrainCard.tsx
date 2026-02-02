@@ -5,6 +5,7 @@ interface HeroTrainCardProps {
   nextReviewAt: string | null;
   needsWarmup: boolean;
   daysSinceLastSession: number;
+  totalSessions: number;
   onStartSession: () => void;
 }
 
@@ -13,27 +14,36 @@ export function HeroTrainCard({
   nextReviewAt,
   needsWarmup,
   daysSinceLastSession,
+  totalSessions,
   onStartSession
 }: HeroTrainCardProps) {
   // Determine the state and messaging
+  const isFirstTime = totalSessions === 0;
   const isZeroDue = dueCount === 0;
-  const title = needsWarmup
+
+  const title = isFirstTime
+    ? 'Ready to Start Training?'
+    : needsWarmup
     ? 'Welcome Back'
     : isZeroDue
     ? 'All Caught Up'
     : 'Train Today';
 
-  const supportingText = needsWarmup
+  const supportingText = isFirstTime
+    ? `You have ${dueCount} puzzle${dueCount !== 1 ? 's' : ''} waiting. Complete your first session to see your tactical profile!`
+    : needsWarmup
     ? `You've been away ${daysSinceLastSession} days. Let's do a quick warmup to see what stuck!`
     : isZeroDue
     ? 'Great work! Check back later for more puzzles.'
     : 'Most people improve by solving these today.';
 
-  const buttonText = needsWarmup
+  const buttonText = isFirstTime
+    ? 'Start First Session'
+    : needsWarmup
     ? 'Start Warmup (5 puzzles)'
     : isZeroDue
     ? 'Browse Puzzles'
-    : 'Start Session →';
+    : 'Start Session';
 
   return (
     <section
@@ -68,7 +78,6 @@ export function HeroTrainCard({
         type="button"
         onClick={onStartSession}
         className="px-8 py-3 bg-accent text-bg-primary rounded-sm font-serif text-lg transition-colors km-focus-visible km-interactive"
-        aria-label={buttonText}
       >
         {buttonText}
       </button>
@@ -76,7 +85,7 @@ export function HeroTrainCard({
       {/* Next Review Info */}
       {nextReviewAt && (
         <p className="mt-6 text-sm text-primary/40 font-sans">
-          Next review {isZeroDue ? 'in' : 'window'}: {formatRelativeTime(nextReviewAt)}
+          Next review: {formatRelativeTime(nextReviewAt)}
         </p>
       )}
     </section>

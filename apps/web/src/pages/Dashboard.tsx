@@ -20,6 +20,7 @@ export default function Dashboard() {
     const [error, setError] = useState<string | null>(null);
     const isFetchingRef = useRef(false);
     const isMountedRef = useRef(true);
+    const hasLoadedRef = useRef(false);
 
     // Track mounted status to prevent state updates after unmount
     useEffect(() => {
@@ -43,7 +44,10 @@ export default function Dashboard() {
 
         isFetchingRef.current = true;
         try {
-            setLoading(true);
+            // Only show full-page spinner on initial load, not on background refreshes
+            if (!hasLoadedRef.current) {
+                setLoading(true);
+            }
             setError(null);
 
             const [dashboard, sessions, tricky] = await Promise.all([
@@ -56,6 +60,7 @@ export default function Dashboard() {
                 setDashboardData(dashboard);
                 setRecentSessions(sessions);
                 setTrickyPuzzles(tricky);
+                hasLoadedRef.current = true;
             }
         } catch (err) {
             console.error('Failed to load dashboard:', err);
@@ -132,12 +137,13 @@ export default function Dashboard() {
                 nextReviewAt={dashboardData.schedule.next_review_at}
                 needsWarmup={dashboardData.needs_warmup}
                 daysSinceLastSession={dashboardData.days_since_last_session}
+                totalSessions={dashboardData.total_sessions}
                 onStartSession={() => navigate(dashboardData.needs_warmup ? '/puzzles?warmup=true' : '/puzzles')}
             />
 
             {/* SECTION 2: Recently Tricky */}
             {trickyPuzzles && trickyPuzzles.puzzles.length > 0 && (
-                <RecentlyTrickyCard puzzles={trickyPuzzles.puzzles} />
+                <RecentlyTrickyCard puzzles={trickyPuzzles.puzzles} totalCount={trickyPuzzles.total_count} />
             )}
 
             {/* SECTION 3 & 4: Two-column grid */}

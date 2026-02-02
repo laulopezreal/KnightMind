@@ -15,6 +15,7 @@ export default function Insights() {
     const [error, setError] = useState<string | null>(null);
     const isFetchingRef = useRef(false);
     const isMountedRef = useRef(true);
+    const hasLoadedRef = useRef(false);
 
     // Track mounted status to prevent state updates after unmount
     useEffect(() => {
@@ -37,7 +38,10 @@ export default function Insights() {
 
         isFetchingRef.current = true;
         try {
-            setLoading(true);
+            // Only show full-page spinner on initial load, not on background refreshes
+            if (!hasLoadedRef.current) {
+                setLoading(true);
+            }
             setError(null);
 
             const [motifs, trendsData] = await Promise.all([
@@ -48,6 +52,7 @@ export default function Insights() {
             if (isMountedRef.current) {
                 setMotifPerformance(motifs);
                 setTrends(trendsData);
+                hasLoadedRef.current = true;
             }
         } catch (err) {
             console.error('Failed to load insights:', err);
@@ -65,6 +70,18 @@ export default function Insights() {
     // Initial load
     useEffect(() => {
         loadInsightsData();
+    }, [loadInsightsData]);
+
+    // Auto-refresh on window focus
+    useEffect(() => {
+        const handleFocus = () => {
+            loadInsightsData();
+        };
+
+        window.addEventListener('focus', handleFocus);
+        return () => {
+            window.removeEventListener('focus', handleFocus);
+        };
     }, [loadInsightsData]);
 
     const handleMotifClick = (motif: string) => {
