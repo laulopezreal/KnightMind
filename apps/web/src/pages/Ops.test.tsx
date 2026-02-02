@@ -40,7 +40,7 @@ const opsOk = {
 
 describe('Ops', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     vi.useFakeTimers({ shouldAdvanceTime: true });
     mockUsername = 'admin';
     mockGetHealth.mockResolvedValue(healthOk);

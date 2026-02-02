@@ -46,7 +46,7 @@ vi.mock('recharts', () => ({
 
 describe('RatingInsights', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     setupMockLocalStorage();
     mockUsername = 'testplayer';
     mockGetRatingExplain.mockRejectedValue(new Error('Not loaded'));
@@ -75,13 +75,36 @@ describe('RatingInsights', () => {
     expect(screen.getByText('Rating Insights')).toBeInTheDocument();
   });
 
-  it('should show loading state', () => {
+  it('should show loading state', async () => {
     mockGetRatingExplain.mockReturnValue(new Promise(() => {}));
     mockGetRatingHistory.mockReturnValue(new Promise(() => {}));
 
     render(<RatingInsights />);
 
-    expect(screen.getByText('Analyzing games...')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText('Analyzing games...')).toBeInTheDocument();
+    });
+  });
+
+  it('should only call getRatingExplain once on mount (no double-fetch)', async () => {
+    mockGetRatingExplain.mockResolvedValue({
+      rating: { start: null, end: null, net_change: null, reference_rating: 0, reference_is_approx: false },
+      stats: { games: 0, wins: 0, draws: 0, losses: 0, actual_minus_expected: null, avg_opponent_rating: null, missing_opponent_rating_games: 0 },
+      drivers: [],
+      highlights: { best_surprises: [], worst_surprises: [] },
+      window: null,
+    });
+    mockGetRatingHistory.mockResolvedValue([]);
+
+    render(<RatingInsights />);
+
+    await waitFor(() => {
+      expect(mockGetRatingExplain).toHaveBeenCalledTimes(1);
+    });
+
+    // Wait extra to ensure no second call happens
+    await new Promise(r => setTimeout(r, 100));
+    expect(mockGetRatingExplain).toHaveBeenCalledTimes(1);
   });
 
   it('should show error when API fails', async () => {

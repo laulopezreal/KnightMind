@@ -45,7 +45,7 @@ vi.mock('../components/LoadingSpinner', () => ({
 
 describe('Home', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     mockUsername = '';
   });
 

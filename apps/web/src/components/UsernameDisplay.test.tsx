@@ -28,7 +28,7 @@ describe('UsernameDisplay', () => {
   const user = userEvent.setup();
 
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     mockUsername = '';
     mockIsEditorOpen = false;
     mockValidateChessComUser.mockResolvedValue({ valid: true, username: 'player1' });

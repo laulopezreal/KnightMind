@@ -122,4 +122,24 @@ describe('useLocalStorage', () => {
 
     expect(result.current[0]).toBe('initial');
   });
+
+  it('should maintain referential stability of setValue across renders', () => {
+    const { result, rerender } = renderHook(() => useLocalStorage('test-key', 'default'));
+
+    const firstSetValue = result.current[1];
+
+    // Trigger a re-render by setting a new value
+    act(() => {
+      result.current[1]('updated');
+    });
+
+    const secondSetValue = result.current[1];
+    expect(secondSetValue).toBe(firstSetValue);
+
+    // Re-render the hook itself
+    rerender();
+
+    const thirdSetValue = result.current[1];
+    expect(thirdSetValue).toBe(firstSetValue);
+  });
 });

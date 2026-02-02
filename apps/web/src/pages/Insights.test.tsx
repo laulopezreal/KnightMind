@@ -33,7 +33,7 @@ vi.mock('../components/MotifTrends', () => ({
 
 describe('Insights', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     mockUsername = 'testplayer';
     mockGetMotifPerformance.mockRejectedValue(new Error('Not loaded'));
     mockGetMotifTrends.mockRejectedValue(new Error('Not loaded'));

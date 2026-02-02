@@ -14,7 +14,7 @@ describe('ThemeToggle', () => {
   const user = userEvent.setup();
 
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     mockTheme = 'night';
   });
 

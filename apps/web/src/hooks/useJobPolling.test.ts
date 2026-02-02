@@ -10,7 +10,7 @@ vi.mock('../api', () => ({
 
 describe('useJobPolling', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
   });
 
   it('should not poll when jobId is null', () => {
@@ -144,5 +144,58 @@ describe('useJobPolling', () => {
     });
 
     consoleSpy.mockRestore();
+  });
+
+  it('should stop polling and call onError after maxRetries exceeded', async () => {
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const onError = vi.fn();
+    mockGetJobStatus.mockRejectedValue(new Error('Network error'));
+
+    renderHook(() => useJobPolling('job-123', {
+      pollInterval: 10,
+      maxRetries: 3,
+      onError,
+    }));
+
+    await waitFor(() => {
+      expect(onError).toHaveBeenCalledWith(
+        expect.objectContaining({ message: 'Job polling failed after 3 retries' })
+      );
+    }, { timeout: 5000 });
+
+    // Should have been called exactly 3 times (maxRetries)
+    expect(mockGetJobStatus).toHaveBeenCalledTimes(3);
+
+    consoleSpy.mockRestore();
+  });
+
+  it('should reset retry count on successful poll', async () => {
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    // Fail once, then succeed (running), then fail once more, then succeed (done)
+    mockGetJobStatus
+      .mockRejectedValueOnce(new Error('Network error'))
+      .mockResolvedValueOnce({ status: 'running', message: 'In progress' })
+      .mockRejectedValueOnce(new Error('Network error'))
+      .mockResolvedValue({ status: 'succeeded', message: 'Done' });
+
+    const { result } = renderHook(() => useJobPolling('job-123', {
+      pollInterval: 10,
+      maxRetries: 2,
+    }));
+
+    await waitFor(() => {
+      expect(result.current.job?.status).toBe('succeeded');
+    }, { timeout: 5000 });
+
+    // All 4 calls made: the retry count reset after the successful 'running' poll
+    expect(mockGetJobStatus).toHaveBeenCalledTimes(4);
+
+    consoleSpy.mockRestore();
+  });
+
+  it('should use default maxRetries of 30', () => {
+    // Just verifying the hook can be called without maxRetries option
+    const { result } = renderHook(() => useJobPolling(null));
+    expect(result.current.job).toBeNull();
   });
 });

@@ -104,7 +104,27 @@ describe('ThemeContext', () => {
       </ThemeProvider>
     );
 
-    expect(document.body.className).toBe('night');
+    expect(document.body.classList.contains('night')).toBe(true);
+  });
+
+  it('should not wipe other classes on body when toggling theme', async () => {
+    localStorage.setItem('knightmind:theme', 'night');
+    document.body.classList.add('extra-class');
+
+    render(
+      <ThemeProvider>
+        <TestConsumer />
+      </ThemeProvider>
+    );
+
+    expect(document.body.classList.contains('night')).toBe(true);
+    expect(document.body.classList.contains('extra-class')).toBe(true);
+
+    await user.click(screen.getByText('Toggle'));
+
+    expect(document.body.classList.contains('day')).toBe(true);
+    expect(document.body.classList.contains('night')).toBe(false);
+    expect(document.body.classList.contains('extra-class')).toBe(true);
   });
 
   it('should throw when useTheme is used outside provider', () => {

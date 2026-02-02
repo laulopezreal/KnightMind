@@ -45,7 +45,7 @@ export default function RatingInsights() {
     const [sessionsLoading, setSessionsLoading] = useState(false);
     const [history, setHistory] = useState<SnapshotHistoryItem[]>([]);
 
-    const fetchData = useCallback(async () => {
+    const fetchData = useCallback(async (resolvedSessionId?: string | null) => {
         if (!username) return;
         setLoading(true);
         setError(null);
@@ -53,12 +53,14 @@ export default function RatingInsights() {
             let sinceStr: string | undefined = undefined;
             let sessionId: string | undefined = undefined;
 
+            const effectiveSessionId = resolvedSessionId !== undefined ? resolvedSessionId : lastSessionId;
+
             if (windowSource === 'fallback_7d') {
                 const d = new Date();
                 d.setDate(d.getDate() - 7);
                 sinceStr = d.toISOString();
-            } else if (windowSource === 'session' && lastSessionId) {
-                sessionId = lastSessionId;
+            } else if (windowSource === 'session' && effectiveSessionId) {
+                sessionId = effectiveSessionId;
             }
 
             const [resp, historyData] = await Promise.all([
@@ -74,40 +76,50 @@ export default function RatingInsights() {
         }
     }, [username, timeControl, windowSource, lastSessionId]);
 
-    const checkSessions = useCallback(async () => {
+    // Single coordinated effect: fetch sessions first, then data with the resolved session ID.
+    // Also handles auto-switch to "Last 7 Days" when no sessions exist, to avoid a
+    // wasted fetch with the wrong windowSource.
+    useEffect(() => {
         if (!username) return;
-        setSessionsLoading(true);
-        try {
-            const sessions = await getRecentSessions(username, 1);
-            setHasSessions(sessions.length > 0);
-            setLastSessionId(sessions.length > 0 ? sessions[0].session_id : null);
-        } catch {
-            // If sessions check fails, assume no sessions exist
-            setHasSessions(false);
-            setLastSessionId(null);
-        } finally {
-            setSessionsLoading(false);
-        }
-    }, [username]);
+        let cancelled = false;
 
-    useEffect(() => {
-        if (username) {
-            fetchData();
-        }
-    }, [username, timeControl, windowSource, fetchData]);
+        async function loadAll() {
+            // 1. Check sessions
+            setSessionsLoading(true);
+            let resolvedSessionId: string | null = null;
+            let foundSessions = false;
+            try {
+                const sessions = await getRecentSessions(username, 1);
+                if (cancelled) return;
+                foundSessions = sessions.length > 0;
+                setHasSessions(foundSessions);
+                resolvedSessionId = foundSessions ? sessions[0].session_id : null;
+                setLastSessionId(resolvedSessionId);
+            } catch {
+                if (cancelled) return;
+                setHasSessions(false);
+                setLastSessionId(null);
+            } finally {
+                if (!cancelled) setSessionsLoading(false);
+            }
 
-    useEffect(() => {
-        if (username) {
-            checkSessions();
-        }
-    }, [username, checkSessions]);
+            // Auto-switch to fallback_7d when no sessions and currently on session mode.
+            // This prevents a wasted fetch with session mode when there are no sessions.
+            if (!foundSessions && windowSource === 'session') {
+                if (!cancelled) setWindowSource('fallback_7d');
+                // The windowSource change will re-trigger this effect with the correct mode.
+                return;
+            }
 
-    // Auto-switch to "Last 7 Days" when no sessions exist; persist corrected value
-    useEffect(() => {
-        if (hasSessions === false && windowSource === 'session') {
-            setWindowSource('fallback_7d');
+            // 2. Fetch data with resolved session ID
+            if (!cancelled) {
+                await fetchData(resolvedSessionId);
+            }
         }
-    }, [hasSessions, windowSource, setWindowSource]);
+
+        loadAll();
+        return () => { cancelled = true; };
+    }, [username, timeControl, windowSource, fetchData, setWindowSource]);
 
     const handleSnapshot = async () => {
         if (!username) return;

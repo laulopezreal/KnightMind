@@ -40,7 +40,7 @@ vi.mock('d3', () => ({
 
 describe('Openings', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     mockUsername = 'testplayer';
     mockGetOpenings.mockRejectedValue(new Error('Not loaded'));
   });
