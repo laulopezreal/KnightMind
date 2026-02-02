@@ -1,7 +1,8 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceDot } from 'recharts';
 import { useChessUsername } from '../context/ChessUsernameContext';
-import { createSnapshot, getRatingExplain, type ExplainResponse, type HighlightGame, type SnapshotResponse } from '../api/ratings';
+import { createSnapshot, getRatingExplain, getRatingHistory, type ExplainResponse, type HighlightGame, type SnapshotResponse, type SnapshotHistoryItem } from '../api/ratings';
 import { getRecentSessions } from '../api/sessions';
 
 const LS_KEYS = {
@@ -42,6 +43,7 @@ export default function RatingInsights() {
     const [hasSessions, setHasSessions] = useState<boolean | null>(null);
     const [lastSessionId, setLastSessionId] = useState<string | null>(null);
     const [sessionsLoading, setSessionsLoading] = useState(false);
+    const [history, setHistory] = useState<SnapshotHistoryItem[]>([]);
 
     const fetchData = useCallback(async () => {
         if (!username) return;
@@ -59,8 +61,12 @@ export default function RatingInsights() {
                 sessionId = lastSessionId;
             }
 
-            const resp = await getRatingExplain(username, timeControl, sessionId, sinceStr);
+            const [resp, historyData] = await Promise.all([
+                getRatingExplain(username, timeControl, sessionId, sinceStr),
+                getRatingHistory(username, timeControl),
+            ]);
             setData(resp);
+            setHistory(historyData);
         } catch (err) {
             setError(err instanceof Error ? err.message : 'Failed to load insights');
         } finally {
@@ -351,6 +357,52 @@ export default function RatingInsights() {
                                     </span>
                                 )}
                             </div>
+
+                            {/* Rating Trend Chart */}
+                            {history.length >= 2 && (
+                                <section className="p-6 bg-primary/5 rounded-sm border border-primary/10">
+                                    <h2 className="text-sm font-sans uppercase tracking-widest text-primary/40 mb-4">Rating Over Time</h2>
+                                    <ResponsiveContainer width="100%" height={220}>
+                                        <LineChart data={history.map(h => ({
+                                            date: new Date(h.recorded_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
+                                            rating: h.rating,
+                                        }))}>
+                                            <XAxis dataKey="date" tick={{ fontSize: 11 }} stroke="currentColor" strokeOpacity={0.2} />
+                                            <YAxis domain={['dataMin - 20', 'dataMax + 20']} tick={{ fontSize: 11 }} stroke="currentColor" strokeOpacity={0.2} width={45} />
+                                            <Tooltip
+                                                contentStyle={{ fontSize: 12, borderRadius: 4, border: '1px solid rgba(0,0,0,0.1)' }}
+                                                labelStyle={{ fontWeight: 600 }}
+                                            />
+                                            <Line
+                                                type="monotone"
+                                                dataKey="rating"
+                                                stroke={
+                                                    history[history.length - 1].rating >= history[0].rating
+                                                        ? '#059669'
+                                                        : '#ef4444'
+                                                }
+                                                strokeWidth={2}
+                                                dot={false}
+                                                activeDot={{ r: 4 }}
+                                            />
+                                            <ReferenceDot
+                                                x={new Date(history[0].recorded_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+                                                y={history[0].rating}
+                                                r={4}
+                                                fill="currentColor"
+                                                fillOpacity={0.4}
+                                            />
+                                            <ReferenceDot
+                                                x={new Date(history[history.length - 1].recorded_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+                                                y={history[history.length - 1].rating}
+                                                r={4}
+                                                fill="currentColor"
+                                                fillOpacity={0.8}
+                                            />
+                                        </LineChart>
+                                    </ResponsiveContainer>
+                                </section>
+                            )}
 
                             {/* Summary Cards */}
                             <section className="grid grid-cols-1 md:grid-cols-4 gap-6">
