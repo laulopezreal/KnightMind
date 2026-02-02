@@ -5,6 +5,7 @@ Handles motif assignment, title generation, and backfilling identity data.
 """
 import logging
 from sqlalchemy import select
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from services.api.models import PuzzleStats
@@ -57,11 +58,17 @@ def backfill_puzzle_identity(db: Session):
     Only updates records where title is NULL.
     """
     logger.info("Starting puzzle identity backfill check...")
-    
-    # query all stats where title is NULL
-    stmt = select(PuzzleStats).where(PuzzleStats.title.is_(None))
-    stats_to_update = db.scalars(stmt).all()
-    
+
+    try:
+        # query all stats where title is NULL
+        stmt = select(PuzzleStats).where(PuzzleStats.title.is_(None))
+        stats_to_update = db.scalars(stmt).all()
+    except OperationalError:
+        # Table may not exist yet (e.g. in test environments or before migrations)
+        logger.warning("puzzle_stats table not available, skipping backfill.")
+        db.rollback()
+        return
+
     if not stats_to_update:
         logger.info("No puzzles need identity backfill.")
         return
@@ -72,17 +79,17 @@ def backfill_puzzle_identity(db: Session):
     for stats in stats_to_update:
         # Load puzzle data to (potentially) determine motif
         puzzle = puzzle_repository.get_puzzle(stats.username, stats.puzzle_id)
-        
+
         # Determine motif
         motif = assign_primary_motif(puzzle)
-        
+
         # Generate title
         title = generate_puzzle_title(motif)
-        
+
         # Update DB
         stats.primary_motif = motif
         stats.title = title
         count += 1
-    
+
     db.commit()
     logger.info(f"Backfilled identity for {count} puzzles.")
