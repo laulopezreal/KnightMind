@@ -129,6 +129,18 @@ class RatingSnapshot(Base):
     session_id: Mapped[str] = mapped_column(String, nullable=True, index=True)  # FK to training_sessions.id logical
 
 
+class ProblemReport(Base):
+    __tablename__ = "problem_reports"
+    __table_args__ = {"extend_existing": True}
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    category: Mapped[str] = mapped_column(String, nullable=False)  # "bug", "feature", "feedback"
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    page: Mapped[str] = mapped_column(String, nullable=True)  # Route where report was filed
+    username: Mapped[str] = mapped_column(String, nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
 class Game(Base):
     __tablename__ = "games"
     __table_args__ = (
