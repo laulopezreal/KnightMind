@@ -7,7 +7,9 @@ from datetime import datetime, timezone, timedelta
 from sqlalchemy.orm import Session
 from sqlalchemy import select, func
 from services.api.models import PuzzleStats, PuzzleReview, PuzzleResult
+from services.api.models import PuzzleStats, PuzzleReview, PuzzleResult
 from services.api.puzzles.identity import assign_primary_motif, generate_puzzle_title
+from services.api.storage import PuzzleRepository
 
 
 def calculate_next_interval(
