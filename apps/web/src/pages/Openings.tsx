@@ -4,6 +4,25 @@ import * as d3 from 'd3';
 import { getOpenings, ApiError, type OpeningNode, type ColorFilter } from '../api';
 import { useChessUsername } from '../context/ChessUsernameContext';
 
+function countLeaves(node: OpeningNode): number {
+  if (!node.children || node.children.length === 0) return 1;
+  return node.children.reduce((sum, child) => sum + countLeaves(child), 0);
+}
+
+function getMaxDepth(node: OpeningNode, depth = 0): number {
+  if (!node.children || node.children.length === 0) return depth;
+  return Math.max(...node.children.map((child) => getMaxDepth(child, depth + 1)));
+}
+
+function getWinRateColor(winRate: number): string {
+  if (winRate >= 60) return '#059669';
+  if (winRate >= 50) return '#10B981';
+  if (winRate >= 45) return '#84CC16';
+  if (winRate >= 40) return '#EAB308';
+  if (winRate >= 30) return '#F97316';
+  return '#EF4444';
+}
+
 export default function Openings() {
   const svgRef = useRef<SVGSVGElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -42,25 +61,7 @@ export default function Openings() {
     fetchOpenings(username, colorFilter);
   };
 
-  // Auto-fetch when page loads with username or when username/color filter changes
-  useEffect(() => {
-    if (username.trim()) {
-      fetchOpenings(username, colorFilter);
-    }
-  }, [username, colorFilter, fetchOpenings]);
-
-  useEffect(() => {
-    if (!treeData || !svgRef.current) return;
-    try {
-      renderTree(treeData);
-      setError((prev) => (prev?.startsWith('Failed to draw') ? null : prev));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to draw opening tree.');
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [treeData]);
-
-  const renderTree = (data: OpeningNode) => {
+  const renderTree = useCallback((data: OpeningNode) => {
     if (!svgRef.current) return;
     const leafCount = countLeaves(data);
     const maxDepth = getMaxDepth(data);
@@ -139,27 +140,24 @@ export default function Openings() {
       .attr('font-family', 'Inter, sans-serif')
       .attr('font-weight', '500')
       .text(d => d.data.move_san === 'Start' ? '●' : d.data.move_san);
-  };
+  }, [setError, setTooltip]);
 
-  const countLeaves = (node: OpeningNode): number => {
-    if (!node.children || node.children.length === 0) return 1;
-    return node.children.reduce((sum, child) => sum + countLeaves(child), 0);
-  };
+  // Auto-fetch when page loads with username or when username/color filter changes
+  useEffect(() => {
+    if (username.trim()) {
+      fetchOpenings(username, colorFilter);
+    }
+  }, [username, colorFilter, fetchOpenings]);
 
-  const getMaxDepth = (node: OpeningNode, depth = 0): number => {
-    if (!node.children || node.children.length === 0) return depth;
-    return Math.max(...node.children.map(child => getMaxDepth(child, depth + 1)));
-  };
-
-  const getWinRateColor = (winRate: number): string => {
-    // Elegant Muted Palette for stats
-    if (winRate >= 60) return '#059669'; // Emerald 600
-    if (winRate >= 50) return '#10B981'; // Emerald 500
-    if (winRate >= 45) return '#84CC16'; // Lime 500
-    if (winRate >= 40) return '#EAB308'; // Yellow 500
-    if (winRate >= 30) return '#F97316'; // Orange 500
-    return '#EF4444'; // Red 500
-  };
+  useEffect(() => {
+    if (!treeData || !svgRef.current) return;
+    try {
+      renderTree(treeData);
+      setError((prev) => (prev?.startsWith('Failed to draw') ? null : prev));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to draw opening tree.');
+    }
+  }, [treeData, renderTree]);
 
   return (
     <div className="space-y-12 animate-teedin">
