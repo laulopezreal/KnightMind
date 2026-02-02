@@ -776,7 +776,9 @@ def test_engine_eval_unavailable(mock_eval):
 # --- Tricky Puzzles Endpoint Tests ---
 
 
-def _create_puzzle_stats(db_session, puzzle_id, username, fail_count, last_reviewed_at=None, title=None):
+_SENTINEL = object()
+
+def _create_puzzle_stats(db_session, puzzle_id, username, fail_count, last_reviewed_at=None, title=_SENTINEL):
     """Helper to create a PuzzleStats record with required Puzzle and Game parents."""
     from services.api.models import Game, Puzzle as PuzzleModel
     game_id = f"game-{puzzle_id}"
@@ -816,7 +818,7 @@ def _create_puzzle_stats(db_session, puzzle_id, username, fail_count, last_revie
     db_session.add(PuzzleStats(
         puzzle_id=puzzle_id,
         username=username,
-        title=title or f"Puzzle {puzzle_id}",
+        title=f"Puzzle {puzzle_id}" if title is _SENTINEL else title,
         attempts=fail_count + 1,
         pass_count=1,
         fail_count=fail_count,
