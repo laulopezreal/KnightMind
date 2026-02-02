@@ -187,8 +187,8 @@ async def _auto_snapshot(username: str, session_id: str, db: Session) -> None:
     """Best-effort: record rating snapshots for common time controls on session complete."""
     try:
         stats = await get_player_stats(username)
-    except Exception:
-        logger.debug("Auto-snapshot: could not fetch Chess.com stats for %s", username)
+    except Exception as e:
+        logger.debug("Auto-snapshot: could not fetch Chess.com stats for %s: %s", username, e)
         return
 
     now = datetime.now(timezone.utc)
