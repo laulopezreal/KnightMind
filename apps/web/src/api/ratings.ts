@@ -42,7 +42,7 @@ export interface DriverStats {
     avg_opponent_rating: number | null;
     expected_total: number | null;
     actual_total: number | null;
-    expected_minus_actual: number | null;
+    actual_minus_expected: number | null;
     missing_opponent_rating_games: number;
 }
 
