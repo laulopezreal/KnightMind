@@ -1,13 +1,8 @@
-import { useState, useEffect } from 'react';
+import { useTheme } from '../context/ThemeContext';
 
 export default function ThemeToggle() {
-    const [isNight, setIsNight] = useState(true);
-
-    useEffect(() => {
-        document.body.className = isNight ? 'night' : 'day';
-    }, [isNight]);
-
-    const toggleTheme = () => setIsNight(!isNight);
+    const { theme, toggleTheme } = useTheme();
+    const isNight = theme === 'night';
 
     return (
         <div
