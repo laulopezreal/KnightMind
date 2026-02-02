@@ -145,6 +145,24 @@ export default function RatingInsights() {
         }
     }, [latestSnapshot]);
 
+    // Memoize chart data to avoid re-creating objects on every render.
+    // Uses index-based labels to guarantee unique X-axis keys even when
+    // multiple snapshots fall on the same calendar day.
+    const chartData = useMemo(() => {
+        const dateCounts = new Map<string, number>();
+        return history.map(h => {
+            const base = new Date(h.recorded_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+            const count = (dateCounts.get(base) ?? 0) + 1;
+            dateCounts.set(base, count);
+            return { label: count > 1 ? `${base} (${count})` : base, rating: h.rating };
+        });
+    }, [history]);
+
+    const chartTrendColor = useMemo(() => {
+        if (history.length < 2) return '#059669';
+        return history[history.length - 1].rating >= history[0].rating ? '#059669' : '#ef4444';
+    }, [history]);
+
     if (!username) {
         return (
             <div className="h-full flex flex-col justify-center items-center space-y-4">
@@ -181,24 +199,6 @@ export default function RatingInsights() {
         : confidence === 'medium'
         ? { label: 'Medium confidence', color: 'bg-amber-500/10 text-amber-600' }
         : { label: 'High confidence', color: 'bg-emerald-500/10 text-emerald-600' };
-
-    // Memoize chart data to avoid re-creating objects on every render.
-    // Uses index-based labels to guarantee unique X-axis keys even when
-    // multiple snapshots fall on the same calendar day.
-    const chartData = useMemo(() => {
-        const dateCounts = new Map<string, number>();
-        return history.map(h => {
-            const base = new Date(h.recorded_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-            const count = (dateCounts.get(base) ?? 0) + 1;
-            dateCounts.set(base, count);
-            return { label: count > 1 ? `${base} (${count})` : base, rating: h.rating };
-        });
-    }, [history]);
-
-    const chartTrendColor = useMemo(() => {
-        if (history.length < 2) return '#059669';
-        return history[history.length - 1].rating >= history[0].rating ? '#059669' : '#ef4444';
-    }, [history]);
 
     return (
         <div className="space-y-12 animate-teedin pb-20">
