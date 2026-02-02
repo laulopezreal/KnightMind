@@ -40,6 +40,7 @@ export default function RatingInsights() {
         localStorage.setItem(LS_KEYS.RATINGS_WINDOW, value === 'session' ? 'since_session' : 'last_7_days');
     }, []);
     const [hasSessions, setHasSessions] = useState<boolean | null>(null);
+    const [lastSessionId, setLastSessionId] = useState<string | null>(null);
     const [sessionsLoading, setSessionsLoading] = useState(false);
 
     const fetchData = useCallback(async () => {
@@ -48,21 +49,24 @@ export default function RatingInsights() {
         setError(null);
         try {
             let sinceStr: string | undefined = undefined;
+            let sessionId: string | undefined = undefined;
 
             if (windowSource === 'fallback_7d') {
                 const d = new Date();
                 d.setDate(d.getDate() - 7);
                 sinceStr = d.toISOString();
+            } else if (windowSource === 'session' && lastSessionId) {
+                sessionId = lastSessionId;
             }
 
-            const resp = await getRatingExplain(username, timeControl, undefined, sinceStr);
+            const resp = await getRatingExplain(username, timeControl, sessionId, sinceStr);
             setData(resp);
         } catch (err) {
             setError(err instanceof Error ? err.message : 'Failed to load insights');
         } finally {
             setLoading(false);
         }
-    }, [username, timeControl, windowSource]);
+    }, [username, timeControl, windowSource, lastSessionId]);
 
     const checkSessions = useCallback(async () => {
         if (!username) return;
@@ -70,9 +74,11 @@ export default function RatingInsights() {
         try {
             const sessions = await getRecentSessions(username, 1);
             setHasSessions(sessions.length > 0);
+            setLastSessionId(sessions.length > 0 ? sessions[0].session_id : null);
         } catch {
             // If sessions check fails, assume no sessions exist
             setHasSessions(false);
+            setLastSessionId(null);
         } finally {
             setSessionsLoading(false);
         }
