@@ -1,4 +1,5 @@
-import { createContext, useContext, useState, type ReactNode } from 'react';
+import { createContext, useContext, type ReactNode } from 'react';
+import { useLocalStorage } from '../hooks/useLocalStorage';
 
 type SessionType = 'standard' | 'timed' | 'accuracy_goal';
 
@@ -14,46 +15,24 @@ interface PuzzleModeContextType {
 const PuzzleModeContext = createContext<PuzzleModeContextType | undefined>(undefined);
 
 export function PuzzleModeProvider({ children }: { children: ReactNode }) {
-    // Initialize from localStorage (same pattern as ChessUsernameContext)
-    const [sessionType, setSessionTypeState] = useState<SessionType>(() => {
-        if (typeof window !== 'undefined') {
-            const saved = localStorage.getItem('knightmind:puzzle_mode');
-            return (saved as SessionType) || 'standard';
-        }
-        return 'standard';
-    });
+    // Use custom useLocalStorage hook to reduce boilerplate
+    const [sessionType, setSessionType] = useLocalStorage<SessionType>(
+        'knightmind:puzzle_mode',
+        'standard',
+        (value) => value as SessionType
+    );
 
-    const [targetAccuracy, setTargetAccuracyState] = useState(() => {
-        if (typeof window !== 'undefined') {
-            const saved = localStorage.getItem('knightmind:target_accuracy');
-            return saved ? parseInt(saved, 10) : 80;
-        }
-        return 80;
-    });
+    const [targetAccuracy, setTargetAccuracy] = useLocalStorage<number>(
+        'knightmind:target_accuracy',
+        80,
+        (value) => parseInt(value, 10)
+    );
 
-    const [targetTimeMinutes, setTargetTimeMinutesState] = useState(() => {
-        if (typeof window !== 'undefined') {
-            const saved = localStorage.getItem('knightmind:target_time_minutes');
-            return saved ? parseInt(saved, 10) : 10;
-        }
-        return 10;
-    });
-
-    // Persist to localStorage (same pattern as ChessUsernameContext)
-    const setSessionType = (type: SessionType) => {
-        localStorage.setItem('knightmind:puzzle_mode', type);
-        setSessionTypeState(type);
-    };
-
-    const setTargetAccuracy = (n: number) => {
-        localStorage.setItem('knightmind:target_accuracy', n.toString());
-        setTargetAccuracyState(n);
-    };
-
-    const setTargetTimeMinutes = (n: number) => {
-        localStorage.setItem('knightmind:target_time_minutes', n.toString());
-        setTargetTimeMinutesState(n);
-    };
+    const [targetTimeMinutes, setTargetTimeMinutes] = useLocalStorage<number>(
+        'knightmind:target_time_minutes',
+        10,
+        (value) => parseInt(value, 10)
+    );
 
     return (
         <PuzzleModeContext.Provider
