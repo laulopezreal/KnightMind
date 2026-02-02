@@ -10,12 +10,12 @@ import { AchievementsList } from '../components/AchievementsList';
 import { RecentSessionsCard } from '../components/RecentSessionsCard';
 import { useJobPolling } from '../hooks/useJobPolling';
 import { useChessUsername } from '../context/ChessUsernameContext';
+import { usePuzzleMode } from '../context/PuzzleModeContext';
 import { parseBestMoveUci, getPieceNameAtSquare } from '../utils/puzzle-clue';
 
 type PuzzleStatus = 'solving' | 'correct' | 'incorrect' | 'revealed';
 type ClueStage = 0 | 1 | 2;
 type SessionState = 'idle' | 'loading' | 'active' | 'completing' | 'completed' | 'error';
-type SessionType = 'standard' | 'timed' | 'accuracy_goal';
 
 const calculateAccuracy = (passCount: number, failCount: number): number => {
     const total = passCount + failCount;
@@ -80,6 +80,7 @@ const ACHIEVEMENTS: Achievement[] = [
 
 export default function Puzzles() {
     const { username, setEditorOpen } = useChessUsername();
+    const { sessionType, targetAccuracy, setTargetAccuracy, targetTimeMinutes, setTargetTimeMinutes } = usePuzzleMode();
     const navigate = useNavigate();
     const [puzzles, setPuzzles] = useState<Puzzle[]>([]);
     const [currentIndex, setCurrentIndex] = useState(0);
@@ -106,11 +107,6 @@ export default function Puzzles() {
     const [isResumingSession, setIsResumingSession] = useState(false);
     const [sessionState, setSessionState] = useState<SessionState>('idle');
     const [clueStage, setClueStage] = useState<ClueStage>(0);
-
-    // Enhanced session features
-    const [sessionType, setSessionType] = useState<SessionType>('standard');
-    const [targetAccuracy, setTargetAccuracy] = useState<number>(80);
-    const [targetTimeMinutes, setTargetTimeMinutes] = useState<number>(10);
     const [puzzleStartTime, setPuzzleStartTime] = useState<number | null>(null);
     const [streak, setStreak] = useState(0);
     const [bestStreak, setBestStreak] = useState(0);
@@ -1103,8 +1099,9 @@ export default function Puzzles() {
             </section>
 
             {/* Controls */}
-            <section className="bg-primary/5 border border-primary/10 rounded-sm p-6 backdrop-blur-sm">
-                <div className="flex flex-col md:flex-row gap-6 relative items-end">
+            <section className="bg-primary/5 border border-primary/10 rounded-sm p-6 backdrop-blur-sm space-y-6">
+                {/* Top row: Username and buttons */}
+                <div className="flex flex-col md:flex-row gap-6 items-end">
                     <div className="flex-1 relative min-w-[300px]">
                         {!username ? (
                             <div className="h-full flex items-center">
@@ -1123,54 +1120,22 @@ export default function Puzzles() {
                             </div>
                         )}
                     </div>
-                    <div className="flex gap-4">
+                    <div className="flex gap-4 flex-wrap">
                         {!activeSessionId && (
-                            <>
-                                <select
-                                    value={sessionType}
-                                    onChange={(e) => setSessionType(e.target.value as SessionType)}
-                                    className="px-3 py-2 border border-primary/20 rounded-sm bg-bg-primary text-primary"
-                                >
-                                    <option value="standard">Standard</option>
-                                    <option value="timed">Timed</option>
-                                    <option value="accuracy_goal">Accuracy Goal</option>
-                                </select>
-                                {sessionType === 'accuracy_goal' && (
-                                    <input
-                                        type="number"
-                                        min="50"
-                                        max="100"
-                                        value={targetAccuracy}
-                                        onChange={(e) => setTargetAccuracy(Number(e.target.value))}
-                                        className="px-3 py-2 border border-primary/20 rounded-sm bg-bg-primary text-primary w-24"
-                                        placeholder="Accuracy %"
-                                    />
-                                )}
-                                {sessionType === 'timed' && (
-                                    <input
-                                        type="number"
-                                        min="1"
-                                        max="60"
-                                        value={targetTimeMinutes}
-                                        onChange={(e) => setTargetTimeMinutes(Number(e.target.value))}
-                                        className="px-3 py-2 border border-primary/20 rounded-sm bg-bg-primary text-primary w-24"
-                                        placeholder="Minutes"
-                                    />
-                                )}
-                                <button
-                                    type="button"
-                                    onClick={handleStartSession}
-                                    disabled={controlsDisabled || !userStatus || userStatus.puzzles_count === 0 || userStatus.due_count === 0}
-                                    title={
-                                        !username ? 'Set username to continue' :
-                                        userStatus?.puzzles_count === 0 ? 'Generate puzzles first' :
-                                        userStatus?.due_count === 0 ? 'No puzzles due for review right now' :
-                                        'Start a new training session'
-                                    }
-                                    className={`px-6 py-2 bg-accent text-bg-primary rounded-sm font-serif transition-colors km-focus-visible ${(controlsDisabled || !userStatus || userStatus.puzzles_count === 0 || userStatus.due_count === 0) ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'}`}>
-                                    Start Session
-                                </button>
-                            </>
+                            <button
+                                type="button"
+                                onClick={handleStartSession}
+                                disabled={controlsDisabled || !userStatus || userStatus.puzzles_count === 0 || userStatus.due_count === 0 || sessionType !== 'standard'}
+                                title={
+                                    !username ? 'Set username to continue' :
+                                    userStatus?.puzzles_count === 0 ? 'Generate puzzles first' :
+                                    userStatus?.due_count === 0 ? 'No puzzles due for review right now' :
+                                    sessionType !== 'standard' ? '🚧 This mode is coming soon! Only Standard mode is available currently.' :
+                                    'Start a new training session'
+                                }
+                                className={`px-6 py-2 bg-accent text-bg-primary rounded-sm font-serif transition-colors km-focus-visible ${(controlsDisabled || !userStatus || userStatus.puzzles_count === 0 || userStatus.due_count === 0 || sessionType !== 'standard') ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'}`}>
+                                Start Session
+                            </button>
                         )}
                         <button
                             type="button"
@@ -1201,24 +1166,73 @@ export default function Puzzles() {
                             {isGenerating ? 'Generating...' : 'Generate New'}
                         </button>
                     </div>
-
-                    {/* Status Indicator for Generate New availability */}
-                    {username && userStatus && !isLoadingStatus && (
-                        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm font-sans text-primary/60 mt-4">
-                            <span>Games: {userStatus.games_count}</span>
-                            <span>Puzzles: {userStatus.puzzles_count}</span>
-                            {userStatus.has_new_games ? (
-                                <span className="text-green-600">
-                                    ✓ New games available for puzzles
-                                </span>
-                            ) : userStatus.games_count > 0 ? (
-                                <span className="text-primary/40">
-                                    All games used for puzzles
-                                </span>
-                            ) : null}
-                        </div>
-                    )}
                 </div>
+
+                {/* User status - full width below buttons */}
+                {username && userStatus && !isLoadingStatus && (
+                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm font-sans text-primary/60">
+                        <span>Games: {userStatus.games_count}</span>
+                        <span>Puzzles: {userStatus.puzzles_count}</span>
+                        {userStatus.has_new_games ? (
+                            <span className="text-green-600">
+                                ✓ New games available for puzzles
+                            </span>
+                        ) : userStatus.games_count > 0 ? (
+                            <span className="text-primary/40">
+                                All games used for puzzles
+                            </span>
+                        ) : null}
+                    </div>
+                )}
+
+                {/* Mode Information Cards - full width below user status */}
+                {!activeSessionId && (
+                    <>
+                        {sessionType === 'standard' ? (
+                            <div className="p-4 bg-primary/5 border border-primary/20 rounded-sm">
+                                <p className="text-sm text-primary/60 font-sans">
+                                    <strong className="font-medium">Standard mode</strong> uses spaced repetition to help you master tactical patterns from your own games.
+                                    Complete 5 puzzles per session with immediate feedback on each move.
+                                </p>
+                            </div>
+                        ) : (
+                            <div className="p-4 bg-primary/5 border border-primary/20 rounded-sm">
+                                <p className="text-sm text-primary/60 font-sans mb-3">
+                                    🚧 <strong className="font-medium">{sessionType === 'timed' ? 'Timed' : 'Accuracy Goal'} mode</strong> is currently in development.
+                                    Try it out by adjusting the settings, but sessions can only be started in Standard mode for now.
+                                </p>
+                                {sessionType === 'timed' && (
+                                    <div className="flex items-center gap-2">
+                                        <label className="text-sm text-primary/60 font-sans">Duration:</label>
+                                        <input
+                                            type="number"
+                                            min="1"
+                                            max="60"
+                                            value={targetTimeMinutes}
+                                            onChange={(e) => setTargetTimeMinutes(Number(e.target.value))}
+                                            className="px-3 py-2 border border-primary/20 rounded-sm bg-bg-primary text-primary w-20"
+                                        />
+                                        <span className="text-sm text-primary/60 font-sans">minutes</span>
+                                    </div>
+                                )}
+                                {sessionType === 'accuracy_goal' && (
+                                    <div className="flex items-center gap-2">
+                                        <label className="text-sm text-primary/60 font-sans">Target accuracy:</label>
+                                        <input
+                                            type="number"
+                                            min="50"
+                                            max="100"
+                                            value={targetAccuracy}
+                                            onChange={(e) => setTargetAccuracy(Number(e.target.value))}
+                                            className="px-3 py-2 border border-primary/20 rounded-sm bg-bg-primary text-primary w-20"
+                                        />
+                                        <span className="text-sm text-primary/60 font-sans">%</span>
+                                    </div>
+                                )}
+                            </div>
+                        )}
+                    </>
+                )}
 
                 {/* Job Status / Error Area */}
                 <div className="mt-6">
