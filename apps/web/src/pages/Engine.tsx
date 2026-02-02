@@ -176,7 +176,7 @@ const bestMoveParsed = useMemo(
       return { [bestMoveParsed.from]: CLUE_HIGHLIGHT_STYLE, [bestMoveParsed.to]: CLUE_HIGHLIGHT_STYLE };
     }
     return { [bestMoveParsed.from]: CLUE_HIGHLIGHT_STYLE };
-  }, [clueStage, bestMoveParsed]);
+  }, [clueStage, bestMoveParsed, CLUE_HIGHLIGHT_STYLE]);
 
   return (
     <div className="space-y-12 animate-teedin">

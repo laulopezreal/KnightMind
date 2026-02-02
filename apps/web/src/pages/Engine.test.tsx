@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { Chess } from 'chess.js';
 import Engine from './Engine';
 import { evaluateFen, getEngineStatus } from '../api';
 
@@ -12,11 +11,11 @@ vi.mock('../api', () => ({
 }));
 
 vi.mock('react-router-dom', () => ({
-  Link: ({ children, ...props }: any) => <a {...props}>{children}</a>,
+  Link: ({ children, ...props }: { children: React.ReactNode; [key: string]: unknown }) => <a {...props}>{children}</a>,
 }));
 
 vi.mock('react-chessboard', () => ({
-  Chessboard: ({ options }: any) => (
+  Chessboard: ({ options }: { options: unknown }) => (
     <div data-testid="chessboard" data-options={JSON.stringify(options)}>
       Chessboard
     </div>
@@ -388,7 +387,7 @@ describe('Engine - Clue Functionality', () => {
 
   describe('Error Handling', () => {
     it('should handle undefined bestMove gracefully', async () => {
-      mockEvaluateFen.mockResolvedValue({ best_move_uci: undefined as any, eval: 0.5 });
+      mockEvaluateFen.mockResolvedValue({ best_move_uci: undefined as string | undefined, eval: 0.5 });
 
       render(<Engine />);
 

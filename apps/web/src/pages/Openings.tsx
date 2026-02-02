@@ -140,7 +140,7 @@ export default function Openings() {
       .attr('font-family', 'Inter, sans-serif')
       .attr('font-weight', '500')
       .text(d => d.data.move_san === 'Start' ? '●' : d.data.move_san);
-  }, [setError, setTooltip]);
+  }, [setTooltip]);
 
   // Auto-fetch when page loads with username or when username/color filter changes
   useEffect(() => {

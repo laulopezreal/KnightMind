@@ -71,7 +71,7 @@ export default function Ops() {
         const interval = setInterval(fetchData, 5000);
         fetchUsers();
         return () => clearInterval(interval);
-    }, [fetchData]);
+    }, [fetchData, fetchUsers]);
 
     useEffect(() => {
         fetchStorageReport(selectedUser || undefined);
