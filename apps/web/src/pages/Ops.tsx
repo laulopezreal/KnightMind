@@ -1,12 +1,30 @@
-import { useState, useEffect } from 'react';
-import { getHealth, getOpsStatus, ApiError } from '../api';
-import type { HealthResponse, OpsStatusResponse, RecentJob } from '../api';
+import { useState, useEffect, useCallback } from 'react';
+import { getHealth, getOpsStatus, getStorageReport, getUsers, ApiError } from '../api';
+import type { HealthResponse, OpsStatusResponse, RecentJob, StorageReportResponse } from '../api';
+import { useChessUsername } from '../context/ChessUsernameContext';
 
 export default function Ops() {
     const [health, setHealth] = useState<HealthResponse | null>(null);
     const [opsStatus, setOpsStatus] = useState<OpsStatusResponse | null>(null);
+    const [storageReport, setStorageReport] = useState<StorageReportResponse | null>(null);
+    const [storageLoading, setStorageLoading] = useState(false);
+    const [storageError, setStorageError] = useState<string | null>(null);
+    const [users, setUsers] = useState<string[]>([]);
+    const [usersError, setUsersError] = useState<string | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
+    const { username, setUsername } = useChessUsername();
+    const [selectedUser, setSelectedUser] = useState(username);
+
+    const getErrorMessage = (err: unknown, fallback: string) => {
+        if (err instanceof ApiError) {
+            return err.detail || err.message;
+        }
+        if (err instanceof Error) {
+            return err.message;
+        }
+        return fallback;
+    };
 
     const fetchData = async () => {
         try {
@@ -16,25 +34,55 @@ export default function Ops() {
             setError(null);
         } catch (err) {
             console.error('Failed to fetch ops data:', err);
-            let msg = 'Check if API is running and proxy is correctly configured.';
-
-            if (err instanceof ApiError) {
-                msg = err.detail || err.message;
-            } else if (err instanceof Error) {
-                msg = err.message;
-            }
-
+            const msg = getErrorMessage(err, 'Check if API is running and proxy is correctly configured.');
             setError(`Failed to load operational data: ${msg}`);
         } finally {
             setLoading(false);
         }
     };
 
+    const fetchUsers = async () => {
+        try {
+            const list = await getUsers();
+            setUsers(list);
+            setUsersError(null);
+        } catch (err) {
+            console.error('Failed to fetch users:', err);
+            setUsersError(getErrorMessage(err, 'Unable to load users.'));
+        }
+    };
+
+    const fetchStorageReport = useCallback(async (filterUser?: string) => {
+        try {
+            setStorageLoading(true);
+            const report = await getStorageReport(filterUser);
+            setStorageReport(report);
+            setStorageError(null);
+        } catch (err) {
+            console.error('Failed to fetch storage report:', err);
+            setStorageError(getErrorMessage(err, 'Unable to load report.'));
+        } finally {
+            setStorageLoading(false);
+        }
+    }, []);
+
     useEffect(() => {
         fetchData();
         const interval = setInterval(fetchData, 5000);
         return () => clearInterval(interval);
     }, []);
+
+    useEffect(() => {
+        fetchUsers();
+    }, []);
+
+    useEffect(() => {
+        fetchStorageReport(selectedUser || undefined);
+    }, [selectedUser, fetchStorageReport]);
+
+    useEffect(() => {
+        setSelectedUser(username);
+    }, [username]);
 
     if (loading && !opsStatus) {
         return (
@@ -56,6 +104,8 @@ export default function Ops() {
         health.worker !== 'ok' && 'Worker',
         health.stockfish !== 'ok' && 'Stockfish',
     ].filter(Boolean).join(', ') : null;
+    const reportEntries = storageReport ? Object.entries(storageReport.report) : [];
+    const canSetUser = selectedUser && selectedUser !== username;
 
     return (
         <div className="w-full font-sans text-primary/80 space-y-12 pb-20">
@@ -85,6 +135,105 @@ export default function Ops() {
                 </div>
             )}
 
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <section className="bg-primary/5 border border-primary/10 rounded-sm p-6 space-y-4 backdrop-blur-sm">
+                    <div className="flex items-center justify-between">
+                        <div>
+                            <h2 className="font-serif text-xl text-primary">User Switcher</h2>
+                            <p className="text-xs text-primary/50">Admin-only: quickly swap the active username.</p>
+                        </div>
+                        <button
+                            type="button"
+                            onClick={() => fetchUsers()}
+                            className="text-[10px] uppercase tracking-widest border border-primary/20 px-3 py-1 rounded-sm km-interactive km-focus-visible"
+                        >
+                            Refresh
+                        </button>
+                    </div>
+                    <div className="space-y-3">
+                        <label className="text-[10px] uppercase tracking-widest text-primary/50">Active user</label>
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                            <select
+                                value={selectedUser}
+                                onChange={(event) => setSelectedUser(event.target.value)}
+                                className="w-full bg-transparent border border-primary/20 py-2 px-3 text-primary focus:outline-none focus:border-primary/60 transition-colors font-sans text-sm rounded-sm"
+                            >
+                                <option value="">Select a user</option>
+                                {users.map(user => (
+                                    <option key={user} value={user}>{user}</option>
+                                ))}
+                            </select>
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    if (canSetUser) {
+                                        setUsername(selectedUser);
+                                    }
+                                }}
+                                disabled={!canSetUser}
+                                className="px-4 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-colors disabled:opacity-50 km-focus-visible"
+                            >
+                                Set Active
+                            </button>
+                        </div>
+                        {usersError && <p className="text-xs text-red-500/70">{usersError}</p>}
+                        {!usersError && users.length === 0 && (
+                            <p className="text-xs text-primary/40">No users found yet.</p>
+                        )}
+                    </div>
+                </section>
+
+                <section className="bg-primary/5 border border-primary/10 rounded-sm p-6 space-y-4 backdrop-blur-sm">
+                    <div className="flex items-center justify-between">
+                        <div>
+                            <h2 className="font-serif text-xl text-primary">Data Integrity</h2>
+                            <p className="text-xs text-primary/50">Storage parity between filesystem and database.</p>
+                        </div>
+                        <button
+                            type="button"
+                            onClick={() => fetchStorageReport(selectedUser || undefined)}
+                            className="text-[10px] uppercase tracking-widest border border-primary/20 px-3 py-1 rounded-sm km-interactive km-focus-visible"
+                        >
+                            Refresh
+                        </button>
+                    </div>
+                    <div className="text-xs text-primary/50">
+                        Showing: {selectedUser ? selectedUser : 'All users'}
+                    </div>
+                    {storageLoading && (
+                        <div className="text-xs text-primary/40 animate-pulse">Loading report...</div>
+                    )}
+                    {storageError && (
+                        <div className="text-xs text-red-500/70">{storageError}</div>
+                    )}
+                    {!storageLoading && !storageError && reportEntries.length === 0 && (
+                        <div className="text-xs text-primary/40">No storage report data available.</div>
+                    )}
+                    {!storageLoading && !storageError && reportEntries.length > 0 && (
+                        <div className="space-y-3">
+                            {reportEntries.map(([user, report]) => (
+                                <div key={user} className="border border-primary/10 rounded-sm p-3 text-xs">
+                                    <div className="flex items-center justify-between">
+                                        <span className="font-serif text-primary">{user}</span>
+                                        <span className="text-[10px] uppercase tracking-widest text-primary/50">
+                                            Missing {report.missing_games_count + report.missing_puzzles_count}
+                                        </span>
+                                    </div>
+                                    <div className="mt-2 grid grid-cols-2 gap-4 text-primary/60">
+                                        <div>
+                                            Games: <span className="font-mono">{report.missing_games_count}</span>
+                                        </div>
+                                        <div>
+                                            Puzzles: <span className="font-mono">{report.missing_puzzles_count}</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </section>
+            </div>
+
             {opsStatus?.last_recovery.recovered_count && opsStatus.last_recovery.recovered_count > 0 && (
                 <div className="bg-amber-500/10 border border-amber-500/20 text-amber-500 p-4 rounded-sm font-sans text-xs flex items-center justify-between">
                     <div className="flex items-center gap-3">
@@ -110,7 +259,7 @@ export default function Ops() {
             {/* Version Info (Pinned to bottom or side, now more subtle) */}
             <div className="flex gap-8 text-[10px] opacity-40 uppercase tracking-tighter border-t border-primary/10 pt-4">
                 <div>
-                    SHA: <span className="font-mono text-primary/60">{health?.version?.sha.substring(0, 7) || 'unknown'}</span>
+                    SHA: <span className="font-mono text-primary/60">{(health?.version?.sha ?? '').substring(0, 7) || 'unknown'}</span>
                 </div>
                 <div>
                     BUILT: <span className="text-primary/60">{health?.version?.built_at ? new Date(health.version.built_at).toLocaleString() : '-'}</span>
@@ -145,16 +294,25 @@ export default function Ops() {
                     </div>
 
                     <div className="space-y-3">
-                        <div className="flex justify-between text-xs font-serif italic mb-1">
-                            <span className="opacity-70">{activeJob.message || 'Processing...'}</span>
-                            <span className="font-sans font-bold text-primary">{activeJob.progress_current}%</span>
-                        </div>
-                        <div className="h-1 w-full bg-primary/10 rounded-full overflow-hidden">
-                            <div
-                                className="h-full bg-primary/40 transition-all duration-1000 ease-out shadow-[0_0_10px_rgba(var(--text-primary-rgb),0.1)]"
-                                style={{ width: `${activeJob.progress_current}%` }}
-                            />
-                        </div>
+                        {(() => {
+                            const pct = activeJob.progress_total > 0
+                                ? Math.round(100 * activeJob.progress_current / activeJob.progress_total)
+                                : activeJob.progress_current;
+                            return (
+                                <>
+                                    <div className="flex justify-between text-xs font-serif italic mb-1">
+                                        <span className="opacity-70">{activeJob.message || 'Processing...'}</span>
+                                        <span className="font-sans font-bold text-primary">{pct}%</span>
+                                    </div>
+                                    <div className="h-1 w-full bg-primary/10 rounded-full overflow-hidden">
+                                        <div
+                                            className="h-full bg-primary/40 transition-all duration-1000 ease-out shadow-[0_0_10px_rgba(var(--text-primary-rgb),0.1)]"
+                                            style={{ width: `${Math.min(100, pct)}%` }}
+                                        />
+                                    </div>
+                                </>
+                            );
+                        })()}
                     </div>
                 </section>
             ) : (
@@ -228,7 +386,7 @@ export default function Ops() {
                                             <td className="px-6 py-4 text-right">
                                                 {job.result_json ? (
                                                     <div className="flex flex-col items-end opacity-70">
-                                                        <span className="font-serif italic">{job.result_json.generated} results</span>
+                                                        <span className="font-serif italic">{job.result_json.generated != null ? `${job.result_json.generated} results` : '—'}</span>
                                                         <span className="text-[9px] opacity-40 font-mono tracking-tighter">
                                                             {calculateCacheRate(job.result_json.cache_hits ?? 0, job.result_json.cache_misses ?? 0)}% hit rate
                                                         </span>
@@ -246,7 +404,7 @@ export default function Ops() {
                                     ))}
                                     {recentJobs.length === 0 && (
                                         <tr>
-                                            <td colSpan={5} className="px-6 py-20 text-center opacity-30 italic font-serif text-sm">
+                                            <td colSpan={6} className="px-6 py-20 text-center opacity-30 italic font-serif text-sm">
                                                 No execution history found in current archive
                                             </td>
                                         </tr>

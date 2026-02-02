@@ -57,18 +57,44 @@ export interface OpsStatusResponse {
     };
 }
 
+export interface StorageReportEntry {
+    missing_games_count: number;
+    missing_puzzles_count: number;
+    missing_games_sample: string[];
+    missing_puzzles_sample: string[];
+}
+
+export interface StorageReportResponse {
+    user_count: number;
+    report: Record<string, StorageReportEntry>;
+}
+
+/** Fetches API health and dependency status (DB, worker, Stockfish). */
 export async function getHealth(): Promise<HealthResponse> {
     return await request<HealthResponse>('/ops/health');
 }
 
+/** Fetches ops dashboard data: active job, recent jobs, last recovery, 24h metrics. */
 export async function getOpsStatus(): Promise<OpsStatusResponse> {
     return await request<OpsStatusResponse>('/ops/status');
 }
 
+/** Fetches storage parity report (filesystem vs DB). Optional username filter. */
+export async function getStorageReport(username?: string): Promise<StorageReportResponse> {
+    const params = new URLSearchParams();
+    if (username) {
+        params.append('username', username);
+    }
+    const suffix = params.toString();
+    return await request<StorageReportResponse>(`/ops/storage/report${suffix ? `?${suffix}` : ''}`);
+}
+
+/** Fetches current status of a background job. */
 export async function getJobStatus(jobId: string): Promise<JobStatusResponse> {
     return await request<JobStatusResponse>(`/jobs/${jobId}`);
 }
 
+/** Cancels a queued or running job. */
 export async function cancelJob(jobId: string): Promise<JobStatusResponse> {
     return await request<JobStatusResponse>(`/jobs/${jobId}/cancel`, {
         method: 'POST',
