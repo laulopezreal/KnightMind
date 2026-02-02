@@ -134,6 +134,9 @@ app.include_router(sessions_router)
 from services.api.dashboard import router as dashboard_router
 app.include_router(dashboard_router)
 
+from services.api.reports import router as reports_router
+app.include_router(reports_router)
+
 def get_allowed_origins() -> list[str]:
     origins = os.environ.get("KNIGHTMIND_CORS_ORIGINS", "")
     return [origin.strip() for origin in origins.split(",") if origin.strip()]

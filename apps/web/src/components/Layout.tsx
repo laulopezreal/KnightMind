@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import Sidebar from './Sidebar';
 import UsernameDisplay from './UsernameDisplay';
 import ThemeToggle from './ThemeToggle';
+import { ReportProblem } from './ReportProblem';
 
 interface LayoutProps {
     children: ReactNode;
@@ -22,6 +23,8 @@ export default function Layout({ children }: LayoutProps) {
                     {children}
                 </div>
             </main>
+
+            <ReportProblem />
         </div>
     );
 }
