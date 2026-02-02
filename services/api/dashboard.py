@@ -412,22 +412,25 @@ async def get_tricky_puzzles(
     Returns:
         List of tricky puzzles with fail counts and last attempt timestamps
     """
-    # Query PuzzleStats for puzzles with multiple failures
-    stmt = (
-        select(PuzzleStats)
-        .where(
-            PuzzleStats.username == username,
-            PuzzleStats.fail_count >= 2,
-            PuzzleStats.last_reviewed_at.isnot(None)
-        )
-        .order_by(
-            desc(PuzzleStats.fail_count),
-            desc(PuzzleStats.last_reviewed_at)
-        )
-        .limit(limit)
+    # Base filter for tricky puzzles (shared by count and result queries)
+    base_query = select(PuzzleStats).where(
+        PuzzleStats.username == username,
+        PuzzleStats.fail_count >= 2,
+        PuzzleStats.last_reviewed_at.isnot(None)
     )
 
-    stats = db.scalars(stmt).all()
+    # Count total tricky puzzles
+    total_count = db.scalar(
+        select(func.count()).select_from(base_query.subquery())
+    ) or 0
+
+    # Get paginated and sorted results
+    stats = db.scalars(
+        base_query.order_by(
+            desc(PuzzleStats.fail_count),
+            desc(PuzzleStats.last_reviewed_at)
+        ).limit(limit)
+    ).all()
 
     puzzles = [
         TrickyPuzzle(
@@ -438,16 +441,6 @@ async def get_tricky_puzzles(
         )
         for stat in stats
     ]
-
-    # Count total tricky puzzles
-    total_count = db.scalar(
-        select(func.count(PuzzleStats.puzzle_id))
-        .where(
-            PuzzleStats.username == username,
-            PuzzleStats.fail_count >= 2,
-            PuzzleStats.last_reviewed_at.isnot(None)
-        )
-    ) or 0
 
     return TrickyPuzzlesResponse(
         puzzles=puzzles,
