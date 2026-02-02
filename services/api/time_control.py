@@ -13,7 +13,7 @@ Classification uses FIDE-style thresholds applied to estimated game duration:
 """
 
 
-def classify_time_control(raw: str) -> str:
+def classify_time_control(raw: str) -> str | None:
     """
     Classify a raw Chess.com time_control string into bullet/blitz/rapid.
 
@@ -21,7 +21,8 @@ def classify_time_control(raw: str) -> str:
         raw: Chess.com time control, e.g. "600", "180+2", "300+0"
 
     Returns:
-        One of "bullet", "blitz", or "rapid".
+        One of "bullet", "blitz", "rapid", or None for unrecognized formats
+        (e.g. "daily", "1/259200").
 
     Examples:
         >>> classify_time_control("60")
@@ -38,17 +39,24 @@ def classify_time_control(raw: str) -> str:
         'rapid'
         >>> classify_time_control("900")
         'rapid'
+        >>> classify_time_control("daily") is None
+        True
     """
+    # Check if the raw string is already a known category
+    normalized = raw.strip().lower()
+    if normalized in ("bullet", "blitz", "rapid"):
+        return normalized
+
     parts = raw.split("+")
     try:
         base = int(parts[0])
         increment = int(parts[1]) if len(parts) > 1 else 0
     except (ValueError, IndexError):
-        # If we can't parse, check if the raw string is already a category
-        normalized = raw.strip().lower()
-        if normalized in ("bullet", "blitz", "rapid"):
-            return normalized
-        return "rapid"  # safe default
+        return None
+
+    # Reject non-positive base times (e.g. "0" or negative values)
+    if base <= 0:
+        return None
 
     total = base + 40 * increment
 

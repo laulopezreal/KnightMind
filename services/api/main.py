@@ -1182,10 +1182,6 @@ async def explain_rating_changes(
     worst_surprises = [s for s in surprises if get_surprise_val(s) < 0][-3:]
     worst_surprises.reverse()
 
-    # Deduplicate: a game should not appear in both lists
-    best_ids = {s.game_id for s in best_surprises}
-    worst_surprises = [s for s in worst_surprises if s.game_id not in best_ids]
-    
     # Start: prefer pre-window snapshot, fall back to earliest in-window
     start_rating_val = (
         pre_window_snapshot.rating if pre_window_snapshot

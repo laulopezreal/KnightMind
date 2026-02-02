@@ -18,7 +18,7 @@ from services.ingest import get_player_stats
 logger = logging.getLogger(__name__)
 
 # Time controls to auto-snapshot on session completion (best-effort)
-AUTO_SNAPSHOT_TIME_CONTROLS = ["rapid", "blitz"]
+AUTO_SNAPSHOT_TIME_CONTROLS = ["rapid", "blitz", "bullet"]
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
@@ -184,7 +184,11 @@ async def get_session(
 
 
 async def _auto_snapshot(username: str, session_id: str, db: Session) -> None:
-    """Best-effort: record rating snapshots for common time controls on session complete."""
+    """Best-effort: record rating snapshots for common time controls on session complete.
+
+    Skips a time control if the latest stored snapshot already has the same rating,
+    avoiding duplicate flat entries in the history chart.
+    """
     try:
         stats = await get_player_stats(username)
     except Exception as e:
@@ -192,10 +196,26 @@ async def _auto_snapshot(username: str, session_id: str, db: Session) -> None:
         return
 
     now = datetime.now(timezone.utc)
+    added = 0
     for tc in AUTO_SNAPSHOT_TIME_CONTROLS:
         rating = stats.get(f"chess_{tc}", {}).get("last", {}).get("rating")
         if not rating:
             continue
+
+        # Skip if the most recent snapshot already has the same rating
+        latest_stmt = (
+            select(RatingSnapshot)
+            .where(
+                RatingSnapshot.username == username,
+                RatingSnapshot.time_control == tc,
+            )
+            .order_by(RatingSnapshot.recorded_at.desc())
+            .limit(1)
+        )
+        latest = db.scalars(latest_stmt).first()
+        if latest and latest.rating == rating:
+            continue
+
         snapshot = RatingSnapshot(
             username=username,
             source="chesscom",
@@ -205,6 +225,10 @@ async def _auto_snapshot(username: str, session_id: str, db: Session) -> None:
             session_id=session_id,
         )
         db.add(snapshot)
+        added += 1
+
+    if added == 0:
+        return
 
     try:
         db.commit()
@@ -236,14 +260,16 @@ async def complete_session(
         raise HTTPException(status_code=403, detail="Session belongs to different user")
 
     # If not already completed, set completed_at and auto-snapshot
+    should_auto_snapshot = False
     if session.completed_at is None:
         session.completed_at = datetime.now(timezone.utc)
         db.commit()
         db.refresh(session)
-        # Best-effort auto-snapshot after session completion
-        await _auto_snapshot(request.username, session_id, db)
+        should_auto_snapshot = True
 
-    return SessionSummary(
+    # Build response before auto-snapshot so a rollback inside
+    # _auto_snapshot cannot expire the ORM-managed session object.
+    result = SessionSummary(
         session_id=session.id,
         requested_n=session.requested_n,
         pass_count=session.pass_count,
@@ -258,6 +284,12 @@ async def complete_session(
         best_streak=session.best_streak,
         hints_used=session.hints_used
     )
+
+    # Best-effort auto-snapshot after response is built
+    if should_auto_snapshot:
+        await _auto_snapshot(request.username, session_id, db)
+
+    return result
 
 
 @router.post("/{session_id}/use_hint", response_model=SessionSummary)
