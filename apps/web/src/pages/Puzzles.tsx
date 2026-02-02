@@ -1203,8 +1203,9 @@ export default function Puzzles() {
                                 </p>
                                 {sessionType === 'timed' && (
                                     <div className="flex items-center gap-2">
-                                        <label className="text-sm text-primary/60 font-sans">Duration:</label>
+                                        <label htmlFor="duration-input" className="text-sm text-primary/60 font-sans">Duration:</label>
                                         <input
+                                            id="duration-input"
                                             type="number"
                                             min="1"
                                             max="60"
@@ -1217,8 +1218,9 @@ export default function Puzzles() {
                                 )}
                                 {sessionType === 'accuracy_goal' && (
                                     <div className="flex items-center gap-2">
-                                        <label className="text-sm text-primary/60 font-sans">Target accuracy:</label>
+                                        <label htmlFor="accuracy-input" className="text-sm text-primary/60 font-sans">Target accuracy:</label>
                                         <input
+                                            id="accuracy-input"
                                             type="number"
                                             min="50"
                                             max="100"
