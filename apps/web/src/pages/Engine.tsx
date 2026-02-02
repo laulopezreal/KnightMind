@@ -96,6 +96,15 @@ export default function Engine() {
     }
   };
 
+  const handleClue = () => {
+    if (!evaluation?.bestMove) return;
+    if (clueStage === 0) {
+      setClueStage(1);
+    } else if (clueStage === 1) {
+      setClueStage(2);
+    }
+  };
+
   const onDrop = (sourceSquare: string, targetSquare: string) => {
     const gameCopy = new Chess(fen);
     try {
@@ -152,27 +161,22 @@ export default function Engine() {
     return 'text-primary';
   };
 
-  const bestMoveParsed = useMemo(() => {
-    if (!evaluation?.bestMove) return { from: '', to: '' };
-    return parseBestMoveUci(evaluation.bestMove);
-  }, [evaluation?.bestMove]);
+const bestMoveParsed = useMemo(
+    () => (evaluation?.bestMove ? parseBestMoveUci(evaluation.bestMove) : { from: '', to: '' }),
+    [evaluation?.bestMove]
+  );
 
-  const clueSquareStyles: Record<string, { backgroundColor: string }> = useMemo(() => {
-    if (!evaluation?.bestMove || clueStage < 1) {
+  const CLUE_HIGHLIGHT_STYLE = { backgroundColor: 'rgba(255, 235, 59, 0.45)' };
+
+  const clueSquareStyles = useMemo(() => {
+    if (clueStage < 1 || !bestMoveParsed.from) {
       return {};
     }
-    const { from, to } = bestMoveParsed;
-    const highlight = { backgroundColor: 'rgba(255, 235, 59, 0.45)' };
-    if (clueStage === 2 && to) {
-      return { [from]: highlight, [to]: highlight };
+    if (clueStage === 2 && bestMoveParsed.to) {
+      return { [bestMoveParsed.from]: CLUE_HIGHLIGHT_STYLE, [bestMoveParsed.to]: CLUE_HIGHLIGHT_STYLE };
     }
-    return from ? { [from]: highlight } : {};
-  }, [bestMoveParsed, clueStage, evaluation?.bestMove]);
-
-  const handleClue = () => {
-    if (!evaluation?.bestMove) return;
-    setClueStage(prev => (prev + 1) as ClueStage);
-  };
+    return { [bestMoveParsed.from]: CLUE_HIGHLIGHT_STYLE };
+  }, [clueStage, bestMoveParsed, CLUE_HIGHLIGHT_STYLE]);
 
   return (
     <div className="space-y-12 animate-teedin">
@@ -308,39 +312,39 @@ export default function Engine() {
               </div>
             )}
 
-            {evaluation ? (
-              <div className="space-y-3 pt-2">
-                <div className="flex justify-between items-center">
-                  <span className="font-sans text-sm text-primary/60 uppercase tracking-widest">Best Move</span>
-                  <div className="flex gap-4 items-center">
-                    {showBestMove ? (
-                      <span className="font-mono text-primary text-lg">{evaluation.bestMove}</span>
-                    ) : (
-                      <span className="text-primary/40 italic text-sm">Hidden</span>
-                    )}
-                    <button type="button" onClick={() => setShowBestMove(!showBestMove)} className="km-interactive km-focus-visible text-primary text-xs uppercase tracking-widest border border-primary/20 px-3 py-1 rounded-sm transition-colors">
-                      {showBestMove ? 'Hide' : 'Show'}
-                    </button>
-                  </div>
-                </div>
-                <div className="flex flex-wrap items-center gap-3 text-xs font-sans text-primary/60">
-                  <button
-                    type="button"
-                    onClick={handleClue}
-                    disabled={clueStage === 2}
-                    className="km-interactive km-focus-visible border border-primary/20 px-3 py-1 text-[10px] font-serif uppercase tracking-widest text-primary transition-colors disabled:opacity-50"
-                  >
-                    {clueStage === 0 ? 'Clue' : clueStage === 1 ? 'Reveal squares' : 'Clue used'}
+            {evaluation && (
+              <div className="flex justify-between items-center pt-2">
+                <span className="font-sans text-sm text-primary/60 uppercase tracking-widest">Best Move</span>
+                <div className="flex gap-4 items-center">
+                  {showBestMove ? (
+                    <span className="font-mono text-primary text-lg">{evaluation.bestMove}</span>
+                  ) : (
+                    <span className="text-primary/40 italic text-sm">Hidden</span>
+                  )}
+                  <button type="button" onClick={() => setShowBestMove(!showBestMove)} className="km-interactive km-focus-visible text-primary text-xs uppercase tracking-widest border border-primary/20 px-3 py-1 rounded-sm transition-colors">
+                    {showBestMove ? 'Hide' : 'Show'}
                   </button>
-                  <span>
-                    {clueStage === 0 ? 'Tap for a small hint.' : getPieceNameAtSquare(fen, bestMoveParsed.from)}
-                  </span>
                 </div>
               </div>
-            ) : (
-              <p className="text-primary/50 font-sans text-sm">
-                {loading ? 'Waiting for Stockfish output…' : 'No evaluation yet. Run the engine to surface the best line.'}
-              </p>
+            )}
+
+            {evaluation && clueStage === 1 && (
+              <div className="pt-2">
+                <p className="text-primary/80 font-sans text-sm">
+                  {getPieceNameAtSquare(fen, bestMoveParsed.from)}
+                </p>
+              </div>
+            )}
+
+            {evaluation && (
+              <button
+                type="button"
+                onClick={handleClue}
+                disabled={!evaluation.bestMove || clueStage === 2}
+                className="w-full py-2 mt-4 bg-primary/10 border border-primary/20 text-primary rounded-sm font-sans text-sm uppercase tracking-widest transition-all km-interactive km-focus-visible disabled:opacity-50 disabled:cursor-default"
+              >
+                {clueStage === 0 ? 'Clue' : clueStage === 1 ? 'Reveal squares' : 'Clue used'}
+              </button>
             )}
           </div>
         </div>
