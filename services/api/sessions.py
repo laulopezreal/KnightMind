@@ -208,9 +208,9 @@ async def _auto_snapshot(username: str, session_id: str, db: Session) -> None:
 
     try:
         db.commit()
-    except Exception:
+    except Exception as e:
         db.rollback()
-        logger.debug("Auto-snapshot: commit failed for %s", username)
+        logger.warning("Auto-snapshot: commit failed for %s: %s", username, e)
 
 
 @router.post("/{session_id}/complete", response_model=SessionSummary)
