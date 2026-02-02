@@ -183,7 +183,6 @@ export default function Puzzles() {
                         if (state.sessionId === session.session_id) {
                             // Restore streak and performance (index is restored after puzzles load)
                             setStreak(state.streak || 0);
-                            setBestStreak(state.bestStreak || 0);
                             if (state.performanceHistory) {
                                 setPerformanceHistory(state.performanceHistory);
                             }
@@ -428,7 +427,10 @@ export default function Puzzles() {
                 setBestStreak(parsed.bestStreak || 0);
             } catch (e) {
                 console.error('Failed to parse saved puzzle stats', e);
+                setBestStreak(0);
             }
+        } else {
+            setBestStreak(0);
         }
     }, [username]);
 
@@ -456,12 +458,11 @@ export default function Puzzles() {
                 sessionId: activeSessionId,
                 currentIndex,
                 streak,
-                bestStreak,
                 performanceHistory,
             };
             localStorage.setItem(`knightmind:sessionState:${username}`, JSON.stringify(state));
         }
-    }, [username, activeSessionId, currentIndex, streak, bestStreak, performanceHistory]);
+    }, [username, activeSessionId, currentIndex, streak, performanceHistory]);
 
     // Cleanup timers on unmount
     useEffect(() => {
