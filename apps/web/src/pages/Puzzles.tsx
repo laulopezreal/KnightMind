@@ -332,15 +332,6 @@ export default function Puzzles() {
         };
     }, [username]);
 
-    // Auto-start warmup session when in warmup mode
-    useEffect(() => {
-        if (warmupMode && sessionState === 'idle' && username && userStatus && !isResumingSession) {
-            // Automatically start a warmup session with 5 puzzles
-            handleStartSession();
-        }
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [warmupMode, sessionState, username, userStatus, isResumingSession]);
-
     const { job, isPolling: isJobPolling } = useJobPolling(activeJobId, {
         enabled: !!activeJobId,
         onSuccess: async () => {
@@ -559,7 +550,7 @@ export default function Puzzles() {
     };
 
     // Session handlers
-    const handleStartSession = async () => {
+    const handleStartSession = useCallback(async () => {
         if (!username.trim()) {
             setError('Please enter a username');
             return;
@@ -674,7 +665,19 @@ export default function Puzzles() {
                 setError(message);
             }
         }
-    };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [
+        username,
+        userStatus,
+        sessionType,
+        targetAccuracy,
+        targetTimeMinutes,
+        warmupMode,
+        puzzles,
+        motifFilter,
+        // Note: handleCompleteSession is stable (wrapped in useCallback) and declared later,
+        // so it's intentionally excluded from dependencies to avoid circular reference
+    ]);
 
     // Helper function to check and award achievements
     const checkAchievements = useCallback((newAchievements: Achievement[] = achievements) => {
@@ -891,6 +894,13 @@ export default function Puzzles() {
         handleReviewPuzzleRef.current = handleReviewPuzzle;
     }, [handleReviewPuzzle]);
 
+    // Auto-start warmup session when in warmup mode
+    useEffect(() => {
+        if (warmupMode && sessionState === 'idle' && username && userStatus && !isResumingSession) {
+            // Automatically start a warmup session with 5 puzzles
+            handleStartSession();
+        }
+    }, [warmupMode, sessionState, username, userStatus, isResumingSession, handleStartSession]);
 
     const shouldShowJobStatusCard =
         !!job &&

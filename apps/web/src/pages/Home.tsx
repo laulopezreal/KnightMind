@@ -132,7 +132,8 @@ export default function Home() {
         try {
           const jobResult = await generatePuzzles(username);
           setGeneratingJobId(jobResult.job_id);
-        } catch (err) {
+        } catch (error) {
+          console.error('Failed to start puzzle generation job:', error);
           setStatus(
             `Imported ${result.new_games} new games, but puzzle generation failed. You can generate them manually from the Puzzles page.`
           );

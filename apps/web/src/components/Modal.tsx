@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import type { ReactNode } from 'react';
+import { FocusTrap } from 'focus-trap-react';
 
 interface ModalProps {
   isOpen: boolean;
@@ -71,23 +72,32 @@ export function Modal({
   if (!isOpen) return null;
 
   return (
-    <div
-      className="fixed inset-0 flex items-center justify-center bg-black/50 z-50 animate-teedin"
-      onClick={(e) => {
-        if (closeOnOverlayClick && e.target === e.currentTarget) {
-          onClose();
-        }
+    <FocusTrap
+      active={isOpen}
+      focusTrapOptions={{
+        allowOutsideClick: true,
+        escapeDeactivates: false,
+        initialFocus: () => modalRef.current || undefined,
       }}
-      role="dialog"
-      aria-modal="true"
     >
       <div
-        ref={modalRef}
-        className="relative"
-        tabIndex={-1}
+        className="fixed inset-0 flex items-center justify-center bg-black/50 z-50 animate-teedin"
+        onClick={(e) => {
+          if (closeOnOverlayClick && e.target === e.currentTarget) {
+            onClose();
+          }
+        }}
+        role="dialog"
+        aria-modal="true"
       >
-        {children}
+        <div
+          ref={modalRef}
+          className="relative"
+          tabIndex={-1}
+        >
+          {children}
+        </div>
       </div>
-    </div>
+    </FocusTrap>
   );
 }
