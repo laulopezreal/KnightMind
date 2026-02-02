@@ -23,15 +23,15 @@ export default function RatingInsights() {
     const [snapshotError, setSnapshotError] = useState<string | null>(null);
     const [latestSnapshot, setLatestSnapshot] = useState<SnapshotResponse | null>(null);
     const [error, setError] = useState<string | null>(null);
-    const [timeControl, setTimeControlState] = useState<'rapid' | 'blitz'>(() => {
+    const [timeControl, setTimeControlState] = useState<'rapid' | 'blitz' | 'bullet'>(() => {
         const stored = localStorage.getItem(LS_KEYS.RATINGS_TIME_CONTROL);
-        return stored === 'blitz' || stored === 'rapid' ? stored : 'rapid';
+        return stored === 'blitz' || stored === 'rapid' || stored === 'bullet' ? stored : 'rapid';
     });
     const [windowSource, setWindowSourceState] = useState<'session' | 'fallback_7d'>(() => {
         const stored = localStorage.getItem(LS_KEYS.RATINGS_WINDOW);
         return stored === 'last_7_days' ? 'fallback_7d' : 'session';
     });
-    const setTimeControl = useCallback((value: 'rapid' | 'blitz') => {
+    const setTimeControl = useCallback((value: 'rapid' | 'blitz' | 'bullet') => {
         setTimeControlState(value);
         localStorage.setItem(LS_KEYS.RATINGS_TIME_CONTROL, value);
     }, []);
@@ -159,9 +159,22 @@ export default function RatingInsights() {
 
     const N = data?.stats.games ?? 0;
     const confidence = N < LOW_CONFIDENCE_THRESHOLD ? 'low' : N < HIGH_CONFIDENCE_THRESHOLD ? 'medium' : 'high';
-    const timeControlLabel = timeControl === 'rapid' ? 'Rapid' : 'Blitz';
+    const timeControlLabel = timeControl === 'rapid' ? 'Rapid' : timeControl === 'blitz' ? 'Blitz' : 'Bullet';
     const windowLabel = N >= HIGH_CONFIDENCE_THRESHOLD ? `Last ${HIGH_CONFIDENCE_THRESHOLD} ${timeControlLabel} games` : `Last ${N} ${timeControlLabel} games`;
-    const confidenceQualifier = confidence === 'low' ? 'Very small sample — insights are indicative only.' : confidence === 'medium' ? 'Moderate sample — trends may still be noisy.' : undefined;
+
+    const formatDate = (iso: string) => {
+        const d = new Date(iso);
+        return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+    };
+    const windowDates = data?.window
+        ? `${formatDate(data.window.start)} – ${formatDate(data.window.end)}`
+        : undefined;
+
+    const confidenceBadge = confidence === 'low'
+        ? { label: 'Low confidence', color: 'bg-red-500/10 text-red-600' }
+        : confidence === 'medium'
+        ? { label: 'Medium confidence', color: 'bg-amber-500/10 text-amber-600' }
+        : { label: 'High confidence', color: 'bg-emerald-500/10 text-emerald-600' };
 
     return (
         <div className="space-y-12 animate-teedin pb-20">
@@ -220,20 +233,16 @@ export default function RatingInsights() {
                     {/* Time Control Selector */}
                     <div className="flex flex-col gap-1.5">
                         <div className="flex bg-primary/5 rounded-sm p-1">
-                            <button
-                                type="button"
-                                onClick={() => setTimeControl('rapid')}
-                                className={`km-toggle-option km-focus-visible px-3 py-2 text-sm font-sans transition-all rounded-sm ${timeControl === 'rapid' ? 'km-toggle-selected bg-primary text-bg-primary shadow-sm' : 'text-primary/60'}`}
-                            >
-                                Rapid
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() => setTimeControl('blitz')}
-                                className={`km-toggle-option km-focus-visible px-3 py-2 text-sm font-sans transition-all rounded-sm ${timeControl === 'blitz' ? 'km-toggle-selected bg-primary text-bg-primary shadow-sm' : 'text-primary/60'}`}
-                            >
-                                Blitz
-                            </button>
+                            {(['bullet', 'blitz', 'rapid'] as const).map(tc => (
+                                <button
+                                    key={tc}
+                                    type="button"
+                                    onClick={() => setTimeControl(tc)}
+                                    className={`km-toggle-option km-focus-visible px-3 py-2 text-sm font-sans transition-all rounded-sm ${timeControl === tc ? 'km-toggle-selected bg-primary text-bg-primary shadow-sm' : 'text-primary/60'}`}
+                                >
+                                    {tc.charAt(0).toUpperCase() + tc.slice(1)}
+                                </button>
+                            ))}
                         </div>
                         {data && data.stats.games === 0 && (
                             <div className="text-[10px] text-primary/40 font-sans ml-1">
@@ -323,7 +332,25 @@ export default function RatingInsights() {
                     {/* STATE 1 & 2: Games exist */}
                     {hasGames && (
                         <>
-                            {/* STATE 1 Callout - no longer needed since hasGames is the gate */}
+                            {/* Window & Confidence Bar */}
+                            <div className="flex flex-wrap items-center gap-3">
+                                {windowDates && (
+                                    <span className="text-xs font-sans text-primary/50">{windowDates}</span>
+                                )}
+                                <span className={`text-[10px] font-sans font-medium px-2 py-0.5 rounded-full ${confidenceBadge.color}`}>
+                                    {confidenceBadge.label} ({N} games)
+                                </span>
+                                {data.rating.reference_rating > 0 && (
+                                    <span className="text-xs font-sans text-primary/40">
+                                        Ref: {data.rating.reference_rating}{data.rating.reference_is_approx ? ' (est.)' : ''}
+                                    </span>
+                                )}
+                                {data.stats.missing_opponent_rating_games > 0 && (
+                                    <span className="text-[10px] font-sans text-amber-600/80">
+                                        {data.stats.missing_opponent_rating_games} game{data.stats.missing_opponent_rating_games > 1 ? 's' : ''} excluded (missing opponent rating)
+                                    </span>
+                                )}
+                            </div>
 
                             {/* Summary Cards */}
                             <section className="grid grid-cols-1 md:grid-cols-4 gap-6">
@@ -332,8 +359,11 @@ export default function RatingInsights() {
                                     value={hasSnapshots && data.rating.net_change !== null
                                         ? (data.rating.net_change > 0 ? `+${data.rating.net_change}` : `${data.rating.net_change}`)
                                         : "—"}
-                                    sub={windowLabel}
-                                    helper={confidenceQualifier}
+                                    sub={
+                                        hasSnapshots && data.rating.start !== null && data.rating.end !== null
+                                            ? `${data.rating.start} → ${data.rating.end}`
+                                            : windowLabel
+                                    }
                                     highlight={hasSnapshots && data.rating.net_change !== null && data.rating.net_change !== 0}
                                     positive={hasSnapshots && data.rating.net_change !== null && data.rating.net_change > 0}
                                     extra={!hasSnapshots ? "Record a snapshot to track rating change." : undefined}
@@ -350,22 +380,18 @@ export default function RatingInsights() {
                                     value={hasGames && data.stats.actual_minus_expected !== null
                                         ? (data.stats.actual_minus_expected > 0 ? `+${(data.stats.actual_minus_expected || 0).toFixed(1)}` : `${(data.stats.actual_minus_expected || 0).toFixed(1)}`)
                                         : "—"}
-                                    sub="Expectation gap"
+                                    sub="Actual minus expected score"
                                     helper="Positive means you outperformed expectations. Negative means you underperformed."
                                 />
                                 <Card
                                     label="Opponent Strength"
                                     value={hasGames ? (data.stats.avg_opponent_rating?.toString() || "—") : "—"}
-                                    sub="Average opponent rating vs your reference rating."
+                                    sub={data.rating.reference_rating > 0
+                                        ? `Avg opponent vs your ${data.rating.reference_rating}`
+                                        : "Average opponent rating"
+                                    }
                                 />
                             </section>
-
-                            {/* Reference rating note when estimated */}
-                            {!hasSnapshots && data.rating.reference_is_approx && (
-                                <p className="text-xs text-primary/40 font-sans italic mt-4">
-                                    Reference rating is estimated from opponents.
-                                </p>
-                            )}
 
                             {/* Drivers */}
                             <section className="border-t border-primary/10 pt-8">
@@ -455,19 +481,25 @@ const Card = ({ label, value, sub, helper, highlight, positive, extra }: { label
     </div>
 );
 
-const GameRow = ({ game, type }: { game: HighlightGame, type: 'good' | 'bad' }) => (
-    <a href={game.url} target="_blank" rel="noopener noreferrer" className="block p-4 hover:bg-primary/5 transition-colors border-b border-primary/5 group">
-        <div className="flex justify-between items-center mb-1">
-            <div className="font-medium text-primary/80 group-hover:text-primary transition-colors">
-                vs {game.opponent_rating}
+const GameRow = ({ game, type }: { game: HighlightGame, type: 'good' | 'bad' }) => {
+    const playedDate = game.played_at
+        ? new Date(game.played_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+        : null;
+    return (
+        <a href={game.url} target="_blank" rel="noopener noreferrer" className="block p-4 hover:bg-primary/5 transition-colors border-b border-primary/5 group">
+            <div className="flex justify-between items-center mb-1">
+                <div className="font-medium text-primary/80 group-hover:text-primary transition-colors">
+                    vs {game.opponent_rating}
+                    {playedDate && <span className="text-xs font-normal text-primary/40 ml-2">{playedDate}</span>}
+                </div>
+                <div className={`text-sm font-bold ${type === 'good' ? 'text-emerald-600' : 'text-red-500'}`}>
+                    {game.result}
+                </div>
             </div>
-            <div className={`text-sm font-bold ${type === 'good' ? 'text-emerald-600' : 'text-red-500'}`}>
-                {game.result}
+            <div className="flex justify-between items-center text-xs text-primary/50 font-sans">
+                <div>Expected: {game.expected_score.toFixed(2)}</div>
+                <div>{(Math.abs(game.rating_diff || 0))} pts {(game.rating_diff || 0) > 0 ? 'higher' : 'lower'}</div>
             </div>
-        </div>
-        <div className="flex justify-between items-center text-xs text-primary/50 font-sans">
-            <div>Expected: {game.expected_score.toFixed(2)}</div>
-            <div>{(Math.abs(game.rating_diff || 0))} pts {(game.rating_diff || 0) > 0 ? 'higher' : 'lower'}</div>
-        </div>
-    </a>
-);
+        </a>
+    );
+};
