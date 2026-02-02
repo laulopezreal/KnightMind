@@ -1,8 +1,12 @@
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { importChessComGames, getImportStatus, validateChessComUser, ApiError } from '../api';
+import { generatePuzzles } from '../api/puzzles';
 import { useChessUsername } from '../context/ChessUsernameContext';
 import { formatRelativeTime } from '../utils/time';
+import { useJobPolling } from '../hooks/useJobPolling';
+import { Modal } from '../components/Modal';
+import { JobStatusCard } from '../components/JobStatusCard';
 
 
 type ImportStatus = {
@@ -11,8 +15,11 @@ type ImportStatus = {
 };
 
 
+type OnboardingPhase = 'idle' | 'importing' | 'generating' | 'complete';
+
 export default function Home() {
   const { username } = useChessUsername();
+  const navigate = useNavigate();
   const [status, setStatus] = useState<string | null>(null);
   const [isError, setIsError] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -22,6 +29,27 @@ export default function Home() {
   });
   const [statusLoading, setStatusLoading] = useState(false);
   const [statusError, setStatusError] = useState<string | null>(null);
+
+  // Onboarding state
+  const [onboardingPhase, setOnboardingPhase] = useState<OnboardingPhase>('idle');
+  const [generatingJobId, setGeneratingJobId] = useState<string | null>(null);
+  const [newGamesCount, setNewGamesCount] = useState<number>(0);
+
+  // Job polling for puzzle generation
+  const { job: generationJob } = useJobPolling(generatingJobId, {
+    enabled: onboardingPhase === 'generating',
+    onSuccess: () => {
+      setOnboardingPhase('complete');
+      // Show celebration for 3 seconds, then redirect
+      setTimeout(() => navigate('/dashboard'), 3000);
+    },
+    onError: (err) => {
+      setStatus(`Puzzle generation failed: ${err.message}. You can generate them manually from the Puzzles page.`);
+      setIsError(true);
+      setOnboardingPhase('idle');
+      setGeneratingJobId(null);
+    }
+  });
 
   useEffect(() => {
     let isActive = true;
@@ -85,15 +113,32 @@ export default function Home() {
     }
 
     setStatus('Fetching games...');
+    setOnboardingPhase('importing');
 
     try {
       const result = await importChessComGames(username);
       if (result.games_count === 0) {
         setStatus('No games found.');
+        setOnboardingPhase('idle');
       } else if (result.new_games === 0) {
         setStatus(`No new games found. You have ${result.games_count} total games.`);
+        setOnboardingPhase('idle');
       } else {
-        setStatus(`Imported ${result.new_games} new games. Ready to generate puzzles!`);
+        // Automatically trigger puzzle generation for new games
+        setNewGamesCount(result.new_games);
+        setStatus(`Imported ${result.new_games} new games. Generating puzzles...`);
+        setOnboardingPhase('generating');
+
+        try {
+          const jobResult = await generatePuzzles(username);
+          setGeneratingJobId(jobResult.job_id);
+        } catch {
+          setStatus(
+            `Imported ${result.new_games} new games, but puzzle generation failed. You can generate them manually from the Puzzles page.`
+          );
+          setIsError(true);
+          setOnboardingPhase('idle');
+        }
       }
       setImportStatus({
         lastImportedAt: new Date().toISOString(),
@@ -107,6 +152,7 @@ export default function Home() {
         setStatus(error instanceof Error ? error.message : 'Unknown error');
       }
       setIsError(true);
+      setOnboardingPhase('idle');
     } finally {
       setLoading(false);
     }
@@ -205,6 +251,43 @@ export default function Home() {
           </div>
         </div>
       </section>
+
+      {/* Job status card during puzzle generation */}
+      {onboardingPhase === 'generating' && generationJob && (
+        <div className="mt-8">
+          <JobStatusCard
+            status={generationJob.status}
+            progress={generationJob.progress || 0}
+            message={generationJob.message}
+            error={generationJob.status === 'failed' ? generationJob.message : undefined}
+          />
+        </div>
+      )}
+
+      {/* Celebration modal on completion */}
+      <Modal
+        isOpen={onboardingPhase === 'complete'}
+        onClose={() => navigate('/dashboard')}
+        closeOnEscape={true}
+        closeOnOverlayClick={true}
+      >
+        <div className="bg-primary border border-green-500/30 rounded-sm p-12 max-w-md text-center">
+          <div className="flex justify-center mb-6">
+            <div className="h-16 w-16 rounded-full bg-green-500 flex items-center justify-center">
+              <svg className="h-10 w-10 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+              </svg>
+            </div>
+          </div>
+          <h2 className="text-3xl font-serif text-primary mb-4">All Set!</h2>
+          <p className="text-primary/60 font-sans mb-2">
+            {newGamesCount} puzzles generated from your games.
+          </p>
+          <p className="text-primary/40 text-sm font-sans">
+            Taking you to your dashboard...
+          </p>
+        </div>
+      </Modal>
     </div>
   );
 }
