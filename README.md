@@ -107,6 +107,15 @@ If an environment ever needs a different base, update `API_BASE` in `apps/web/sr
 - Once a user has set their Chess.com username, the home screen emphasizes exploration and treats game syncing as an optional “Sync” action rather than a primary prompt to import games.
 - Syncing reports “No new games found” when existing games are already in the database.
 
+## Backend Features Not Yet Surfaced in the UI
+
+The API exposes a couple of admin-oriented endpoints that are not currently surfaced in the web app. These were added to support operational workflows and multi-user environments, but the UI does not yet provide entry points for them. Suggested UI resurfacing ideas are listed here so the product surface stays aligned with the backend. (Assumption: these should remain admin-only until role-based access is in place.)
+
+- **User index (`GET /users`)** – Returns all users who have imported games. This is useful for an admin “user switcher” in a shared environment or for debugging.  
+  **UI suggestion:** add a compact user switcher in the Ops page or top nav that fetches `/users`, allowing admins to jump into a selected user’s dashboard and run imports without retyping usernames.
+- **Storage parity report (`GET /ops/storage/report`)** – Compares filesystem-stored games/puzzles against DB records to surface missing metadata, intended for migration and ops checks.  
+  **UI suggestion:** add a “Data Integrity” card in the Ops page that shows per-user missing counts with a “Refresh” button, plus a link to run the existing backfill script from docs.
+
 ## Testing
 
 ### Frontend
