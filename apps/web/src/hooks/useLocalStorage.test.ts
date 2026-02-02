@@ -34,7 +34,7 @@ describe('useLocalStorage', () => {
     });
 
     expect(result.current[0]).toBe('new-value');
-    expect(localStorage.getItem('test-key')).toBe('new-value');
+    expect(localStorage.getItem('test-key')).toBe(JSON.stringify('new-value'));
   });
 
   it('should handle object values', () => {
@@ -72,15 +72,15 @@ describe('useLocalStorage', () => {
     expect(result.current[0]).toBe(42);
   });
 
-  it('should handle string values without double-quoting', () => {
+  it('should JSON-stringify string values consistently', () => {
     const { result } = renderHook(() => useLocalStorage('test-key', 'default'));
 
     act(() => {
       result.current[1]('hello');
     });
 
-    // String values are stored directly, not JSON.stringified
-    expect(localStorage.getItem('test-key')).toBe('hello');
+    // String values are JSON.stringified like all other types
+    expect(localStorage.getItem('test-key')).toBe(JSON.stringify('hello'));
   });
 
   it('should return initial value when localStorage getItem throws', () => {

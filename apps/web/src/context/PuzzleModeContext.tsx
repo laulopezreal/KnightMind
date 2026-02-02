@@ -19,7 +19,6 @@ export function PuzzleModeProvider({ children }: { children: ReactNode }) {
     const [sessionType, setSessionType] = useLocalStorage<SessionType>(
         'knightmind:puzzle_mode',
         'standard',
-        (value) => value as SessionType
     );
 
     const [targetAccuracy, setTargetAccuracy] = useLocalStorage<number>(

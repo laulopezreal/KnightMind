@@ -44,7 +44,7 @@ describe('PuzzleModeContext', () => {
   });
 
   it('should read stored session type from localStorage', () => {
-    localStorage.setItem('knightmind:puzzle_mode', 'timed');
+    localStorage.setItem('knightmind:puzzle_mode', JSON.stringify('timed'));
 
     render(
       <PuzzleModeProvider>
