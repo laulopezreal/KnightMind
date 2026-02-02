@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { getDashboardSummary, getTrickyPuzzles, type DashboardSummary, type TrickyPuzzlesResponse } from '../api/users';
 import { getRecentSessions, type SessionSummary } from '../api/sessions';
 import { useChessUsername } from '../context/ChessUsernameContext';
@@ -17,7 +17,6 @@ export default function Dashboard() {
     const [trickyPuzzles, setTrickyPuzzles] = useState<TrickyPuzzlesResponse | null>(null);
     const [recentSessions, setRecentSessions] = useState<SessionSummary[]>([]);
     const [loading, setLoading] = useState(true);
-    const [refreshing, setRefreshing] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const isFetchingRef = useRef(false);
     const isMountedRef = useRef(true);
@@ -44,11 +43,7 @@ export default function Dashboard() {
 
         isFetchingRef.current = true;
         try {
-            if (isRefresh) {
-                setRefreshing(true);
-            } else {
-                setLoading(true);
-            }
+            setLoading(true);
             setError(null);
 
             const [dashboard, sessions, tricky] = await Promise.all([
@@ -70,7 +65,6 @@ export default function Dashboard() {
         } finally {
             if (isMountedRef.current) {
                 setLoading(false);
-                setRefreshing(false);
             }
             isFetchingRef.current = false;
         }
