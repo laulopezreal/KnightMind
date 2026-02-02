@@ -10,6 +10,18 @@
     <title>KnightMind</title>
   </head>
   <body>
+    <!-- Apply theme class before first paint to prevent flash of wrong theme -->
+    <script>
+      (function() {
+        var STORAGE_KEY = 'knightmind:theme';
+        var stored = null;
+        try { stored = localStorage.getItem(STORAGE_KEY); } catch(e) {}
+        var theme = (stored === 'night' || stored === 'day')
+          ? stored
+          : (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'night' : 'day');
+        document.body.className = theme;
+      })();
+    </script>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

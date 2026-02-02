@@ -24,7 +24,7 @@
 
 /* Custom Utilities for the slow vibe */
 @utility transition-slow {
-  transition: background-color 3s ease-in-out, color 2s ease-in-out, border-color 3s ease-in-out;
+  transition: background-color 3s ease-in-out, color 3s ease-in-out, border-color 3s ease-in-out;
 }
 
 :root {
@@ -49,12 +49,22 @@ body {
   background-color: var(--bg-primary);
   color: var(--text-primary);
   font-family: var(--font-serif);
-  /* The Secret Sauce: 5s viscous transition */
-  transition: background-color 3s ease-in-out, color 2s ease-in-out;
+  transition: background-color 3s ease-in-out, color 3s ease-in-out;
   min-height: 100vh;
   margin: 0;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/*
+ * Global theme transition: ensure all elements that inherit or use
+ * CSS-variable-driven colors transition smoothly on theme change,
+ * instead of snapping instantly while the body slowly transitions.
+ */
+*,
+*::before,
+*::after {
+  transition: background-color 3s ease-in-out, color 3s ease-in-out, border-color 3s ease-in-out, outline-color 3s ease-in-out;
 }
 
 /* Animations from Portfolio */
