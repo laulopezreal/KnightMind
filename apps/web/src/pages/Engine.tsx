@@ -70,7 +70,7 @@ export default function Engine() {
         clearTimeout(autoEvalTimeoutRef.current);
       }
     };
-  }, [engineAvailable, fen, handleEvaluate, loading]);
+  }, [engineAvailable, fen, handleEvaluate]);
 
   const handleReset = () => {
     setFen(STARTING_FEN);
@@ -90,6 +90,7 @@ export default function Engine() {
       new Chess(fenInput);
       setFen(fenInput);
       setLoading(true);
+      setEvaluation(null);
       setShowBestMove(false);
       setFenError(null);
       setEvaluationError(null);
@@ -307,7 +308,11 @@ export default function Engine() {
                     {clueStage === 0 ? 'Clue' : clueStage === 1 ? 'Reveal squares' : 'Hide clues and reset'}
                   </button>
                   <span>
-                    {clueStage === 0 ? 'Tap for a small hint.' : getPieceNameAtSquare(fen, bestMoveParsed.from)}
+                    {clueStage === 0
+                      ? 'Tap for a small hint.'
+                      : clueStage === 1
+                        ? getPieceNameAtSquare(fen, bestMoveParsed.from)
+                        : ''}
                   </span>
                 </div>
               </div>
