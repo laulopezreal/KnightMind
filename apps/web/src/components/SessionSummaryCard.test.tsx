@@ -1,0 +1,127 @@
+import { describe, it, expect, vi } from 'vitest';
+import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { SessionSummaryCard } from './SessionSummaryCard';
+
+const mockSessionSummary = {
+  session_id: 'session-1',
+  pass_count: 8,
+  fail_count: 2,
+  total_time_ms: 125000, // 2m 5s
+  best_streak: 5,
+  hints_used: 1,
+  completed_at: '2025-01-15T12:00:00Z',
+  session_type: 'standard' as const,
+};
+
+const mockAchievements = [
+  { id: '1', name: 'Quick Solver', description: 'Fast completion', icon: '⚡', earned: true },
+  { id: '2', name: 'Unearned', description: 'Not yet', icon: '🔒', earned: false },
+];
+
+describe('SessionSummaryCard', () => {
+  const user = userEvent.setup();
+
+  it('should display session summary heading', () => {
+    render(
+      <SessionSummaryCard
+        sessionSummary={mockSessionSummary}
+        achievements={mockAchievements}
+        onStartNewSession={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText('Session Successfully Recorded!')).toBeInTheDocument();
+  });
+
+  it('should display pass and fail counts', () => {
+    render(
+      <SessionSummaryCard
+        sessionSummary={mockSessionSummary}
+        achievements={mockAchievements}
+        onStartNewSession={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText('8')).toBeInTheDocument();
+    expect(screen.getByText('2')).toBeInTheDocument();
+  });
+
+  it('should display accuracy percentage', () => {
+    render(
+      <SessionSummaryCard
+        sessionSummary={mockSessionSummary}
+        achievements={mockAchievements}
+        onStartNewSession={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText('80%')).toBeInTheDocument();
+  });
+
+  it('should display total time', () => {
+    render(
+      <SessionSummaryCard
+        sessionSummary={mockSessionSummary}
+        achievements={mockAchievements}
+        onStartNewSession={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText('2m 5s')).toBeInTheDocument();
+  });
+
+  it('should display best streak and hints used', () => {
+    render(
+      <SessionSummaryCard
+        sessionSummary={mockSessionSummary}
+        achievements={mockAchievements}
+        onStartNewSession={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText('5')).toBeInTheDocument(); // best streak
+    expect(screen.getByText('1')).toBeInTheDocument(); // hints used
+  });
+
+  it('should display earned achievements only', () => {
+    render(
+      <SessionSummaryCard
+        sessionSummary={mockSessionSummary}
+        achievements={mockAchievements}
+        onStartNewSession={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText('Quick Solver')).toBeInTheDocument();
+    expect(screen.queryByText('Unearned')).not.toBeInTheDocument();
+  });
+
+  it('should call onStartNewSession when button clicked', async () => {
+    const onStartNewSession = vi.fn();
+    render(
+      <SessionSummaryCard
+        sessionSummary={mockSessionSummary}
+        achievements={mockAchievements}
+        onStartNewSession={onStartNewSession}
+      />
+    );
+
+    await user.click(screen.getByText('Start New Session'));
+    expect(onStartNewSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('should not show achievements section when none earned', () => {
+    const noAchievements = [{ id: '1', name: 'Locked', description: 'Not yet', icon: '🔒', earned: false }];
+
+    render(
+      <SessionSummaryCard
+        sessionSummary={mockSessionSummary}
+        achievements={noAchievements}
+        onStartNewSession={vi.fn()}
+      />
+    );
+
+    expect(screen.queryByText('Achievements Earned')).not.toBeInTheDocument();
+  });
+});
