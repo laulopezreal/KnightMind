@@ -87,6 +87,7 @@ export default function Sidebar() {
                         )}
                     </div>
 
+                    <NavItem to="/insights" label="Insights" isActive={location.pathname === '/insights'} />
                     <NavItem to="/rating-insights" label="Ratings" isActive={location.pathname === '/rating-insights'} />
                     <NavItem to="/ops" label="Ops" isActive={location.pathname === '/ops'} />
                 </nav>
