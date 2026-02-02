@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useLayoutEffect, useState, type ReactNode } from 'react';
 
 const THEMES = ['night', 'day'] as const;
 type Theme = (typeof THEMES)[number];
@@ -36,8 +36,9 @@ function getInitialTheme(): Theme {
 export function ThemeProvider({ children }: { children: ReactNode }) {
     const [theme, setTheme] = useState<Theme>(getInitialTheme);
 
-    // Apply theme class to body whenever it changes
-    useEffect(() => {
+    // Apply theme class to body synchronously before the browser paints
+    // to avoid a flash of the wrong theme (FOUC).
+    useLayoutEffect(() => {
         document.body.className = theme;
     }, [theme]);
 
