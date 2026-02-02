@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useSearchParams, useNavigate } from 'react-router-dom';
 import { Chessboard } from 'react-chessboard';
 import { Chess } from 'chess.js';
@@ -11,10 +11,9 @@ import { RecentSessionsCard } from '../components/RecentSessionsCard';
 import { useJobPolling } from '../hooks/useJobPolling';
 import { useChessUsername } from '../context/ChessUsernameContext';
 import { usePuzzleMode } from '../context/PuzzleModeContext';
-import { parseBestMoveUci, getPieceNameAtSquare } from '../utils/puzzle-clue';
+import { useClue } from '../hooks/useClue';
 
 type PuzzleStatus = 'solving' | 'correct' | 'incorrect' | 'revealed';
-type ClueStage = 0 | 1 | 2;
 type SessionState = 'idle' | 'loading' | 'active' | 'completing' | 'completed' | 'error';
 
 const calculateAccuracy = (passCount: number, failCount: number): number => {
@@ -106,7 +105,6 @@ export default function Puzzles() {
     const [reviewedCount, setReviewedCount] = useState(0);
     const [isResumingSession, setIsResumingSession] = useState(false);
     const [sessionState, setSessionState] = useState<SessionState>('idle');
-    const [clueStage, setClueStage] = useState<ClueStage>(0);
     const [puzzleStartTime, setPuzzleStartTime] = useState<number | null>(null);
     const [streak, setStreak] = useState(0);
     const [bestStreak, setBestStreak] = useState(0);
@@ -140,6 +138,8 @@ export default function Puzzles() {
 
 
     const currentPuzzle = puzzles[currentIndex];
+    const clue = useClue(currentPuzzle?.best_move_uci ?? '', currentPuzzle?.fen ?? '');
+    const clueReset = clue.reset;
     const puzzlesAvailable = puzzles.length > 0;
     const isFinalPuzzle = puzzlesAvailable && currentIndex >= puzzles.length - 1;
     const finishButtonDisabled = isFinalPuzzle ? sessionState !== 'active' : false;
@@ -986,8 +986,11 @@ export default function Puzzles() {
         if (!username) return;
         setIsRefreshingInsights(true);
         setInsightsError(null);
-        await Promise.all([refreshUserStatus(), refreshMotifPerformance(), refreshRecentSessions()]);
-        setIsRefreshingInsights(false);
+        try {
+            await Promise.all([refreshUserStatus(), refreshMotifPerformance(), refreshRecentSessions()]);
+        } finally {
+            setIsRefreshingInsights(false);
+        }
     }, [refreshMotifPerformance, refreshRecentSessions, refreshUserStatus, username]);
 
 
@@ -1027,37 +1030,21 @@ export default function Puzzles() {
     };
 
     const handleClue = () => {
-        if (!currentPuzzle?.best_move_uci) return;
-        if (clueStage === 0) {
-            setClueStage(1);
-        } else if (clueStage === 1) {
-            setClueStage(2);
+        if (clue.clueStage === 1) {
+            clue.advance();
             handleRevealSolution();
+        } else {
+            clue.advance();
         }
     };
 
     const [game, setGame] = useState(new Chess());
     const [lastFeedback, setLastFeedback] = useState<string>('');
 
-    const bestMoveParsed = useMemo(() => {
-        if (!currentPuzzle?.best_move_uci) return { from: '', to: '' };
-        return parseBestMoveUci(currentPuzzle.best_move_uci);
-    }, [currentPuzzle?.best_move_uci]);
-
-    const clueSquareStyles: Record<string, { backgroundColor: string }> =
-        currentPuzzle?.best_move_uci && clueStage >= 1
-            ? (() => {
-                const { from, to } = bestMoveParsed;
-                const highlight = { backgroundColor: 'rgba(255, 235, 59, 0.45)' };
-                if (clueStage === 2 && to) return { [from]: highlight, [to]: highlight };
-                return from ? { [from]: highlight } : {};
-            })()
-            : {};
-
     useEffect(() => {
         if (currentPuzzle) {
             setGame(new Chess(currentPuzzle.fen));
-            setClueStage(0);
+            clueReset();
             // Start timer for this puzzle
             const startTime = Date.now();
             setPuzzleStartTime(startTime);
@@ -1093,14 +1080,14 @@ export default function Puzzles() {
                 puzzleTimeRef.current = null;
             }
         };
-    }, [currentPuzzle, sessionType, activeSessionId]);
+    }, [currentPuzzle, sessionType, activeSessionId, clueReset]);
 
     const onPieceDrop = (sourceSquare: string, targetSquare: string) => {
         if (!currentPuzzle || status === 'correct' || status === 'revealed') return false;
         try {
             const move = game.move({ from: sourceSquare, to: targetSquare, promotion: 'q' });
             if (move === null) return false;
-            setClueStage(0);
+            clue.reset();
             setGame(new Chess(game.fen()));
             const uciMove = `${move.from}${move.to}${move.promotion || ''}`;
             setUserMove(uciMove);
@@ -1116,7 +1103,7 @@ export default function Puzzles() {
             setCurrentIndex(currentIndex + 1);
             setStatus('solving');
             setUserMove('');
-            setClueStage(0);
+            clue.reset();
         }
     };
 
@@ -1516,7 +1503,7 @@ export default function Puzzles() {
                                     boardOrientation: currentPuzzle.side_to_move === 'white' ? 'white' : 'black',
                                     darkSquareStyle: { backgroundColor: 'var(--color-chess-brown-700)' },
                                     lightSquareStyle: { backgroundColor: 'var(--color-chess-cream-300)' },
-                                    squareStyles: clueSquareStyles,
+                                    squareStyles: clue.squareStyles,
                                 }}
                             />
                         </div>
@@ -1638,12 +1625,10 @@ export default function Puzzles() {
 
                         {/* Status Area */}
                         <div className="min-h-[100px] flex items-center justify-center text-center p-6 border border-primary/10 rounded-sm relative overflow-hidden">
-                            {status === 'solving' && clueStage === 0 && <p className="text-primary/60 font-serif text-lg italic">Find the best move...</p>}
-                            {status === 'solving' && clueStage === 1 && (
+                            {status === 'solving' && clue.clueStage === 0 && <p className="text-primary/60 font-serif text-lg italic">Find the best move...</p>}
+                            {status === 'solving' && clue.clueStage === 1 && (
                                 <p className="text-primary/80 font-sans text-sm">
-                                    {currentPuzzle?.best_move_uci
-                                        ? getPieceNameAtSquare(currentPuzzle.fen, bestMoveParsed.from)
-                                        : 'Move the correct piece'}
+                                    {clue.pieceHint || 'Move the correct piece'}
                                 </p>
                             )}
                             {status === 'correct' && (
@@ -1710,7 +1695,7 @@ export default function Puzzles() {
                                         onClick={activeSessionId ? handleUseHint : handleClue}
                                         disabled={activeSessionId
                                             ? (!currentPuzzle?.best_move_uci || hintsUsed >= 3)
-                                            : (!currentPuzzle?.best_move_uci || clueStage === 2)}
+                                            : clue.isDisabled}
                                         className="px-6 py-4 border border-primary/20 text-primary rounded-sm font-serif text-lg transition-all km-interactive km-focus-visible disabled:opacity-50 disabled:cursor-default">
                                         {activeSessionId ? `Hint (${hintsUsed}/3)` : 'Clue'}
                                     </button>
@@ -1776,7 +1761,7 @@ export default function Puzzles() {
                                                 setStatus('solving');
                                                 setUserMove('');
                                                 setGame(new Chess(currentPuzzle.fen));
-                                                setClueStage(0);
+                                                clue.reset();
                                             }}
                                             className="px-6 py-4 border border-primary/20 text-primary rounded-sm font-serif text-lg transition-all km-interactive km-focus-visible">
                                             Mark as Failed & Try Again

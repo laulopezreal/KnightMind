@@ -44,7 +44,7 @@ vi.mock('../components/RecentSessionsCard', () => ({
 
 describe('Dashboard', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     mockUsername = 'testplayer';
   });
 

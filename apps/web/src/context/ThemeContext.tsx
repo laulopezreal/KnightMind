@@ -39,7 +39,8 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     // Apply theme class to body synchronously before the browser paints
     // to avoid a flash of the wrong theme (FOUC).
     useLayoutEffect(() => {
-        document.body.className = theme;
+        document.body.classList.remove('night', 'day');
+        document.body.classList.add(theme);
     }, [theme]);
 
     // Listen for OS-level preference changes when the user hasn't stored a preference

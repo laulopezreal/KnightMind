@@ -13,7 +13,7 @@ describe('Modal', () => {
   const onClose = vi.fn();
 
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     document.body.className = '';
   });
 
