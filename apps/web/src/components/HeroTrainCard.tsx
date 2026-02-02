@@ -17,12 +17,16 @@ export function HeroTrainCard({
 }: HeroTrainCardProps) {
   // Determine the state and messaging
   const isZeroDue = dueCount === 0;
-  const title = needsWarmup ? '🧠 Welcome Back' : '🧠 Train Today';
+  const title = needsWarmup
+    ? 'Welcome Back'
+    : isZeroDue
+    ? 'All Caught Up'
+    : 'Train Today';
 
   const supportingText = needsWarmup
     ? `You've been away ${daysSinceLastSession} days. Let's do a quick warmup to see what stuck!`
     : isZeroDue
-    ? "You're all caught up!"
+    ? 'Great work! Check back later for more puzzles.'
     : 'Most people improve by solving these today.';
 
   const buttonText = needsWarmup
@@ -44,33 +48,20 @@ export function HeroTrainCard({
         {title}
       </h2>
 
-      {/* Due Count (or celebration) */}
-      {isZeroDue ? (
-        <div className="mb-6">
-          <p className="text-4xl md:text-5xl font-mono text-primary mb-2">
-            🎉
-          </p>
-          <p className="text-lg text-primary/60 font-sans">
-            {supportingText}
-          </p>
-        </div>
-      ) : (
-        <div className="mb-6">
-          <p className="text-6xl md:text-7xl font-mono text-primary mb-2">
-            {dueCount}
-          </p>
-          <p className="text-primary/60 text-sm font-sans">
-            puzzle{dueCount !== 1 ? 's' : ''} due
-          </p>
-        </div>
-      )}
+      {/* Due Count */}
+      <div className="mb-6">
+        <p className="text-6xl md:text-7xl font-mono text-primary mb-2">
+          {dueCount}
+        </p>
+        <p className="text-primary/60 text-sm font-sans">
+          puzzle{dueCount !== 1 ? 's' : ''} due
+        </p>
+      </div>
 
       {/* Supporting Text */}
-      {!isZeroDue && (
-        <p className="text-lg text-primary/60 font-sans mb-8">
-          {supportingText}
-        </p>
-      )}
+      <p className="text-lg text-primary/60 font-sans mb-8">
+        {supportingText}
+      </p>
 
       {/* Primary CTA */}
       <button

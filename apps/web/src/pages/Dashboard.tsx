@@ -124,19 +124,12 @@ export default function Dashboard() {
         <main className="container mx-auto p-6 max-w-7xl space-y-8">
             {/* Header */}
             <section>
-                <div className="flex justify-between items-end">
-                    <div>
-                        <h1 className="text-4xl md:text-5xl font-serif text-primary mb-2">
-                            Dashboard
-                        </h1>
-                        <p className="text-lg text-primary/60 font-sans">
-                            Your chess training overview
-                        </p>
-                    </div>
-                    <Link to="/" className="text-primary/60 hover:text-primary text-sm transition-colors">
-                        ← Home
-                    </Link>
-                </div>
+                <h1 className="text-4xl md:text-5xl font-serif text-primary mb-2">
+                    Dashboard
+                </h1>
+                <p className="text-lg text-primary/60 font-sans">
+                    Your chess training overview
+                </p>
             </section>
 
             {/* SECTION 1: Hero Train Card */}
