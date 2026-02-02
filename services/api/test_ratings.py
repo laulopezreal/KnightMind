@@ -199,4 +199,4 @@ def test_explain_rating_changes_basic(client_with_db, db_session, tmp_path, monk
     assert data["stats"]["losses"] == 0
     assert data["rating"]["reference_rating"] == 1400
     assert data["rating"]["reference_is_approx"] is False
-    assert any("outperformed" in driver.lower() for driver in data["drivers"])
+    assert any("outperformed" in driver["text"].lower() for driver in data["drivers"])

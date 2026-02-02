@@ -46,12 +46,18 @@ export interface DriverStats {
     missing_opponent_rating_games: number;
 }
 
+export interface Driver {
+    text: string;
+    severity: 'major' | 'moderate' | 'minor';
+    direction: 'up' | 'down' | 'neutral';
+}
+
 export interface ExplainResponse {
     time_control: string;
     window: RatingWindow;
     rating: RatingInfo;
     stats: DriverStats;
-    drivers: string[];
+    drivers: Driver[];
     highlights: Highlights;
 }
 

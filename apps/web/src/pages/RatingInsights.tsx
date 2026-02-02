@@ -448,71 +448,72 @@ export default function RatingInsights() {
                             {/* Drivers */}
                             <section className="border-t border-primary/10 pt-8">
                                 <h2 className="text-2xl font-serif text-primary mb-6">Primary Drivers</h2>
-                                {hasGames ? (
-                                    <>
-                                        {data.drivers.length > 0 ? (
-                                            (() => {
-                                                const prefix = confidence === 'low' ? 'Early signal: ' : confidence === 'medium' ? 'Likely contributed: ' : 'Key driver: ';
-                                                return (
-                                                    <ul className="space-y-4">
-                                                        {data.drivers.map((driver, i) => (
-                                                            <li key={i} className="flex items-start gap-3 text-lg font-sans text-primary/80">
-                                                                <span className="mt-2 w-1.5 h-1.5 rounded-full bg-primary/40" />
-                                                                {prefix}{driver}
-                                                            </li>
-                                                        ))}
-                                                    </ul>
-                                                );
-                                            })()
-                                        ) : (
-                                            <p className="text-primary/50 font-sans italic">No clear drivers yet. Play a few games and this will explain what influenced your rating most.</p>
-                                        )}
-                                    </>
+                                {data.drivers.length > 0 ? (
+                                    <ul className="space-y-4">
+                                        {data.drivers.map((driver, i) => {
+                                            const dotColor = driver.direction === 'up' ? 'bg-emerald-500' : driver.direction === 'down' ? 'bg-red-500' : 'bg-primary/40';
+                                            const severityLabel = driver.severity === 'major' ? 'Major' : driver.severity === 'moderate' ? 'Moderate' : 'Minor';
+                                            const severityColor = driver.severity === 'major' ? 'bg-primary/10 text-primary/70' : driver.severity === 'moderate' ? 'bg-primary/5 text-primary/50' : 'bg-primary/5 text-primary/40';
+                                            return (
+                                                <li key={i} className="flex items-start gap-3 text-lg font-sans text-primary/80">
+                                                    <span className={`mt-2 w-2 h-2 rounded-full shrink-0 ${dotColor}`} />
+                                                    <span>{driver.text}</span>
+                                                    <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full shrink-0 mt-1 ${severityColor}`}>{severityLabel}</span>
+                                                </li>
+                                            );
+                                        })}
+                                    </ul>
                                 ) : (
-                                    <div className="space-y-2">
-                                        <p className="text-primary/80 font-sans text-lg">No clear drivers yet.</p>
-                                        <p className="text-primary/50 font-sans">Once you’ve played a few games, this section will explain what influenced your rating most.</p>
-                                    </div>
-                                )}
-                                {hasGames && (
-                                    <p className="mt-8 text-xs text-primary/40 font-sans italic">
-                                        * Drivers are based on results vs expectation; Chess.com uses internal factors, so this is directional.
+                                    <p className="text-primary/50 font-sans italic">
+                                        Performance matched expectations — no standout drivers in this window.
                                     </p>
                                 )}
+                                <p className="mt-8 text-xs text-primary/40 font-sans italic">
+                                    Based on results vs Elo expectation. Chess.com uses internal factors, so this is directional only.
+                                </p>
                             </section>
 
-                            {/* Highlights - Only show if items exist */}
-                            {hasGames && (data.highlights.worst_surprises.length > 0 || data.highlights.best_surprises.length > 0) && (
-                                <section className="grid grid-cols-1 md:grid-cols-2 gap-12 border-t border-primary/10 pt-8">
-                                    {data.highlights.worst_surprises.length > 0 && (
-                                        <div>
-                                            <h3 className="text-xl font-serif text-primary mb-6 flex items-center gap-2">
-                                                <span>Most Costly Games</span>
-                                                <span className="text-xs font-sans bg-red-500/10 text-red-600 px-2 py-1 rounded-full">Negative Surprise</span>
-                                            </h3>
-                                            <div className="space-y-2">
-                                                {data.highlights.worst_surprises.map(game => (
-                                                    <GameRow key={game.game_id} game={game} type="bad" />
-                                                ))}
+                            {/* Highlights */}
+                            <section className="border-t border-primary/10 pt-8">
+                                {(data.highlights.worst_surprises.length > 0 || data.highlights.best_surprises.length > 0) ? (
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-12">
+                                        {data.highlights.worst_surprises.length > 0 && (
+                                            <div>
+                                                <h3 className="text-xl font-serif text-primary mb-6 flex items-center gap-2">
+                                                    <span>Most Costly Games</span>
+                                                    <span className="text-xs font-sans bg-red-500/10 text-red-600 px-2 py-1 rounded-full">Negative Surprise</span>
+                                                </h3>
+                                                <div className="space-y-2">
+                                                    {data.highlights.worst_surprises.map(game => (
+                                                        <GameRow key={game.game_id} game={game} type="bad" />
+                                                    ))}
+                                                </div>
                                             </div>
-                                        </div>
-                                    )}
+                                        )}
 
-                                    {data.highlights.best_surprises.length > 0 && (
-                                        <div>
-                                            <h3 className="text-xl font-serif text-primary mb-6 flex items-center gap-2">
-                                                <span>Most Helpful Games</span>
-                                                <span className="text-xs font-sans bg-emerald-500/10 text-emerald-600 px-2 py-1 rounded-full">Positive Surprise</span>
-                                            </h3>
-                                            <div className="space-y-2">
-                                                {data.highlights.best_surprises.map(game => (
-                                                    <GameRow key={game.game_id} game={game} type="good" />
-                                                ))}
+                                        {data.highlights.best_surprises.length > 0 && (
+                                            <div>
+                                                <h3 className="text-xl font-serif text-primary mb-6 flex items-center gap-2">
+                                                    <span>Most Helpful Games</span>
+                                                    <span className="text-xs font-sans bg-emerald-500/10 text-emerald-600 px-2 py-1 rounded-full">Positive Surprise</span>
+                                                </h3>
+                                                <div className="space-y-2">
+                                                    {data.highlights.best_surprises.map(game => (
+                                                        <GameRow key={game.game_id} game={game} type="good" />
+                                                    ))}
+                                                </div>
                                             </div>
-                                        </div>
-                                    )}
-                                </section>
-                            )}
+                                        )}
+                                    </div>
+                                ) : (
+                                    <div>
+                                        <h3 className="text-xl font-serif text-primary mb-3">Game Highlights</h3>
+                                        <p className="text-primary/50 font-sans italic">
+                                            All games matched expectations — no significant surprises in this window.
+                                        </p>
+                                    </div>
+                                )}
+                            </section>
                         </>
                     )}
                 </>

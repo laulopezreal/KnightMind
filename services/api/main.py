@@ -947,12 +947,18 @@ class DriverStats(BaseModel):
     missing_opponent_rating_games: int
 
 
+class Driver(BaseModel):
+    text: str
+    severity: Literal["major", "moderate", "minor"]
+    direction: Literal["up", "down", "neutral"]
+
+
 class ExplainResponse(BaseModel):
     time_control: str
     window: RatingWindow
     rating: RatingInfo
     stats: DriverStats
-    drivers: list[str]
+    drivers: list[Driver]
     highlights: Highlights
 
 
@@ -1124,27 +1130,48 @@ async def explain_rating_changes(
             
     avg_opp = int(total_opp_rating / opp_rating_count) if opp_rating_count > 0 else None
     
-    drivers = []
+    drivers: list[Driver] = []
     diff = actual_total_rated - expected_total
-    
+
     if diff > PERFORMANCE_DIFF_THRESHOLD:
-        drivers.append("You outperformed expectations overall (upward pressure).")
+        severity = "major" if abs(diff) > 2.0 else "moderate" if abs(diff) > 1.0 else "minor"
+        drivers.append(Driver(
+            text=f"You outperformed expectations by {diff:+.1f} points (upward pressure).",
+            severity=severity, direction="up"
+        ))
     elif diff < -PERFORMANCE_DIFF_THRESHOLD:
-        drivers.append("You underperformed expectations overall (downward pressure).")
-        
+        severity = "major" if abs(diff) > 2.0 else "moderate" if abs(diff) > 1.0 else "minor"
+        drivers.append(Driver(
+            text=f"You underperformed expectations by {diff:+.1f} points (downward pressure).",
+            severity=severity, direction="down"
+        ))
+
     wins_vs_higher = sum(1 for g in game_details if g["opp_rating"] and g["opp_rating"] >= reference_rating + RATING_DIFFERENCE_THRESHOLD and g["actual"] == 1.0)
     if wins_vs_higher >= SIGNIFICANT_WINS_VS_HIGHER_THRESHOLD:
-        drivers.append("Wins against higher-rated opponents likely offset losses.")
-        
+        drivers.append(Driver(
+            text=f"{wins_vs_higher} wins against higher-rated opponents likely offset losses.",
+            severity="moderate" if wins_vs_higher >= 4 else "minor", direction="up"
+        ))
+
     losses_vs_lower = sum(1 for g in game_details if g["opp_rating"] and g["opp_rating"] <= reference_rating - RATING_DIFFERENCE_THRESHOLD and g["actual"] == 0.0)
     if losses_vs_lower >= SIGNIFICANT_LOSSES_VS_LOWER_THRESHOLD:
-        drivers.append("Losses against lower-rated opponents likely drove most of the drop.")
-        
+        drivers.append(Driver(
+            text=f"{losses_vs_lower} losses against lower-rated opponents likely drove most of the drop.",
+            severity="moderate" if losses_vs_lower >= 4 else "minor", direction="down"
+        ))
+
     if len(opp_ratings) >= 5:
         variance = sum((x - avg_opp) ** 2 for x in opp_ratings) / len(opp_ratings)
         std_dev = variance ** 0.5
         if std_dev > OPPONENT_RATING_STD_DEV_THRESHOLD:
-            drivers.append("Wide opponent rating range increased volatility.")
+            drivers.append(Driver(
+                text="Wide opponent rating range increased volatility.",
+                severity="minor", direction="neutral"
+            ))
+
+    # Sort drivers by severity (major first)
+    severity_order = {"major": 0, "moderate": 1, "minor": 2}
+    drivers.sort(key=lambda d: severity_order[d.severity])
 
     def get_surprise_val(h: HighlightGame):
         act = 1.0 if h.result == "Win" else 0.5 if h.result == "Draw" else 0.0
