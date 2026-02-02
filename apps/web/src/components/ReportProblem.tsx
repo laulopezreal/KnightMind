@@ -12,30 +12,33 @@ export function ReportProblem() {
         >
             <svg
                 viewBox="0 0 24 24"
-                className="w-6 h-6"
-                fill="currentColor"
+                className="w-5 h-5"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
                 aria-hidden="true"
             >
-                {/* GitHub-style bug/ant icon */}
                 {/* Antennae */}
-                <path d="M8 2a1 1 0 0 1 .707.293l2 2a1 1 0 0 1-1.414 1.414L8 4.414 6.707 5.707A1 1 0 0 1 5.293 4.293l2-2A1 1 0 0 1 8 2z" opacity="0" />
-                <path d="M4.5 7.5A1.5 1.5 0 0 1 6 6h1.5L9 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" fill="none" />
-                <path d="M19.5 7.5A1.5 1.5 0 0 0 18 6h-1.5L15 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" fill="none" />
+                <path d="M8 6.5 L6 2" />
+                <circle cx="5.5" cy="1.5" r="1" fill="currentColor" stroke="none" />
+                <path d="M16 6.5 L18 2" />
+                <circle cx="18.5" cy="1.5" r="1" fill="currentColor" stroke="none" />
                 {/* Head */}
                 <circle cx="12" cy="8" r="2.5" />
                 {/* Body */}
-                <ellipse cx="12" cy="15" rx="4.5" ry="6" />
-                {/* Body segment line */}
-                <line x1="7.5" y1="14" x2="16.5" y2="14" stroke="var(--bg-primary, white)" strokeWidth="1" />
-                <line x1="7.5" y1="17" x2="16.5" y2="17" stroke="var(--bg-primary, white)" strokeWidth="1" />
+                <ellipse cx="12" cy="14.5" rx="4" ry="3.5" />
+                {/* Abdomen */}
+                <ellipse cx="12" cy="20" rx="3.5" ry="3" />
                 {/* Legs - left */}
-                <path d="M7.5 12.5 L4 10.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" fill="none" />
-                <path d="M7.5 15 L3.5 15" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" fill="none" />
-                <path d="M7.5 17.5 L4 19.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" fill="none" />
+                <path d="M8.5 12 L4 9.5" />
+                <path d="M8 14.5 L3 14.5" />
+                <path d="M8.5 17 L4 19.5" />
                 {/* Legs - right */}
-                <path d="M16.5 12.5 L20 10.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" fill="none" />
-                <path d="M16.5 15 L20.5 15" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" fill="none" />
-                <path d="M16.5 17.5 L20 19.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" fill="none" />
+                <path d="M15.5 12 L20 9.5" />
+                <path d="M16 14.5 L21 14.5" />
+                <path d="M15.5 17 L20 19.5" />
             </svg>
         </a>
     );
