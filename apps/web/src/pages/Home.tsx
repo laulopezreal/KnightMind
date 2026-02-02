@@ -144,13 +144,11 @@ export default function Home() {
       let generationFailed = false;
 
       if (result.games_count === 0 || result.new_games === 0) {
-        // No-op sync: timestamp update is sufficient feedback, no banner needed
-        setActionStatus(null);
+        setActionStatus('No new games — you\u2019re all caught up!');
         setOnboardingPhase('idle');
       } else {
-        // Automatically trigger puzzle generation for new games
         setNewGamesCount(result.new_games);
-        setActionStatus(`Imported ${result.new_games} new games. Generating puzzles...`);
+        setActionStatus(`${result.new_games} new game${result.new_games === 1 ? '' : 's'} found — generating puzzles...`);
         setOnboardingPhase('generating');
 
         try {
