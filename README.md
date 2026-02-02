@@ -107,6 +107,13 @@ If an environment ever needs a different base, update `API_BASE` in `apps/web/sr
 - Once a user has set their Chess.com username, the home screen emphasizes exploration and treats game syncing as an optional “Sync” action rather than a primary prompt to import games.
 - Syncing reports “No new games found” when existing games are already in the database.
 
+## Admin Ops Utilities
+
+The **Ops** page (`/ops` in the web app) surfaces admin-oriented endpoints to keep operational workflows close to the UI. (Assumption: these remain admin-only until role-based access is in place.)
+
+- **User index (`GET /users`)** – Powers the Ops “User Switcher,” letting admins set the active username without retyping it.
+- **Storage parity report (`GET /ops/storage/report`)** – Powers the Ops “Data Integrity” panel, reporting filesystem vs. database gaps per user to support migration checks.
+
 ## Testing
 
 ### Frontend
