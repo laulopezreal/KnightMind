@@ -3,6 +3,7 @@ Training session endpoints.
 
 Handles session lifecycle: start, complete, and recent sessions query.
 """
+import logging
 import uuid
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
@@ -11,7 +12,13 @@ from sqlalchemy import select, desc
 from pydantic import BaseModel
 
 from services.api.db import get_db
-from services.api.models import TrainingSession
+from services.api.models import TrainingSession, RatingSnapshot
+from services.ingest import get_player_stats
+
+logger = logging.getLogger(__name__)
+
+# Time controls to auto-snapshot on session completion (best-effort)
+AUTO_SNAPSHOT_TIME_CONTROLS = ["rapid", "blitz"]
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
@@ -176,6 +183,36 @@ async def get_session(
     )
 
 
+async def _auto_snapshot(username: str, session_id: str, db: Session) -> None:
+    """Best-effort: record rating snapshots for common time controls on session complete."""
+    try:
+        stats = await get_player_stats(username)
+    except Exception:
+        logger.debug("Auto-snapshot: could not fetch Chess.com stats for %s", username)
+        return
+
+    now = datetime.now(timezone.utc)
+    for tc in AUTO_SNAPSHOT_TIME_CONTROLS:
+        rating = stats.get(f"chess_{tc}", {}).get("last", {}).get("rating")
+        if not rating:
+            continue
+        snapshot = RatingSnapshot(
+            username=username,
+            source="chesscom",
+            time_control=tc,
+            rating=rating,
+            recorded_at=now,
+            session_id=session_id,
+        )
+        db.add(snapshot)
+
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.debug("Auto-snapshot: commit failed for %s", username)
+
+
 @router.post("/{session_id}/complete", response_model=SessionSummary)
 async def complete_session(
     session_id: str,
@@ -186,6 +223,7 @@ async def complete_session(
     Mark a session as complete.
 
     Idempotent - returns existing summary if already completed.
+    Auto-records rating snapshots linked to this session (best-effort).
     """
     # Fetch session
     stmt = select(TrainingSession).where(TrainingSession.id == session_id)
@@ -197,11 +235,13 @@ async def complete_session(
     if session.username != request.username:
         raise HTTPException(status_code=403, detail="Session belongs to different user")
 
-    # If not already completed, set completed_at
+    # If not already completed, set completed_at and auto-snapshot
     if session.completed_at is None:
         session.completed_at = datetime.now(timezone.utc)
         db.commit()
         db.refresh(session)
+        # Best-effort auto-snapshot after session completion
+        await _auto_snapshot(request.username, session_id, db)
 
     return SessionSummary(
         session_id=session.id,
