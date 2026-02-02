@@ -30,7 +30,7 @@ describe('Engine - Clue Functionality', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mockGetEngineStatus.mockResolvedValue({ available: true });
+    mockGetEngineStatus.mockResolvedValue({ available: true, message: 'Engine ready' });
     mockEvaluateFen.mockResolvedValue({ best_move_uci: 'e2e4', eval: 0.5 });
   });
 
@@ -387,7 +387,7 @@ describe('Engine - Clue Functionality', () => {
 
   describe('Error Handling', () => {
     it('should handle undefined bestMove gracefully', async () => {
-      mockEvaluateFen.mockResolvedValue({ best_move_uci: undefined as string | undefined, eval: 0.5 });
+      mockEvaluateFen.mockResolvedValue({ best_move_uci: '', eval: 0.5 });
 
       render(<Engine />);
 

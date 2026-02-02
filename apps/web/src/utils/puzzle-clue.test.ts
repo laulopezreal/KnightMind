@@ -16,7 +16,7 @@ describe('parseBestMoveUci', () => {
 
   it('should handle edge cases', () => {
     expect(parseBestMoveUci('')).toEqual({ from: '', to: '' });
-    expect(parseBestMoveUci(undefined as string | undefined)).toEqual({ from: '', to: '' });
+    expect(parseBestMoveUci(undefined as unknown as string)).toEqual({ from: '', to: '' });
     expect(parseBestMoveUci('abc')).toEqual({ from: '', to: '' });
     expect(parseBestMoveUci('a')).toEqual({ from: '', to: '' });
     expect(parseBestMoveUci('a1')).toEqual({ from: '', to: '' });
@@ -62,7 +62,7 @@ describe('getPieceNameAtSquare', () => {
 
   it('should handle invalid square parameters', () => {
     expect(getPieceNameAtSquare(startingFen, '')).toBe('Move the correct piece');
-    expect(getPieceNameAtSquare(startingFen, undefined as string | undefined)).toBe('Move the correct piece');
+    expect(getPieceNameAtSquare(startingFen, undefined as unknown as string)).toBe('Move the correct piece');
     expect(getPieceNameAtSquare(startingFen, 'i9')).toBe('Move the correct piece');
     expect(getPieceNameAtSquare(startingFen, 'a0')).toBe('Move the correct piece');
   });
