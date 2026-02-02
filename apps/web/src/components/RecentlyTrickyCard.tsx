@@ -1,11 +1,5 @@
 import { formatRelativeTime } from '../utils/time';
-
-export interface TrickyPuzzle {
-  puzzle_id: string;
-  title: string;
-  fail_count: number;
-  last_attempted_at: string;
-}
+import { type TrickyPuzzle } from '../api/users';
 
 interface RecentlyTrickyCardProps {
   puzzles: TrickyPuzzle[];
