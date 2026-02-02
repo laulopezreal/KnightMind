@@ -310,7 +310,6 @@ export default function Puzzles() {
         try {
             const performance = await getMotifPerformance(username);
             setMotifPerformance(performance);
-            setInsightsError(null);
         } catch (err) {
             console.warn('Unable to refresh motif performance:', err);
             setMotifPerformance(null);
@@ -323,9 +322,9 @@ export default function Puzzles() {
         try {
             const sessions = await getRecentSessions(username, 5);
             setRecentSessions(sessions);
-            setInsightsError(null);
         } catch (err) {
             console.warn('Unable to refresh recent sessions:', err);
+            setRecentSessions([]);
             setInsightsError(err instanceof Error ? err.message : 'Unable to load recent sessions');
         }
     }, [username]);
