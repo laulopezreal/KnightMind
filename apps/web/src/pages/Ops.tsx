@@ -1,12 +1,20 @@
 import { useState, useEffect } from 'react';
-import { getHealth, getOpsStatus, ApiError } from '../api';
-import type { HealthResponse, OpsStatusResponse, RecentJob } from '../api';
+import { getHealth, getOpsStatus, getStorageReport, getUsers, ApiError } from '../api';
+import type { HealthResponse, OpsStatusResponse, RecentJob, StorageReportResponse } from '../api';
+import { useChessUsername } from '../context/ChessUsernameContext';
 
 export default function Ops() {
     const [health, setHealth] = useState<HealthResponse | null>(null);
     const [opsStatus, setOpsStatus] = useState<OpsStatusResponse | null>(null);
+    const [storageReport, setStorageReport] = useState<StorageReportResponse | null>(null);
+    const [storageLoading, setStorageLoading] = useState(false);
+    const [storageError, setStorageError] = useState<string | null>(null);
+    const [users, setUsers] = useState<string[]>([]);
+    const [usersError, setUsersError] = useState<string | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
+    const { username, setUsername } = useChessUsername();
+    const [selectedUser, setSelectedUser] = useState(username);
 
     const fetchData = async () => {
         try {
@@ -30,11 +38,47 @@ export default function Ops() {
         }
     };
 
+    const fetchUsers = async () => {
+        try {
+            const list = await getUsers();
+            setUsers(list);
+            setUsersError(null);
+        } catch (err) {
+            console.error('Failed to fetch users:', err);
+            const msg = err instanceof ApiError ? err.message : 'Unable to load users.';
+            setUsersError(msg);
+        }
+    };
+
+    const fetchStorageReport = async (filterUser?: string) => {
+        try {
+            setStorageLoading(true);
+            const report = await getStorageReport(filterUser);
+            setStorageReport(report);
+            setStorageError(null);
+        } catch (err) {
+            console.error('Failed to fetch storage report:', err);
+            const msg = err instanceof ApiError ? err.message : 'Unable to load report.';
+            setStorageError(msg);
+        } finally {
+            setStorageLoading(false);
+        }
+    };
+
     useEffect(() => {
         fetchData();
         const interval = setInterval(fetchData, 5000);
         return () => clearInterval(interval);
     }, []);
+
+    useEffect(() => {
+        fetchUsers();
+        fetchStorageReport();
+    }, []);
+
+    useEffect(() => {
+        setSelectedUser(username);
+    }, [username]);
 
     if (loading && !opsStatus) {
         return (
@@ -56,6 +100,7 @@ export default function Ops() {
         health.worker !== 'ok' && 'Worker',
         health.stockfish !== 'ok' && 'Stockfish',
     ].filter(Boolean).join(', ') : null;
+    const reportEntries = storageReport ? Object.entries(storageReport.report) : [];
 
     return (
         <div className="w-full font-sans text-primary/80 space-y-12 pb-20">
@@ -84,6 +129,101 @@ export default function Ops() {
                     </button>
                 </div>
             )}
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <section className="bg-primary/5 border border-primary/10 rounded-sm p-6 space-y-4">
+                    <div className="flex items-center justify-between">
+                        <div>
+                            <h2 className="font-serif text-xl text-primary">User Switcher</h2>
+                            <p className="text-xs text-primary/50">Admin-only: quickly swap the active username.</p>
+                        </div>
+                        <button
+                            type="button"
+                            onClick={() => fetchUsers()}
+                            className="text-[10px] uppercase tracking-widest border border-primary/20 px-3 py-1 rounded-sm km-interactive km-focus-visible"
+                        >
+                            Refresh
+                        </button>
+                    </div>
+                    <div className="space-y-3">
+                        <label className="text-[10px] uppercase tracking-widest text-primary/50">Active user</label>
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                            <select
+                                value={selectedUser}
+                                onChange={(event) => setSelectedUser(event.target.value)}
+                                className="w-full bg-transparent border border-primary/20 py-2 px-3 text-primary focus:outline-none focus:border-primary/60 transition-colors font-sans text-sm rounded-sm"
+                            >
+                                <option value="">Select a user</option>
+                                {users.map(user => (
+                                    <option key={user} value={user}>{user}</option>
+                                ))}
+                            </select>
+                            <button
+                                type="button"
+                                onClick={() => setUsername(selectedUser)}
+                                disabled={!selectedUser}
+                                className="px-4 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-colors disabled:opacity-50 km-focus-visible"
+                            >
+                                Set Active
+                            </button>
+                        </div>
+                        {usersError && <p className="text-xs text-red-500/70">{usersError}</p>}
+                        {!usersError && users.length === 0 && (
+                            <p className="text-xs text-primary/40">No users found yet.</p>
+                        )}
+                    </div>
+                </section>
+
+                <section className="bg-primary/5 border border-primary/10 rounded-sm p-6 space-y-4">
+                    <div className="flex items-center justify-between">
+                        <div>
+                            <h2 className="font-serif text-xl text-primary">Data Integrity</h2>
+                            <p className="text-xs text-primary/50">Storage parity between filesystem and database.</p>
+                        </div>
+                        <button
+                            type="button"
+                            onClick={() => fetchStorageReport(selectedUser || undefined)}
+                            className="text-[10px] uppercase tracking-widest border border-primary/20 px-3 py-1 rounded-sm km-interactive km-focus-visible"
+                        >
+                            Refresh
+                        </button>
+                    </div>
+                    <div className="text-xs text-primary/50">
+                        Showing: {selectedUser ? selectedUser : 'All users'}
+                    </div>
+                    {storageLoading && (
+                        <div className="text-xs text-primary/40 animate-pulse">Loading report...</div>
+                    )}
+                    {storageError && (
+                        <div className="text-xs text-red-500/70">{storageError}</div>
+                    )}
+                    {!storageLoading && !storageError && reportEntries.length === 0 && (
+                        <div className="text-xs text-primary/40">No storage report data available.</div>
+                    )}
+                    {!storageLoading && !storageError && reportEntries.length > 0 && (
+                        <div className="space-y-3">
+                            {reportEntries.map(([user, report]) => (
+                                <div key={user} className="border border-primary/10 rounded-sm p-3 text-xs">
+                                    <div className="flex items-center justify-between">
+                                        <span className="font-serif text-primary">{user}</span>
+                                        <span className="text-[10px] uppercase tracking-widest text-primary/50">
+                                            Missing {report.missing_games_count + report.missing_puzzles_count}
+                                        </span>
+                                    </div>
+                                    <div className="mt-2 grid grid-cols-2 gap-4 text-primary/60">
+                                        <div>
+                                            Games: <span className="font-mono">{report.missing_games_count}</span>
+                                        </div>
+                                        <div>
+                                            Puzzles: <span className="font-mono">{report.missing_puzzles_count}</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </section>
+            </div>
 
             {opsStatus?.last_recovery.recovered_count && opsStatus.last_recovery.recovered_count > 0 && (
                 <div className="bg-amber-500/10 border border-amber-500/20 text-amber-500 p-4 rounded-sm font-sans text-xs flex items-center justify-between">

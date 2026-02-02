@@ -57,12 +57,33 @@ export interface OpsStatusResponse {
     };
 }
 
+export interface StorageReportEntry {
+    missing_games_count: number;
+    missing_puzzles_count: number;
+    missing_games_sample: string[];
+    missing_puzzles_sample: string[];
+}
+
+export interface StorageReportResponse {
+    user_count: number;
+    report: Record<string, StorageReportEntry>;
+}
+
 export async function getHealth(): Promise<HealthResponse> {
     return await request<HealthResponse>('/ops/health');
 }
 
 export async function getOpsStatus(): Promise<OpsStatusResponse> {
     return await request<OpsStatusResponse>('/ops/status');
+}
+
+export async function getStorageReport(username?: string): Promise<StorageReportResponse> {
+    const params = new URLSearchParams();
+    if (username) {
+        params.append('username', username);
+    }
+    const suffix = params.toString();
+    return await request<StorageReportResponse>(`/ops/storage/report${suffix ? `?${suffix}` : ''}`);
 }
 
 export async function getJobStatus(jobId: string): Promise<JobStatusResponse> {
