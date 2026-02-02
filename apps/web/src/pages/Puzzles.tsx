@@ -127,6 +127,8 @@ export default function Puzzles() {
     const [userStatus, setUserStatus] = useState<UserStatus | null>(null);
     const [isLoadingStatus, setIsLoadingStatus] = useState(false);
     const [motifPerformance, setMotifPerformance] = useState<MotifPerformanceResponse | null>(null);
+    const [isRefreshingInsights, setIsRefreshingInsights] = useState(false);
+    const [insightsError, setInsightsError] = useState<string | null>(null);
 
     const statusRef = useRef(status);
     statusRef.current = status;
@@ -244,8 +246,9 @@ export default function Puzzles() {
             try {
                 const sessions = await getRecentSessions(username, 5);
                 setRecentSessions(sessions);
+                setInsightsError(null);
             } catch (err) {
-                setError(err instanceof Error ? err.message : 'Failed to load recent sessions');
+                setInsightsError(err instanceof Error ? err.message : 'Failed to load recent sessions');
             }
         };
 
@@ -268,11 +271,13 @@ export default function Puzzles() {
                 const status = await getUserStatus(username);
                 if (!cancelled) {
                     setUserStatus(status);
+                    setInsightsError(null);
                 }
             } catch (err) {
                 if (!cancelled) {
                     console.warn('Unable to load user status:', err);
                     setUserStatus(null);
+                    setInsightsError(err instanceof Error ? err.message : 'Unable to load user status');
                 }
             } finally {
                 if (!cancelled) {
@@ -293,8 +298,35 @@ export default function Puzzles() {
         try {
             const status = await getUserStatus(username);
             setUserStatus(status);
+            setInsightsError(null);
         } catch (err) {
             console.warn('Unable to refresh user status:', err);
+            setInsightsError(err instanceof Error ? err.message : 'Unable to refresh user status');
+        }
+    }, [username]);
+
+    const refreshMotifPerformance = useCallback(async () => {
+        if (!username) return;
+        try {
+            const performance = await getMotifPerformance(username);
+            setMotifPerformance(performance);
+            setInsightsError(null);
+        } catch (err) {
+            console.warn('Unable to refresh motif performance:', err);
+            setMotifPerformance(null);
+            setInsightsError(err instanceof Error ? err.message : 'Unable to load motif performance');
+        }
+    }, [username]);
+
+    const refreshRecentSessions = useCallback(async () => {
+        if (!username) return;
+        try {
+            const sessions = await getRecentSessions(username, 5);
+            setRecentSessions(sessions);
+            setInsightsError(null);
+        } catch (err) {
+            console.warn('Unable to refresh recent sessions:', err);
+            setInsightsError(err instanceof Error ? err.message : 'Unable to load recent sessions');
         }
     }, [username]);
 
@@ -311,11 +343,13 @@ export default function Puzzles() {
                 const performance = await getMotifPerformance(username);
                 if (!cancelled) {
                     setMotifPerformance(performance);
+                    setInsightsError(null);
                 }
             } catch (err) {
                 if (!cancelled) {
                     console.warn('Unable to load motif performance:', err);
                     setMotifPerformance(null);
+                    setInsightsError(err instanceof Error ? err.message : 'Unable to load motif performance');
                 }
             }
         };
@@ -932,12 +966,30 @@ export default function Puzzles() {
             job.status === 'running' ||
             (!puzzlesAvailable && (job.status === 'succeeded' || job.status === 'failed')));
     const shouldShowErrorCard = sessionState === 'error' && !!error;
+    const shouldShowLoadingCard =
+        (isLoading || isLoadingStatus || isResumingSession) && !isGenerating && !shouldShowJobStatusCard;
     const shouldShowEmptyState =
         !isLoading &&
         !isGenerating &&
+        !isLoadingStatus &&
         !puzzlesAvailable &&
         !shouldShowJobStatusCard &&
         !error;
+    const shouldShowPartialDataCard =
+        !!username &&
+        !isLoadingStatus &&
+        !!userStatus &&
+        userStatus.puzzles_count > 0 &&
+        (!motifPerformance || !!insightsError);
+    const canRetryLoad = !!username && !isGenerating && !isLoading;
+
+    const handleRefreshInsights = useCallback(async () => {
+        if (!username) return;
+        setIsRefreshingInsights(true);
+        setInsightsError(null);
+        await Promise.all([refreshUserStatus(), refreshMotifPerformance(), refreshRecentSessions()]);
+        setIsRefreshingInsights(false);
+    }, [refreshMotifPerformance, refreshRecentSessions, refreshUserStatus, username]);
 
 
     const handleCheckAnswer = () => {
@@ -1341,7 +1393,38 @@ export default function Puzzles() {
                         </div>
                     )}
                     {shouldShowErrorCard && (
-                        <JobStatusCard status="failed" error={error ?? 'Failed to generate puzzles'} />
+                        <div className="space-y-4">
+                            <JobStatusCard status="failed" error={error ?? 'Failed to generate puzzles'} />
+                            <div className="flex flex-wrap justify-center gap-3">
+                                <button
+                                    type="button"
+                                    onClick={handleLoadPuzzles}
+                                    disabled={!canRetryLoad}
+                                    className={`px-6 py-2 border border-primary/20 text-primary rounded-sm font-serif transition-all km-focus-visible ${!canRetryLoad ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'}`}
+                                >
+                                    Retry Load
+                                </button>
+                                {userStatus?.has_new_games && (
+                                    <button
+                                        type="button"
+                                        onClick={handleGeneratePuzzles}
+                                        disabled={!canRetryLoad}
+                                        className={`px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-colors km-focus-visible ${!canRetryLoad ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'}`}
+                                    >
+                                        Generate New
+                                    </button>
+                                )}
+                                {!username && (
+                                    <button
+                                        type="button"
+                                        onClick={() => setEditorOpen(true)}
+                                        className="px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-colors km-interactive km-focus-visible"
+                                    >
+                                        Set Username
+                                    </button>
+                                )}
+                            </div>
+                        </div>
                     )}
                     {shouldShowJobStatusCard && job && (
                         <JobStatusCard
@@ -1352,8 +1435,27 @@ export default function Puzzles() {
                             onCancel={handleCancelJob}
                         />
                     )}
-                    {isLoading && !isGenerating && (
-                        <JobStatusCard status="running" message="Loading puzzles..." />
+                    {shouldShowLoadingCard && (
+                        <JobStatusCard
+                            status="running"
+                            message={isResumingSession ? 'Resuming your session...' : isLoadingStatus ? 'Loading training status...' : 'Loading puzzles...'}
+                        />
+                    )}
+                    {shouldShowPartialDataCard && (
+                        <div className="bg-primary/5 border border-primary/10 rounded-sm p-6 backdrop-blur-sm text-center space-y-4">
+                            <h3 className="font-serif text-xl text-primary">Some insights are unavailable</h3>
+                            <p className="text-primary/60 font-sans">
+                                {insightsError || 'We are still syncing your tactical insights. Refresh to try again.'}
+                            </p>
+                            <button
+                                type="button"
+                                onClick={handleRefreshInsights}
+                                disabled={isRefreshingInsights}
+                                className={`px-6 py-2 border border-primary/20 text-primary rounded-sm font-serif transition-all km-focus-visible ${isRefreshingInsights ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'}`}
+                            >
+                                {isRefreshingInsights ? 'Refreshing...' : 'Refresh Insights'}
+                            </button>
+                        </div>
                     )}
                 </div>
             </section>
