@@ -41,7 +41,7 @@ export default function Ops() {
         }
     }, []);
 
-    const fetchUsers = async () => {
+    const fetchUsers = useCallback(async () => {
         try {
             const list = await getUsers();
             setUsers(list);
@@ -50,7 +50,7 @@ export default function Ops() {
             console.error('Failed to fetch users:', err);
             setUsersError(getErrorMessage(err, 'Unable to load users.'));
         }
-    };
+    }, []);
 
     const fetchStorageReport = useCallback(async (filterUser?: string) => {
         try {
