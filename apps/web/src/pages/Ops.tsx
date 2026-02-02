@@ -26,7 +26,7 @@ export default function Ops() {
         return fallback;
     };
 
-    const fetchData = async () => {
+    const fetchData = useCallback(async () => {
         try {
             const [h, s] = await Promise.all([getHealth(), getOpsStatus()]);
             setHealth(h);
@@ -39,7 +39,7 @@ export default function Ops() {
         } finally {
             setLoading(false);
         }
-    };
+    }, []);
 
     const fetchUsers = async () => {
         try {
@@ -70,7 +70,7 @@ export default function Ops() {
         fetchData();
         const interval = setInterval(fetchData, 5000);
         return () => clearInterval(interval);
-    }, []);
+    }, [fetchData]);
 
     useEffect(() => {
         fetchUsers();
@@ -104,7 +104,7 @@ export default function Ops() {
         health.worker !== 'ok' && 'Worker',
         health.stockfish !== 'ok' && 'Stockfish',
     ].filter(Boolean).join(', ') : null;
-    const reportEntries = storageReport ? Object.entries(storageReport.report) : [];
+    const reportEntries = storageReport ? Object.entries(storageReport.report ?? {}) : [];
     const canSetUser = selectedUser && selectedUser !== username;
 
     return (
@@ -234,16 +234,16 @@ export default function Ops() {
                 </section>
             </div>
 
-            {opsStatus?.last_recovery.recovered_count && opsStatus.last_recovery.recovered_count > 0 && (
+            {(opsStatus?.last_recovery?.recovered_count ?? 0) > 0 && (
                 <div className="bg-amber-500/10 border border-amber-500/20 text-amber-500 p-4 rounded-sm font-sans text-xs flex items-center justify-between">
                     <div className="flex items-center gap-3">
                         <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
                         <span>
-                            <span className="font-bold">Self-Healing:</span> {opsStatus.last_recovery.recovered_count} stuck job{opsStatus.last_recovery.recovered_count > 1 ? 's' : ''} recovered after restart
+                            <span className="font-bold">Self-Healing:</span> {opsStatus?.last_recovery?.recovered_count} stuck job{(opsStatus?.last_recovery?.recovered_count ?? 0) > 1 ? 's' : ''} recovered after restart
                         </span>
                     </div>
                     <span className="opacity-40 text-[10px]">
-                        {opsStatus.last_recovery.last_recovery_at && new Date(opsStatus.last_recovery.last_recovery_at).toLocaleTimeString()}
+                        {opsStatus?.last_recovery?.last_recovery_at != null && new Date(opsStatus.last_recovery.last_recovery_at).toLocaleTimeString()}
                     </span>
                 </div>
             )}
@@ -271,73 +271,94 @@ export default function Ops() {
                 )}
             </div>
 
-            {/* Active Job Panel - More premium feel */}
+            {/* Background process — disclosure (details/summary) */}
             {activeJob ? (
-                <section className="border border-primary/20 bg-primary/[0.02] rounded-sm p-8 relative">
-                    <div className="absolute top-0 left-0 h-[2px] bg-amber-500/30 w-full" />
-                    <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6 mb-8">
+                <details className="group bg-primary/5 border border-primary/10 rounded-sm overflow-hidden backdrop-blur-sm">
+                    <summary className="list-none flex items-center justify-between gap-4 px-5 py-4 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 rounded-sm [&::-webkit-details-marker]:hidden [&::marker]:hidden">
+                        <div className="flex items-center gap-4 min-w-0">
+                            <span className="text-[10px] uppercase tracking-widest text-primary/50 font-sans shrink-0">Process</span>
+                            <span className="font-serif text-lg font-medium text-primary truncate">{activeJob.type}</span>
+                            <StatusBadge status={activeJob.status} />
+                        </div>
+                        <div className="flex items-center gap-3 shrink-0">
+                            <span className="text-[11px] font-mono text-primary/50 tabular-nums">{calculateElapsed(activeJob.created_at)}</span>
+                            <span className="inline-block w-0 h-0 border-l-[4px] border-r-[4px] border-t-[5px] border-l-transparent border-r-transparent border-t-primary/40 transition-transform duration-200 group-open:rotate-180" aria-hidden />
+                        </div>
+                    </summary>
+                    <div className="border-t border-primary/10 px-5 pb-5 pt-4 space-y-5">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3 text-sm">
+                            <dl className="flex flex-col gap-0.5">
+                                <dt className="text-[10px] uppercase tracking-widest text-primary/50 font-sans">Job ID</dt>
+                                <dd className="font-mono text-primary/90 text-xs">{activeJob.id}</dd>
+                            </dl>
+                            <dl className="flex flex-col gap-0.5">
+                                <dt className="text-[10px] uppercase tracking-widest text-primary/50 font-sans">User</dt>
+                                <dd className="font-sans text-primary/90 text-xs">{activeJob.username}</dd>
+                            </dl>
+                            <dl className="flex flex-col gap-0.5">
+                                <dt className="text-[10px] uppercase tracking-widest text-primary/50 font-sans">Created</dt>
+                                <dd className="font-mono text-primary/90 text-xs">{formatTime(activeJob.created_at)}</dd>
+                            </dl>
+                            <dl className="flex flex-col gap-0.5">
+                                <dt className="text-[10px] uppercase tracking-widest text-primary/50 font-sans">Updated</dt>
+                                <dd className="font-mono text-primary/90 text-xs">{formatTime(activeJob.updated_at)}</dd>
+                            </dl>
+                        </div>
                         <div>
-                            <div className="text-[10px] uppercase tracking-[0.2em] text-amber-500 font-bold mb-2">Live Process</div>
-                            <h2 className="text-2xl font-serif font-medium text-primary">{activeJob.type}</h2>
-                            <p className="text-xs opacity-50 font-mono mt-1">
-                                {activeJob.id} • {activeJob.username}
-                            </p>
+                            <span className="text-[10px] uppercase tracking-widest text-primary/50 font-sans block mb-1">Message</span>
+                            <p className="text-sm font-serif italic text-primary/80">{activeJob.message || 'Processing…'}</p>
                         </div>
-                        <div className="text-right flex flex-col items-end">
-                            <span className="px-3 py-1 bg-amber-500/5 text-amber-500 text-[11px] uppercase tracking-widest border border-amber-500/20 rounded-sm font-sans font-bold">
-                                {activeJob.status}
-                            </span>
-                            <div className="text-[10px] opacity-40 mt-2">
-                                ELAPSED: {calculateElapsed(activeJob.created_at)}
-                            </div>
-                        </div>
-                    </div>
-
-                    <div className="space-y-3">
                         {(() => {
                             const pct = activeJob.progress_total > 0
                                 ? Math.round(100 * activeJob.progress_current / activeJob.progress_total)
                                 : activeJob.progress_current;
                             return (
-                                <>
-                                    <div className="flex justify-between text-xs font-serif italic mb-1">
-                                        <span className="opacity-70">{activeJob.message || 'Processing...'}</span>
-                                        <span className="font-sans font-bold text-primary">{pct}%</span>
+                                <div className="space-y-2">
+                                    <div className="flex justify-between text-xs">
+                                        <span className="text-[10px] uppercase tracking-widest text-primary/50">Progress</span>
+                                        <span className="font-sans font-medium text-primary tabular-nums">{pct}%</span>
                                     </div>
-                                    <div className="h-1 w-full bg-primary/10 rounded-full overflow-hidden">
-                                        <div
-                                            className="h-full bg-primary/40 transition-all duration-1000 ease-out shadow-[0_0_10px_rgba(var(--text-primary-rgb),0.1)]"
-                                            style={{ width: `${Math.min(100, pct)}%` }}
-                                        />
+                                    <div className="h-2 w-full bg-primary/10 rounded-full overflow-hidden">
+                                        <div className="h-full bg-primary/40 transition-[width] duration-300 ease-out" style={{ width: `${Math.min(100, pct)}%` }} />
                                     </div>
-                                </>
+                                </div>
                             );
                         })()}
+                        {activeJob.error_message && (
+                            <div>
+                                <span className="text-[10px] uppercase tracking-widest text-red-500/70 font-sans block mb-1">Error</span>
+                                <p className="text-xs text-red-500/80 font-sans">{activeJob.error_message}</p>
+                            </div>
+                        )}
                     </div>
-                </section>
+                </details>
             ) : (
-                <div className="py-12 border border-dashed border-primary/10 text-center rounded-sm">
-                    <p className="text-[10px] uppercase tracking-widest opacity-30 italic">No background processes active</p>
-                </div>
+                <details className="group bg-primary/5 border border-primary/10 rounded-sm overflow-hidden backdrop-blur-sm">
+                    <summary className="list-none flex items-center justify-between gap-3 px-5 py-3 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 rounded-sm [&::-webkit-details-marker]:hidden [&::marker]:hidden">
+                        <span className="text-[10px] uppercase tracking-widest text-primary/50 font-sans">No background process</span>
+                        <span className="inline-block w-0 h-0 border-l-[4px] border-r-[4px] border-t-[5px] border-l-transparent border-r-transparent border-t-primary/40 transition-transform duration-200 group-open:rotate-180" aria-hidden />
+                    </summary>
+                    <div className="border-t border-primary/10 px-5 pb-4 pt-3">
+                        <p className="text-xs font-sans text-primary/60 leading-relaxed">
+                            No jobs are running. Start puzzle generation from Puzzles or run a sync to queue work.
+                        </p>
+                    </div>
+                </details>
             )}
 
             {/* Bottom Row: Metrics & Activity Table */}
             <div className="grid grid-cols-1 xl:grid-cols-4 gap-12 items-start">
                 {/* 24h Metrics Panel */}
-                <aside className="xl:col-span-1 bg-primary/[0.01] border border-primary/10 p-6 rounded-sm">
+                <aside className="xl:col-span-1 min-w-[220px] bg-primary/[0.01] border border-primary/10 p-6 rounded-sm">
                     <h3 className="font-serif text-xl mb-6 opacity-90 border-b border-primary/10 pb-3">Operational Metrics</h3>
                     {metrics ? (
-                        <div className="space-y-6">
+                        <div className="space-y-5">
                             <MetricItem label="Jobs Succeeded" value={metrics.jobs_succeeded} />
                             <MetricItem label="Jobs Failed" value={metrics.jobs_failed} trend={metrics.jobs_failed > 0 ? 'bad' : 'good'} />
-                            <MetricItem label="Avg Execution" value={formatDuration(metrics.avg_duration_ms)} />
-                            <MetricItem label="Neural Hit Rate" value={`${calculateCacheRate(metrics.cache_hits, metrics.cache_misses)}%`} />
-
-                            <div className="pt-4 mt-4 border-t border-primary/5 text-center">
-                                <span className="text-[9px] uppercase tracking-[0.3em] opacity-30">Network Efficiency</span>
-                                <div className="text-[10px] opacity-40 mt-1 font-mono">
-                                    {metrics.cache_hits}H / {metrics.cache_misses}M
-                                </div>
+                            <MetricItem label="Avg execution" value={formatDuration(metrics.avg_duration_ms ?? 0)} />
+                            <MetricItem label="Cache hit rate" value={`${calculateCacheRate(metrics.cache_hits, metrics.cache_misses)}%`} />
+                            <div className="pt-4 mt-4 border-t border-primary/10">
+                                <MetricItem label="Hits / misses" value={`${metrics.cache_hits} / ${metrics.cache_misses}`} />
                             </div>
                         </div>
                     ) : (
@@ -356,19 +377,19 @@ export default function Ops() {
                             <table className="w-full text-left text-[11px] border-collapse">
                                 <thead>
                                     <tr className="border-b border-primary/10 opacity-50 font-serif uppercase tracking-widest">
-                                        <th className="px-6 py-4 font-medium border-r border-primary/5">Job ID</th>
-                                        <th className="px-6 py-4 font-medium border-r border-primary/5">User</th>
-                                        <th className="px-6 py-4 font-medium border-r border-primary/5">Process Type</th>
-                                        <th className="px-6 py-4 font-medium border-r border-primary/5">Status</th>
-                                        <th className="px-6 py-4 font-medium border-r border-primary/5">Timestamp</th>
-                                        <th className="px-6 py-4 font-medium text-right">Telemetry</th>
+                                        <th scope="col" className="px-6 py-4 font-medium border-r border-primary/5">Job ID</th>
+                                        <th scope="col" className="px-6 py-4 font-medium border-r border-primary/5">User</th>
+                                        <th scope="col" className="px-6 py-4 font-medium border-r border-primary/5">Process Type</th>
+                                        <th scope="col" className="px-6 py-4 font-medium border-r border-primary/5">Status</th>
+                                        <th scope="col" className="px-6 py-4 font-medium border-r border-primary/5">Timestamp</th>
+                                        <th scope="col" className="px-6 py-4 font-medium text-right">Telemetry</th>
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-primary/5">
                                     {recentJobs.map(job => (
                                         <tr key={job.id} className="hover:bg-primary/[0.01] transition-colors group">
                                             <td className="px-6 py-4 font-mono opacity-50 group-hover:opacity-100 border-r border-primary/5">
-                                                #{job.id.substring(0, 6)}
+                                                #{job.id?.substring(0, 6) ?? '—'}
                                             </td>
                                             <td className="px-6 py-4 border-r border-primary/5 font-medium opacity-80">
                                                 {job.username}
@@ -379,23 +400,23 @@ export default function Ops() {
                                             <td className="px-6 py-4 border-r border-primary/5">
                                                 <StatusBadge status={job.status} />
                                             </td>
-                                            <td className="px-6 py-4 border-r border-primary/5">
-                                                <div className="font-serif italic">{formatTime(job.created_at)}</div>
-                                                <div className="text-[9px] opacity-30 tracking-tighter">{calculateDuration(job.created_at, job.updated_at)}</div>
+                                            <td className="px-6 py-4 border-r border-primary/5 whitespace-nowrap">
+                                                <span className="font-serif text-primary/90">{formatTime(job.created_at)}</span>
+                                                <span className="text-[10px] opacity-50 font-mono ml-1.5">· {calculateDuration(job.created_at, job.updated_at)}</span>
                                             </td>
                                             <td className="px-6 py-4 text-right">
                                                 {job.result_json ? (
-                                                    <div className="flex flex-col items-end opacity-70">
-                                                        <span className="font-serif italic">{job.result_json.generated != null ? `${job.result_json.generated} results` : '—'}</span>
-                                                        <span className="text-[9px] opacity-40 font-mono tracking-tighter">
-                                                            {calculateCacheRate(job.result_json.cache_hits ?? 0, job.result_json.cache_misses ?? 0)}% hit rate
+                                                    <span className="inline-block whitespace-nowrap font-sans text-primary/80">
+                                                        {job.result_json.generated != null ? `${job.result_json.generated} res` : '—'}
+                                                        <span className="text-[10px] opacity-50 font-mono ml-1.5">
+                                                            {calculateCacheRate(job.result_json.cache_hits ?? 0, job.result_json.cache_misses ?? 0)}% hit
                                                         </span>
-                                                    </div>
+                                                    </span>
                                                 ) : (
-                                                    <span className="text-[9px] opacity-30 uppercase tracking-widest">No results</span>
+                                                    <span className="text-[10px] opacity-40">—</span>
                                                 )}
                                                 {job.error_message && (
-                                                    <span className="text-red-500/60 block mt-1 leading-tight max-w-[150px] truncate" title={job.error_message}>
+                                                    <span className="text-red-500/60 block mt-1 leading-tight max-w-[180px] truncate text-left" title={job.error_message}>
                                                         {job.error_message}
                                                     </span>
                                                 )}
@@ -438,13 +459,11 @@ function HealthCard({ label, status, value }: { label: string, status: 'up' | 'd
 
 function MetricItem({ label, value, trend }: { label: string, value: string | number, trend?: 'good' | 'bad' }) {
     return (
-        <div className="flex justify-between items-end">
-            <span className="text-[10px] uppercase tracking-widest opacity-40">{label}</span>
-            <div className="flex flex-col items-end">
-                <span className={`text-lg font-serif ${trend === 'bad' ? 'text-red-500 opacity-70' : 'text-primary'}`}>
-                    {value}
-                </span>
-            </div>
+        <div className="flex flex-col gap-1">
+            <span className="text-[10px] uppercase tracking-widest opacity-50 font-sans">{label}</span>
+            <span className={`text-lg font-serif tabular-nums ${trend === 'bad' ? 'text-red-500 opacity-70' : 'text-primary'}`}>
+                {value}
+            </span>
         </div>
     );
 }
@@ -457,9 +476,10 @@ function StatusBadge({ status }: { status: RecentJob['status'] }) {
         queued: 'text-blue-500/70 border-blue-500/20',
         canceled: 'text-primary/30 border-primary/10',
     };
+    const style = colors[status] ?? 'text-primary/50 border-primary/10';
 
     return (
-        <span className={`px-2 py-0.5 border text-[9px] uppercase tracking-widest font-sans font-bold rounded-sm ${colors[status]}`}>
+        <span className={`px-2 py-0.5 border text-[9px] uppercase tracking-widest font-sans font-bold rounded-sm ${style}`}>
             {status}
         </span>
     );
