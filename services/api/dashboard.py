@@ -417,7 +417,8 @@ async def get_tricky_puzzles(
         select(PuzzleStats)
         .where(
             PuzzleStats.username == username,
-            PuzzleStats.fail_count >= 2
+            PuzzleStats.fail_count >= 2,
+            PuzzleStats.last_reviewed_at.isnot(None)
         )
         .order_by(
             desc(PuzzleStats.fail_count),
@@ -443,7 +444,8 @@ async def get_tricky_puzzles(
         select(func.count(PuzzleStats.puzzle_id))
         .where(
             PuzzleStats.username == username,
-            PuzzleStats.fail_count >= 2
+            PuzzleStats.fail_count >= 2,
+            PuzzleStats.last_reviewed_at.isnot(None)
         )
     ) or 0
 

@@ -6,7 +6,11 @@ interface StreakCardProps {
 }
 
 export function StreakCard({ streakDays, lastSessionAt }: StreakCardProps) {
-  const encouragement = streakDays > 0 ? 'Keep going' : 'Start your streak today';
+  const encouragement = streakDays > 0
+    ? 'Keep going'
+    : lastSessionAt
+    ? 'Resume your streak'
+    : 'Start your streak today';
 
   return (
     <section

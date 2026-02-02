@@ -1,14 +1,18 @@
+import { Link } from 'react-router-dom';
 import { formatRelativeTime } from '../utils/time';
 import { type TrickyPuzzle } from '../api/users';
 
 interface RecentlyTrickyCardProps {
   puzzles: TrickyPuzzle[];
+  totalCount: number;
 }
 
-export function RecentlyTrickyCard({ puzzles }: RecentlyTrickyCardProps) {
+export function RecentlyTrickyCard({ puzzles, totalCount }: RecentlyTrickyCardProps) {
   if (puzzles.length === 0) {
     return null; // Don't render if no tricky puzzles
   }
+
+  const remaining = totalCount - puzzles.length;
 
   return (
     <section
@@ -21,9 +25,10 @@ export function RecentlyTrickyCard({ puzzles }: RecentlyTrickyCardProps) {
 
       <div className="space-y-0">
         {puzzles.map((puzzle, index) => (
-          <div
+          <Link
             key={puzzle.puzzle_id}
-            className={`py-3 ${
+            to={`/puzzles?motif=${encodeURIComponent(puzzle.title)}`}
+            className={`block py-3 km-interactive rounded-sm px-2 -mx-2 ${
               index !== puzzles.length - 1 ? 'border-b border-primary/5' : ''
             }`}
           >
@@ -34,16 +39,17 @@ export function RecentlyTrickyCard({ puzzles }: RecentlyTrickyCardProps) {
 
             {/* Metadata */}
             <p className="text-xs text-primary/40 font-sans">
-              Failed {puzzle.fail_count}× · Last tried {formatRelativeTime(puzzle.last_attempted_at)}
+              Failed {puzzle.fail_count}&times; · Last tried {formatRelativeTime(puzzle.last_attempted_at)}
             </p>
-          </div>
+          </Link>
         ))}
       </div>
 
-      {/* Encouraging footer */}
-      <p className="mt-4 pt-4 border-t border-primary/5 text-xs text-primary/50 font-sans italic">
-        These puzzles are helping you learn. Keep practicing!
-      </p>
+      {remaining > 0 && (
+        <p className="mt-4 pt-4 border-t border-primary/5 text-xs text-primary/50 font-sans">
+          and {remaining} more tricky puzzle{remaining !== 1 ? 's' : ''}
+        </p>
+      )}
     </section>
   );
 }

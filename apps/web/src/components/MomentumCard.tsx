@@ -32,7 +32,7 @@ export function MomentumCard({ recentForm }: MomentumCardProps) {
               <div
                 key={i}
                 className={`w-6 h-6 rounded-sm transition-colors ${
-                  result === 'pass' ? 'bg-primary/30' : 'bg-primary/10'
+                  result === 'pass' ? 'bg-green-800/20' : 'bg-red-800/15'
                 }`}
                 title={result === 'pass' ? 'Correct' : 'Incorrect'}
                 aria-label={result === 'pass' ? 'Correct attempt' : 'Incorrect attempt'}
