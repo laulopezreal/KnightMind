@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useSearchParams, useNavigate } from 'react-router-dom';
 import { Chessboard } from 'react-chessboard';
 import { Chess } from 'chess.js';
-import { generatePuzzles, getDailyPuzzles, getDuePuzzles, cancelJob, ApiError, type Puzzle, startSession, completeSession, reviewPuzzle, getSession, type SessionSummary, useHint as requestHint } from '../api';
+import { generatePuzzles, getDailyPuzzles, cancelJob, ApiError } from '../api';
 import { JobStatusCard } from '../components/JobStatusCard';
 import { SessionSummaryCard } from '../components/SessionSummaryCard';
 import { WarmupSummary } from '../components/WarmupSummary';
@@ -15,20 +15,14 @@ import { useClue } from '../hooks/useClue';
 import { usePuzzleTimer } from '../hooks/usePuzzleTimer';
 import { useAchievements } from '../hooks/useAchievements';
 import { usePuzzleInsights } from '../hooks/usePuzzleInsights';
-
-type PuzzleStatus = 'solving' | 'correct' | 'incorrect' | 'revealed';
-type SessionState = 'idle' | 'loading' | 'active' | 'completing' | 'completed' | 'error';
+import { usePuzzleSession, type PuzzleStatus } from '../hooks/usePuzzleSession';
 
 export default function Puzzles() {
     const { username, setEditorOpen } = useChessUsername();
     const { sessionType, targetAccuracy, setTargetAccuracy, targetTimeMinutes, setTargetTimeMinutes } = usePuzzleMode();
     const navigate = useNavigate();
-    const [puzzles, setPuzzles] = useState<Puzzle[]>([]);
-    const [currentIndex, setCurrentIndex] = useState(0);
     const [userMove, setUserMove] = useState('');
     const [status, setStatus] = useState<PuzzleStatus>('solving');
-    const [isLoading, setIsLoading] = useState(false);
-    const [error, setError] = useState<string | null>(null);
     const [showUciInput, setShowUciInput] = useState(false);
     const [activeJobId, setActiveJobId] = useState<string | null>(null);
 
@@ -40,18 +34,8 @@ export default function Puzzles() {
     // Warmup state
     const [warmupMode, setWarmupMode] = useState(isWarmupMode);
 
-    // Session state
+    // Shared state: activeSessionId is needed by both timer and session hooks
     const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
-    const [sessionSummary, setSessionSummary] = useState<SessionSummary | null>(null);
-    const [reviewedCount, setReviewedCount] = useState(0);
-    const [isResumingSession, setIsResumingSession] = useState(false);
-    const [sessionState, setSessionState] = useState<SessionState>('idle');
-    const [streak, setStreak] = useState(0);
-    const [bestStreak, setBestStreak] = useState(0);
-    const [hintsUsed, setHintsUsed] = useState(0);
-
-    // Performance tracking
-    const [performanceHistory, setPerformanceHistory] = useState<Array<{ time: number, result: 'pass' | 'fail' }>>([]);
 
     const { achievements, checkAchievements, checkSessionAchievements } = useAchievements(username);
     const insights = usePuzzleInsights(username);
@@ -67,14 +51,6 @@ export default function Puzzles() {
 
     const handleReviewPuzzleRef = useRef<((result: 'pass' | 'fail', timeMs?: number) => Promise<void>)>(async () => { });
 
-    // Mock progress for now until we hook up real polling
-    // const mockProgress = 0; 
-
-
-    const currentPuzzle = puzzles[currentIndex];
-    const clue = useClue(currentPuzzle?.best_move_uci ?? '', currentPuzzle?.fen ?? '');
-    const clueReset = clue.reset;
-
     const timer = usePuzzleTimer({
         sessionType,
         activeSessionId,
@@ -85,14 +61,46 @@ export default function Puzzles() {
             }
         },
     });
-    const timerCleanup = timer.cleanup;
+
+    const session = usePuzzleSession({
+        activeSessionId,
+        setActiveSessionId,
+        setStatus,
+        username,
+        sessionType,
+        targetAccuracy,
+        targetTimeMinutes,
+        warmupMode,
+        motifFilter,
+        userStatus,
+        timer,
+        checkAchievements,
+        checkSessionAchievements,
+        refreshRecentSessions,
+        refreshMotifPerformance,
+        refreshUserStatus,
+    });
+
+    const {
+        sessionState, sessionSummary, isResumingSession,
+        streak, bestStreak, hintsUsed, reviewedCount, performanceHistory,
+        puzzles, currentIndex, isLoading, error, lastFeedback,
+        setPuzzles, setCurrentIndex, setError, setLastFeedback,
+        setSessionSummary, setSessionState, setReviewedCount, setIsLoading,
+        handleStartSession, handleReviewPuzzle, handleUseHint,
+        calculateRecentPerformance, getPerformanceTrend,
+    } = session;
+
     const startPuzzleTimer = timer.startPuzzleTimer;
+    const currentPuzzle = puzzles[currentIndex];
+    const clue = useClue(currentPuzzle?.best_move_uci ?? '', currentPuzzle?.fen ?? '');
+    const clueReset = clue.reset;
     const puzzlesAvailable = puzzles.length > 0;
     const isFinalPuzzle = puzzlesAvailable && currentIndex >= puzzles.length - 1;
     const finishButtonDisabled = isFinalPuzzle ? sessionState !== 'active' : false;
     const controlsEnabled = sessionState === 'idle' || sessionState === 'error';
 
-    // Load persisted job and session from local storage on mount or username change
+    // Load persisted job ID from local storage on mount or username change
     useEffect(() => {
         if (!username) return;
         const savedJobId = localStorage.getItem(`knightmind:lastJob:${username}`);
@@ -101,96 +109,6 @@ export default function Puzzles() {
         } else {
             setActiveJobId(null);
         }
-
-        const savedSessionId = localStorage.getItem(`knightmind:session:${username}`);
-
-        const loadSessionAndPuzzles = async () => {
-            if (!savedSessionId) return;
-
-            try {
-                setIsResumingSession(true);
-                const session = await getSession(savedSessionId);
-
-                if (session.completed_at) {
-                    // Session already completed, clear it
-                    localStorage.removeItem(`knightmind:session:${username}`);
-                    setActiveSessionId(null);
-                    return;
-                }
-
-                // Session valid and active
-                setActiveSessionId(session.session_id);
-                setSessionSummary(session);
-                setReviewedCount(session.pass_count + session.fail_count);
-                setHintsUsed(session.hints_used || 0);
-
-                // Restore streak and performance from localStorage if available
-                const savedState = localStorage.getItem(`knightmind:sessionState:${username}`);
-                if (savedState) {
-                    try {
-                        const state = JSON.parse(savedState);
-                        if (state.sessionId === session.session_id) {
-                            // Restore streak and performance (index is restored after puzzles load)
-                            setStreak(state.streak || 0);
-                            if (state.performanceHistory) {
-                                setPerformanceHistory(state.performanceHistory);
-                            }
-                        }
-                    } catch (e) {
-                        console.error('Failed to parse saved session state', e);
-                    }
-                }
-
-                setSessionState('loading');
-                setError(null);
-                setIsLoading(true);
-                try {
-                    const response = await getDuePuzzles(username, session.requested_n, 'standard', undefined, motifFilter || undefined);
-                    setPuzzles(response.puzzles);
-
-                    // Restore current index from saved state, with bounds checking
-                    const savedState = localStorage.getItem(`knightmind:sessionState:${username}`);
-                    let restoredIndex = 0;
-                    if (savedState) {
-                        try {
-                            const state = JSON.parse(savedState);
-                            if (state.sessionId === session.session_id && state.currentIndex !== undefined) {
-                                // Ensure index is within bounds
-                                restoredIndex = Math.min(state.currentIndex, response.puzzles.length - 1);
-                                restoredIndex = Math.max(0, restoredIndex);
-                            }
-                        } catch (e) {
-                            console.error('Failed to restore puzzle index', e);
-                        }
-                    }
-                    setCurrentIndex(restoredIndex);
-                    setStatus('solving');
-                    if (response.puzzles.length > 0) {
-                        setSessionState('active');
-                        setError(null);
-                    } else {
-                        setSessionState('error');
-                    }
-                } catch (err) {
-                    const message = err instanceof Error ? err.message : 'Failed to load puzzles';
-                    setError(message);
-                    setSessionState(puzzles.length > 0 ? 'active' : 'error');
-                } finally {
-                    setIsLoading(false);
-                }
-            } catch (err) {
-                // Session not found or error, clear it
-                console.error("Failed to resume session:", err);
-                localStorage.removeItem(`knightmind:session:${username}`);
-                setActiveSessionId(null);
-                setSessionState('idle');
-            } finally {
-                setIsResumingSession(false);
-            }
-        };
-
-        loadSessionAndPuzzles();
-        // eslint-disable-next-line react-hooks/exhaustive-deps -- run only on username change
     }, [username]);
 
     const { job, isPolling: isJobPolling } = useJobPolling(activeJobId, {
@@ -251,53 +169,8 @@ export default function Puzzles() {
     // Sync job status to local isGenerating for backwards compat with other UI if needed,
     // but better to rely on 'job' object.
 
-    // Initialize persistent streak stats from localStorage
-    useEffect(() => {
-        if (!username) {
-            setBestStreak(0);
-            return;
-        }
+    // Best streak, session state save, and session resume effects are now in usePuzzleSession
 
-        const savedStats = localStorage.getItem(`knightmind:puzzleStats:${username}`);
-        if (savedStats) {
-            try {
-                const parsed = JSON.parse(savedStats);
-                setBestStreak(parsed.bestStreak || 0);
-            } catch (e) {
-                console.error('Failed to parse saved puzzle stats', e);
-                setBestStreak(0);
-            }
-        } else {
-            setBestStreak(0);
-        }
-    }, [username]);
-
-    // Persist best streak per user
-    useEffect(() => {
-        if (username) {
-            const stats = {
-                bestStreak,
-            };
-            localStorage.setItem(`knightmind:puzzleStats:${username}`, JSON.stringify(stats));
-        }
-    }, [bestStreak, username]);
-
-    // Save session state to localStorage for recovery after refresh
-    useEffect(() => {
-        if (username && activeSessionId) {
-            const state = {
-                sessionId: activeSessionId,
-                currentIndex,
-                streak,
-                performanceHistory,
-            };
-            localStorage.setItem(`knightmind:sessionState:${username}`, JSON.stringify(state));
-        }
-    }, [username, activeSessionId, currentIndex, streak, performanceHistory]);
-
-
-    // ... (keep logic same as original, just updating UI)
-    // ... (keep logic same as original, just updating UI)
     const handleGeneratePuzzles = async () => {
         if (!username.trim()) {
             setError('Please enter a username');
@@ -391,222 +264,10 @@ export default function Puzzles() {
         }
     };
 
-    // Session handlers
-    const handleStartSession = useCallback(async () => {
-        if (!username.trim()) {
-            setError('Please enter a username');
-            return;
-        }
+    // Session handlers (handleStartSession, handleCompleteSession, handleReviewPuzzle, handleUseHint)
+    // are now provided by usePuzzleSession above.
 
-        // Validate puzzles are available before creating session
-        if (!userStatus) {
-            setError('Loading user status...');
-            return;
-        }
-
-        if (userStatus.puzzles_count === 0) {
-            setError('No puzzles available. Generate puzzles first.');
-            return;
-        }
-
-        if (userStatus.due_count === 0) {
-            setError('No puzzles are due for review right now. Check back later or generate more puzzles.');
-            return;
-        }
-
-        setSessionState('loading');
-        setError(null);
-        setLastFeedback('');
-
-        try {
-            // Determine parameters based on session type
-            let targetAccuracyParam: number | undefined = undefined;
-            let targetTimeMinutesParam: number | undefined = undefined;
-
-            if (sessionType === 'accuracy_goal') {
-                targetAccuracyParam = targetAccuracy;
-            } else if (sessionType === 'timed') {
-                targetTimeMinutesParam = targetTimeMinutes;
-            }
-
-            const { session_id } = await startSession(
-                username.trim(),
-                5,
-                sessionType,
-                targetAccuracyParam,
-                targetTimeMinutesParam,
-                warmupMode ? { is_warmup: true } : undefined
-            );
-            setActiveSessionId(session_id);
-
-            // Set up session timer for timed sessions
-            if (sessionType === 'timed') {
-                timer.startSessionTimer(targetTimeMinutes * 60, handleCompleteSession);
-            }
-            localStorage.setItem(`knightmind:session:${username.trim()}`, session_id);
-            localStorage.removeItem(`knightmind:sessionState:${username.trim()}`); // Clear any old state
-            setSessionSummary(null);
-            setReviewedCount(0);
-            setStreak(0);
-            setHintsUsed(0);
-            setPerformanceHistory([]);
-
-            // Load puzzles
-            // FIX: Use getDuePuzzles for session training
-            setIsLoading(true);
-            try {
-                const response = await getDuePuzzles(
-                    username.trim(),
-                    5,
-                    sessionType,
-                    sessionType === 'accuracy_goal' ? targetAccuracy : undefined,
-                    motifFilter || undefined
-                );
-                setPuzzles(response.puzzles);
-                setCurrentIndex(0);
-                setStatus('solving');
-                if (response.puzzles.length > 0) {
-                    setSessionState('active');
-                    setError(null);
-                } else {
-                    setSessionState('error');
-                }
-            } catch (puzErr) {
-                const message = puzErr instanceof Error ? puzErr.message : 'Failed to load session puzzles';
-                if (puzzles.length > 0) {
-                    setSessionState('active');
-                    setError(null);
-                } else {
-                    setSessionState('error');
-                    setError(message);
-                }
-            } finally {
-                setIsLoading(false);
-            }
-        } catch (err) {
-            const message = err instanceof Error ? err.message : 'Failed to start session';
-            if (puzzles.length > 0) {
-                setSessionState('active');
-                setError(null);
-            } else {
-                setSessionState('error');
-                setError(message);
-            }
-        }
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [
-        username,
-        userStatus,
-        sessionType,
-        targetAccuracy,
-        targetTimeMinutes,
-        warmupMode,
-        puzzles,
-        motifFilter,
-        // Note: handleCompleteSession is stable (wrapped in useCallback) and declared later,
-        // so it's intentionally excluded from dependencies to avoid circular reference
-    ]);
-
-    const handleCompleteSession = useCallback(async () => {
-        if (!activeSessionId || !username.trim()) return;
-
-        setSessionState('completing');
-        setError(null); // Clear any previous errors
-
-        // Clean up timers
-        timerCleanup();
-
-        try {
-            const summary = await completeSession(activeSessionId, username.trim());
-            setSessionSummary(summary);
-            setActiveSessionId(null);
-            localStorage.removeItem(`knightmind:session:${username.trim()}`);
-            localStorage.removeItem(`knightmind:sessionState:${username.trim()}`);
-            setSessionState('completed');
-
-            // Check for session completion achievements
-            checkSessionAchievements({ passCount: summary.pass_count, failCount: summary.fail_count });
-
-            // Refresh insights (errors handled internally by the hook)
-            await Promise.all([refreshRecentSessions(), refreshMotifPerformance()]);
-        } catch (err) {
-            console.error('Failed to complete session:', err);
-            const errorMessage = err instanceof Error ? err.message : 'Failed to complete session. Please try again.';
-            setError(errorMessage);
-            setSessionState('active');
-        }
-    }, [activeSessionId, checkSessionAchievements, refreshMotifPerformance, refreshRecentSessions, timerCleanup, username]);
-
-    const handleReviewPuzzle = useCallback(async (result: 'pass' | 'fail', timeMs?: number) => {
-        if (!currentPuzzle || !username.trim()) return;
-
-        // Calculate time spent on this puzzle if not provided
-        let timeSpent = timeMs;
-        if (!timeSpent && timer.puzzleStartTime) {
-            timeSpent = Date.now() - timer.puzzleStartTime;
-        }
-
-        try {
-            const response = await reviewPuzzle(
-                currentPuzzle.id,
-                username.trim(),
-                result,
-                timeSpent,
-                activeSessionId || undefined
-            );
-
-            // Set feedback message
-            if (response.feedback) {
-                setLastFeedback(response.feedback);
-                // Clear feedback after a few seconds
-                setTimeout(() => setLastFeedback(''), 5000);
-            }
-
-            // Update streak
-            if (result === 'pass') {
-                const newStreak = streak + 1;
-                setStreak(newStreak);
-                if (newStreak > bestStreak) {
-                    setBestStreak(newStreak);
-                }
-            } else {
-                setStreak(0);
-            }
-
-            // Update performance history
-            setPerformanceHistory(prev => [...prev, { time: Date.now(), result }]);
-
-            // Check for achievements
-            const effectiveStreak = result === 'pass' ? streak + 1 : 0;
-            checkAchievements({ streak: effectiveStreak, currentPuzzleTime: timer.currentPuzzleTime });
-
-            // Increment reviewed count
-            const newCount = reviewedCount + 1;
-            setReviewedCount(newCount);
-
-            // Check if session is complete
-            if (activeSessionId && newCount >= puzzles.length) {
-                await handleCompleteSession();
-            }
-        } catch (err) {
-            console.error('Failed to review puzzle:', err);
-            setError(err instanceof Error ? err.message : 'Failed to review puzzle');
-        }
-    }, [
-        activeSessionId,
-        bestStreak,
-        checkAchievements,
-        currentPuzzle,
-        handleCompleteSession,
-        timer.puzzleStartTime,
-        timer.currentPuzzleTime,
-        puzzles.length,
-        reviewedCount,
-        streak,
-        username,
-    ]);
-
-    // Keep ref in sync
+    // Keep ref in sync for timer timeout callback
     useEffect(() => {
         handleReviewPuzzleRef.current = handleReviewPuzzle;
     }, [handleReviewPuzzle]);
@@ -614,7 +275,6 @@ export default function Puzzles() {
     // Auto-start warmup session when in warmup mode
     useEffect(() => {
         if (warmupMode && sessionState === 'idle' && username && userStatus && !isResumingSession) {
-            // Automatically start a warmup session with 5 puzzles
             handleStartSession();
         }
     }, [warmupMode, sessionState, username, userStatus, isResumingSession, handleStartSession]);
@@ -664,19 +324,6 @@ export default function Puzzles() {
         }
     };
 
-    const handleUseHint = async () => {
-        if (!activeSessionId || !username.trim()) return;
-
-        try {
-            const updatedSession = await requestHint(activeSessionId, username.trim());
-            setHintsUsed(updatedSession.hints_used);
-            setSessionSummary(updatedSession);
-        } catch (err) {
-            console.error('Failed to use hint:', err);
-            setError(err instanceof Error ? err.message : 'Failed to use hint');
-        }
-    };
-
     const handleClue = () => {
         if (clue.clueStage === 1) {
             clue.advance();
@@ -687,7 +334,6 @@ export default function Puzzles() {
     };
 
     const [game, setGame] = useState(new Chess());
-    const [lastFeedback, setLastFeedback] = useState<string>('');
 
     useEffect(() => {
         if (currentPuzzle) {
@@ -735,31 +381,6 @@ export default function Puzzles() {
         }
     };
 
-
-    // Helper function to calculate recent performance
-    const calculateRecentPerformance = (history: Array<{ time: number, result: 'pass' | 'fail' }>, minutes: number = 5): number => {
-        const cutoffTime = Date.now() - (minutes * 60 * 1000);
-        const recent = history.filter(item => item.time > cutoffTime);
-        if (recent.length === 0) return 0;
-        const passCount = recent.filter(item => item.result === 'pass').length;
-        return Math.round((passCount / recent.length) * 100);
-    };
-
-    // Helper function to get performance trend
-    const getPerformanceTrend = (history: Array<{ time: number, result: 'pass' | 'fail' }>): 'improving' | 'declining' | 'stable' => {
-        if (history.length < 4) return 'stable';
-
-        const recent = history.slice(-4);
-        const firstHalf = recent.slice(0, 2);
-        const secondHalf = recent.slice(2, 4);
-
-        const firstHalfAccuracy = firstHalf.filter(item => item.result === 'pass').length / firstHalf.length;
-        const secondHalfAccuracy = secondHalf.filter(item => item.result === 'pass').length / secondHalf.length;
-
-        if (secondHalfAccuracy > firstHalfAccuracy + 0.1) return 'improving';
-        if (secondHalfAccuracy < firstHalfAccuracy - 0.1) return 'declining';
-        return 'stable';
-    };
 
     return (
         <div className="space-y-12 animate-teedin">
