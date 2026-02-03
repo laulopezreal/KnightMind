@@ -3,7 +3,8 @@ import { Link, useParams } from 'react-router-dom';
 import { Chessboard } from 'react-chessboard';
 import { Chess } from 'chess.js';
 import { useChessUsername } from '../context/ChessUsernameContext';
-import { getLibraryPuzzles, reviewPuzzle, type LibraryPuzzle as LibraryPuzzleType } from '../api/puzzles';
+import { getLibraryPuzzle, reviewPuzzle, type LibraryPuzzle as LibraryPuzzleType } from '../api/puzzles';
+import { ApiError } from '../api/core';
 
 type SolveStatus = 'solving' | 'correct' | 'incorrect' | 'revealed';
 
@@ -35,18 +36,16 @@ export default function LibraryPuzzle() {
         setIsLoading(true);
         setError(null);
         try {
-            // Fetch single puzzle via the list endpoint with search by ID
-            const res = await getLibraryPuzzles({ username, q: puzzleId, limit: 1 });
-            const found = res.puzzles.find(p => p.id === puzzleId);
-            if (!found) {
-                setError('Puzzle not found');
-                return;
-            }
+            const found = await getLibraryPuzzle(puzzleId, username);
             setPuzzle(found);
             setGame(new Chess(found.fen));
             solveStartRef.current = Date.now();
         } catch (err) {
-            setError(err instanceof Error ? err.message : 'Failed to load puzzle');
+            if (err instanceof ApiError && err.statusCode === 404) {
+                setError('Puzzle not found');
+            } else {
+                setError(err instanceof Error ? err.message : 'Failed to load puzzle');
+            }
         } finally {
             setIsLoading(false);
         }

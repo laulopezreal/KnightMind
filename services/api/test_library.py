@@ -578,3 +578,67 @@ class TestAvailableMotifs:
         # Filter by difficulty=easy — only p-fork matches, but motifs should still show both
         response = client.get("/puzzles/list?username=testuser&difficulty=easy")
         assert response.json()["available_motifs"] == ["Fork", "Pin"]
+
+
+class TestGetPuzzleDetail:
+    """Tests for GET /puzzles/{puzzle_id}."""
+
+    def test_returns_puzzle_by_id(self, client, db_session):
+        _create_puzzle(db_session, "p-detail", swing=3.0)
+        _create_stats(
+            db_session, "p-detail", title="Detail Test", primary_motif="Fork",
+            attempts=5, pass_count=4, fail_count=1,
+        )
+        db_session.commit()
+
+        response = client.get("/puzzles/p-detail?username=testuser")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["id"] == "p-detail"
+        assert data["title"] == "Detail Test"
+        assert data["primary_motif"] == "Fork"
+        assert data["difficulty"] == "medium"
+        assert data["attempts"] == 5
+        assert data["pass_count"] == 4
+        assert data["fail_count"] == 1
+
+    def test_puzzle_without_stats(self, client, db_session):
+        _create_puzzle(db_session, "p-nostats", swing=1.0)
+        db_session.commit()
+
+        response = client.get("/puzzles/p-nostats?username=testuser")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "new"
+        assert data["attempts"] == 0
+        assert data["title"] is None
+
+    def test_puzzle_not_found(self, client, db_session):
+        response = client.get("/puzzles/nonexistent?username=testuser")
+        assert response.status_code == 404
+
+    def test_puzzle_wrong_user(self, client, db_session):
+        _create_puzzle(db_session, "p-alice", username="alice")
+        db_session.commit()
+
+        response = client.get("/puzzles/p-alice?username=bob")
+        assert response.status_code == 404
+
+    def test_missing_username(self, client):
+        response = client.get("/puzzles/some-id")
+        assert response.status_code == 422
+
+    def test_response_shape(self, client, db_session):
+        _create_puzzle(db_session, "p-shape", swing=6.0)
+        _create_stats(db_session, "p-shape", title="Shape Test", primary_motif="Pin")
+        db_session.commit()
+
+        response = client.get("/puzzles/p-shape?username=testuser")
+        data = response.json()
+        expected_keys = {
+            "id", "title", "primary_motif", "difficulty", "swing",
+            "fen", "side_to_move", "best_move_uci", "status",
+            "attempts", "pass_count", "fail_count",
+            "last_reviewed_at", "last_result", "next_due_at", "created_at",
+        }
+        assert set(data.keys()) == expected_keys

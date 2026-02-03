@@ -188,6 +188,14 @@ export interface LibraryListParams {
     offset?: number;
 }
 
+export async function getLibraryPuzzle(
+    puzzleId: string,
+    username: string
+): Promise<LibraryPuzzle> {
+    const params = new URLSearchParams({ username });
+    return await request<LibraryPuzzle>(`/puzzles/${encodeURIComponent(puzzleId)}?${params}`);
+}
+
 export async function getLibraryPuzzles(
     params: LibraryListParams
 ): Promise<LibraryListResponse> {

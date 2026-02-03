@@ -16,11 +16,30 @@ vi.mock('../context/ChessUsernameContext', () => ({
     useChessUsername: () => ({ username: mockUsername }),
 }));
 
-const mockGetLibraryPuzzles = vi.fn();
-const mockReviewPuzzle = vi.fn();
+const { MockApiError, mockGetLibraryPuzzle, mockReviewPuzzle } = vi.hoisted(() => {
+    class MockApiError extends Error {
+        statusCode: number;
+        detail?: string;
+        constructor(message: string, statusCode: number, detail?: string) {
+            super(message);
+            this.name = 'ApiError';
+            this.statusCode = statusCode;
+            this.detail = detail;
+        }
+    }
+    return {
+        MockApiError,
+        mockGetLibraryPuzzle: vi.fn(),
+        mockReviewPuzzle: vi.fn(),
+    };
+});
+
+vi.mock('../api/core', () => ({
+    ApiError: MockApiError,
+}));
 
 vi.mock('../api/puzzles', () => ({
-    getLibraryPuzzles: (...args: unknown[]) => mockGetLibraryPuzzles(...args),
+    getLibraryPuzzle: (...args: unknown[]) => mockGetLibraryPuzzle(...args),
     reviewPuzzle: (...args: unknown[]) => mockReviewPuzzle(...args),
 }));
 
@@ -61,14 +80,7 @@ describe('LibraryPuzzle', () => {
         vi.resetAllMocks();
         mockUsername = 'testplayer';
         mockPuzzleId = 'puzzle-abc';
-        mockGetLibraryPuzzles.mockResolvedValue({
-            puzzles: [MOCK_PUZZLE],
-            total: 1,
-            limit: 1,
-            offset: 0,
-            available_motifs: ['Fork'],
-            stats: { total: 1, due: 1, new: 0, learning: 0, mastered: 0 },
-        });
+        mockGetLibraryPuzzle.mockResolvedValue(MOCK_PUZZLE);
         mockReviewPuzzle.mockResolvedValue({
             next_due_at: '2026-02-10T12:00:00Z',
             interval_days: 7,
@@ -86,7 +98,7 @@ describe('LibraryPuzzle', () => {
     // --- Loading ---
 
     it('should show loading state', () => {
-        mockGetLibraryPuzzles.mockReturnValue(new Promise(() => {}));
+        mockGetLibraryPuzzle.mockReturnValue(new Promise(() => {}));
         render(<LibraryPuzzle />);
         expect(screen.getByText(/Loading puzzle/i)).toBeInTheDocument();
     });
@@ -94,7 +106,7 @@ describe('LibraryPuzzle', () => {
     // --- Error states ---
 
     it('should show error when puzzle not found', async () => {
-        mockGetLibraryPuzzles.mockResolvedValue({ puzzles: [], total: 0, limit: 1, offset: 0, available_motifs: [] });
+        mockGetLibraryPuzzle.mockRejectedValue(new MockApiError('Not found', 404));
         render(<LibraryPuzzle />);
         await waitFor(() => {
             expect(screen.getByText(/Puzzle not found/i)).toBeInTheDocument();
@@ -102,7 +114,7 @@ describe('LibraryPuzzle', () => {
     });
 
     it('should show error on API failure', async () => {
-        mockGetLibraryPuzzles.mockRejectedValue(new Error('Server error'));
+        mockGetLibraryPuzzle.mockRejectedValue(new Error('Server error'));
         render(<LibraryPuzzle />);
         await waitFor(() => {
             expect(screen.getByText(/Server error/i)).toBeInTheDocument();
@@ -110,7 +122,7 @@ describe('LibraryPuzzle', () => {
     });
 
     it('should show back to library link on error', async () => {
-        mockGetLibraryPuzzles.mockResolvedValue({ puzzles: [], total: 0, limit: 1, offset: 0, available_motifs: [] });
+        mockGetLibraryPuzzle.mockRejectedValue(new MockApiError('Not found', 404));
         render(<LibraryPuzzle />);
         await waitFor(() => {
             expect(screen.getByText(/Back to Library/i)).toBeInTheDocument();
@@ -259,16 +271,10 @@ describe('LibraryPuzzle', () => {
 
     // --- API call ---
 
-    it('should search by puzzle ID to fetch detail', async () => {
+    it('should fetch puzzle by ID', async () => {
         render(<LibraryPuzzle />);
         await waitFor(() => {
-            expect(mockGetLibraryPuzzles).toHaveBeenCalledWith(
-                expect.objectContaining({
-                    username: 'testplayer',
-                    q: 'puzzle-abc',
-                    limit: 1,
-                })
-            );
+            expect(mockGetLibraryPuzzle).toHaveBeenCalledWith('puzzle-abc', 'testplayer');
         });
     });
 });
