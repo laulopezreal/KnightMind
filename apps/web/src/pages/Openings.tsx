@@ -26,13 +26,18 @@ export default function Openings() {
   const [treeData, setTreeData] = useState<OpeningNode | null>(null);
   const [tooltip, setTooltip] = useState<{ x: number; y: number; data: OpeningNode } | null>(null);
 
-  const subtitle = !username
-    ? 'Set your Chess.com username to explore your opening repertoire.'
-    : loading
-      ? 'Building your opening tree...'
-      : treeData
-        ? 'Your repertoire\u2009—\u2009scroll to zoom, drag to pan, click nodes to explore.'
-        : 'Load your games to build your opening knowledge graph.';
+  const subtitle = (() => {
+    if (!username) {
+      return 'Set your Chess.com username to explore your opening repertoire.';
+    }
+    if (loading) {
+      return 'Building your opening tree...';
+    }
+    if (treeData) {
+      return 'Your repertoire\u2009—\u2009scroll to zoom, drag to pan, click nodes to explore.';
+    }
+    return 'Load your games to build your opening knowledge graph.';
+  })();
 
   const fetchOpenings = useCallback(async (user: string, color: ColorFilter) => {
     if (!user.trim()) {
@@ -116,25 +121,22 @@ export default function Openings() {
           </select>
         </div>
 
-        {treeData ? (
-          <button
-            type="button"
-            onClick={handleFetchClick}
-            disabled={loading || !username}
-            className={`px-6 py-2 border border-primary/20 text-primary hover:bg-primary hover:text-bg-primary rounded-sm font-serif transition-all km-focus-visible ${loading || !username ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'}`}
-          >
-            {loading ? 'Refreshing...' : 'Refresh'}
-          </button>
-        ) : (
-          <button
-            type="button"
-            onClick={handleFetchClick}
-            disabled={loading || !username}
-            className={`px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-all km-focus-visible ${loading || !username ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'}`}
-          >
-            {loading ? 'Analyzing...' : 'Load Openings'}
-          </button>
-        )}
+        <button
+          type="button"
+          onClick={handleFetchClick}
+          disabled={loading || !username}
+          className={[
+            'px-6 py-2 rounded-sm font-serif transition-all km-focus-visible',
+            loading || !username ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive',
+            treeData
+              ? 'border border-primary/20 text-primary hover:bg-primary hover:text-bg-primary'
+              : 'bg-primary text-bg-primary',
+          ].join(' ')}
+        >
+          {treeData
+            ? loading ? 'Refreshing...' : 'Refresh'
+            : loading ? 'Analyzing...' : 'Load Openings'}
+        </button>
       </section>
 
       {/* Error */}
