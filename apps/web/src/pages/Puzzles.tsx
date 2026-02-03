@@ -114,12 +114,6 @@ export default function Puzzles() {
     const { job, isPolling: isJobPolling } = useJobPolling(activeJobId, {
         enabled: !!activeJobId,
         onSuccess: async () => {
-            // Clear local storage on success so we don't start polling old finished jobs next time?
-            // Or keep it to show "Success" state persistently until user generates new?
-            // Prompt says: "If succeeded/failed, show final state and clear stored job_id (optional)"
-            // Let's keep it to show the success card, but maybe trigger auto-refresh.
-
-            // Auto-refresh puzzles
             try {
                 const res = await getDailyPuzzles(username, 5);
                 setPuzzles(res.puzzles);
@@ -139,16 +133,12 @@ export default function Puzzles() {
                 setError(message);
             }
 
-            // Clear job ID after a delay or let user clear it?
-            // If we clear it immediately, the card disappears. We probably want the card to stay "Success".
-            // We can clear localStorage but keep activeJobId in state for this session.
             localStorage.removeItem(`knightmind:lastJob:${username}`);
 
             // Refresh user status to update has_new_games flag
             await refreshUserStatus();
         },
         onError: (err) => {
-            // Similarly clear storage on hard failure so we don't get stuck
             localStorage.removeItem(`knightmind:lastJob:${username}`);
             const message = err instanceof Error ? err.message : 'Failed to generate puzzles';
             if (puzzles.length > 0) {
@@ -165,11 +155,6 @@ export default function Puzzles() {
     const controlsDisabled = !controlsEnabled || isLoading || isGenerating;
     const generateNewDisabled = !controlsEnabled || isLoading || isGenerating || !userStatus?.has_new_games;
     const loadPuzzlesDisabled = !username || isLoading || isGenerating || (sessionState !== 'idle' && sessionState !== 'error' && sessionState !== 'completed') || userStatus?.puzzles_count === 0;
-
-    // Sync job status to local isGenerating for backwards compat with other UI if needed,
-    // but better to rely on 'job' object.
-
-    // Best streak, session state save, and session resume effects are now in usePuzzleSession
 
     const handleGeneratePuzzles = async () => {
         if (!username.trim()) {
@@ -213,7 +198,6 @@ export default function Puzzles() {
             setError('Please enter a username');
             return;
         }
-        // Check if we already have a running job? Maybe not needed.
         setSessionState('loading');
         setIsLoading(true);
         setError(null);
@@ -263,9 +247,6 @@ export default function Puzzles() {
             setError(err instanceof Error ? err.message : 'Failed to cancel job');
         }
     };
-
-    // Session handlers (handleStartSession, handleCompleteSession, handleReviewPuzzle, handleUseHint)
-    // are now provided by usePuzzleSession above.
 
     // Keep ref in sync for timer timeout callback
     useEffect(() => {
@@ -380,7 +361,6 @@ export default function Puzzles() {
             handleNextPuzzle();
         }
     };
-
 
     return (
         <div className="space-y-12 animate-teedin">
