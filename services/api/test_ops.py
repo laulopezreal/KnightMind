@@ -203,7 +203,7 @@ def test_cancel_job_returns_error_field(client, db_session):
     response = client.post(f"/jobs/{job.id}/cancel")
     assert response.status_code == 200
     data = response.json()
-    assert "error" in data
+    assert data["error"] is None
 
 def test_ops_status_active_job(client, db_session):
     from services.api.models import Job, JobStatus
