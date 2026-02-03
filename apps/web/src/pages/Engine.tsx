@@ -50,7 +50,6 @@ export default function Engine() {
       const result = await evaluateFen(fen);
       if (!isMountedRef.current) return;
       setEvaluation({ bestMove: result.best_move_uci, eval: result.eval });
-      clueReset();
     } catch (err) {
       if (!isMountedRef.current) return;
       if (err instanceof ApiError) {
