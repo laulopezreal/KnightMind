@@ -135,6 +135,66 @@ export async function getDuePuzzles(
     }
 }
 
+// --- Library (Puzzle Exploration) ---
+
+export type PuzzleStatus = 'new' | 'due' | 'learning' | 'mastered';
+export type PuzzleDifficulty = 'easy' | 'medium' | 'hard';
+export type PuzzleSort = 'due_soonest' | 'last_attempted' | 'most_failed' | 'difficulty_asc' | 'difficulty_desc' | 'newest';
+
+export interface LibraryPuzzle {
+    id: string;
+    title: string | null;
+    primary_motif: string | null;
+    difficulty: PuzzleDifficulty;
+    swing: number;
+    fen: string;
+    side_to_move: string;
+    best_move_uci: string;
+    status: PuzzleStatus;
+    attempts: number;
+    pass_count: number;
+    fail_count: number;
+    last_reviewed_at: string | null;
+    last_result: string | null;
+    next_due_at: string | null;
+    created_at: string | null;
+}
+
+export interface LibraryListResponse {
+    puzzles: LibraryPuzzle[];
+    total: number;
+    limit: number;
+    offset: number;
+    available_motifs: string[];
+}
+
+export interface LibraryListParams {
+    username: string;
+    q?: string;
+    status?: PuzzleStatus;
+    motif?: string;
+    difficulty?: PuzzleDifficulty;
+    sort?: PuzzleSort;
+    limit?: number;
+    offset?: number;
+}
+
+export async function getLibraryPuzzles(
+    params: LibraryListParams
+): Promise<LibraryListResponse> {
+    const searchParams = new URLSearchParams({ username: params.username });
+
+    if (params.q) searchParams.append('q', params.q);
+    if (params.status) searchParams.append('status', params.status);
+    if (params.motif) searchParams.append('motif', params.motif);
+    if (params.difficulty) searchParams.append('difficulty', params.difficulty);
+    if (params.sort) searchParams.append('sort', params.sort);
+    if (params.limit !== undefined) searchParams.append('limit', params.limit.toString());
+    if (params.offset !== undefined) searchParams.append('offset', params.offset.toString());
+
+    return await request<LibraryListResponse>(`/puzzles/list?${searchParams}`);
+}
+
 export async function reviewPuzzle(
     puzzleId: string,
     username: string,
