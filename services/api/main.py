@@ -370,6 +370,33 @@ class DuePuzzlesResponse(BaseModel):
     puzzles: list[dict]
 
 
+class PuzzleListItem(BaseModel):
+    id: str
+    title: str | None
+    primary_motif: str | None
+    difficulty: str  # "easy" | "medium" | "hard"
+    swing: float
+    fen: str
+    side_to_move: str
+    best_move_uci: str
+    status: str  # "new" | "due" | "learning" | "mastered"
+    attempts: int
+    pass_count: int
+    fail_count: int
+    last_reviewed_at: datetime | None
+    last_result: str | None
+    next_due_at: datetime | None
+    created_at: datetime | None
+
+
+class PuzzleListResponse(BaseModel):
+    puzzles: list[PuzzleListItem]
+    total: int
+    limit: int
+    offset: int
+    available_motifs: list[str]
+
+
 class ReviewRequest(BaseModel):
     username: str
     result: PuzzleResult
@@ -727,6 +754,182 @@ async def get_due_puzzles_endpoint(
         "now": now,
         "puzzles": result_puzzles
     }
+
+
+def _compute_puzzle_status(stats: PuzzleStats | None, now: datetime) -> str:
+    """Derive user-facing status from puzzle_stats."""
+    if stats is None or stats.attempts == 0:
+        return "new"
+    if stats.next_due_at is not None:
+        due = stats.next_due_at
+        if due.tzinfo is None:
+            due = due.replace(tzinfo=timezone.utc)
+        if due <= now:
+            return "due"
+    if stats.attempts > 0 and stats.pass_count / stats.attempts >= 0.8 and stats.attempts >= 3:
+        return "mastered"
+    return "learning"
+
+
+def _swing_to_difficulty(swing: float) -> str:
+    if swing < 2.0:
+        return "easy"
+    if swing < 5.0:
+        return "medium"
+    return "hard"
+
+
+@app.get("/puzzles/list", response_model=PuzzleListResponse)
+async def list_puzzles(
+    username: str = Query(..., description="Username to list puzzles for"),
+    q: str = Query(None, description="Search by title or puzzle ID"),
+    status: str = Query(None, description="Filter: new, due, learning, mastered"),
+    motif: str = Query(None, description="Filter by primary_motif (comma-separated for OR)"),
+    difficulty: str = Query(None, description="Filter: easy, medium, hard"),
+    sort: str = Query("due_soonest", description="Sort: due_soonest, last_attempted, most_failed, difficulty_asc, difficulty_desc, newest"),
+    limit: int = Query(50, ge=1, le=100, description="Page size"),
+    offset: int = Query(0, ge=0, description="Offset for pagination"),
+    db: Session = Depends(get_db)
+):
+    """
+    List all puzzles for a user with filtering, search, sorting, and pagination.
+    Joins puzzle data with user stats for a complete view.
+    """
+    from services.api.models import Puzzle as PuzzleModel
+
+    now = datetime.now(timezone.utc)
+    username_lower = username.lower()
+
+    # 1. Load all puzzle rows + left-join stats
+    stmt = (
+        select(PuzzleModel, PuzzleStats)
+        .outerjoin(
+            PuzzleStats,
+            (PuzzleModel.id == PuzzleStats.puzzle_id) & (PuzzleStats.username == username_lower)
+        )
+        .where(PuzzleModel.username == username_lower)
+    )
+    rows = db.execute(stmt).all()
+
+    # 2. Build enriched list
+    items: list[dict] = []
+    motif_set: set[str] = set()
+
+    for puzzle, stats in rows:
+        pm = stats.primary_motif if stats else None
+        if pm:
+            motif_set.add(pm)
+
+        computed_status = _compute_puzzle_status(stats, now)
+        diff = _swing_to_difficulty(puzzle.swing)
+
+        items.append({
+            "puzzle": puzzle,
+            "stats": stats,
+            "computed_status": computed_status,
+            "difficulty": diff,
+            "title": stats.title if stats else None,
+            "primary_motif": pm,
+        })
+
+    # 3. Search filter
+    if q:
+        q_lower = q.lower()
+        items = [
+            it for it in items
+            if (it["title"] and q_lower in it["title"].lower())
+            or q_lower in it["puzzle"].id.lower()
+        ]
+
+    # 4. Status filter
+    if status:
+        items = [it for it in items if it["computed_status"] == status]
+
+    # 5. Motif filter (comma-separated OR)
+    if motif:
+        motif_values = {m.strip().lower() for m in motif.split(",")}
+        items = [
+            it for it in items
+            if it["primary_motif"] and it["primary_motif"].lower() in motif_values
+        ]
+
+    # 6. Difficulty filter
+    if difficulty:
+        items = [it for it in items if it["difficulty"] == difficulty.lower()]
+
+    total = len(items)
+
+    # 7. Sort
+    def _sort_key(it: dict):
+        s = it["stats"]
+        p = it["puzzle"]
+        if sort == "due_soonest":
+            if s and s.next_due_at:
+                due = s.next_due_at
+                if due.tzinfo is None:
+                    due = due.replace(tzinfo=timezone.utc)
+                if due <= now:
+                    return (0, due)   # Due: highest priority
+                return (2, due)       # Future: lowest priority
+            if it["computed_status"] == "new":
+                return (1, now)       # New: middle priority
+            return (2, now)
+        elif sort == "last_attempted":
+            if s and s.last_reviewed_at:
+                reviewed = s.last_reviewed_at
+                if reviewed.tzinfo is None:
+                    reviewed = reviewed.replace(tzinfo=timezone.utc)
+                return (0, -reviewed.timestamp())
+            return (1, 0)
+        elif sort == "most_failed":
+            return (0, -(s.fail_count if s else 0))
+        elif sort == "difficulty_asc":
+            return (0, p.swing)
+        elif sort == "difficulty_desc":
+            return (0, -p.swing)
+        elif sort == "newest":
+            created = p.created_at
+            if created and created.tzinfo is None:
+                created = created.replace(tzinfo=timezone.utc)
+            return (0, -created.timestamp() if created else 0)
+        return (0, 0)
+
+    items.sort(key=_sort_key)
+
+    # 8. Paginate
+    page_items = items[offset:offset + limit]
+
+    # 9. Build response
+    result_puzzles = []
+    for it in page_items:
+        p = it["puzzle"]
+        s = it["stats"]
+        result_puzzles.append(PuzzleListItem(
+            id=p.id,
+            title=it["title"],
+            primary_motif=it["primary_motif"],
+            difficulty=it["difficulty"],
+            swing=p.swing,
+            fen=p.fen,
+            side_to_move=p.side_to_move,
+            best_move_uci=p.best_move_uci,
+            status=it["computed_status"],
+            attempts=s.attempts if s else 0,
+            pass_count=s.pass_count if s else 0,
+            fail_count=s.fail_count if s else 0,
+            last_reviewed_at=s.last_reviewed_at if s else None,
+            last_result=s.last_result if s else None,
+            next_due_at=s.next_due_at if s else None,
+            created_at=p.created_at,
+        ))
+
+    return PuzzleListResponse(
+        puzzles=result_puzzles,
+        total=total,
+        limit=limit,
+        offset=offset,
+        available_motifs=sorted(motif_set),
+    )
 
 
 @app.post("/puzzles/{puzzle_id}/review")
