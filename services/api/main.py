@@ -788,6 +788,178 @@ def _swing_to_difficulty(swing: float) -> str:
     return "hard"
 
 
+def _list_puzzles_from_filesystem(
+    db: Session,
+    username_lower: str,
+    q: str | None,
+    status: str | None,
+    motif: str | None,
+    difficulty: str | None,
+    sort: str,
+    limit: int,
+    offset: int,
+) -> PuzzleListResponse:
+    """Fallback: load puzzles from the filesystem repository when DB has no
+    puzzle rows (i.e. KNIGHTMIND_STORAGE_MODE is 'filesystem')."""
+    now = datetime.now(timezone.utc)
+    puzzle_repo = PuzzleRepository(db)
+    all_puzzles = puzzle_repo.get_all_puzzles(username_lower)
+
+    # Load all stats from DB (stats are always in the DB even in filesystem mode)
+    all_stats = get_all_puzzle_stats(db, username_lower)
+
+    # Build enriched list
+    items: list[dict] = []
+    motif_set: set[str] = set()
+
+    for p in all_puzzles:
+        stats = all_stats.get(p.id)
+        pm = stats.primary_motif if stats else None
+        if pm:
+            motif_set.add(pm)
+
+        computed_status = _compute_puzzle_status(stats, now)
+        diff = _swing_to_difficulty(p.swing)
+        created_at = None
+        if p.created_at:
+            try:
+                created_at = datetime.fromisoformat(p.created_at.replace("Z", "+00:00"))
+            except (ValueError, AttributeError):
+                pass
+
+        items.append({
+            "id": p.id,
+            "title": stats.title if stats else None,
+            "primary_motif": pm,
+            "difficulty": diff,
+            "swing": p.swing,
+            "fen": p.fen,
+            "side_to_move": p.side_to_move,
+            "best_move_uci": p.best_move_uci,
+            "computed_status": computed_status,
+            "attempts": stats.attempts if stats else 0,
+            "pass_count": stats.pass_count if stats else 0,
+            "fail_count": stats.fail_count if stats else 0,
+            "last_reviewed_at": stats.last_reviewed_at if stats else None,
+            "last_result": stats.last_result if stats else None,
+            "next_due_at": stats.next_due_at if stats else None,
+            "created_at": created_at,
+            "stats": stats,
+        })
+
+    # Corpus stats (unfiltered)
+    corpus_total = len(items)
+    cnt_new = sum(1 for it in items if it["computed_status"] == "new")
+    cnt_due = sum(1 for it in items if it["computed_status"] == "due")
+    cnt_learning = sum(1 for it in items if it["computed_status"] == "learning")
+    cnt_mastered = sum(1 for it in items if it["computed_status"] == "mastered")
+
+    available_motifs = sorted(motif_set)
+
+    # Search filter
+    if q:
+        q_lower = q.lower()
+        items = [
+            it for it in items
+            if (it["title"] and q_lower in it["title"].lower())
+            or q_lower in it["id"].lower()
+        ]
+
+    # Status filter
+    if status:
+        items = [it for it in items if it["computed_status"] == status]
+
+    # Motif filter (comma-separated OR)
+    if motif:
+        motif_values = {m.strip().lower() for m in motif.split(",")}
+        items = [
+            it for it in items
+            if it["primary_motif"] and it["primary_motif"].lower() in motif_values
+        ]
+
+    # Difficulty filter
+    if difficulty:
+        items = [it for it in items if it["difficulty"] == difficulty.lower()]
+
+    total = len(items)
+
+    # Sort
+    def _sort_key(it: dict):
+        s = it["stats"]
+        if sort == "due_soonest":
+            if s and s.next_due_at:
+                due = s.next_due_at
+                if due.tzinfo is None:
+                    due = due.replace(tzinfo=timezone.utc)
+                if due <= now:
+                    return (0, due)
+                return (2, due)
+            if it["computed_status"] == "new":
+                return (1, now)
+            return (2, now)
+        elif sort == "last_attempted":
+            if s and s.last_reviewed_at:
+                reviewed = s.last_reviewed_at
+                if reviewed.tzinfo is None:
+                    reviewed = reviewed.replace(tzinfo=timezone.utc)
+                return (0, -reviewed.timestamp())
+            return (1, 0)
+        elif sort == "most_failed":
+            return (0, -(s.fail_count if s else 0))
+        elif sort == "difficulty_asc":
+            return (0, it["swing"])
+        elif sort == "difficulty_desc":
+            return (0, -it["swing"])
+        elif sort == "newest":
+            created = it["created_at"]
+            if created and created.tzinfo is None:
+                created = created.replace(tzinfo=timezone.utc)
+            return (0, -created.timestamp() if created else 0)
+        return (0, 0)
+
+    items.sort(key=_sort_key)
+
+    # Paginate
+    page_items = items[offset:offset + limit]
+
+    result_puzzles = [
+        PuzzleListItem(
+            id=it["id"],
+            title=it["title"],
+            primary_motif=it["primary_motif"],
+            difficulty=it["difficulty"],
+            swing=it["swing"],
+            fen=it["fen"],
+            side_to_move=it["side_to_move"],
+            best_move_uci=it["best_move_uci"],
+            status=it["computed_status"],
+            attempts=it["attempts"],
+            pass_count=it["pass_count"],
+            fail_count=it["fail_count"],
+            last_reviewed_at=it["last_reviewed_at"],
+            last_result=it["last_result"],
+            next_due_at=it["next_due_at"],
+            created_at=it["created_at"],
+        )
+        for it in page_items
+    ]
+
+    return PuzzleListResponse(
+        puzzles=result_puzzles,
+        total=total,
+        limit=limit,
+        offset=offset,
+        available_motifs=available_motifs,
+        stats=PuzzleCorpusStats(
+            total=corpus_total,
+            due=cnt_due,
+            new=cnt_new,
+            learning=cnt_learning,
+            mastered=cnt_mastered,
+        ),
+    )
+
+
 @app.get("/puzzles/list", response_model=PuzzleListResponse)
 async def list_puzzles(
     username: str = Query(..., description="Username to list puzzles for"),
@@ -802,12 +974,30 @@ async def list_puzzles(
 ):
     """
     List all puzzles for a user with filtering, search, sorting, and pagination.
-    Filtering, sorting, and pagination are performed in SQL for scalability.
+    Uses SQL when puzzles are in the database; falls back to the filesystem
+    repository when KNIGHTMIND_STORAGE_MODE is 'filesystem'.
     """
     from services.api.models import Puzzle as PuzzleModel
+    from services.api.storage.game_repository import get_storage_mode
 
     now = datetime.now(timezone.utc)
     username_lower = username.lower()
+
+    # Check if there are puzzles in the DB; if not, fall back to filesystem
+    storage_mode = get_storage_mode()
+    if storage_mode == "filesystem":
+        return _list_puzzles_from_filesystem(
+            db, username_lower, q, status, motif, difficulty, sort, limit, offset
+        )
+
+    # Also fall back if DB is empty but filesystem has data (dual mode safety)
+    db_count = db.scalar(
+        select(func.count()).select_from(PuzzleModel).where(PuzzleModel.username == username_lower)
+    ) or 0
+    if db_count == 0 and storage_mode == "dual":
+        return _list_puzzles_from_filesystem(
+            db, username_lower, q, status, motif, difficulty, sort, limit, offset
+        )
 
     join_cond = (
         (PuzzleModel.id == PuzzleStats.puzzle_id)
@@ -1003,33 +1193,77 @@ async def get_puzzle_detail(
 ):
     """Get a single puzzle by ID with user stats."""
     from services.api.models import Puzzle as PuzzleModel
+    from services.api.storage.game_repository import get_storage_mode
 
     username_lower = username.lower()
     now = datetime.now(timezone.utc)
 
-    stmt = (
-        select(PuzzleModel, PuzzleStats)
-        .outerjoin(
-            PuzzleStats,
-            (PuzzleModel.id == PuzzleStats.puzzle_id)
-            & (PuzzleStats.username == username_lower),
+    storage_mode = get_storage_mode()
+
+    # Try DB first (works for 'database' and 'dual' modes)
+    puzzle_row = None
+    if storage_mode != "filesystem":
+        stmt = (
+            select(PuzzleModel, PuzzleStats)
+            .outerjoin(
+                PuzzleStats,
+                (PuzzleModel.id == PuzzleStats.puzzle_id)
+                & (PuzzleStats.username == username_lower),
+            )
+            .where(PuzzleModel.id == puzzle_id, PuzzleModel.username == username_lower)
         )
-        .where(PuzzleModel.id == puzzle_id, PuzzleModel.username == username_lower)
-    )
-    row = db.execute(stmt).first()
-    if not row:
+        puzzle_row = db.execute(stmt).first()
+
+    if puzzle_row:
+        puzzle, stats = puzzle_row
+        return PuzzleListItem(
+            id=puzzle.id,
+            title=stats.title if stats else None,
+            primary_motif=stats.primary_motif if stats else None,
+            difficulty=_swing_to_difficulty(puzzle.swing),
+            swing=puzzle.swing,
+            fen=puzzle.fen,
+            side_to_move=puzzle.side_to_move,
+            best_move_uci=puzzle.best_move_uci,
+            status=_compute_puzzle_status(stats, now),
+            attempts=stats.attempts if stats else 0,
+            pass_count=stats.pass_count if stats else 0,
+            fail_count=stats.fail_count if stats else 0,
+            last_reviewed_at=stats.last_reviewed_at if stats else None,
+            last_result=stats.last_result if stats else None,
+            next_due_at=stats.next_due_at if stats else None,
+            created_at=puzzle.created_at,
+        )
+
+    # Fallback to filesystem repository
+    puzzle_repo = PuzzleRepository(db)
+    fs_puzzle = puzzle_repo.filesystem.get_puzzle(username_lower, puzzle_id)
+    if not fs_puzzle:
         raise HTTPException(status_code=404, detail="Puzzle not found")
 
-    puzzle, stats = row
+    # Load stats from DB (stats are always stored in DB)
+    stats_stmt = select(PuzzleStats).where(
+        PuzzleStats.puzzle_id == puzzle_id,
+        PuzzleStats.username == username_lower,
+    )
+    stats = db.scalars(stats_stmt).first()
+
+    created_at = None
+    if fs_puzzle.created_at:
+        try:
+            created_at = datetime.fromisoformat(fs_puzzle.created_at.replace("Z", "+00:00"))
+        except (ValueError, AttributeError):
+            pass
+
     return PuzzleListItem(
-        id=puzzle.id,
+        id=fs_puzzle.id,
         title=stats.title if stats else None,
         primary_motif=stats.primary_motif if stats else None,
-        difficulty=_swing_to_difficulty(puzzle.swing),
-        swing=puzzle.swing,
-        fen=puzzle.fen,
-        side_to_move=puzzle.side_to_move,
-        best_move_uci=puzzle.best_move_uci,
+        difficulty=_swing_to_difficulty(fs_puzzle.swing),
+        swing=fs_puzzle.swing,
+        fen=fs_puzzle.fen,
+        side_to_move=fs_puzzle.side_to_move,
+        best_move_uci=fs_puzzle.best_move_uci,
         status=_compute_puzzle_status(stats, now),
         attempts=stats.attempts if stats else 0,
         pass_count=stats.pass_count if stats else 0,
@@ -1037,7 +1271,7 @@ async def get_puzzle_detail(
         last_reviewed_at=stats.last_reviewed_at if stats else None,
         last_result=stats.last_result if stats else None,
         next_due_at=stats.next_due_at if stats else None,
-        created_at=puzzle.created_at,
+        created_at=created_at,
     )
 
 
