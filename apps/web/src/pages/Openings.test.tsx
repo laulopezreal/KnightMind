@@ -63,7 +63,7 @@ describe('Openings', () => {
     mockGetOpenings.mockReturnValue(new Promise(() => {}));
     render(<Openings />);
 
-    expect(screen.getByDisplayValue('Both')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('All games')).toBeInTheDocument();
   });
 
   it('should show Analyzing button while loading', () => {
