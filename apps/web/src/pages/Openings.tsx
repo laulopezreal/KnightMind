@@ -143,6 +143,7 @@ export default function Openings() {
               data: node,
             })}
             onNodeHoverEnd={() => setTooltip(null)}
+            onError={setError}
           />
         )}
 
