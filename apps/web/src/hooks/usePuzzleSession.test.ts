@@ -14,7 +14,7 @@ vi.mock('../api', () => ({
     useHint: vi.fn(),
 }));
 
-import { startSession, completeSession, reviewPuzzle, getSession, getDuePuzzles, useHint } from '../api';
+import { startSession, completeSession, reviewPuzzle, getSession, getDuePuzzles, useHint, type ReviewPuzzleResponse } from '../api';
 
 const mockedStartSession = vi.mocked(startSession);
 const mockedCompleteSession = vi.mocked(completeSession);
@@ -64,6 +64,29 @@ const mockSessionSummary = {
     best_streak: 3,
     hints_used: 1,
 };
+
+function makeReviewResponse(overrides: Partial<ReviewPuzzleResponse> = {}): ReviewPuzzleResponse {
+    return {
+        next_due_at: '2025-02-01',
+        interval_days: 3,
+        ease_factor: 2.5,
+        feedback: '',
+        puzzle_info: {
+            fen: mockPuzzle.fen,
+            best_move: mockPuzzle.best_move_uci,
+            side_to_move: mockPuzzle.side_to_move,
+            swing: mockPuzzle.swing,
+        },
+        stats: {
+            attempts: 1,
+            pass_count: 1,
+            fail_count: 0,
+            last_reviewed_at: new Date().toISOString(),
+            last_result: 'pass',
+        },
+        ...overrides,
+    };
+}
 
 function makeOpts(overrides: Partial<UsePuzzleSessionOptions> = {}): UsePuzzleSessionOptions {
     return {
@@ -225,14 +248,7 @@ describe('usePuzzleSession', () => {
             result.current.setPuzzles([mockPuzzle, mockPuzzle2]);
         });
 
-        mockedReviewPuzzle.mockResolvedValue({
-            next_due_at: '2025-02-01',
-            interval_days: 3,
-            ease_factor: 2.5,
-            feedback: 'Good job!',
-            puzzle_info: {},
-            stats: {},
-        } as never);
+        mockedReviewPuzzle.mockResolvedValue(makeReviewResponse({ feedback: 'Good job!' }));
 
         await act(async () => {
             await result.current.handleReviewPuzzle('pass');
@@ -251,14 +267,7 @@ describe('usePuzzleSession', () => {
             result.current.setPuzzles([mockPuzzle, mockPuzzle2]);
         });
 
-        mockedReviewPuzzle.mockResolvedValue({
-            next_due_at: '2025-02-01',
-            interval_days: 1,
-            ease_factor: 2.5,
-            feedback: '',
-            puzzle_info: {},
-            stats: {},
-        } as never);
+        mockedReviewPuzzle.mockResolvedValue(makeReviewResponse({ interval_days: 1 }));
 
         // First pass to set streak to 1
         await act(async () => {
@@ -282,14 +291,7 @@ describe('usePuzzleSession', () => {
             result.current.setPuzzles([mockPuzzle, mockPuzzle2]);
         });
 
-        mockedReviewPuzzle.mockResolvedValue({
-            next_due_at: '2025-02-01',
-            interval_days: 3,
-            ease_factor: 2.5,
-            feedback: '',
-            puzzle_info: {},
-            stats: {},
-        } as never);
+        mockedReviewPuzzle.mockResolvedValue(makeReviewResponse());
 
         await act(async () => {
             await result.current.handleReviewPuzzle('pass');
@@ -318,14 +320,7 @@ describe('usePuzzleSession', () => {
             result.current.setPuzzles([mockPuzzle]);
         });
 
-        mockedReviewPuzzle.mockResolvedValue({
-            next_due_at: '2025-02-01',
-            interval_days: 3,
-            ease_factor: 2.5,
-            feedback: '',
-            puzzle_info: {},
-            stats: {},
-        } as never);
+        mockedReviewPuzzle.mockResolvedValue(makeReviewResponse());
 
         await act(async () => {
             await result.current.handleReviewPuzzle('pass');
@@ -427,14 +422,7 @@ describe('usePuzzleSession', () => {
             result.current.setPuzzles([mockPuzzle, mockPuzzle2]);
         });
 
-        mockedReviewPuzzle.mockResolvedValue({
-            next_due_at: '2025-02-01',
-            interval_days: 3,
-            ease_factor: 2.5,
-            feedback: '',
-            puzzle_info: {},
-            stats: {},
-        } as never);
+        mockedReviewPuzzle.mockResolvedValue(makeReviewResponse());
 
         await act(async () => {
             await result.current.handleReviewPuzzle('pass');

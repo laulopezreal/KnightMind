@@ -141,13 +141,8 @@ export default function Puzzles() {
         onError: (err) => {
             localStorage.removeItem(`knightmind:lastJob:${username}`);
             const message = err instanceof Error ? err.message : 'Failed to generate puzzles';
-            if (puzzles.length > 0) {
-                setSessionState('active');
-                setError(null);
-            } else {
-                setSessionState('error');
-                setError(message);
-            }
+            setSessionState('error');
+            setError(message);
         }
     });
 
@@ -184,12 +179,7 @@ export default function Puzzles() {
             } else {
                 setError(err instanceof Error ? err.message : 'Failed to generate puzzles');
             }
-            if (puzzles.length > 0) {
-                setSessionState('active');
-                setError(null);
-            } else {
-                setSessionState('error');
-            }
+            setSessionState('error');
         }
     };
 
@@ -225,12 +215,7 @@ export default function Puzzles() {
             } else {
                 setError(err instanceof Error ? err.message : 'Failed to load puzzles');
             }
-            if (puzzles.length > 0) {
-                setSessionState('active');
-                setError(null);
-            } else {
-                setSessionState('error');
-            }
+            setSessionState('error');
         } finally {
             setIsLoading(false);
         }

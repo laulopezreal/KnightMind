@@ -198,19 +198,22 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
                 setReviewedCount(session.pass_count + session.fail_count);
                 setHintsUsed(session.hints_used || 0);
 
-                // Restore streak and performance from localStorage
-                const savedState = localStorage.getItem(`knightmind:sessionState:${username}`);
-                if (savedState) {
+                // Parse saved session state once for reuse
+                let parsedSessionState: { sessionId?: string; streak?: number; currentIndex?: number; performanceHistory?: Array<{ time: number; result: 'pass' | 'fail' }> } | null = null;
+                const savedStateRaw = localStorage.getItem(`knightmind:sessionState:${username}`);
+                if (savedStateRaw) {
                     try {
-                        const state = JSON.parse(savedState);
-                        if (state.sessionId === session.session_id) {
-                            setStreak(state.streak || 0);
-                            if (state.performanceHistory) {
-                                setPerformanceHistory(state.performanceHistory);
-                            }
-                        }
+                        parsedSessionState = JSON.parse(savedStateRaw);
                     } catch (e) {
                         console.error('Failed to parse saved session state', e);
+                    }
+                }
+
+                // Restore streak and performance from saved state
+                if (parsedSessionState?.sessionId === session.session_id) {
+                    setStreak(parsedSessionState.streak || 0);
+                    if (parsedSessionState.performanceHistory) {
+                        setPerformanceHistory(parsedSessionState.performanceHistory);
                     }
                 }
 
@@ -221,25 +224,17 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
                     const response = await getDuePuzzles(
                         username,
                         session.requested_n,
-                        'standard',
-                        undefined,
+                        session.session_type || 'standard',
+                        session.target_accuracy,
                         motifFilter || undefined,
                     );
                     setPuzzles(response.puzzles);
 
                     // Restore current index with bounds checking
-                    const savedState2 = localStorage.getItem(`knightmind:sessionState:${username}`);
                     let restoredIndex = 0;
-                    if (savedState2) {
-                        try {
-                            const state = JSON.parse(savedState2);
-                            if (state.sessionId === session.session_id && state.currentIndex !== undefined) {
-                                restoredIndex = Math.min(state.currentIndex, response.puzzles.length - 1);
-                                restoredIndex = Math.max(0, restoredIndex);
-                            }
-                        } catch (e) {
-                            console.error('Failed to restore puzzle index', e);
-                        }
+                    if (parsedSessionState?.sessionId === session.session_id && parsedSessionState.currentIndex !== undefined) {
+                        restoredIndex = Math.min(parsedSessionState.currentIndex, response.puzzles.length - 1);
+                        restoredIndex = Math.max(0, restoredIndex);
                     }
                     setCurrentIndex(restoredIndex);
                     setStatus('solving');
@@ -252,7 +247,7 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
                 } catch (err) {
                     const message = err instanceof Error ? err.message : 'Failed to load puzzles';
                     setError(message);
-                    setSessionState(puzzles.length > 0 ? 'active' : 'error');
+                    setSessionState('error');
                 } finally {
                     setIsLoading(false);
                 }
@@ -296,7 +291,8 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
             setError(errorMessage);
             setSessionState('active');
         }
-    }, [activeSessionId, checkSessionAchievements, refreshMotifPerformance, refreshRecentSessions, setActiveSessionId, timer, username]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- use timer.cleanup, not the unstable timer object
+    }, [activeSessionId, checkSessionAchievements, refreshMotifPerformance, refreshRecentSessions, setActiveSessionId, timer.cleanup, username]);
 
     // ── handleReviewPuzzle ──
     const currentPuzzle = puzzles[currentIndex];
@@ -444,26 +440,17 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
                 }
             } catch (puzErr) {
                 const message = puzErr instanceof Error ? puzErr.message : 'Failed to load session puzzles';
-                if (puzzles.length > 0) {
-                    setSessionState('active');
-                    setError(null);
-                } else {
-                    setSessionState('error');
-                    setError(message);
-                }
+                setSessionState('error');
+                setError(message);
             } finally {
                 setIsLoading(false);
             }
         } catch (err) {
             const message = err instanceof Error ? err.message : 'Failed to start session';
-            if (puzzles.length > 0) {
-                setSessionState('active');
-                setError(null);
-            } else {
-                setSessionState('error');
-                setError(message);
-            }
+            setSessionState('error');
+            setError(message);
         }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- use timer.startSessionTimer, not the unstable timer object
     }, [
         username,
         userStatus,
@@ -471,11 +458,10 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
         targetAccuracy,
         targetTimeMinutes,
         warmupMode,
-        puzzles,
         motifFilter,
         setActiveSessionId,
         setStatus,
-        timer,
+        timer.startSessionTimer,
         handleCompleteSession,
     ]);
 
