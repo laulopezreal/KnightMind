@@ -19,10 +19,6 @@ export interface UsePuzzleInsightsReturn {
     refreshMotifPerformance: () => Promise<void>;
     refreshRecentSessions: () => Promise<void>;
     handleRefreshInsights: () => Promise<void>;
-    /** Direct setter for recentSessions (used by session completion). */
-    setRecentSessions: React.Dispatch<React.SetStateAction<SessionSummary[]>>;
-    /** Direct setter for motifPerformance (used by session completion). */
-    setMotifPerformance: React.Dispatch<React.SetStateAction<MotifPerformanceResponse | null>>;
 }
 
 export function usePuzzleInsights(username: string): UsePuzzleInsightsReturn {
@@ -109,17 +105,27 @@ export function usePuzzleInsights(username: string): UsePuzzleInsightsReturn {
             return;
         }
 
+        let cancelled = false;
+
         const loadRecent = async () => {
             try {
                 const sessions = await getRecentSessions(username, 5);
-                setRecentSessions(sessions);
-                setInsightsError(null);
+                if (!cancelled) {
+                    setRecentSessions(sessions);
+                    setInsightsError(null);
+                }
             } catch (err) {
-                setInsightsError(err instanceof Error ? err.message : 'Failed to load recent sessions');
+                if (!cancelled) {
+                    setInsightsError(err instanceof Error ? err.message : 'Failed to load recent sessions');
+                }
             }
         };
 
         loadRecent();
+
+        return () => {
+            cancelled = true;
+        };
     }, [username]);
 
     const refreshUserStatus = useCallback(async () => {
@@ -180,7 +186,5 @@ export function usePuzzleInsights(username: string): UsePuzzleInsightsReturn {
         refreshMotifPerformance,
         refreshRecentSessions,
         handleRefreshInsights,
-        setRecentSessions,
-        setMotifPerformance,
     };
 }

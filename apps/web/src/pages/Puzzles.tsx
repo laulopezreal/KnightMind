@@ -86,6 +86,7 @@ export default function Puzzles() {
         },
     });
     const timerCleanup = timer.cleanup;
+    const startPuzzleTimer = timer.startPuzzleTimer;
     const puzzlesAvailable = puzzles.length > 0;
     const isFinalPuzzle = puzzlesAvailable && currentIndex >= puzzles.length - 1;
     const finishButtonDisabled = isFinalPuzzle ? sessionState !== 'active' : false;
@@ -692,10 +693,9 @@ export default function Puzzles() {
         if (currentPuzzle) {
             setGame(new Chess(currentPuzzle.fen));
             clueReset();
-            timer.startPuzzleTimer();
+            startPuzzleTimer();
         }
-        // eslint-disable-next-line react-hooks/exhaustive-deps -- timer.startPuzzleTimer is stable
-    }, [currentPuzzle, clueReset]);
+    }, [currentPuzzle, clueReset, startPuzzleTimer]);
 
     const onPieceDrop = (sourceSquare: string, targetSquare: string) => {
         if (!currentPuzzle || status === 'correct' || status === 'revealed') return false;

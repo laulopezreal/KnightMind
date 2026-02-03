@@ -122,20 +122,18 @@ describe('useAchievements', () => {
     });
 
     it('should save to localStorage when achievements are earned', () => {
-        renderHook(() => useAchievements('testuser'));
+        const { result } = renderHook(() => useAchievements('testuser'));
         const setItem = localStorage.setItem as ReturnType<typeof vi.fn>;
+        setItem.mockClear();
 
-        // Initial state has no earned, so nothing saved
-        const callsBefore = setItem.mock.calls.length;
+        act(() => {
+            result.current.checkAchievements({ streak: 5, currentPuzzleTime: 20 });
+        });
 
-        // Need to trigger a state change that earns something
-        // The save happens via effect when achievements change
-        // Since initial state has no earned achievements, setItem shouldn't be called for achievements
-        expect(
-            setItem.mock.calls.filter(
-                (c: string[]) => c[0] === 'knightmind:achievements:testuser',
-            ).length,
-        ).toBe(callsBefore > 0 ? callsBefore : 0);
+        expect(setItem).toHaveBeenCalledWith(
+            'knightmind:achievements:testuser',
+            expect.stringContaining('"earned":true'),
+        );
     });
 
     it('should produce immutable achievement objects on check', () => {
