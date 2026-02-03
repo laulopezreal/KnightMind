@@ -1,11 +1,4 @@
-interface Achievement {
-    id: string;
-    name: string;
-    description: string;
-    icon: string;
-    earned: boolean;
-    earnedAt?: Date;
-}
+import { type Achievement } from '../hooks/useAchievements';
 
 interface AchievementsListProps {
     achievements: Achievement[];
