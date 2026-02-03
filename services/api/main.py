@@ -454,10 +454,10 @@ async def get_engine_status():
 
 
 @app.post("/engine/eval", response_model=EvalResponse)
-async def evaluate_fen(request: EvalRequest, db: Session = Depends(get_db)):
+async def evaluate_fen(request: EvalRequest):
     """Evaluate a chess position using Stockfish with caching."""
     try:
-        result = await get_or_compute_eval(request.fen, db=db)
+        result = get_or_compute_eval(request.fen)
         return EvalResponse(best_move_uci=result.best_move_uci, eval=result.eval)
     except EngineNotAvailableError as e:
         raise HTTPException(status_code=503, detail=str(e))
