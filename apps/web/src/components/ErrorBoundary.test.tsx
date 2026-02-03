@@ -14,9 +14,10 @@ function ThrowingComponent() {
 }
 
 describe('ErrorBoundary', () => {
-  const user = userEvent.setup();
+  let user: ReturnType<typeof userEvent.setup>;
 
   beforeEach(() => {
+    user = userEvent.setup();
     // Suppress console.error from React error boundary
     vi.spyOn(console, 'error').mockImplementation(() => {});
     shouldComponentThrow = true;
@@ -98,6 +99,29 @@ describe('ErrorBoundary', () => {
 
     const reloadButton = screen.getByRole('button', { name: /reload the page/i });
     expect(reloadButton).toBeInTheDocument();
+  });
+
+  it('should render fallback as render prop with error and reset access', async () => {
+    render(
+      <ErrorBoundary
+        fallback={({ error, reset }) => (
+          <div>
+            <span>Caught: {error?.message}</span>
+            <button onClick={reset}>Custom Reset</button>
+          </div>
+        )}
+      >
+        <ThrowingComponent />
+      </ErrorBoundary>
+    );
+
+    expect(screen.getByText('Caught: Test error message')).toBeInTheDocument();
+    expect(screen.queryByText('Something went wrong')).not.toBeInTheDocument();
+
+    shouldComponentThrow = false;
+    await user.click(screen.getByText('Custom Reset'));
+
+    expect(screen.getByText('Child content')).toBeInTheDocument();
   });
 
   it('should show generic message when error has no message', () => {

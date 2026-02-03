@@ -25,6 +25,7 @@ export default function Puzzles() {
     const [status, setStatus] = useState<PuzzleStatus>('solving');
     const [showUciInput, setShowUciInput] = useState(false);
     const [activeJobId, setActiveJobId] = useState<string | null>(null);
+    const [game, setGame] = useState(new Chess());
 
     // Get motif filter and warmup mode from URL query params
     const [searchParams] = useSearchParams();
@@ -298,8 +299,6 @@ export default function Puzzles() {
             clue.advance();
         }
     };
-
-    const [game, setGame] = useState(new Chess());
 
     useEffect(() => {
         if (currentPuzzle) {

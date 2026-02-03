@@ -1,12 +1,11 @@
-import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { Chessboard } from 'react-chessboard';
 import { Chess } from 'chess.js';
 import { evaluateFen, getEngineStatus, ApiError } from '../api';
-import { parseBestMoveUci, getPieceNameAtSquare } from '../utils/puzzle-clue';
+import { useClue } from '../hooks/useClue';
 
 const STARTING_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
-type ClueStage = 0 | 1 | 2;
 
 export default function Engine() {
   const [fen, setFen] = useState(STARTING_FEN);
@@ -17,11 +16,18 @@ export default function Engine() {
   const [evaluationError, setEvaluationError] = useState<string | null>(null);
   const [engineAvailable, setEngineAvailable] = useState<boolean | null>(null);
   const [showBestMove, setShowBestMove] = useState(false);
-  const [clueStage, setClueStage] = useState<ClueStage>(0);
   const [fenHistory, setFenHistory] = useState([STARTING_FEN]);
   const [historyIndex, setHistoryIndex] = useState(0);
   const lastEvaluatedFen = useRef<string | null>(null);
   const autoEvalTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isMountedRef = useRef(true);
+  const clue = useClue(evaluation?.bestMove ?? '', fen);
+  const clueReset = clue.reset;
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => { isMountedRef.current = false; };
+  }, []);
 
   useEffect(() => {
     getEngineStatus().then(s => setEngineAvailable(s.available)).catch(() => setEngineAvailable(false));
@@ -38,13 +44,15 @@ export default function Engine() {
     setEvaluationError(null);
     setEvaluation(null);
     setShowBestMove(false);
-    setClueStage(0);
+    clueReset();
 
     try {
       const result = await evaluateFen(fen);
+      if (!isMountedRef.current) return;
       setEvaluation({ bestMove: result.best_move_uci, eval: result.eval });
-      setClueStage(0);
+      clueReset();
     } catch (err) {
+      if (!isMountedRef.current) return;
       if (err instanceof ApiError) {
         setEvaluationError(err.detail || err.message);
       } else {
@@ -52,9 +60,11 @@ export default function Engine() {
       }
     } finally {
       lastEvaluatedFen.current = fen;
-      setLoading(false);
+      if (isMountedRef.current) {
+        setLoading(false);
+      }
     }
-  }, [fen]);
+  }, [fen, clueReset]);
 
   useEffect(() => {
     if (!engineAvailable) return;
@@ -79,7 +89,7 @@ export default function Engine() {
     setShowBestMove(false);
     setFenError(null);
     setEvaluationError(null);
-    setClueStage(0);
+    clueReset();
     setFenHistory([STARTING_FEN]);
     setHistoryIndex(0);
     lastEvaluatedFen.current = STARTING_FEN;
@@ -94,7 +104,7 @@ export default function Engine() {
       setShowBestMove(false);
       setFenError(null);
       setEvaluationError(null);
-      setClueStage(0);
+      clueReset();
       const nextHistory = [...fenHistory.slice(0, historyIndex + 1), fenInput];
       setFenHistory(nextHistory);
       setHistoryIndex(nextHistory.length - 1);
@@ -116,7 +126,7 @@ export default function Engine() {
       setShowBestMove(false);
       setFenError(null);
       setEvaluationError(null);
-      setClueStage(0);
+      clueReset();
       const nextHistory = [...fenHistory.slice(0, historyIndex + 1), newFen];
       setFenHistory(nextHistory);
       setHistoryIndex(nextHistory.length - 1);
@@ -135,7 +145,7 @@ export default function Engine() {
     setShowBestMove(false);
     setFenError(null);
     setEvaluationError(null);
-    setClueStage(0);
+    clueReset();
   };
 
   const handleForward = () => {
@@ -149,7 +159,7 @@ export default function Engine() {
     setShowBestMove(false);
     setFenError(null);
     setEvaluationError(null);
-    setClueStage(0);
+    clueReset();
   };
 
   const formatEval = (v: number) => {
@@ -162,30 +172,13 @@ export default function Engine() {
     return 'text-primary';
   };
 
-  const bestMoveParsed = useMemo(() => {
-    if (!evaluation?.bestMove) return { from: '', to: '' };
-    return parseBestMoveUci(evaluation.bestMove);
-  }, [evaluation?.bestMove]);
-
-  const clueSquareStyles: Record<string, { backgroundColor: string }> = useMemo(() => {
-    if (!evaluation?.bestMove || clueStage < 1) {
-      return {};
-    }
-    const { from, to } = bestMoveParsed;
-    const highlight = { backgroundColor: 'rgba(255, 235, 59, 0.45)' };
-    if (clueStage === 2 && to) {
-      return { [from]: highlight, [to]: highlight };
-    }
-    return from ? { [from]: highlight } : {};
-  }, [bestMoveParsed, clueStage, evaluation?.bestMove]);
-
   const handleClue = () => {
     if (!evaluation?.bestMove) return;
-    if (clueStage === 2) {
-      setClueStage(0);
-      return;
+    if (clue.isExhausted) {
+      clueReset();
+    } else {
+      clue.advance();
     }
-    setClueStage(prev => (prev + 1) as ClueStage);
   };
 
   return (
@@ -222,7 +215,7 @@ export default function Engine() {
                 position: fen,
                 onPieceDrop: ({ sourceSquare, targetSquare }) => targetSquare ? onDrop(sourceSquare, targetSquare) : false,
                 arrows: showBestMove && evaluation ? [{ startSquare: evaluation.bestMove.slice(0, 2), endSquare: evaluation.bestMove.slice(2, 4), color: 'rgba(16, 185, 129, 0.8)' }] : [],
-                squareStyles: clueSquareStyles,
+                squareStyles: clue.squareStyles,
                 boardOrientation: "white",
                 darkSquareStyle: { backgroundColor: 'var(--color-chess-brown-700)' },
                 lightSquareStyle: { backgroundColor: 'var(--color-chess-cream-300)' },
@@ -305,13 +298,13 @@ export default function Engine() {
                     onClick={handleClue}
                     className="km-interactive km-focus-visible border border-primary/20 px-3 py-1 text-[10px] font-serif uppercase tracking-widest text-primary transition-colors disabled:opacity-50"
                   >
-                    {clueStage === 0 ? 'Clue' : clueStage === 1 ? 'Reveal squares' : 'Hide clues and reset'}
+                    {clue.clueStage === 0 ? 'Clue' : clue.clueStage === 1 ? 'Reveal squares' : 'Hide clues and reset'}
                   </button>
                   <span>
-                    {clueStage === 0
+                    {clue.clueStage === 0
                       ? 'Tap for a small hint.'
-                      : clueStage === 1
-                        ? getPieceNameAtSquare(fen, bestMoveParsed.from)
+                      : clue.clueStage === 1
+                        ? clue.pieceHint
                         : ''}
                   </span>
                 </div>
