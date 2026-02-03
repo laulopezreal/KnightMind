@@ -7,7 +7,7 @@ if (typeof window !== 'undefined' && (!window.localStorage || typeof window.loca
     Object.defineProperty(window, 'localStorage', {
         value: {
             getItem: (key: string) => store[key] ?? null,
-            setItem: (key: string, value: string) => { store[key] = String(value); },
+            setItem: (key: string, value: string) => { store[key] = value; },
             removeItem: (key: string) => { delete store[key]; },
             clear: () => { for (const key in store) { delete store[key]; } },
             get length() { return Object.keys(store).length; },
