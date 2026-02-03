@@ -13,70 +13,10 @@ import { useChessUsername } from '../context/ChessUsernameContext';
 import { usePuzzleMode } from '../context/PuzzleModeContext';
 import { useClue } from '../hooks/useClue';
 import { usePuzzleTimer } from '../hooks/usePuzzleTimer';
+import { useAchievements } from '../hooks/useAchievements';
 
 type PuzzleStatus = 'solving' | 'correct' | 'incorrect' | 'revealed';
 type SessionState = 'idle' | 'loading' | 'active' | 'completing' | 'completed' | 'error';
-
-const calculateAccuracy = (passCount: number, failCount: number): number => {
-    const total = passCount + failCount;
-    return total > 0 ? Math.round((passCount / total) * 100) : 0;
-};
-
-// Achievement types
-interface Achievement {
-    id: string;
-    name: string;
-    description: string;
-    icon: string;
-    earned: boolean;
-    earnedAt?: Date;
-}
-
-// Define achievements
-const ACHIEVEMENTS: Achievement[] = [
-    {
-        id: 'first_session',
-        name: 'First Steps',
-        description: 'Complete your first training session',
-        icon: '👣',
-        earned: false
-    },
-    {
-        id: 'streak_5',
-        name: 'Hot Streak',
-        description: 'Achieve a 5 puzzle streak',
-        icon: '🔥',
-        earned: false
-    },
-    {
-        id: 'streak_10',
-        name: 'Blazing Streak',
-        description: 'Achieve a 10 puzzle streak',
-        icon: '🧨',
-        earned: false
-    },
-    {
-        id: 'accuracy_90',
-        name: 'Sharp Shooter',
-        description: 'Achieve 90% accuracy in a session',
-        icon: '🎯',
-        earned: false
-    },
-    {
-        id: 'speed_demon',
-        name: 'Speed Demon',
-        description: 'Solve a puzzle in under 10 seconds',
-        icon: '⚡',
-        earned: false
-    },
-    {
-        id: 'perfect_session',
-        name: 'Flawless Victory',
-        description: 'Complete a session with 100% accuracy',
-        icon: '🏆',
-        earned: false
-    }
-];
 
 export default function Puzzles() {
     const { username, setEditorOpen } = useChessUsername();
@@ -113,8 +53,7 @@ export default function Puzzles() {
     // Performance tracking
     const [performanceHistory, setPerformanceHistory] = useState<Array<{ time: number, result: 'pass' | 'fail' }>>([]);
 
-    // Achievements
-    const [achievements, setAchievements] = useState<Achievement[]>(ACHIEVEMENTS);
+    const { achievements, checkAchievements, checkSessionAchievements } = useAchievements(username);
 
     const [userStatus, setUserStatus] = useState<UserStatus | null>(null);
     const [isLoadingStatus, setIsLoadingStatus] = useState(false);
@@ -424,34 +363,6 @@ export default function Puzzles() {
     // Sync job status to local isGenerating for backwards compat with other UI if needed,
     // but better to rely on 'job' object.
 
-    // Initialize achievements from localStorage
-    useEffect(() => {
-        if (username) {
-            const savedAchievements = localStorage.getItem(`knightmind:achievements:${username}`);
-            if (savedAchievements) {
-                try {
-                    const parsed = JSON.parse(savedAchievements);
-                    // Merge with default achievements to ensure all are present
-                    const merged = ACHIEVEMENTS.map(defaultAchievement => {
-                        const saved = parsed.find((a: Achievement) => a.id === defaultAchievement.id);
-                        if (saved) {
-                            // Convert earnedAt string back to Date object
-                            return {
-                                ...defaultAchievement,
-                                ...saved,
-                                earnedAt: saved.earnedAt ? new Date(saved.earnedAt) : undefined
-                            };
-                        }
-                        return defaultAchievement;
-                    });
-                    setAchievements(merged);
-                } catch (e) {
-                    console.error('Failed to parse saved achievements', e);
-                }
-            }
-        }
-    }, [username]);
-
     // Initialize persistent streak stats from localStorage
     useEffect(() => {
         if (!username) {
@@ -472,13 +383,6 @@ export default function Puzzles() {
             setBestStreak(0);
         }
     }, [username]);
-
-    // Save achievements to localStorage when they change
-    useEffect(() => {
-        if (username && achievements.some(a => a.earned)) {
-            localStorage.setItem(`knightmind:achievements:${username}`, JSON.stringify(achievements));
-        }
-    }, [achievements, username]);
 
     // Persist best streak per user
     useEffect(() => {
@@ -715,98 +619,6 @@ export default function Puzzles() {
         // so it's intentionally excluded from dependencies to avoid circular reference
     ]);
 
-    // Helper function to check and award achievements
-    const checkAchievements = useCallback((newAchievements: Achievement[] = achievements) => {
-        const updatedAchievements = [...newAchievements];
-        let achievementsChanged = false;
-
-        // Check for streak achievements
-        if (streak >= 5 && !updatedAchievements.find(a => a.id === 'streak_5')?.earned) {
-            const achievement = updatedAchievements.find(a => a.id === 'streak_5');
-            if (achievement) {
-                achievement.earned = true;
-                achievement.earnedAt = new Date();
-                achievementsChanged = true;
-            }
-        }
-
-        if (streak >= 10 && !updatedAchievements.find(a => a.id === 'streak_10')?.earned) {
-            const achievement = updatedAchievements.find(a => a.id === 'streak_10');
-            if (achievement) {
-                achievement.earned = true;
-                achievement.earnedAt = new Date();
-                achievementsChanged = true;
-            }
-        }
-
-        // Check for speed achievement
-        if (timer.currentPuzzleTime < 10 && !updatedAchievements.find(a => a.id === 'speed_demon')?.earned) {
-            const achievement = updatedAchievements.find(a => a.id === 'speed_demon');
-            if (achievement) {
-                achievement.earned = true;
-                achievement.earnedAt = new Date();
-                achievementsChanged = true;
-            }
-        }
-
-        if (achievementsChanged) {
-            setAchievements(updatedAchievements);
-        }
-
-        return updatedAchievements;
-    }, [achievements, timer.currentPuzzleTime, streak]);
-
-    // Helper function to calculate accuracy percentage
-    // const calculateAccuracy = (passCount: number, failCount: number): number => {
-    //     const total = passCount + failCount;
-    //     return total > 0 ? Math.round((passCount / total) * 100) : 0;
-    // };
-
-    // Helper function to check session completion achievements
-    const checkSessionAchievements = useCallback(() => {
-        const updatedAchievements = [...achievements];
-        let achievementsChanged = false;
-
-        // First session achievement (if this is the first session)
-        if (!updatedAchievements.find(a => a.id === 'first_session')?.earned) {
-            const achievement = updatedAchievements.find(a => a.id === 'first_session');
-            if (achievement) {
-                achievement.earned = true;
-                achievement.earnedAt = new Date();
-                achievementsChanged = true;
-            }
-        }
-
-        // Accuracy achievements
-        if (sessionSummary && sessionSummary.pass_count + sessionSummary.fail_count > 0) {
-            const accuracy = calculateAccuracy(sessionSummary.pass_count, sessionSummary.fail_count);
-
-            if (accuracy >= 90 && !updatedAchievements.find(a => a.id === 'accuracy_90')?.earned) {
-                const achievement = updatedAchievements.find(a => a.id === 'accuracy_90');
-                if (achievement) {
-                    achievement.earned = true;
-                    achievement.earnedAt = new Date();
-                    achievementsChanged = true;
-                }
-            }
-
-            if (accuracy === 100 && !updatedAchievements.find(a => a.id === 'perfect_session')?.earned) {
-                const achievement = updatedAchievements.find(a => a.id === 'perfect_session');
-                if (achievement) {
-                    achievement.earned = true;
-                    achievement.earnedAt = new Date();
-                    achievementsChanged = true;
-                }
-            }
-        }
-
-        if (achievementsChanged) {
-            setAchievements(updatedAchievements);
-        }
-
-        return updatedAchievements;
-    }, [achievements, sessionSummary]);
-
     const handleCompleteSession = useCallback(async () => {
         if (!activeSessionId || !username.trim()) return;
 
@@ -825,12 +637,7 @@ export default function Puzzles() {
             setSessionState('completed');
 
             // Check for session completion achievements
-            const updatedAchievements = checkSessionAchievements();
-
-            // Save achievements to localStorage
-            if (updatedAchievements.some(a => a.earned)) {
-                localStorage.setItem(`knightmind:achievements:${username.trim()}`, JSON.stringify(updatedAchievements));
-            }
+            checkSessionAchievements({ passCount: summary.pass_count, failCount: summary.fail_count });
 
             // Refresh recent sessions
             const recent = await getRecentSessions(username.trim(), 5);
@@ -891,7 +698,8 @@ export default function Puzzles() {
             setPerformanceHistory(prev => [...prev, { time: Date.now(), result }]);
 
             // Check for achievements
-            checkAchievements();
+            const effectiveStreak = result === 'pass' ? streak + 1 : 0;
+            checkAchievements({ streak: effectiveStreak, currentPuzzleTime: timer.currentPuzzleTime });
 
             // Increment reviewed count
             const newCount = reviewedCount + 1;
@@ -912,6 +720,7 @@ export default function Puzzles() {
         currentPuzzle,
         handleCompleteSession,
         timer.puzzleStartTime,
+        timer.currentPuzzleTime,
         puzzles.length,
         reviewedCount,
         streak,
