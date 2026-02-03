@@ -457,7 +457,7 @@ async def get_engine_status():
 async def evaluate_fen(request: EvalRequest):
     """Evaluate a chess position using Stockfish with caching."""
     try:
-        result = get_or_compute_eval(request.fen)
+        result = await asyncio.to_thread(get_or_compute_eval, request.fen)
         return EvalResponse(best_move_uci=result.best_move_uci, eval=result.eval)
     except EngineNotAvailableError as e:
         raise HTTPException(status_code=503, detail=str(e))
