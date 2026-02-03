@@ -180,7 +180,7 @@ export default function Openings() {
             <button
               type="button"
               onClick={() => graphRef.current?.zoomIn()}
-              className="p-2 bg-bg-primary/80 border border-primary/10 rounded-sm text-primary/60 hover:text-primary km-interactive km-focus-visible transition-colors"
+              className="p-2 bg-bg-primary border border-primary/10 rounded-sm text-primary/60 hover:text-primary km-interactive km-focus-visible transition-colors"
               aria-label="Zoom in"
               title="Zoom in"
             >
@@ -191,7 +191,7 @@ export default function Openings() {
             <button
               type="button"
               onClick={() => graphRef.current?.zoomOut()}
-              className="p-2 bg-bg-primary/80 border border-primary/10 rounded-sm text-primary/60 hover:text-primary km-interactive km-focus-visible transition-colors"
+              className="p-2 bg-bg-primary border border-primary/10 rounded-sm text-primary/60 hover:text-primary km-interactive km-focus-visible transition-colors"
               aria-label="Zoom out"
               title="Zoom out"
             >
@@ -202,7 +202,7 @@ export default function Openings() {
             <button
               type="button"
               onClick={() => graphRef.current?.fitToView()}
-              className="p-2 bg-bg-primary/80 border border-primary/10 rounded-sm text-primary/60 hover:text-primary km-interactive km-focus-visible transition-colors"
+              className="p-2 bg-bg-primary border border-primary/10 rounded-sm text-primary/60 hover:text-primary km-interactive km-focus-visible transition-colors"
               aria-label="Fit to view"
               title="Fit to view"
             >
@@ -214,7 +214,7 @@ export default function Openings() {
         )}
 
         {treeData && !loading && (
-          <div className="absolute bottom-3 left-3 text-xs text-primary/30 font-sans bg-bg-primary/80 px-2 py-1 rounded-sm pointer-events-none">
+          <div className="absolute bottom-3 left-3 text-xs text-primary/30 font-sans bg-bg-primary px-2 py-1 rounded-sm pointer-events-none">
             Scroll to zoom · Drag to pan · Click nodes to expand
           </div>
         )}
