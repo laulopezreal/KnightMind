@@ -1417,7 +1417,7 @@ export default function Puzzles() {
                             status={job.status}
                             message={job.message}
                             progress={job.progress}
-                            error={job.status === 'failed' ? job.message : undefined}
+                            error={job.status === 'failed' ? (job.error || job.message) : undefined}
                             onCancel={handleCancelJob}
                         />
                     )}

@@ -36,6 +36,7 @@ export interface JobStatusResponse {
     message?: string;
     progress?: number;
     result?: unknown;
+    error?: string;
 }
 
 export interface OpsStatusResponse {

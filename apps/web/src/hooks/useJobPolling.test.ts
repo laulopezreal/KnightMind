@@ -198,4 +198,57 @@ describe('useJobPolling', () => {
     const { result } = renderHook(() => useJobPolling(null));
     expect(result.current.job).toBeNull();
   });
+
+  it('should prefer error field over message when job fails', async () => {
+    const onError = vi.fn();
+    mockGetJobStatus.mockResolvedValue({
+      status: 'failed',
+      error: 'Stockfish binary not found at /usr/bin/stockfish',
+      message: 'Processing games',
+    });
+
+    renderHook(() => useJobPolling('job-123', { onError }));
+
+    await waitFor(() => {
+      expect(onError).toHaveBeenCalledWith(
+        expect.objectContaining({ message: 'Stockfish binary not found at /usr/bin/stockfish' })
+      );
+    });
+  });
+
+  it('should fall back to message when error field is absent', async () => {
+    const onError = vi.fn();
+    mockGetJobStatus.mockResolvedValue({
+      status: 'failed',
+      message: 'Something broke',
+    });
+
+    renderHook(() => useJobPolling('job-123', { onError }));
+
+    await waitFor(() => {
+      expect(onError).toHaveBeenCalledWith(
+        expect.objectContaining({ message: 'Something broke' })
+      );
+    });
+  });
+
+  it('should not fire onError when job is canceled', async () => {
+    const onError = vi.fn();
+    const onSuccess = vi.fn();
+    mockGetJobStatus.mockResolvedValue({ status: 'canceled', message: 'Canceled by user' });
+
+    const { result } = renderHook(() => useJobPolling('job-123', { onError, onSuccess }));
+
+    await waitFor(() => {
+      expect(result.current.job?.status).toBe('canceled');
+    });
+
+    // Neither callback should be called for canceled jobs
+    expect(onError).not.toHaveBeenCalled();
+    expect(onSuccess).not.toHaveBeenCalled();
+
+    // Polling should have stopped
+    await new Promise(r => setTimeout(r, 100));
+    expect(mockGetJobStatus).toHaveBeenCalledTimes(1);
+  });
 });

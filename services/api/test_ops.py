@@ -106,6 +106,105 @@ def test_ops_status_basic(client, db_session):
     assert len(data["recent_jobs"]) >= 1
     assert data["recent_jobs"][0]["username"] == "testuser"
 
+def test_ops_metrics_succeeded_count(client, db_session):
+    from services.api.models import Job, JobStatus
+    from datetime import datetime, timezone, timedelta
+
+    job = Job(
+        type="puzzle_generation",
+        username="metrics_user",
+        status=JobStatus.SUCCEEDED,
+        progress_current=100,
+        result_json={"generated": 3},
+        created_at=datetime.now(timezone.utc) - timedelta(minutes=30),
+        updated_at=datetime.now(timezone.utc) - timedelta(minutes=29)
+    )
+    db_session.add(job)
+    db_session.commit()
+
+    response = client.get("/ops/status")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["metrics"]["last_24h"]["jobs_succeeded"] == 1
+    assert data["metrics"]["last_24h"]["jobs_failed"] == 0
+
+def test_ops_metrics_failed_count(client, db_session):
+    from services.api.models import Job, JobStatus
+    from datetime import datetime, timezone, timedelta
+
+    job = Job(
+        type="puzzle_generation",
+        username="fail_user",
+        status=JobStatus.FAILED,
+        error_message="Stockfish not found",
+        created_at=datetime.now(timezone.utc) - timedelta(minutes=5),
+        updated_at=datetime.now(timezone.utc) - timedelta(minutes=4)
+    )
+    db_session.add(job)
+    db_session.commit()
+
+    response = client.get("/ops/status")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["metrics"]["last_24h"]["jobs_failed"] == 1
+
+def test_ops_metrics_excludes_old_jobs(client, db_session):
+    from services.api.models import Job, JobStatus
+    from datetime import datetime, timezone, timedelta
+
+    job = Job(
+        type="puzzle_generation",
+        username="old_user",
+        status=JobStatus.SUCCEEDED,
+        progress_current=100,
+        result_json={"generated": 5},
+        created_at=datetime.now(timezone.utc) - timedelta(hours=25),
+        updated_at=datetime.now(timezone.utc) - timedelta(hours=24, minutes=59)
+    )
+    db_session.add(job)
+    db_session.commit()
+
+    response = client.get("/ops/status")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["metrics"]["last_24h"]["jobs_succeeded"] == 0
+    assert data["metrics"]["last_24h"]["jobs_failed"] == 0
+
+def test_job_status_returns_error_field(client, db_session):
+    from services.api.models import Job, JobStatus
+
+    job = Job(
+        type="puzzle_generation",
+        username="error_user",
+        status=JobStatus.FAILED,
+        message="Processing games",
+        error_message="Stockfish binary not found at /usr/bin/stockfish",
+    )
+    db_session.add(job)
+    db_session.commit()
+
+    response = client.get(f"/jobs/{job.id}")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["error"] == "Stockfish binary not found at /usr/bin/stockfish"
+    assert data["message"] == "Processing games"
+
+def test_cancel_job_returns_error_field(client, db_session):
+    from services.api.models import Job, JobStatus
+
+    job = Job(
+        type="puzzle_generation",
+        username="cancel_error_user",
+        status=JobStatus.RUNNING,
+    )
+    db_session.add(job)
+    db_session.commit()
+
+    response = client.post(f"/jobs/{job.id}/cancel")
+    assert response.status_code == 200
+    data = response.json()
+    assert "error" in data
+
 def test_ops_status_active_job(client, db_session):
     from services.api.models import Job, JobStatus
     

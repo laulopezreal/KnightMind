@@ -64,8 +64,8 @@ def get_ops_status(db: Session = Depends(get_db)):
     ).where(Job.created_at >= yesterday).group_by(Job.status)
     counts = dict(db.execute(stmt_counts).all())
     
-    succeeded_count = counts.get(JobStatus.SUCCEEDED, 0)
-    failed_count = counts.get(JobStatus.FAILED, 0)
+    succeeded_count = counts.get(JobStatus.SUCCEEDED.value, 0)
+    failed_count = counts.get(JobStatus.FAILED.value, 0)
 
     # Performance metrics from result_json
     # We'll calculate this in Python for simplicity with SQLite/JSON fields
