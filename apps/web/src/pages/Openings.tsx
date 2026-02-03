@@ -39,7 +39,7 @@ export default function Openings() {
       return 'Building your opening tree...';
     }
     if (treeData) {
-      return `${username}\u2019s repertoire\u2009\u2014\u2009scroll to zoom, drag to pan, click nodes to explore.`;
+      return `${username}\u2019s openings across all imported games`;
     }
     return 'Load your games to build your opening knowledge graph.';
   })();
@@ -82,23 +82,22 @@ export default function Openings() {
   return (
     <div className="space-y-8 animate-teedin">
       {/* Header */}
-      <section>
-        <h1 className="text-4xl md:text-5xl font-serif text-primary mb-2">Opening Explorer</h1>
-        <p className="text-lg text-primary/60 font-sans max-w-2xl">{subtitle}</p>
+      <section className="mb-2">
+        <h1 className="text-4xl md:text-5xl font-serif text-primary mb-3">Opening Explorer</h1>
+        <p className="text-base text-primary/50 font-sans">{subtitle}</p>
       </section>
 
       {/* Controls */}
-      <section className="flex flex-wrap gap-4 items-end p-6 border border-primary/10 rounded-sm bg-primary/5 backdrop-blur-sm">
-        <div className="w-40">
-          <label className="block text-xs font-sans uppercase tracking-widest text-primary/40 mb-2">Color</label>
+      <section className="flex flex-wrap gap-4 items-center px-5 py-3 border border-primary/10 rounded-sm bg-primary/5 backdrop-blur-sm">
+        <div>
           <select
             value={colorFilter}
             onChange={(e) => setColorFilter(e.target.value as ColorFilter)}
-            className="w-full bg-transparent border-b border-primary/20 py-2 text-primary focus:outline-none focus:border-primary/60 transition-colors font-serif text-xl cursor-pointer"
+            className="bg-transparent border-b border-primary/20 py-1 text-primary focus:outline-none focus:border-primary/60 transition-colors font-serif text-lg cursor-pointer"
           >
-            <option value="both">Both</option>
-            <option value="white">White</option>
-            <option value="black">Black</option>
+            <option value="both">All games</option>
+            <option value="white">As white</option>
+            <option value="black">As black</option>
           </select>
         </div>
 
@@ -135,7 +134,7 @@ export default function Openings() {
       )}
 
       {/* Graph */}
-      <section ref={containerRef} className="relative min-h-[300px] md:min-h-[500px] max-h-[70vh] bg-primary/5 border border-primary/10 rounded-sm overflow-hidden">
+      <section ref={containerRef} className="relative min-h-[300px] md:min-h-[500px] max-h-[70vh] bg-chess-cream-300/40 shadow-[inset_0_2px_12px_0_rgba(0,0,0,0.06)] rounded-sm overflow-hidden">
         {!treeData && !loading && !error && (
           <div className="absolute inset-0 flex flex-col items-center justify-center">
             <span className="text-9xl font-serif text-primary/10">♔</span>
@@ -205,8 +204,18 @@ export default function Openings() {
         )}
 
         {treeData && !loading && (
-          <div className="absolute bottom-3 left-3 text-xs text-primary/30 font-sans bg-bg-primary px-2 py-1 rounded-sm pointer-events-none">
-            Scroll to zoom · Drag to pan · Click nodes to expand
+          <div className="absolute bottom-3 left-3 group">
+            <div
+              className="w-6 h-6 rounded-full border border-primary/20 flex items-center justify-center text-primary/40 hover:text-primary/70 hover:border-primary/40 transition-colors cursor-help"
+              style={{ backgroundColor: 'var(--bg-primary)' }}
+            >
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+            </div>
+            <div className="absolute bottom-8 left-0 hidden group-hover:block text-xs text-primary/70 font-sans px-3 py-2 rounded-sm border border-primary/10 shadow-lg whitespace-nowrap" style={{ backgroundColor: 'var(--bg-primary)' }}>
+              Scroll to zoom · Drag to pan · Click nodes to expand
+            </div>
           </div>
         )}
 
@@ -245,27 +254,19 @@ export default function Openings() {
         <div className="flex items-center gap-1"><div className="w-3 h-3 rounded-full bg-orange-500"></div> 30%+</div>
         <div className="flex items-center gap-1"><div className="w-3 h-3 rounded-full bg-red-500"></div> &lt;30%</div>
 
-        <span className="border-l border-primary/20 pl-6 ml-2 flex items-center gap-2">
-          <span className="uppercase tracking-widest mr-1">Size:</span>
-          <span className="flex items-center gap-1">
-            <div className="w-2 h-2 rounded-full bg-primary/40"></div>
-            <span>Few</span>
-          </span>
-          <span className="flex items-center gap-1">
-            <div className="w-3.5 h-3.5 rounded-full bg-primary/40"></div>
-            <span>Many</span>
-          </span>
-        </span>
+        <span className="border-l border-primary/20 pl-6 ml-2">Node size = games played</span>
 
         {treeData && (
-          <>
-            <span className="border-l border-primary/20 pl-6 ml-2">
-              <span className="font-mono">{treeData.games_count}</span> games
-            </span>
-            <span>
-              <span className="font-mono">{countAllNodes(treeData)}</span> lines
-            </span>
-          </>
+          <div className="w-full flex justify-center gap-12 pt-4 mt-4 border-t border-primary/10">
+            <div className="text-center">
+              <div className="text-2xl font-serif text-primary">{treeData.games_count}</div>
+              <div className="text-xs uppercase tracking-widest text-primary/40">Games Analyzed</div>
+            </div>
+            <div className="text-center">
+              <div className="text-2xl font-serif text-primary">{countAllNodes(treeData)}</div>
+              <div className="text-xs uppercase tracking-widest text-primary/40">Unique Positions</div>
+            </div>
+          </div>
         )}
       </section>
     </div>
