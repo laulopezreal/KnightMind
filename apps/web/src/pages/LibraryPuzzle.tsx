@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { Chessboard } from 'react-chessboard';
 import { Chess } from 'chess.js';
@@ -20,11 +20,15 @@ export default function LibraryPuzzle() {
     const [userMove, setUserMove] = useState('');
     const [showUciInput, setShowUciInput] = useState(false);
 
+    // Solve timer
+    const solveStartRef = useRef<number>(0);
+
     // Feedback after recording
     const [recorded, setRecorded] = useState(false);
     const [nextDueAt, setNextDueAt] = useState<string | null>(null);
     const [feedback, setFeedback] = useState('');
     const [isRecording, setIsRecording] = useState(false);
+    const [solveTimeMs, setSolveTimeMs] = useState<number | null>(null);
 
     const fetchPuzzle = useCallback(async () => {
         if (!username || !puzzleId) return;
@@ -40,6 +44,7 @@ export default function LibraryPuzzle() {
             }
             setPuzzle(found);
             setGame(new Chess(found.fen));
+            solveStartRef.current = Date.now();
         } catch (err) {
             setError(err instanceof Error ? err.message : 'Failed to load puzzle');
         } finally {
@@ -54,8 +59,10 @@ export default function LibraryPuzzle() {
     const handleRecordResult = async (result: 'pass' | 'fail') => {
         if (!puzzle || !username || isRecording) return;
         setIsRecording(true);
+        const elapsed = solveStartRef.current > 0 ? Date.now() - solveStartRef.current : undefined;
+        if (elapsed) setSolveTimeMs(elapsed);
         try {
-            const res = await reviewPuzzle(puzzle.id, username, result);
+            const res = await reviewPuzzle(puzzle.id, username, result, elapsed);
             setRecorded(true);
             setNextDueAt(res.next_due_at);
             setFeedback(res.feedback);
@@ -122,6 +129,8 @@ export default function LibraryPuzzle() {
         setRecorded(false);
         setNextDueAt(null);
         setFeedback('');
+        setSolveTimeMs(null);
+        solveStartRef.current = Date.now();
     };
 
     if (isLoading) {
@@ -250,6 +259,20 @@ export default function LibraryPuzzle() {
                     {recorded && (
                         <div className="bg-green-500/10 border border-green-500/20 rounded-sm p-4 text-center animate-teedin">
                             <p className="text-green-600 font-serif font-medium">Recorded</p>
+                            <div className="flex items-center justify-center gap-4 mt-2 text-sm font-sans text-green-600/70">
+                                {solveTimeMs && (
+                                    <span>{solveTimeMs < 60000
+                                        ? `${Math.round(solveTimeMs / 1000)}s`
+                                        : `${Math.floor(solveTimeMs / 60000)}m ${Math.round((solveTimeMs % 60000) / 1000)}s`
+                                    }</span>
+                                )}
+                                {puzzle.attempts > 0 && (
+                                    <span>
+                                        Solved {puzzle.pass_count}/{puzzle.attempts} times
+                                        ({Math.round((puzzle.pass_count / puzzle.attempts) * 100)}%)
+                                    </span>
+                                )}
+                            </div>
                             {nextDueAt && (
                                 <p className="text-green-600/70 font-sans text-sm mt-1">
                                     Next review: {new Date(nextDueAt).toLocaleDateString(undefined, {

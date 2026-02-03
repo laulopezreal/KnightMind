@@ -20,12 +20,15 @@ vi.mock('../api/puzzles', () => ({
     getLibraryPuzzles: (...args: unknown[]) => mockGetLibraryPuzzles(...args),
 }));
 
+const MOCK_STATS = { total: 2, due: 1, new: 1, learning: 0, mastered: 0 };
+
 const EMPTY_RESPONSE = {
     puzzles: [],
     total: 0,
     limit: 50,
     offset: 0,
     available_motifs: [],
+    stats: { total: 0, due: 0, new: 0, learning: 0, mastered: 0 },
 };
 
 const MOCK_PUZZLES = [
@@ -76,6 +79,7 @@ describe('Library', () => {
             puzzles: MOCK_PUZZLES,
             total: 2,
             available_motifs: ['Fork'],
+            stats: MOCK_STATS,
         });
     });
 
@@ -121,7 +125,31 @@ describe('Library', () => {
 
     it('should render link to training page', async () => {
         render(<Library />);
-        expect(screen.getByText(/Go to Training/i)).toBeInTheDocument();
+        await waitFor(() => {
+            expect(screen.getByText(/Start Training/i)).toBeInTheDocument();
+        });
+    });
+
+    // --- Corpus stats ---
+
+    it('should display corpus stats header', async () => {
+        render(<Library />);
+        await waitFor(() => {
+            expect(screen.getByText('Total')).toBeInTheDocument();
+            // Due/New/Learning/Mastered also appear in filter dropdown,
+            // so check that at least 2 matches exist (stats label + dropdown)
+            expect(screen.getAllByText('Due').length).toBeGreaterThanOrEqual(2);
+            expect(screen.getAllByText('New').length).toBeGreaterThanOrEqual(2);
+            expect(screen.getAllByText('Learning').length).toBeGreaterThanOrEqual(2);
+            expect(screen.getAllByText('Mastered').length).toBeGreaterThanOrEqual(2);
+        });
+    });
+
+    it('should show due count in training nudge', async () => {
+        render(<Library />);
+        await waitFor(() => {
+            expect(screen.getByText(/1 puzzle due for review/)).toBeInTheDocument();
+        });
     });
 
     // --- Data loading ---

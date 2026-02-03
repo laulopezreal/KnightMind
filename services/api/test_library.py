@@ -159,6 +159,7 @@ class TestListPuzzlesBasic:
         assert data["puzzles"] == []
         assert data["total"] == 0
         assert data["available_motifs"] == []
+        assert data["stats"] == {"total": 0, "due": 0, "new": 0, "learning": 0, "mastered": 0}
 
     def test_returns_all_puzzles(self, client, db_session):
         """Returns all puzzles for a user with correct structure."""
@@ -248,6 +249,40 @@ class TestStatusComputation:
         db_session.commit()
         puzzle = client.get("/puzzles/list?username=testuser").json()["puzzles"][0]
         assert puzzle["status"] == "mastered"
+
+
+# ---- Corpus stats tests ----
+
+class TestCorpusStats:
+    def test_stats_reflect_all_statuses(self, client, db_session):
+        """Stats object counts each status category."""
+        _create_puzzle(db_session, "p-new1")
+        _create_puzzle(db_session, "p-due1")
+        _create_stats(db_session, "p-due1", attempts=1, pass_count=1,
+                      next_due_at=datetime.now(timezone.utc) - timedelta(hours=1))
+        _create_puzzle(db_session, "p-mastered1")
+        _create_stats(db_session, "p-mastered1", attempts=5, pass_count=5, fail_count=0,
+                      next_due_at=datetime.now(timezone.utc) + timedelta(days=30))
+        db_session.commit()
+
+        data = client.get("/puzzles/list?username=testuser").json()
+        stats = data["stats"]
+        assert stats["total"] == 3
+        assert stats["new"] == 1
+        assert stats["due"] == 1
+        assert stats["mastered"] == 1
+        assert stats["learning"] == 0
+
+    def test_stats_unaffected_by_filters(self, client, db_session):
+        """Stats always reflect the full corpus, even when filters are applied."""
+        _create_puzzle(db_session, "p-a", swing=1.0)
+        _create_puzzle(db_session, "p-b", swing=6.0)
+        db_session.commit()
+
+        # Filter to only hard puzzles
+        data = client.get("/puzzles/list?username=testuser&difficulty=hard").json()
+        assert data["total"] == 1  # filtered total
+        assert data["stats"]["total"] == 2  # corpus total (unfiltered)
 
 
 # ---- Difficulty bucketing tests ----

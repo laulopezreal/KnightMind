@@ -160,12 +160,21 @@ export interface LibraryPuzzle {
     created_at: string | null;
 }
 
+export interface LibraryCorpusStats {
+    total: number;
+    due: number;
+    new: number;
+    learning: number;
+    mastered: number;
+}
+
 export interface LibraryListResponse {
     puzzles: LibraryPuzzle[];
     total: number;
     limit: number;
     offset: number;
     available_motifs: string[];
+    stats: LibraryCorpusStats;
 }
 
 export interface LibraryListParams {

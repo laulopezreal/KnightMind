@@ -4,6 +4,7 @@ import { useChessUsername } from '../context/ChessUsernameContext';
 import {
     getLibraryPuzzles,
     type LibraryPuzzle,
+    type LibraryCorpusStats,
     type PuzzleStatus,
     type PuzzleDifficulty,
     type PuzzleSort,
@@ -129,6 +130,7 @@ export default function Library() {
     const [puzzles, setPuzzles] = useState<LibraryPuzzle[]>([]);
     const [total, setTotal] = useState(0);
     const [availableMotifs, setAvailableMotifs] = useState<string[]>([]);
+    const [corpusStats, setCorpusStats] = useState<LibraryCorpusStats | null>(null);
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
@@ -170,6 +172,7 @@ export default function Library() {
             setPuzzles(res.puzzles);
             setTotal(res.total);
             setAvailableMotifs(res.available_motifs);
+            setCorpusStats(res.stats);
         } catch (err) {
             setError(err instanceof Error ? err.message : 'Failed to load puzzles');
         } finally {
@@ -189,7 +192,7 @@ export default function Library() {
             <div className="space-y-12 animate-teedin">
                 <section>
                     <h1 className="text-4xl md:text-5xl font-serif text-primary mb-2">Library</h1>
-                    <p className="text-lg text-primary/60 font-sans">Browse and explore all your puzzles.</p>
+                    <p className="text-lg text-primary/60 font-sans">Puzzles from your own games. Every position here is a moment you can learn from.</p>
                 </section>
                 <div className="bg-primary/5 border border-primary/10 rounded-sm p-6 text-center space-y-4">
                     <h3 className="font-serif text-xl text-primary">Set your username to get started</h3>
@@ -211,9 +214,35 @@ export default function Library() {
             <section>
                 <h1 className="text-4xl md:text-5xl font-serif text-primary mb-2">Library</h1>
                 <p className="text-lg text-primary/60 font-sans">
-                    Browse and explore all your puzzles.
+                    Puzzles from your own games. Every position here is a moment you can learn from.
                 </p>
             </section>
+
+            {/* Corpus stats */}
+            {corpusStats && corpusStats.total > 0 && (
+                <section className="grid grid-cols-2 md:grid-cols-5 gap-3">
+                    <div className="bg-primary/5 border border-primary/10 rounded-sm p-3 text-center">
+                        <span className="block text-2xl font-serif text-primary">{corpusStats.total}</span>
+                        <span className="text-xs font-sans text-primary/50 uppercase tracking-wider">Total</span>
+                    </div>
+                    <div className="bg-orange-500/5 border border-orange-500/15 rounded-sm p-3 text-center">
+                        <span className="block text-2xl font-serif text-orange-600">{corpusStats.due}</span>
+                        <span className="text-xs font-sans text-orange-600/60 uppercase tracking-wider">Due</span>
+                    </div>
+                    <div className="bg-blue-500/5 border border-blue-500/15 rounded-sm p-3 text-center">
+                        <span className="block text-2xl font-serif text-blue-600">{corpusStats.new}</span>
+                        <span className="text-xs font-sans text-blue-600/60 uppercase tracking-wider">New</span>
+                    </div>
+                    <div className="bg-yellow-500/5 border border-yellow-500/15 rounded-sm p-3 text-center">
+                        <span className="block text-2xl font-serif text-yellow-700">{corpusStats.learning}</span>
+                        <span className="text-xs font-sans text-yellow-700/60 uppercase tracking-wider">Learning</span>
+                    </div>
+                    <div className="bg-green-500/5 border border-green-500/15 rounded-sm p-3 text-center">
+                        <span className="block text-2xl font-serif text-green-600">{corpusStats.mastered}</span>
+                        <span className="text-xs font-sans text-green-600/60 uppercase tracking-wider">Mastered</span>
+                    </div>
+                </section>
+            )}
 
             {/* Search + Filters */}
             <section className="bg-primary/5 border border-primary/10 rounded-sm p-4 space-y-4">
@@ -333,9 +362,15 @@ export default function Library() {
 
             {/* Training nudge */}
             <div className="text-center text-sm font-sans text-primary/40">
-                <Link to="/puzzles" className="km-interactive km-inline-link underline decoration-primary/20 underline-offset-4 hover:text-primary/70 transition-colors">
-                    Go to Training
-                </Link>
+                {corpusStats && corpusStats.due > 0 ? (
+                    <Link to="/puzzles" className="km-interactive km-inline-link underline decoration-primary/20 underline-offset-4 hover:text-primary/70 transition-colors">
+                        {corpusStats.due} puzzle{corpusStats.due !== 1 ? 's' : ''} due for review — Start Training
+                    </Link>
+                ) : (
+                    <Link to="/puzzles" className="km-interactive km-inline-link underline decoration-primary/20 underline-offset-4 hover:text-primary/70 transition-colors">
+                        Go to Training
+                    </Link>
+                )}
             </div>
         </div>
     );
