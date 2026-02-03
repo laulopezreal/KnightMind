@@ -1,30 +1,11 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import * as d3 from 'd3';
 import { getOpenings, ApiError, type OpeningNode, type ColorFilter } from '../api';
 import { useChessUsername } from '../context/ChessUsernameContext';
-
-function countLeaves(node: OpeningNode): number {
-  if (!node.children || node.children.length === 0) return 1;
-  return node.children.reduce((sum, child) => sum + countLeaves(child), 0);
-}
-
-function getMaxDepth(node: OpeningNode, depth = 0): number {
-  if (!node.children || node.children.length === 0) return depth;
-  return Math.max(...node.children.map((child) => getMaxDepth(child, depth + 1)));
-}
-
-function getWinRateColor(winRate: number): string {
-  if (winRate >= 60) return '#059669';
-  if (winRate >= 50) return '#10B981';
-  if (winRate >= 45) return '#84CC16';
-  if (winRate >= 40) return '#EAB308';
-  if (winRate >= 30) return '#F97316';
-  return '#EF4444';
-}
+import { OpeningGraph } from '../components/OpeningGraph';
+import { getWinRateColor } from '../utils/openings';
 
 export default function Openings() {
-  const svgRef = useRef<SVGSVGElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -61,103 +42,12 @@ export default function Openings() {
     fetchOpenings(username, colorFilter);
   };
 
-  const renderTree = useCallback((data: OpeningNode) => {
-    if (!svgRef.current) return;
-    const leafCount = countLeaves(data);
-    const maxDepth = getMaxDepth(data);
-    const nodeSpacing = 35;
-    const levelWidth = 180;
-
-    const width = Math.max(800, (maxDepth + 1) * levelWidth + 100);
-    const height = Math.max(400, leafCount * nodeSpacing + 60);
-    const margin = { top: 30, right: 150, bottom: 30, left: 60 };
-
-    d3.select(svgRef.current).selectAll('*').remove();
-
-    const svg = d3.select(svgRef.current)
-      .attr('width', width)
-      .attr('height', height);
-
-    const g = svg.append('g')
-      .attr('transform', `translate(${margin.left},${margin.top})`);
-
-    const root = d3.hierarchy(data);
-    const treeLayout = d3.tree<OpeningNode>()
-      .size([height - margin.top - margin.bottom, width - margin.left - margin.right])
-      .separation((a, b) => (a.parent === b.parent ? 1 : 1.2));
-
-    const treeDataLayout = treeLayout(root);
-
-    // Links
-    g.selectAll('.link')
-      .data(treeDataLayout.links())
-      .enter()
-      .append('path')
-      .attr('class', 'link')
-      .attr('fill', 'none')
-      .attr('stroke', 'currentColor') // Use current text color
-      .attr('stroke-width', 1.5)
-      .attr('stroke-opacity', 0.2)
-      .attr('d', d3.linkHorizontal<d3.HierarchyPointLink<OpeningNode>, d3.HierarchyPointNode<OpeningNode>>()
-        .x(d => d.y)
-        .y(d => d.x)
-      );
-
-    // Nodes
-    const nodes = g.selectAll('.node')
-      .data(treeDataLayout.descendants())
-      .enter()
-      .append('g')
-      .attr('class', 'node')
-      .attr('transform', d => `translate(${d.y},${d.x})`)
-      .style('cursor', 'pointer');
-
-    nodes.append('circle')
-      .attr('r', d => Math.max(6, Math.min(16, Math.sqrt(d.data.games_count) * 1.5 + 4)))
-      .attr('fill', d => getWinRateColor(d.data.win_rate))
-      .attr('stroke', 'var(--bg-primary)')
-      .attr('stroke-width', 2)
-      .on('mouseenter', function (event, d) {
-        d3.select(this).attr('stroke-width', 3);
-        setTooltip({
-          x: event.clientX + 10,
-          y: event.clientY - 10,
-          data: d.data
-        });
-      })
-      .on('mouseleave', function () {
-        d3.select(this).attr('stroke-width', 2);
-        setTooltip(null);
-      });
-
-    // Labels
-    nodes.append('text')
-      .attr('dy', 5)
-      .attr('x', d => d.children ? -20 : 20)
-      .attr('text-anchor', d => d.children ? 'end' : 'start')
-      .attr('fill', 'currentColor')
-      .attr('font-size', '13px')
-      .attr('font-family', 'Inter, sans-serif')
-      .attr('font-weight', '500')
-      .text(d => d.data.move_san === 'Start' ? '●' : d.data.move_san);
-  }, [setTooltip]);
-
   // Auto-fetch when page loads with username or when username/color filter changes
   useEffect(() => {
     if (username.trim()) {
       fetchOpenings(username, colorFilter);
     }
   }, [username, colorFilter, fetchOpenings]);
-
-  useEffect(() => {
-    if (!treeData || !svgRef.current) return;
-    try {
-      renderTree(treeData);
-      setError((prev) => (prev?.startsWith('Failed to draw') ? null : prev));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to draw opening tree.');
-    }
-  }, [treeData, renderTree]);
 
   return (
     <div className="space-y-12 animate-teedin">
@@ -244,9 +134,17 @@ export default function Openings() {
           </div>
         )}
 
-        <div className="min-w-0 min-h-0">
-          <svg ref={svgRef} className="text-primary block mx-auto"></svg>
-        </div>
+        {treeData && (
+          <OpeningGraph
+            data={treeData}
+            onNodeHover={(event, node) => setTooltip({
+              x: event.clientX + 10,
+              y: event.clientY - 10,
+              data: node,
+            })}
+            onNodeHoverEnd={() => setTooltip(null)}
+          />
+        )}
 
         {/* Tooltip in portal so it is not clipped by overflow */}
         {tooltip &&
