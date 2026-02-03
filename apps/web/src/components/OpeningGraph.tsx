@@ -53,6 +53,14 @@ function getVisibleMaxDepth(node: CollapsibleNode, depth = 0): number {
   return Math.max(...node.children.map((child) => getVisibleMaxDepth(child as CollapsibleNode, depth + 1)));
 }
 
+/** Format node label with chess move number: "1. e4" (white) or "1…e5" (black) */
+function formatMoveLabel(node: d3.HierarchyNode<OpeningNode>): string {
+  if (node.data.move_san === 'Start') return '●';
+  const moveNum = Math.ceil(node.depth / 2);
+  const isWhite = node.depth % 2 === 1;
+  return isWhite ? `${moveNum}. ${node.data.move_san}` : `${moveNum}\u2026${node.data.move_san}`;
+}
+
 interface OpeningGraphProps {
   data: OpeningNode;
   onNodeHover: (event: MouseEvent, node: OpeningNode) => void;
@@ -282,10 +290,13 @@ export function OpeningGraph({ data, onNodeHover, onNodeHoverEnd, onError, graph
           .attr('x', d => (d.children || d._children) ? -LAYOUT.labelOffset : LAYOUT.labelOffset)
           .attr('text-anchor', d => (d.children || d._children) ? 'end' : 'start')
           .attr('fill', 'currentColor')
+          .attr('stroke', 'var(--bg-primary)')
+          .attr('stroke-width', 4)
+          .attr('paint-order', 'stroke')
           .attr('font-size', LAYOUT.labelFontSize)
           .attr('font-family', 'Inter, sans-serif')
           .attr('font-weight', '500')
-          .text(d => d.data.move_san === 'Start' ? '●' : d.data.move_san);
+          .text(d => formatMoveLabel(d));
 
         // Collapse indicator (+)
         nodeEnter.append('text')
