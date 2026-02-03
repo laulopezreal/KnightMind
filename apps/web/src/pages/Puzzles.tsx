@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useSearchParams, useNavigate } from 'react-router-dom';
 import { Chessboard } from 'react-chessboard';
 import { Chess } from 'chess.js';
-import { generatePuzzles, getDailyPuzzles, getDuePuzzles, cancelJob, ApiError, type Puzzle, startSession, completeSession, getRecentSessions, reviewPuzzle, getSession, type SessionSummary, useHint as requestHint, getUserStatus, type UserStatus, getMotifPerformance, type MotifPerformanceResponse } from '../api';
+import { generatePuzzles, getDailyPuzzles, getDuePuzzles, cancelJob, ApiError, type Puzzle, startSession, completeSession, reviewPuzzle, getSession, type SessionSummary, useHint as requestHint } from '../api';
 import { JobStatusCard } from '../components/JobStatusCard';
 import { SessionSummaryCard } from '../components/SessionSummaryCard';
 import { WarmupSummary } from '../components/WarmupSummary';
@@ -14,6 +14,7 @@ import { usePuzzleMode } from '../context/PuzzleModeContext';
 import { useClue } from '../hooks/useClue';
 import { usePuzzleTimer } from '../hooks/usePuzzleTimer';
 import { useAchievements } from '../hooks/useAchievements';
+import { usePuzzleInsights } from '../hooks/usePuzzleInsights';
 
 type PuzzleStatus = 'solving' | 'correct' | 'incorrect' | 'revealed';
 type SessionState = 'idle' | 'loading' | 'active' | 'completing' | 'completed' | 'error';
@@ -42,7 +43,6 @@ export default function Puzzles() {
     // Session state
     const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
     const [sessionSummary, setSessionSummary] = useState<SessionSummary | null>(null);
-    const [recentSessions, setRecentSessions] = useState<SessionSummary[]>([]);
     const [reviewedCount, setReviewedCount] = useState(0);
     const [isResumingSession, setIsResumingSession] = useState(false);
     const [sessionState, setSessionState] = useState<SessionState>('idle');
@@ -54,12 +54,13 @@ export default function Puzzles() {
     const [performanceHistory, setPerformanceHistory] = useState<Array<{ time: number, result: 'pass' | 'fail' }>>([]);
 
     const { achievements, checkAchievements, checkSessionAchievements } = useAchievements(username);
-
-    const [userStatus, setUserStatus] = useState<UserStatus | null>(null);
-    const [isLoadingStatus, setIsLoadingStatus] = useState(false);
-    const [motifPerformance, setMotifPerformance] = useState<MotifPerformanceResponse | null>(null);
-    const [isRefreshingInsights, setIsRefreshingInsights] = useState(false);
-    const [insightsError, setInsightsError] = useState<string | null>(null);
+    const insights = usePuzzleInsights(username);
+    const {
+        userStatus, isLoadingStatus, motifPerformance, recentSessions,
+        insightsError, isRefreshingInsights,
+        refreshUserStatus, refreshRecentSessions, refreshMotifPerformance,
+        handleRefreshInsights,
+    } = insights;
 
     const statusRef = useRef(status);
     statusRef.current = status;
@@ -187,122 +188,8 @@ export default function Puzzles() {
             }
         };
 
-        const loadRecent = async () => {
-            try {
-                const sessions = await getRecentSessions(username, 5);
-                setRecentSessions(sessions);
-                setInsightsError(null);
-            } catch (err) {
-                setInsightsError(err instanceof Error ? err.message : 'Failed to load recent sessions');
-            }
-        };
-
         loadSessionAndPuzzles();
-        loadRecent();
         // eslint-disable-next-line react-hooks/exhaustive-deps -- run only on username change
-    }, [username]);
-
-    useEffect(() => {
-        if (!username) {
-            setUserStatus(null);
-            return;
-        }
-
-        let cancelled = false;
-
-        const fetchStatus = async () => {
-            setIsLoadingStatus(true);
-            try {
-                const status = await getUserStatus(username);
-                if (!cancelled) {
-                    setUserStatus(status);
-                    setInsightsError(null);
-                }
-            } catch (err) {
-                if (!cancelled) {
-                    console.warn('Unable to load user status:', err);
-                    setUserStatus(null);
-                    setInsightsError(err instanceof Error ? err.message : 'Unable to load user status');
-                }
-            } finally {
-                if (!cancelled) {
-                    setIsLoadingStatus(false);
-                }
-            }
-        };
-
-        fetchStatus();
-
-        return () => {
-            cancelled = true;
-        };
-    }, [username]);
-
-    const refreshUserStatus = useCallback(async () => {
-        if (!username) return;
-        try {
-            const status = await getUserStatus(username);
-            setUserStatus(status);
-        } catch (err) {
-            console.warn('Unable to refresh user status:', err);
-            setUserStatus(null);
-            setInsightsError(err instanceof Error ? err.message : 'Unable to refresh user status');
-        }
-    }, [username]);
-
-    const refreshMotifPerformance = useCallback(async () => {
-        if (!username) return;
-        try {
-            const performance = await getMotifPerformance(username);
-            setMotifPerformance(performance);
-        } catch (err) {
-            console.warn('Unable to refresh motif performance:', err);
-            setMotifPerformance(null);
-            setInsightsError(err instanceof Error ? err.message : 'Unable to load motif performance');
-        }
-    }, [username]);
-
-    const refreshRecentSessions = useCallback(async () => {
-        if (!username) return;
-        try {
-            const sessions = await getRecentSessions(username, 5);
-            setRecentSessions(sessions);
-        } catch (err) {
-            console.warn('Unable to refresh recent sessions:', err);
-            setRecentSessions([]);
-            setInsightsError(err instanceof Error ? err.message : 'Unable to load recent sessions');
-        }
-    }, [username]);
-
-    useEffect(() => {
-        if (!username) {
-            setMotifPerformance(null);
-            return;
-        }
-
-        let cancelled = false;
-
-        const fetchMotifs = async () => {
-            try {
-                const performance = await getMotifPerformance(username);
-                if (!cancelled) {
-                    setMotifPerformance(performance);
-                    setInsightsError(null);
-                }
-            } catch (err) {
-                if (!cancelled) {
-                    console.warn('Unable to load motif performance:', err);
-                    setMotifPerformance(null);
-                    setInsightsError(err instanceof Error ? err.message : 'Unable to load motif performance');
-                }
-            }
-        };
-
-        fetchMotifs();
-
-        return () => {
-            cancelled = true;
-        };
     }, [username]);
 
     const { job, isPolling: isJobPolling } = useJobPolling(activeJobId, {
@@ -639,24 +526,15 @@ export default function Puzzles() {
             // Check for session completion achievements
             checkSessionAchievements({ passCount: summary.pass_count, failCount: summary.fail_count });
 
-            // Refresh recent sessions
-            const recent = await getRecentSessions(username.trim(), 5);
-            setRecentSessions(recent);
-
-            // Refresh motif performance
-            try {
-                const updated = await getMotifPerformance(username.trim());
-                setMotifPerformance(updated);
-            } catch (motifErr) {
-                console.warn('Failed to refresh motif performance:', motifErr);
-            }
+            // Refresh insights (errors handled internally by the hook)
+            await Promise.all([refreshRecentSessions(), refreshMotifPerformance()]);
         } catch (err) {
             console.error('Failed to complete session:', err);
             const errorMessage = err instanceof Error ? err.message : 'Failed to complete session. Please try again.';
             setError(errorMessage);
             setSessionState('active');
         }
-    }, [activeSessionId, checkSessionAchievements, timerCleanup, username]);
+    }, [activeSessionId, checkSessionAchievements, refreshMotifPerformance, refreshRecentSessions, timerCleanup, username]);
 
     const handleReviewPuzzle = useCallback(async (result: 'pass' | 'fail', timeMs?: number) => {
         if (!currentPuzzle || !username.trim()) return;
@@ -762,18 +640,6 @@ export default function Puzzles() {
         userStatus.puzzles_count > 0 &&
         (!motifPerformance || !!insightsError);
     const canRetryLoad = !!username && !isGenerating && !isLoading;
-
-    const handleRefreshInsights = useCallback(async () => {
-        if (!username) return;
-        setIsRefreshingInsights(true);
-        setInsightsError(null);
-        try {
-            await Promise.all([refreshUserStatus(), refreshMotifPerformance(), refreshRecentSessions()]);
-        } finally {
-            setIsRefreshingInsights(false);
-        }
-    }, [refreshMotifPerformance, refreshRecentSessions, refreshUserStatus, username]);
-
 
     const handleCheckAnswer = () => {
         if (!currentPuzzle) return;
