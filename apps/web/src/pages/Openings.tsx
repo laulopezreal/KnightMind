@@ -39,7 +39,7 @@ export default function Openings() {
       return 'Building your opening tree...';
     }
     if (treeData) {
-      return 'Your repertoire\u2009—\u2009scroll to zoom, drag to pan, click nodes to explore.';
+      return `${username}\u2019s repertoire\u2009\u2014\u2009scroll to zoom, drag to pan, click nodes to explore.`;
     }
     return 'Load your games to build your opening knowledge graph.';
   })();
@@ -89,15 +89,6 @@ export default function Openings() {
 
       {/* Controls */}
       <section className="flex flex-wrap gap-4 items-end p-6 border border-primary/10 rounded-sm bg-primary/5 backdrop-blur-sm">
-        <div className="flex-1 min-w-[200px]">
-          <div>
-            <label className="block text-xs font-sans uppercase tracking-widest text-primary/40 mb-2">Username</label>
-            <div className="font-serif text-xl text-primary border-b border-primary/20 py-2">
-              {username}
-            </div>
-          </div>
-        </div>
-
         <div className="w-40">
           <label className="block text-xs font-sans uppercase tracking-widest text-primary/40 mb-2">Color</label>
           <select
@@ -253,6 +244,18 @@ export default function Openings() {
         <div className="flex items-center gap-1"><div className="w-3 h-3 rounded-full bg-yellow-500"></div> 40%+</div>
         <div className="flex items-center gap-1"><div className="w-3 h-3 rounded-full bg-orange-500"></div> 30%+</div>
         <div className="flex items-center gap-1"><div className="w-3 h-3 rounded-full bg-red-500"></div> &lt;30%</div>
+
+        <span className="border-l border-primary/20 pl-6 ml-2 flex items-center gap-2">
+          <span className="uppercase tracking-widest mr-1">Size:</span>
+          <span className="flex items-center gap-1">
+            <div className="w-2 h-2 rounded-full bg-primary/40"></div>
+            <span>Few</span>
+          </span>
+          <span className="flex items-center gap-1">
+            <div className="w-3.5 h-3.5 rounded-full bg-primary/40"></div>
+            <span>Many</span>
+          </span>
+        </span>
 
         {treeData && (
           <>
