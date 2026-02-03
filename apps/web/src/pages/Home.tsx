@@ -366,7 +366,7 @@ export default function Home() {
                 status={generationJob.status}
                 progress={generationJob.progress || 0}
                 message={generationJob.message}
-                error={generationJob.status === 'failed' ? generationJob.message : undefined}
+                error={generationJob.status === 'failed' ? (generationJob.error || generationJob.message) : undefined}
               />
             ) : (
               <div className="flex items-center gap-4">

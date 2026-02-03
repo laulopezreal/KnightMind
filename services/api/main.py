@@ -562,7 +562,8 @@ async def cancel_job(job_id: str, db: Session = Depends(get_db)):
         status=job.status,
         message=job.message,
         progress=job.progress_current,
-        result=job.result_json
+        result=job.result_json,
+        error=job.error_message
     )
 
 

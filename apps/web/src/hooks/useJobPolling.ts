@@ -50,7 +50,7 @@ export function useJobPolling(jobId: string | null, options: JobPollingOptions =
                     callbacksRef.current.onSuccess?.(status);
                 } else if (status.status === 'failed' || status.status === 'canceled') {
                     if (status.status === 'failed') {
-                        const err = new Error(status.message || 'Job failed');
+                        const err = new Error(status.error || status.message || 'Job failed');
                         callbacksRef.current.onError?.(err);
                     }
                 } else {
