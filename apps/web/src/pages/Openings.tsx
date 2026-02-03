@@ -223,8 +223,8 @@ export default function Openings() {
         {tooltip &&
           createPortal(
             <div
-              className="fixed z-[9999] bg-bg-primary border border-primary/20 p-4 shadow-2xl rounded-sm pointer-events-none min-w-[200px]"
-              style={{ left: tooltip.x, top: tooltip.y }}
+              className="fixed z-[9999] border border-primary/20 p-4 shadow-2xl rounded-sm pointer-events-none min-w-[200px]"
+              style={{ left: tooltip.x, top: tooltip.y, backgroundColor: 'var(--bg-primary)' }}
             >
               <div className="font-serif text-xl text-primary mb-2 border-b border-primary/10 pb-2">
                 {tooltip.data.move_san === 'Start' ? 'Start' : tooltip.data.move_san}
