@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
+import { useNavigate } from 'react-router-dom';
 import { getOpenings, ApiError, type OpeningNode, type ColorFilter } from '../api';
 import { useChessUsername } from '../context/ChessUsernameContext';
-import { OpeningGraph } from '../components/OpeningGraph';
+import { OpeningGraph, type OpeningGraphHandle } from '../components/OpeningGraph';
 import { getWinRateColor } from '../utils/openings';
 import { useLocalStorage } from '../hooks/useLocalStorage';
 
@@ -15,10 +16,12 @@ function countAllNodes(node: OpeningNode): number {
 }
 
 export default function Openings() {
+  const navigate = useNavigate();
   const containerRef = useRef<HTMLDivElement>(null);
+  const graphRef = useRef<OpeningGraphHandle>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const { username, setEditorOpen } = useChessUsername();
+  const { username } = useChessUsername();
   const [colorFilter, setColorFilter] = useLocalStorage<ColorFilter>(
     'knightmind:openings:color_filter',
     'both'
@@ -26,10 +29,12 @@ export default function Openings() {
   const [treeData, setTreeData] = useState<OpeningNode | null>(null);
   const [tooltip, setTooltip] = useState<{ x: number; y: number; data: OpeningNode } | null>(null);
 
+  // Redirect if no username (username is set during onboarding)
+  useEffect(() => {
+    if (!username) navigate('/');
+  }, [username, navigate]);
+
   const subtitle = (() => {
-    if (!username) {
-      return 'Set your Chess.com username to explore your opening repertoire.';
-    }
     if (loading) {
       return 'Building your opening tree...';
     }
@@ -85,27 +90,12 @@ export default function Openings() {
       {/* Controls */}
       <section className="flex flex-wrap gap-4 items-end p-6 border border-primary/10 rounded-sm bg-primary/5 backdrop-blur-sm">
         <div className="flex-1 min-w-[200px]">
-          {!username ? (
-            <div className="h-full flex flex-col justify-center">
-              <div className="flex items-center gap-2">
-                <span className="text-primary/60 font-sans text-sm">Set username to analyze</span>
-                <button
-                  type="button"
-                  onClick={() => setEditorOpen(true)}
-                  className="km-interactive km-focus-visible km-inline-link text-primary text-sm font-medium"
-                >
-                  Set
-                </button>
-              </div>
+          <div>
+            <label className="block text-xs font-sans uppercase tracking-widest text-primary/40 mb-2">Username</label>
+            <div className="font-serif text-xl text-primary border-b border-primary/20 py-2">
+              {username}
             </div>
-          ) : (
-            <div>
-              <label className="block text-xs font-sans uppercase tracking-widest text-primary/40 mb-2">Username</label>
-              <div className="font-serif text-xl text-primary border-b border-primary/20 py-2">
-                {username}
-              </div>
-            </div>
-          )}
+          </div>
         </div>
 
         <div className="w-40">
@@ -124,10 +114,10 @@ export default function Openings() {
         <button
           type="button"
           onClick={handleFetchClick}
-          disabled={loading || !username}
+          disabled={loading}
           className={[
             'px-6 py-2 rounded-sm font-serif transition-all km-focus-visible',
-            loading || !username ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive',
+            loading ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive',
             treeData
               ? 'border border-primary/20 text-primary hover:bg-primary hover:text-bg-primary'
               : 'bg-primary text-bg-primary',
@@ -159,7 +149,7 @@ export default function Openings() {
           <div className="absolute inset-0 flex flex-col items-center justify-center">
             <span className="text-9xl font-serif text-primary/10">♔</span>
             <p className="mt-4 text-primary/30 font-sans text-sm">
-              {username ? 'Load your openings to see your repertoire' : 'Connect your account to get started'}
+              Load your openings to see your repertoire
             </p>
           </div>
         )}
@@ -180,12 +170,52 @@ export default function Openings() {
             })}
             onNodeHoverEnd={() => setTooltip(null)}
             onError={setError}
+            graphRef={graphRef}
           />
+        )}
+
+        {/* Toolbar */}
+        {treeData && !loading && (
+          <div className="absolute top-3 right-3 flex gap-1">
+            <button
+              type="button"
+              onClick={() => graphRef.current?.zoomIn()}
+              className="p-2 bg-bg-primary/80 border border-primary/10 rounded-sm text-primary/60 hover:text-primary km-interactive km-focus-visible transition-colors"
+              aria-label="Zoom in"
+              title="Zoom in"
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path d="M12 6v12M6 12h12" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              onClick={() => graphRef.current?.zoomOut()}
+              className="p-2 bg-bg-primary/80 border border-primary/10 rounded-sm text-primary/60 hover:text-primary km-interactive km-focus-visible transition-colors"
+              aria-label="Zoom out"
+              title="Zoom out"
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path d="M6 12h12" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              onClick={() => graphRef.current?.fitToView()}
+              className="p-2 bg-bg-primary/80 border border-primary/10 rounded-sm text-primary/60 hover:text-primary km-interactive km-focus-visible transition-colors"
+              aria-label="Fit to view"
+              title="Fit to view"
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path d="M4 8V4h4M20 8V4h-4M4 16v4h4M20 16v4h-4" />
+              </svg>
+            </button>
+          </div>
         )}
 
         {treeData && !loading && (
           <div className="absolute bottom-3 left-3 text-xs text-primary/30 font-sans bg-bg-primary/80 px-2 py-1 rounded-sm pointer-events-none">
-            Scroll to zoom · Drag to pan
+            Scroll to zoom · Drag to pan · Click nodes to expand
           </div>
         )}
 

@@ -3,14 +3,14 @@ import { render, screen, waitFor } from '@testing-library/react';
 import Openings from './Openings';
 
 let mockUsername = 'testplayer';
-const mockSetEditorOpen = vi.fn();
+const mockNavigate = vi.fn();
 
 vi.mock('react-router-dom', () => ({
-  useNavigate: () => vi.fn(),
+  useNavigate: () => mockNavigate,
 }));
 
 vi.mock('../context/ChessUsernameContext', () => ({
-  useChessUsername: () => ({ username: mockUsername, setEditorOpen: mockSetEditorOpen }),
+  useChessUsername: () => ({ username: mockUsername }),
 }));
 
 const mockGetOpenings = vi.fn();
@@ -49,14 +49,14 @@ describe('Openings', () => {
     mockGetOpenings.mockReturnValue(new Promise(() => {}));
     render(<Openings />);
 
-    expect(screen.getByText('Opening Tree')).toBeInTheDocument();
+    expect(screen.getByText('Opening Explorer')).toBeInTheDocument();
   });
 
-  it('should show username prompt when no username', () => {
+  it('should redirect when no username', () => {
     mockUsername = '';
     render(<Openings />);
 
-    expect(screen.getByText('Set username to analyze')).toBeInTheDocument();
+    expect(mockNavigate).toHaveBeenCalledWith('/');
   });
 
   it('should show color filter options', () => {
@@ -88,14 +88,6 @@ describe('Openings', () => {
     await waitFor(() => {
       expect(screen.getByText('Network error')).toBeInTheDocument();
     });
-  });
-
-  it('should disable Load button when no username', () => {
-    mockUsername = '';
-    render(<Openings />);
-
-    const button = screen.getByText('Load Openings');
-    expect(button).toBeDisabled();
   });
 
   it('should show win rate legend', () => {
