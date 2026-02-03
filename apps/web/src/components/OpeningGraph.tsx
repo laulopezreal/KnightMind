@@ -45,7 +45,7 @@ function getMaxDepth(node: d3.HierarchyNode<OpeningNode>, depth = 0): number {
 /** Count visible nodes for layout sizing */
 function countVisibleLeaves(node: CollapsibleNode): number {
   if (!node.children || node.children.length === 0) return 1;
-  return node.children.reduce((sum, child) => sum + countVisibleLeaves(child), 0);
+  return node.children.reduce((sum, child) => sum + countVisibleLeaves(child as CollapsibleNode), 0);
 }
 
 function getVisibleMaxDepth(node: CollapsibleNode, depth = 0): number {
@@ -205,28 +205,12 @@ export function OpeningGraph({ data, onNodeHover, onNodeHoverEnd, onError, graph
           }
         });
 
-      /** Core update function — enter/update/exit with transitions */
-      function update(source: CollapsibleNode): void {
-        // Resize layout based on visible nodes
-        const visibleLeaves = countVisibleLeaves(root);
-        const visibleDepth = getVisibleMaxDepth(root);
-        const updatedWidth = Math.max(LAYOUT.minWidth, (visibleDepth + 1) * LAYOUT.levelWidth + 100);
-        const updatedHeight = Math.max(LAYOUT.minHeight, visibleLeaves * LAYOUT.nodeSpacing + 60);
-
-        treeLayout.size([updatedHeight - margin.top - margin.bottom, updatedWidth - margin.left - margin.right]);
-
-        // Update viewBox
-        d3.select(svgEl)
-          .attr('viewBox', `0 0 ${updatedWidth} ${updatedHeight}`);
-
-        // Recalculate layout
-        treeLayout(root);
-        const nodes = root.descendants() as CollapsibleNode[];
-        const links = root.links() as d3.HierarchyPointLink<OpeningNode>[];
-
-        const duration = LAYOUT.transitionDuration;
-
-        // --- LINKS ---
+      /** Update link elements with enter/update/exit transitions */
+      function updateLinks(
+        source: CollapsibleNode,
+        links: d3.HierarchyPointLink<OpeningNode>[],
+        duration: number,
+      ): void {
         const linkSel = contentG.select('g.links')
           .selectAll<SVGPathElement, d3.HierarchyPointLink<OpeningNode>>('path.link')
           .data(links, (d) => {
@@ -264,8 +248,14 @@ export function OpeningGraph({ data, onNodeHover, onNodeHoverEnd, onError, graph
             return linkPathGen({ source: o, target: o } as d3.HierarchyPointLink<OpeningNode>);
           })
           .remove();
+      }
 
-        // --- NODES ---
+      /** Update node elements with enter/update/exit transitions */
+      function updateNodes(
+        source: CollapsibleNode,
+        nodes: CollapsibleNode[],
+        duration: number,
+      ): void {
         const nodeSel = contentG.select('g.nodes')
           .selectAll<SVGGElement, CollapsibleNode>('g.node')
           .data(nodes, (d) => `${d.data.move_san}-${d.depth}-${d.parent?.data.move_san ?? 'root'}`);
@@ -353,6 +343,31 @@ export function OpeningGraph({ data, onNodeHover, onNodeHoverEnd, onError, graph
 
         // Apply drag to all current nodes
         nodeUpdate.call(dragBehavior);
+      }
+
+      /** Core update function — recalculates layout and delegates to link/node helpers */
+      function update(source: CollapsibleNode): void {
+        // Resize layout based on visible nodes
+        const visibleLeaves = countVisibleLeaves(root);
+        const visibleDepth = getVisibleMaxDepth(root);
+        const updatedWidth = Math.max(LAYOUT.minWidth, (visibleDepth + 1) * LAYOUT.levelWidth + 100);
+        const updatedHeight = Math.max(LAYOUT.minHeight, visibleLeaves * LAYOUT.nodeSpacing + 60);
+
+        treeLayout.size([updatedHeight - margin.top - margin.bottom, updatedWidth - margin.left - margin.right]);
+
+        // Update viewBox
+        d3.select(svgEl)
+          .attr('viewBox', `0 0 ${updatedWidth} ${updatedHeight}`);
+
+        // Recalculate layout
+        treeLayout(root);
+        const nodes = root.descendants() as CollapsibleNode[];
+        const links = root.links() as d3.HierarchyPointLink<OpeningNode>[];
+
+        const duration = LAYOUT.transitionDuration;
+
+        updateLinks(source, links, duration);
+        updateNodes(source, nodes, duration);
       }
 
       // Initial render
