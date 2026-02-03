@@ -8,6 +8,15 @@ import { ApiError } from '../api/core';
 
 type SolveStatus = 'solving' | 'correct' | 'incorrect' | 'revealed';
 
+function formatSolveTime(ms: number): string {
+    if (ms < 60000) {
+        return `${Math.round(ms / 1000)}s`;
+    }
+    const minutes = Math.floor(ms / 60000);
+    const seconds = Math.round((ms % 60000) / 1000);
+    return `${minutes}m ${seconds}s`;
+}
+
 export default function LibraryPuzzle() {
     const { puzzleId } = useParams<{ puzzleId: string }>();
     const { username } = useChessUsername();
@@ -260,10 +269,7 @@ export default function LibraryPuzzle() {
                             <p className="text-green-600 font-serif font-medium">Recorded</p>
                             <div className="flex items-center justify-center gap-4 mt-2 text-sm font-sans text-green-600/70">
                                 {solveTimeMs && (
-                                    <span>{solveTimeMs < 60000
-                                        ? `${Math.round(solveTimeMs / 1000)}s`
-                                        : `${Math.floor(solveTimeMs / 60000)}m ${Math.round((solveTimeMs % 60000) / 1000)}s`
-                                    }</span>
+                                    <span>{formatSolveTime(solveTimeMs)}</span>
                                 )}
                                 {puzzle.attempts > 0 && (
                                     <span>
