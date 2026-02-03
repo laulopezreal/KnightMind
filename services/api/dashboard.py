@@ -8,7 +8,7 @@ Provides comprehensive dashboard data including:
 - Improvement trends over time
 """
 
-from datetime import datetime, timezone, timedelta
+from datetime import date, datetime, timezone, timedelta
 from typing import Literal
 from sqlalchemy.orm import Session
 from sqlalchemy import select, desc, func, case
@@ -369,7 +369,7 @@ async def get_motif_trends(
         # func.date() returns a string on SQLite, a date object on PostgreSQL
         formatted_points = [
             TrendDataPoint(
-                date=dp_date.strftime('%Y-%m-%d') if isinstance(dp_date, (datetime.date, datetime.datetime)) else str(dp_date),
+                date=dp_date.strftime('%Y-%m-%d') if isinstance(dp_date, (date, datetime)) else str(dp_date),
                 accuracy=round(accuracy, 3)
             )
             for dp_date, accuracy in data_points
