@@ -257,14 +257,15 @@ export default function Openings() {
 
         {treeData && (
           <div className="w-full flex justify-center gap-12 pt-4 mt-4 border-t border-primary/10">
-            <div className="text-center">
-              <div className="text-2xl font-mono text-primary">{treeData.games_count}</div>
-              <div className="text-xs uppercase tracking-widest text-primary/40">Games Analyzed</div>
-            </div>
-            <div className="text-center">
-              <div className="text-2xl font-mono text-primary">{countAllNodes(treeData)}</div>
-              <div className="text-xs uppercase tracking-widest text-primary/40">Unique Positions</div>
-            </div>
+            {[
+              { value: treeData.games_count, label: 'Games Analyzed' },
+              { value: countAllNodes(treeData), label: 'Unique Positions' },
+            ].map(stat => (
+              <div className="text-center" key={stat.label}>
+                <div className="text-2xl font-mono text-primary">{stat.value}</div>
+                <div className="text-xs uppercase tracking-widest text-primary/40">{stat.label}</div>
+              </div>
+            ))}
           </div>
         )}
       </section>
