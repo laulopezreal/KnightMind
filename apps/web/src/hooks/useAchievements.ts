@@ -84,19 +84,20 @@ export function useAchievements(username: string) {
         ({ streak, currentPuzzleTime }: CheckAchievementsParams) => {
             setAchievements(prev => {
                 let changed = false;
+                const now = new Date();
                 const updated = prev.map(a => {
                     if (a.earned) return a;
                     if (a.id === 'streak_5' && streak >= 5) {
                         changed = true;
-                        return { ...a, earned: true, earnedAt: new Date() };
+                        return { ...a, earned: true, earnedAt: now };
                     }
                     if (a.id === 'streak_10' && streak >= 10) {
                         changed = true;
-                        return { ...a, earned: true, earnedAt: new Date() };
+                        return { ...a, earned: true, earnedAt: now };
                     }
                     if (a.id === 'speed_demon' && currentPuzzleTime < 10) {
                         changed = true;
-                        return { ...a, earned: true, earnedAt: new Date() };
+                        return { ...a, earned: true, earnedAt: now };
                     }
                     return a;
                 });
@@ -114,21 +115,22 @@ export function useAchievements(username: string) {
         ({ passCount, failCount }: CheckSessionAchievementsParams) => {
             setAchievements(prev => {
                 let changed = false;
+                const now = new Date();
                 const accuracy = calculateAccuracy(passCount, failCount);
                 const total = passCount + failCount;
                 const updated = prev.map(a => {
                     if (a.earned) return a;
                     if (a.id === 'first_session') {
                         changed = true;
-                        return { ...a, earned: true, earnedAt: new Date() };
+                        return { ...a, earned: true, earnedAt: now };
                     }
                     if (a.id === 'accuracy_90' && accuracy >= 90 && total > 0) {
                         changed = true;
-                        return { ...a, earned: true, earnedAt: new Date() };
+                        return { ...a, earned: true, earnedAt: now };
                     }
                     if (a.id === 'perfect_session' && accuracy === 100 && total > 0) {
                         changed = true;
-                        return { ...a, earned: true, earnedAt: new Date() };
+                        return { ...a, earned: true, earnedAt: now };
                     }
                     return a;
                 });
