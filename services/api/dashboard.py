@@ -366,12 +366,13 @@ async def get_motif_trends(
             trend = "steady"
 
         # Format data points
+        # func.date() returns a string on SQLite, a date object on PostgreSQL
         formatted_points = [
             TrendDataPoint(
-                date=date.strftime('%Y-%m-%d'),
+                date=dp_date.strftime('%Y-%m-%d') if hasattr(dp_date, 'strftime') else str(dp_date),
                 accuracy=round(accuracy, 3)
             )
-            for date, accuracy in data_points
+            for dp_date, accuracy in data_points
         ]
 
         trends.append(MotifTrend(
