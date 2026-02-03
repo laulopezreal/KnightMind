@@ -67,6 +67,7 @@ describe('LibraryPuzzle', () => {
             limit: 1,
             offset: 0,
             available_motifs: ['Fork'],
+            stats: { total: 1, due: 1, new: 0, learning: 0, mastered: 0 },
         });
         mockReviewPuzzle.mockResolvedValue({
             next_due_at: '2026-02-10T12:00:00Z',
@@ -197,10 +198,10 @@ describe('LibraryPuzzle', () => {
             expect(screen.getByText('e2e4')).toBeInTheDocument();
         });
 
-        // Should record as fail
+        // Should record as fail (4th arg is time_spent_ms)
         await waitFor(() => {
             expect(mockReviewPuzzle).toHaveBeenCalledWith(
-                'puzzle-abc', 'testplayer', 'fail'
+                'puzzle-abc', 'testplayer', 'fail', expect.any(Number)
             );
         });
     });
