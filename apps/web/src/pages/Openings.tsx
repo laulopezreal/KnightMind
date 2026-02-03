@@ -17,7 +17,6 @@ function countAllNodes(node: OpeningNode): number {
 
 export default function Openings() {
   const navigate = useNavigate();
-  const containerRef = useRef<HTMLDivElement>(null);
   const graphRef = useRef<OpeningGraphHandle>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -134,7 +133,7 @@ export default function Openings() {
       )}
 
       {/* Graph */}
-      <section ref={containerRef} className="relative min-h-[300px] md:min-h-[500px] max-h-[70vh] bg-chess-cream-300/40 shadow-[inset_0_2px_12px_0_rgba(0,0,0,0.06)] rounded-sm overflow-hidden">
+      <section className="relative min-h-[300px] md:min-h-[500px] max-h-[70vh] bg-primary/5 border border-primary/10 rounded-sm overflow-hidden">
         {!treeData && !loading && !error && (
           <div className="absolute inset-0 flex flex-col items-center justify-center">
             <span className="text-9xl font-serif text-primary/10">♔</span>
@@ -259,11 +258,11 @@ export default function Openings() {
         {treeData && (
           <div className="w-full flex justify-center gap-12 pt-4 mt-4 border-t border-primary/10">
             <div className="text-center">
-              <div className="text-2xl font-serif text-primary">{treeData.games_count}</div>
+              <div className="text-2xl font-mono text-primary">{treeData.games_count}</div>
               <div className="text-xs uppercase tracking-widest text-primary/40">Games Analyzed</div>
             </div>
             <div className="text-center">
-              <div className="text-2xl font-serif text-primary">{countAllNodes(treeData)}</div>
+              <div className="text-2xl font-mono text-primary">{countAllNodes(treeData)}</div>
               <div className="text-xs uppercase tracking-widest text-primary/40">Unique Positions</div>
             </div>
           </div>
