@@ -221,26 +221,18 @@ export default function Library() {
             {/* Corpus stats */}
             {corpusStats && corpusStats.total > 0 && (
                 <section className="grid grid-cols-2 md:grid-cols-5 gap-3">
-                    <div className="bg-primary/5 border border-primary/10 rounded-sm p-3 text-center">
-                        <span className="block text-2xl font-serif text-primary">{corpusStats.total}</span>
-                        <span className="text-xs font-sans text-primary/50 uppercase tracking-wider">Total</span>
-                    </div>
-                    <div className="bg-orange-500/5 border border-orange-500/15 rounded-sm p-3 text-center">
-                        <span className="block text-2xl font-serif text-orange-600">{corpusStats.due}</span>
-                        <span className="text-xs font-sans text-orange-600/60 uppercase tracking-wider">Due</span>
-                    </div>
-                    <div className="bg-blue-500/5 border border-blue-500/15 rounded-sm p-3 text-center">
-                        <span className="block text-2xl font-serif text-blue-600">{corpusStats.new}</span>
-                        <span className="text-xs font-sans text-blue-600/60 uppercase tracking-wider">New</span>
-                    </div>
-                    <div className="bg-yellow-500/5 border border-yellow-500/15 rounded-sm p-3 text-center">
-                        <span className="block text-2xl font-serif text-yellow-700">{corpusStats.learning}</span>
-                        <span className="text-xs font-sans text-yellow-700/60 uppercase tracking-wider">Learning</span>
-                    </div>
-                    <div className="bg-green-500/5 border border-green-500/15 rounded-sm p-3 text-center">
-                        <span className="block text-2xl font-serif text-green-600">{corpusStats.mastered}</span>
-                        <span className="text-xs font-sans text-green-600/60 uppercase tracking-wider">Mastered</span>
-                    </div>
+                    {[
+                        { label: 'Total', value: corpusStats.total, containerClasses: 'bg-primary/5 border-primary/10', valueClasses: 'text-primary', labelClasses: 'text-primary/50' },
+                        { label: 'Due', value: corpusStats.due, containerClasses: 'bg-orange-500/5 border-orange-500/15', valueClasses: 'text-orange-600', labelClasses: 'text-orange-600/60' },
+                        { label: 'New', value: corpusStats.new, containerClasses: 'bg-blue-500/5 border-blue-500/15', valueClasses: 'text-blue-600', labelClasses: 'text-blue-600/60' },
+                        { label: 'Learning', value: corpusStats.learning, containerClasses: 'bg-yellow-500/5 border-yellow-500/15', valueClasses: 'text-yellow-700', labelClasses: 'text-yellow-700/60' },
+                        { label: 'Mastered', value: corpusStats.mastered, containerClasses: 'bg-green-500/5 border-green-500/15', valueClasses: 'text-green-600', labelClasses: 'text-green-600/60' },
+                    ].map(stat => (
+                        <div key={stat.label} className={`${stat.containerClasses} border rounded-sm p-3 text-center`}>
+                            <span className={`block text-2xl font-serif ${stat.valueClasses}`}>{stat.value}</span>
+                            <span className={`text-xs font-sans ${stat.labelClasses} uppercase tracking-wider`}>{stat.label}</span>
+                        </div>
+                    ))}
                 </section>
             )}
 
