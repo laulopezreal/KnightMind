@@ -9,10 +9,11 @@ vi.mock('focus-trap-react', () => ({
 }));
 
 describe('Modal', () => {
-  const user = userEvent.setup();
+  let user: ReturnType<typeof userEvent.setup>;
   const onClose = vi.fn();
 
   beforeEach(() => {
+    user = userEvent.setup();
     vi.resetAllMocks();
     document.body.className = '';
   });

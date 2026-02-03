@@ -51,9 +51,10 @@ const STARTING_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
 const ALT_FEN = 'rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1';
 
 describe('Engine - Clue Functionality', () => {
-  const user = userEvent.setup();
+  let user: ReturnType<typeof userEvent.setup>;
 
   beforeEach(() => {
+    user = userEvent.setup();
     vi.resetAllMocks();
     mockGetEngineStatus.mockResolvedValue({ available: true, message: 'Engine ready' });
     mockEvaluateFen.mockResolvedValue({ best_move_uci: 'e2e4', eval: 0.5 });
