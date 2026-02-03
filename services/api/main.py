@@ -389,12 +389,21 @@ class PuzzleListItem(BaseModel):
     created_at: datetime | None
 
 
+class PuzzleCorpusStats(BaseModel):
+    total: int
+    due: int
+    new: int
+    learning: int
+    mastered: int
+
+
 class PuzzleListResponse(BaseModel):
     puzzles: list[PuzzleListItem]
     total: int
     limit: int
     offset: int
     available_motifs: list[str]
+    stats: PuzzleCorpusStats
 
 
 class ReviewRequest(BaseModel):
@@ -832,6 +841,14 @@ async def list_puzzles(
             "primary_motif": pm,
         })
 
+    # 2b. Compute corpus stats (unfiltered) for the stats header
+    corpus_total = len(items)
+    corpus_stats = {"new": 0, "due": 0, "learning": 0, "mastered": 0}
+    for it in items:
+        cs = it["computed_status"]
+        if cs in corpus_stats:
+            corpus_stats[cs] += 1
+
     # 3. Search filter
     if q:
         q_lower = q.lower()
@@ -929,6 +946,13 @@ async def list_puzzles(
         limit=limit,
         offset=offset,
         available_motifs=sorted(motif_set),
+        stats=PuzzleCorpusStats(
+            total=corpus_total,
+            due=corpus_stats["due"],
+            new=corpus_stats["new"],
+            learning=corpus_stats["learning"],
+            mastered=corpus_stats["mastered"],
+        ),
     )
 
 
