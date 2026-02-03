@@ -4,15 +4,35 @@ import { getOpenings, ApiError, type OpeningNode, type ColorFilter } from '../ap
 import { useChessUsername } from '../context/ChessUsernameContext';
 import { OpeningGraph } from '../components/OpeningGraph';
 import { getWinRateColor } from '../utils/openings';
+import { useLocalStorage } from '../hooks/useLocalStorage';
+
+function countAllNodes(node: OpeningNode): number {
+  let count = 1;
+  if (node.children) {
+    for (const child of node.children) count += countAllNodes(child);
+  }
+  return count;
+}
 
 export default function Openings() {
   const containerRef = useRef<HTMLDivElement>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const { username, setEditorOpen } = useChessUsername();
-  const [colorFilter, setColorFilter] = useState<ColorFilter>('both');
+  const [colorFilter, setColorFilter] = useLocalStorage<ColorFilter>(
+    'knightmind:openings:color_filter',
+    'both'
+  );
   const [treeData, setTreeData] = useState<OpeningNode | null>(null);
   const [tooltip, setTooltip] = useState<{ x: number; y: number; data: OpeningNode } | null>(null);
+
+  const subtitle = !username
+    ? 'Set your Chess.com username to explore your opening repertoire.'
+    : loading
+      ? 'Building your opening tree...'
+      : treeData
+        ? 'Your repertoire\u2009—\u2009scroll to zoom, drag to pan, click nodes to explore.'
+        : 'Load your games to build your opening knowledge graph.';
 
   const fetchOpenings = useCallback(async (user: string, color: ColorFilter) => {
     if (!user.trim()) {
@@ -50,16 +70,15 @@ export default function Openings() {
   }, [username, colorFilter, fetchOpenings]);
 
   return (
-    <div className="space-y-12 animate-teedin">
+    <div className="space-y-8 animate-teedin">
+      {/* Header */}
       <section>
-        <h1 className="text-4xl md:text-5xl font-serif text-primary mb-4">Opening Tree</h1>
-        <p className="text-lg text-primary/60 font-sans max-w-2xl">
-          Visualize your repertoire. Discover where you win, where you lose, and where you can improve.
-        </p>
+        <h1 className="text-4xl md:text-5xl font-serif text-primary mb-2">Opening Explorer</h1>
+        <p className="text-lg text-primary/60 font-sans max-w-2xl">{subtitle}</p>
       </section>
 
       {/* Controls */}
-      <section className="flex flex-wrap gap-6 items-end p-6 border border-primary/10 rounded-lg bg-primary/5 backdrop-blur-sm">
+      <section className="flex flex-wrap gap-4 items-end p-6 border border-primary/10 rounded-sm bg-primary/5 backdrop-blur-sm">
         <div className="flex-1 min-w-[200px]">
           {!username ? (
             <div className="h-full flex flex-col justify-center">
@@ -97,44 +116,59 @@ export default function Openings() {
           </select>
         </div>
 
-        <button
-          type="button"
-          onClick={handleFetchClick}
-          disabled={loading || !username}
-          className={`px-8 py-3 bg-primary text-bg-primary rounded-sm font-serif text-lg transition-all km-focus-visible ${loading || !username ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'}`}
-        >
-          {loading ? 'Analyzing...' : 'Load Openings'}
-        </button>
+        {treeData ? (
+          <button
+            type="button"
+            onClick={handleFetchClick}
+            disabled={loading || !username}
+            className={`px-6 py-2 border border-primary/20 text-primary hover:bg-primary hover:text-bg-primary rounded-sm font-serif transition-all km-focus-visible ${loading || !username ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'}`}
+          >
+            {loading ? 'Refreshing...' : 'Refresh'}
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={handleFetchClick}
+            disabled={loading || !username}
+            className={`px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-all km-focus-visible ${loading || !username ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'}`}
+          >
+            {loading ? 'Analyzing...' : 'Load Openings'}
+          </button>
+        )}
       </section>
 
-      {/* Legend */}
-      <section className="flex gap-4 items-center justify-center text-xs font-sans text-primary/60">
-        <span className="uppercase tracking-widest mr-2">Win Rate:</span>
-        <div className="flex items-center gap-1"><div className="w-3 h-3 rounded-full bg-emerald-600"></div> 60%+</div>
-        <div className="flex items-center gap-1"><div className="w-3 h-3 rounded-full bg-emerald-500"></div> 50%+</div>
-        <div className="flex items-center gap-1"><div className="w-3 h-3 rounded-full bg-lime-500"></div> 45%+</div>
-        <div className="flex items-center gap-1"><div className="w-3 h-3 rounded-full bg-yellow-500"></div> 40%+</div>
-        <div className="flex items-center gap-1"><div className="w-3 h-3 rounded-full bg-orange-500"></div> 30%+</div>
-        <div className="flex items-center gap-1"><div className="w-3 h-3 rounded-full bg-red-500"></div> &lt;30%</div>
-      </section>
+      {/* Error */}
+      {error && (
+        <div className="flex items-center gap-4">
+          <p className="text-red-500/80 font-sans">{error}</p>
+          <button
+            type="button"
+            onClick={handleFetchClick}
+            className="px-4 py-1 border border-red-500/20 text-red-500/80 hover:bg-red-500/10 rounded-sm font-serif transition-colors km-interactive km-focus-visible text-sm"
+          >
+            Retry
+          </button>
+        </div>
+      )}
 
-      {error && <p className="text-red-500/80 font-sans">{error}</p>}
-
-      {/* Visualization: overflow-auto so tree can scroll vertically and horizontally */}
-      <section ref={containerRef} className="relative min-h-[500px] border-t border-primary/10 pt-8 overflow-auto">
-        {!treeData && !loading && (
-          <div className="absolute inset-0 flex items-center justify-center opacity-20 pointer-events-none">
-            <span className="text-9xl font-serif">♔</span>
+      {/* Graph */}
+      <section ref={containerRef} className="relative min-h-[300px] md:min-h-[500px] max-h-[70vh] bg-primary/5 border border-primary/10 rounded-sm overflow-hidden">
+        {!treeData && !loading && !error && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center">
+            <span className="text-9xl font-serif text-primary/10">♔</span>
+            <p className="mt-4 text-primary/30 font-sans text-sm">
+              {username ? 'Load your openings to see your repertoire' : 'Connect your account to get started'}
+            </p>
           </div>
         )}
 
         {loading && (
-          <div className="absolute inset-0 flex items-center justify-center">
+          <div className="absolute inset-0 flex flex-col items-center justify-center">
             <p className="font-serif text-xl animate-pulse text-primary/60">Tracing paths...</p>
           </div>
         )}
 
-        {treeData && (
+        {treeData && !loading && (
           <OpeningGraph
             data={treeData}
             onNodeHover={(event, node) => setTooltip({
@@ -145,6 +179,12 @@ export default function Openings() {
             onNodeHoverEnd={() => setTooltip(null)}
             onError={setError}
           />
+        )}
+
+        {treeData && !loading && (
+          <div className="absolute bottom-3 left-3 text-xs text-primary/30 font-sans bg-bg-primary/80 px-2 py-1 rounded-sm pointer-events-none">
+            Scroll to zoom · Drag to pan
+          </div>
         )}
 
         {/* Tooltip in portal so it is not clipped by overflow */}
@@ -171,6 +211,28 @@ export default function Openings() {
             document.body
           )}
       </section>
-    </div >
+
+      {/* Legend + Stats */}
+      <section className="flex flex-wrap gap-6 items-center justify-center text-xs font-sans text-primary/60">
+        <span className="uppercase tracking-widest mr-2">Win Rate:</span>
+        <div className="flex items-center gap-1"><div className="w-3 h-3 rounded-full bg-emerald-600"></div> 60%+</div>
+        <div className="flex items-center gap-1"><div className="w-3 h-3 rounded-full bg-emerald-500"></div> 50%+</div>
+        <div className="flex items-center gap-1"><div className="w-3 h-3 rounded-full bg-lime-500"></div> 45%+</div>
+        <div className="flex items-center gap-1"><div className="w-3 h-3 rounded-full bg-yellow-500"></div> 40%+</div>
+        <div className="flex items-center gap-1"><div className="w-3 h-3 rounded-full bg-orange-500"></div> 30%+</div>
+        <div className="flex items-center gap-1"><div className="w-3 h-3 rounded-full bg-red-500"></div> &lt;30%</div>
+
+        {treeData && (
+          <>
+            <span className="border-l border-primary/20 pl-6 ml-2">
+              <span className="font-mono">{treeData.games_count}</span> games
+            </span>
+            <span>
+              <span className="font-mono">{countAllNodes(treeData)}</span> lines
+            </span>
+          </>
+        )}
+      </section>
+    </div>
   );
 }
