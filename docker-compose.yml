@@ -1,0 +1,53 @@
+# ============================================================================
+# KnightMind – Docker Compose (local dev + production-like)
+# ============================================================================
+# Usage:
+#   make docker-up       → Start API + Postgres
+#   make docker-down     → Stop everything
+#   make docker-build    → Rebuild API image
+#   make docker-logs     → Tail logs
+#
+# First run:
+#   cp .env.example .env.docker
+#   Edit .env.docker with your values
+#   make docker-up
+#   make docker-migrate  → Run Alembic migrations
+# ============================================================================
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-knightmind}
+      POSTGRES_USER: ${POSTGRES_USER:-knightmind}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-knightmind_dev}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-knightmind}"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "${API_PORT:-8000}:8000"
+    env_file:
+      - .env.docker
+    environment:
+      # Override DATABASE_URL to point to the compose postgres service
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-knightmind}:${POSTGRES_PASSWORD:-knightmind_dev}@db:5432/${POSTGRES_DB:-knightmind}
+      STOCKFISH_PATH: /usr/games/stockfish
+
+volumes:
+  pgdata:
