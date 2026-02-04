@@ -1,3 +1,11 @@
+import os
+import sys
+from pathlib import Path
+
+# Load .env before any project imports read os.environ
+from dotenv import load_dotenv
+load_dotenv(Path(__file__).resolve().parent / ".env")
+
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from datetime import date, datetime, timezone, timedelta
@@ -11,9 +19,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 import anyio
-import os
 import re
-import sys
 
 # Add project root to path to verify imports work even if CWD is services/api
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
