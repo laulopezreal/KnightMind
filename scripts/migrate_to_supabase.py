@@ -219,7 +219,7 @@ def copy_data(pg_url: str) -> None:
                     d[col] = bool(d[col])
             return d
 
-        batch_size = 500
+        batch_size = 100
         inserted = 0
         try:
             with pg_conn.cursor() as pg_cur:
@@ -230,7 +230,7 @@ def copy_data(pg_url: str) -> None:
                     pg_conn.commit()
                     inserted += len(batch)
                     print(f"    {table}: {inserted}/{len(rows)} rows...",
-                          end="\r", flush=True)
+                          flush=True)
         except Exception as exc:
             pg_conn.rollback()
             msg = str(exc).lower()
@@ -257,7 +257,7 @@ def copy_data(pg_url: str) -> None:
             raise
 
         total_rows += inserted
-        print(f"  {table}: {inserted} rows copied" + " " * 20)
+        print(f"  {table}: {inserted} rows copied (done)")
 
     print(f"\nTotal: {total_rows} rows copied across {len(TABLE_ORDER)} tables.")
 
