@@ -225,8 +225,8 @@ def copy_data(pg_url: str) -> None:
             with pg_conn.cursor() as pg_cur:
                 for i in range(0, len(rows), batch_size):
                     batch = rows[i : i + batch_size]
-                    for row in batch:
-                        pg_cur.execute(insert_sql, make_params(row))
+                    params_list = [make_params(row) for row in batch]
+                    pg_cur.executemany(insert_sql, params_list)
                     pg_conn.commit()
                     inserted += len(batch)
                     print(f"    {table}: {inserted}/{len(rows)} rows...",
