@@ -3,23 +3,17 @@
 Migrate local SQLite knightmind.db → Supabase (PostgreSQL).
 
 Usage:
-  1. Set DATABASE_URL in services/api/.env:
-       DATABASE_URL=postgresql://postgres.<ref>:<password>@aws-0-<region>.pooler.supabase.com:5432/postgres
+  python scripts/migrate_to_supabase.py "postgresql://postgres.<ref>:<password>@aws-0-<region>.pooler.supabase.com:5432/postgres"
 
-  2. Run the script:
-       python scripts/migrate_to_supabase.py
-
-  What it does:
-    Step 1 – Runs Alembic migrations against Supabase to create the schema
-    Step 2 – Copies all rows from local SQLite into Supabase, respecting FK order
+What it does:
+  Step 1 – Runs Alembic migrations against Supabase to create the schema
+  Step 2 – Copies all rows from local SQLite into Supabase, respecting FK order
 """
 
-import os
+import argparse
 import sys
 import sqlite3
 from pathlib import Path
-
-from dotenv import load_dotenv
 
 # ---------------------------------------------------------------------------
 # Config
@@ -28,9 +22,6 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent
 API_DIR = PROJECT_ROOT / "services" / "api"
 SQLITE_PATH = API_DIR / "knightmind.db"
-
-# Load config from the same .env the API uses
-load_dotenv(API_DIR / ".env")
 
 # Tables in FK-safe insertion order (parents before children)
 TABLE_ORDER = [
@@ -48,13 +39,15 @@ TABLE_ORDER = [
 # Helpers
 # ---------------------------------------------------------------------------
 
-def get_database_url() -> str:
-    url = os.getenv("DATABASE_URL")
-    if not url or url.startswith("sqlite"):
-        print("ERROR: Set DATABASE_URL in services/api/.env to your Supabase Postgres URL.")
-        print('  DATABASE_URL=postgresql://postgres.<ref>:<pass>@aws-0-<region>.pooler.supabase.com:5432/postgres')
-        sys.exit(1)
-    return url
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Migrate local SQLite knightmind.db → Supabase (PostgreSQL)."
+    )
+    parser.add_argument(
+        "pg_url",
+        help='Supabase Postgres connection string, e.g. "postgresql://postgres.<ref>:<pass>@aws-0-<region>.pooler.supabase.com:5432/postgres"',
+    )
+    return parser.parse_args()
 
 
 def run_alembic_migrations(pg_url: str) -> None:
@@ -170,7 +163,8 @@ def main() -> None:
     print("=" * 60)
     print()
 
-    pg_url = get_database_url()
+    args = parse_args()
+    pg_url = args.pg_url
 
     # Ensure project imports work
     sys.path.insert(0, str(PROJECT_ROOT))
@@ -191,8 +185,9 @@ def main() -> None:
     print()
     print("Next steps:")
     print("  1. Verify data in Supabase Dashboard → Table Editor")
-    print("  2. Restart your API server (it will use DATABASE_URL from .env)")
-    print("  3. Enable Row Level Security on tables if using Supabase API directly")
+    print("  2. Set DATABASE_URL in services/api/.env to point at Supabase")
+    print("  3. Restart your API server")
+    print("  4. Enable Row Level Security on tables if using Supabase API directly")
     print("=" * 60)
 
 
