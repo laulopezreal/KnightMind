@@ -70,8 +70,8 @@ lint-front: ## Lint frontend
 
 lint-back: ## Lint backend
 	@echo "$(GREEN)Linting backend...$(NC)"
-	-python -m ruff check .
-	-python -m black --check .
+	python -m ruff check .
+	python -m black --check .
 
 # ---------------------------------------------------------------------------
 # Building

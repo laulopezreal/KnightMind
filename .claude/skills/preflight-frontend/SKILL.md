@@ -10,15 +10,15 @@ Run frontend preflight checks. Stop at the first failure.
 
 1. **Lint**:
    ```bash
-   cd /Users/laura/git/KnightMind/apps/web && npm run lint
+   cd apps/web && npm run lint
    ```
 2. **Build** (includes TypeScript type-check):
    ```bash
-   cd /Users/laura/git/KnightMind/apps/web && npm run build
+   cd apps/web && npm run build
    ```
 3. **Tests** (if any exist):
    ```bash
-   cd /Users/laura/git/KnightMind/apps/web && npm run test -- --run 2>/dev/null || echo "No tests configured"
+   cd apps/web && npm run test -- --run 2>/dev/null || echo "No tests configured"
    ```
 
 ## Output
