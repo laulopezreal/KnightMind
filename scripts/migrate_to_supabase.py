@@ -50,6 +50,35 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _url_with_timeouts(url: str, connect_timeout: int = 10,
+                        lock_timeout_ms: int = 15000) -> str:
+    """Append connect_timeout and lock_timeout options to a Postgres URL."""
+    sep = "&" if "?" in url else "?"
+    return (
+        f"{url}{sep}connect_timeout={connect_timeout}"
+        f"&options=-c%20lock_timeout%3D{lock_timeout_ms}"
+    )
+
+
+LOCK_TIMEOUT_HINT = (
+    "\nERROR: Migration timed out waiting for a database lock.\n"
+    "This usually means a previous migration was interrupted and left an\n"
+    "open transaction holding a lock on the schema.\n"
+    "\n"
+    "To fix this, open the Supabase SQL Editor and run:\n"
+    "\n"
+    "  -- 1. Find the stuck connection:\n"
+    "  SELECT pid, state, query, query_start\n"
+    "  FROM pg_stat_activity\n"
+    "  WHERE state = 'idle in transaction';\n"
+    "\n"
+    "  -- 2. Terminate it (replace <pid> with the actual pid):\n"
+    "  SELECT pg_terminate_backend(<pid>);\n"
+    "\n"
+    "After that, re-run this migration script.\n"
+)
+
+
 def run_alembic_migrations(pg_url: str) -> None:
     """Run alembic upgrade head against Supabase."""
     from alembic.config import Config
@@ -57,10 +86,17 @@ def run_alembic_migrations(pg_url: str) -> None:
 
     alembic_ini = str(API_DIR / "alembic.ini")
     alembic_cfg = Config(alembic_ini)
-    alembic_cfg.set_main_option("sqlalchemy.url", pg_url)
+    alembic_cfg.set_main_option("sqlalchemy.url", _url_with_timeouts(pg_url))
 
     print("Running Alembic migrations on Supabase...")
-    command.upgrade(alembic_cfg, "head")
+    try:
+        command.upgrade(alembic_cfg, "head")
+    except Exception as exc:
+        msg = str(exc).lower()
+        if "lock" in msg or "timeout" in msg or "canceling" in msg:
+            print(LOCK_TIMEOUT_HINT, file=sys.stderr)
+            sys.exit(1)
+        raise
     print("Schema created successfully.\n")
 
 
@@ -106,13 +142,32 @@ def copy_data(pg_url: str) -> None:
         print(f"ERROR: Could not parse connection URL.")
         sys.exit(1)
     pg_user, pg_pass, pg_host, pg_port, pg_dbname = m.groups()
-    pg_conn = psycopg.connect(
-        host=pg_host,
-        port=int(pg_port),
-        user=unquote(pg_user),
-        password=unquote(pg_pass),
-        dbname=pg_dbname,
-    )
+    try:
+        pg_conn = psycopg.connect(
+            host=pg_host,
+            port=int(pg_port),
+            user=unquote(pg_user),
+            password=unquote(pg_pass),
+            dbname=pg_dbname,
+            connect_timeout=10,
+            options="-c lock_timeout=15000 -c statement_timeout=30000",
+        )
+    except Exception as exc:
+        msg = str(exc).lower()
+        if "timeout" in msg or "could not connect" in msg:
+            print(
+                f"\nERROR: Could not connect to PostgreSQL at {pg_host}:{pg_port}.\n"
+                "Possible causes:\n"
+                "  - The database host is unreachable (check your network/VPN)\n"
+                "  - The connection string is incorrect\n"
+                "  - Supabase project is paused (check the dashboard)\n",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        if "lock" in msg or "canceling" in msg:
+            print(LOCK_TIMEOUT_HINT, file=sys.stderr)
+            sys.exit(1)
+        raise
 
     total_rows = 0
 
@@ -165,16 +220,43 @@ def copy_data(pg_url: str) -> None:
 
         batch_size = 500
         inserted = 0
-        with pg_conn.cursor() as pg_cur:
-            for i in range(0, len(rows), batch_size):
-                batch = rows[i : i + batch_size]
-                for row in batch:
-                    pg_cur.execute(insert_sql, make_params(row))
-                inserted += len(batch)
+        try:
+            with pg_conn.cursor() as pg_cur:
+                for i in range(0, len(rows), batch_size):
+                    batch = rows[i : i + batch_size]
+                    for row in batch:
+                        pg_cur.execute(insert_sql, make_params(row))
+                    pg_conn.commit()
+                    inserted += len(batch)
+                    print(f"    {table}: {inserted}/{len(rows)} rows...",
+                          end="\r", flush=True)
+        except Exception as exc:
+            pg_conn.rollback()
+            msg = str(exc).lower()
+            if "lock" in msg or "timeout" in msg or "canceling" in msg:
+                print(
+                    f"\n\nERROR: Timed out inserting into '{table}' "
+                    f"(after {inserted}/{len(rows)} rows).\n"
+                    "A previous interrupted migration likely left row locks.\n"
+                    "\n"
+                    "To fix this, open the Supabase SQL Editor and run:\n"
+                    "\n"
+                    "  SELECT pid, state, query, query_start\n"
+                    "  FROM pg_stat_activity\n"
+                    "  WHERE state = 'idle in transaction';\n"
+                    "\n"
+                    "  -- Then terminate the stuck connection(s):\n"
+                    "  SELECT pg_terminate_backend(<pid>);\n"
+                    "\n"
+                    "After clearing it, re-run this script. Already-copied\n"
+                    "rows will be skipped (ON CONFLICT DO NOTHING).\n",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+            raise
 
-        pg_conn.commit()
         total_rows += inserted
-        print(f"  {table}: {inserted} rows copied")
+        print(f"  {table}: {inserted} rows copied" + " " * 20)
 
     print(f"\nTotal: {total_rows} rows copied across {len(TABLE_ORDER)} tables.")
 
