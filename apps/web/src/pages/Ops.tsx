@@ -112,11 +112,16 @@ export default function Ops() {
             </header>
 
             {backendIssue && (
-                <div className="bg-red-500/10 border border-red-500/20 text-red-500 p-6 rounded-sm font-sans text-sm flex flex-col gap-2">
+                <div className="bg-red-500/10 border border-red-500/20 text-red-500 p-6 rounded-sm font-sans text-sm flex flex-col gap-3">
                     <span className="font-bold uppercase tracking-widest text-[10px]">Backend Unavailable</span>
                     <span>
                         {error ? error : 'Backend health checks reported degraded services.'}
                     </span>
+                    <div className="text-xs text-red-500/70 space-y-1">
+                        <span className="text-[10px] uppercase tracking-widest block">Attempted endpoints</span>
+                        <code className="block font-mono text-[11px]">/api/ops/health</code>
+                        <code className="block font-mono text-[11px]">/api/ops/status</code>
+                    </div>
                     {backendIssueDetails && (
                         <span className="text-[10px] uppercase tracking-widest opacity-70">
                             Affected: {backendIssueDetails}
