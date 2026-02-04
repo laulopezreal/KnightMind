@@ -1,9 +1,7 @@
 import os
 os.environ["KNIGHTMIND_WORKER_DISABLED"] = "true"
-import shutil
-import tempfile
 from unittest.mock import patch
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, date, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
@@ -13,51 +11,7 @@ from sqlalchemy.pool import StaticPool
 
 from services.api.main import app, get_db
 from services.api.models import Base, Job, JobStatus, PuzzleStats, Game, Puzzle as PuzzleModel
-from services.api.storage import GameStorage
-from services.api.storage.puzzles import PuzzleStorage
 
-
-@pytest.fixture
-def temp_storage():
-    """Create a temporary storage directory for tests."""
-    temp_dir = tempfile.mkdtemp()
-    storage = GameStorage(temp_dir)
-    yield storage
-    shutil.rmtree(temp_dir)
-
-
-@pytest.fixture
-def client_with_temp_storage(temp_storage, db_session, monkeypatch):
-    """Create a test client with temporary storage and db."""
-    monkeypatch.setenv("KNIGHTMIND_STORAGE_MODE", "filesystem")
-    puzzle_storage = PuzzleStorage(temp_storage.base_path)
-    app.dependency_overrides[get_db] = lambda: db_session
-    with patch("services.api.main.GameRepository") as mock_repo:
-        # Create actual repository instance for new methods
-        from services.api.storage import GameRepository
-        actual_game_repo = GameRepository(db_session, base_path=temp_storage.base_path)
-        actual_game_repo.filesystem = temp_storage  # Use the same storage instance
-
-        mock_repo.return_value.filesystem = temp_storage
-        # Proxy calls to filesystem methods that endpoints use
-        mock_repo.return_value.get_users.side_effect = temp_storage.get_users
-        mock_repo.return_value.get_game_count.side_effect = temp_storage.get_game_count
-        mock_repo.return_value.store_game.side_effect = temp_storage.store_game
-        mock_repo.return_value.get_all_metadata.side_effect = temp_storage.get_all_metadata
-        mock_repo.return_value.get_pgn.side_effect = temp_storage.get_pgn
-        mock_repo.return_value.get_latest_game_time.side_effect = actual_game_repo.get_latest_game_time
-        with patch("services.api.main.PuzzleRepository") as mock_puzzle_repo:
-            from services.api.storage import PuzzleRepository
-            actual_puzzle_repo = PuzzleRepository(db_session, base_path=temp_storage.base_path)
-            actual_puzzle_repo.filesystem = puzzle_storage  # Use the same storage instance
-
-            mock_puzzle_repo.return_value.filesystem = puzzle_storage
-            mock_puzzle_repo.return_value.get_puzzle_count.side_effect = puzzle_storage.get_puzzle_count
-            mock_puzzle_repo.return_value.get_all_puzzles.side_effect = puzzle_storage.get_all_puzzles
-            mock_puzzle_repo.return_value.get_latest_puzzle_time.side_effect = actual_puzzle_repo.get_latest_puzzle_time
-
-            yield TestClient(app)
-    app.dependency_overrides.clear()
 
 @pytest.fixture
 def db_session():
@@ -86,6 +40,62 @@ def client_with_db(db_session, monkeypatch):
 client = TestClient(app)
 
 
+# --- Helpers ---
+
+def _create_game(db, game_id: str, username: str = "testuser", pgn: str = "", end_time: int | None = None):
+    """Helper: create a Game row."""
+    existing = db.get(Game, game_id)
+    if existing:
+        return
+    db.add(Game(
+        game_id=game_id,
+        url=f"https://chess.com/game/{game_id}",
+        username=username,
+        white_username=username,
+        black_username="opponent",
+        white_result="win",
+        black_result="lose",
+        time_control="600",
+        end_time=end_time or int(datetime.now(timezone.utc).timestamp()),
+        rated=True,
+        pgn_blob=pgn or '[Event "Test"]\n\n1. e4 e5 1/2-1/2',
+    ))
+    db.flush()
+
+
+def _create_puzzle(
+    db,
+    puzzle_id: str,
+    username: str = "testuser",
+    source_game_id: str | None = None,
+    ply: int = 10,
+    swing: float = 2.0,
+    created_at: datetime | None = None,
+    used_on: date | None = None,
+):
+    """Helper: create a Puzzle row (and parent Game if needed)."""
+    game_id = source_game_id or f"game-{puzzle_id}"
+    _create_game(db, game_id, username)
+    db.add(PuzzleModel(
+        id=puzzle_id,
+        username=username,
+        source_game_id=game_id,
+        ply=ply,
+        fen="rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+        side_to_move="white",
+        played_move_uci="e2e4",
+        best_move_uci="d2d4",
+        eval_before=0.5,
+        eval_after=-1.5,
+        swing=swing,
+        created_at=created_at or datetime.now(timezone.utc),
+        used_on=used_on,
+    ))
+    db.flush()
+
+
+# --- Basic tests ---
+
 def test_root():
     response = client.get("/")
     assert response.status_code == 200
@@ -105,10 +115,11 @@ def test_get_openings_missing_username():
     assert response.status_code == 422  # Validation error
 
 
+# --- Openings tests ---
+
 @patch("services.api.main.import_all_games")
-def test_get_openings_with_games(mock_import_games, client_with_temp_storage):
+def test_get_openings_with_games(mock_import_games, client_with_db):
     """Test /openings endpoint with imported games."""
-    # Mock async generator
     async def mock_generator(username):
         from services.ingest import ChessGame
         for game_data in MOCK_GAMES:
@@ -123,14 +134,14 @@ def test_get_openings_with_games(mock_import_games, client_with_temp_storage):
                 white_result=game_data["white"]["result"],
                 black_result=game_data["black"]["result"],
             )
-    
+
     mock_import_games.side_effect = mock_generator
 
-    import_response = client_with_temp_storage.post("/import/chesscom?username=testuser")
+    import_response = client_with_db.post("/import/chesscom?username=testuser")
     assert import_response.status_code == 200
 
     # Now fetch openings
-    response = client_with_temp_storage.get("/openings?username=testuser")
+    response = client_with_db.get("/openings?username=testuser")
     assert response.status_code == 200
     data = response.json()
 
@@ -145,36 +156,29 @@ def test_get_openings_with_games(mock_import_games, client_with_temp_storage):
     assert data["games_count"] == 2
 
 
-def test_get_openings_no_games(client_with_temp_storage):
+def test_get_openings_no_games(client_with_db):
     """Test /openings returns 404 when user has no games."""
-    response = client_with_temp_storage.get("/openings?username=unknownuser")
+    response = client_with_db.get("/openings?username=unknownuser")
     assert response.status_code == 404
     assert "no games" in response.json()["detail"].lower()
 
-    assert "no games" in response.json()["detail"].lower()
 
+# --- User tests ---
 
-def test_get_users_list(client_with_temp_storage, temp_storage):
+def test_get_users_list(client_with_db, db_session):
     """Test retrieving list of users."""
-    # Add some indices to temp_storage to simulate users
-    (temp_storage.index_path / "user1.json").write_text('["game1"]')
-    (temp_storage.index_path / "user2.json").write_text('["game2"]')
-    
-    response = client_with_temp_storage.get("/users")
-    
+    _create_game(db_session, "game1", "user1")
+    _create_game(db_session, "game2", "user2")
+    db_session.commit()
+
+    response = client_with_db.get("/users")
+
     assert response.status_code == 200
     assert response.json() == {"users": ["user1", "user2"]}
-    
-    # Test empty list
-    for index_file in temp_storage.index_path.glob("*.json"):
-        index_file.unlink()
-    response = client_with_temp_storage.get("/users")
-    assert response.status_code == 200
-    assert response.json() == {"users": []}
 
 
-def test_user_status_empty(client_with_temp_storage):
-    response = client_with_temp_storage.get("/users/testuser/status")
+def test_user_status_empty(client_with_db):
+    response = client_with_db.get("/users/testuser/status")
 
     assert response.status_code == 200
     assert response.json() == {
@@ -187,21 +191,11 @@ def test_user_status_empty(client_with_temp_storage):
     }
 
 
-def test_user_status_games_without_puzzles(client_with_temp_storage, temp_storage):
-    temp_storage.store_game(
-        username="testuser",
-        url="https://www.chess.com/game/live/99999",
-        pgn='[Event "Test"]\n\n1. e4 e5 1/2-1/2',
-        white_username="testuser",
-        black_username="opponent",
-        white_result="draw",
-        black_result="draw",
-        time_control="600",
-        end_time=int(datetime.now(timezone.utc).timestamp()),
-        rated=True,
-    )
+def test_user_status_games_without_puzzles(client_with_db, db_session):
+    _create_game(db_session, "game-99999", "testuser")
+    db_session.commit()
 
-    response = client_with_temp_storage.get("/users/testuser/status")
+    response = client_with_db.get("/users/testuser/status")
 
     assert response.status_code == 200
     data = response.json()
@@ -212,93 +206,22 @@ def test_user_status_games_without_puzzles(client_with_temp_storage, temp_storag
     assert data["has_new_games"] is True
 
 
-def test_user_status_with_due_puzzles(client_with_temp_storage, temp_storage, db_session):
-    _, game_id = temp_storage.store_game(
-        username="testuser",
-        url="https://www.chess.com/game/live/100000",
-        pgn='[Event "Test"]\n\n1. d4 d5 1/2-1/2',
-        white_username="testuser",
-        black_username="opponent",
-        white_result="draw",
-        black_result="draw",
-        time_control="600",
-        end_time=int(datetime.now(timezone.utc).timestamp() - 3600),
-        rated=True,
-    )
-    puzzle_storage = PuzzleStorage(temp_storage.base_path)
-    _, puzzle_id_one = puzzle_storage.save_puzzle(
-        username="testuser",
-        source_game_id=game_id,
-        ply=10,
-        fen="8/8/8/8/8/8/8/8 w - - 0 1",
-        side_to_move="white",
-        played_move_uci="e2e4",
-        best_move_uci="d2d4",
-        eval_before=0.2,
-        eval_after=-0.5,
-        swing=0.7,
-    )
-    _, puzzle_id_two = puzzle_storage.save_puzzle(
-        username="testuser",
-        source_game_id=game_id,
-        ply=12,
-        fen="8/8/8/8/8/8/8/8 w - - 0 1",
-        side_to_move="white",
-        played_move_uci="g1f3",
-        best_move_uci="c2c4",
-        eval_before=0.1,
-        eval_after=-0.3,
-        swing=0.4,
-    )
+def test_user_status_with_due_puzzles(client_with_db, db_session):
+    game_end_time = int((datetime.now(timezone.utc) - timedelta(days=3)).timestamp())
+    game_id = "game-status-test"
+    _create_game(db_session, game_id, "testuser", end_time=game_end_time)
 
-    db_session.add(
-        Game(
-            game_id=game_id,
-            url="https://www.chess.com/game/live/100000",
-            username="testuser",
-            white_username="testuser",
-            black_username="opponent",
-            white_result="draw",
-            black_result="draw",
-            time_control="600",
-            end_time=int(datetime.now(timezone.utc).timestamp() - 3600),
-            rated=True,
-            imported_at=datetime.now(timezone.utc),
-        )
+    puzzle_id_one = "puzzle-due-1"
+    puzzle_id_two = "puzzle-due-2"
+    _create_puzzle(
+        db_session, puzzle_id_one, "testuser",
+        source_game_id=game_id, ply=10,
+        created_at=datetime.now(timezone.utc) - timedelta(days=2),
     )
-    db_session.add_all(
-        [
-            PuzzleModel(
-                id=puzzle_id_one,
-                username="testuser",
-                source_game_id=game_id,
-                ply=10,
-                fen="8/8/8/8/8/8/8/8 w - - 0 1",
-                side_to_move="white",
-                played_move_uci="e2e4",
-                best_move_uci="d2d4",
-                eval_before=0.2,
-                eval_after=-0.5,
-                swing=0.7,
-                created_at=datetime.now(timezone.utc) - timedelta(days=2),
-                imported_at=datetime.now(timezone.utc) - timedelta(days=2),
-            ),
-            PuzzleModel(
-                id=puzzle_id_two,
-                username="testuser",
-                source_game_id=game_id,
-                ply=12,
-                fen="8/8/8/8/8/8/8/8 w - - 0 1",
-                side_to_move="white",
-                played_move_uci="g1f3",
-                best_move_uci="c2c4",
-                eval_before=0.1,
-                eval_after=-0.3,
-                swing=0.4,
-                created_at=datetime.now(timezone.utc) - timedelta(days=1),
-                imported_at=datetime.now(timezone.utc) - timedelta(days=1),
-            ),
-        ]
+    _create_puzzle(
+        db_session, puzzle_id_two, "testuser",
+        source_game_id=game_id, ply=12,
+        created_at=datetime.now(timezone.utc) - timedelta(days=1),
     )
 
     past_due = datetime.now(timezone.utc) - timedelta(days=1)
@@ -333,7 +256,7 @@ def test_user_status_with_due_puzzles(client_with_temp_storage, temp_storage, db
     )
     db_session.commit()
 
-    response = client_with_temp_storage.get("/users/testuser/status")
+    response = client_with_db.get("/users/testuser/status")
 
     assert response.status_code == 200
     data = response.json()
@@ -342,6 +265,9 @@ def test_user_status_with_due_puzzles(client_with_temp_storage, temp_storage, db
     assert data["due_count"] == 1
     assert data["has_new_games"] is False
     assert data["next_due_at"].startswith(future_due.date().isoformat())
+
+
+# --- Import tests ---
 
 MOCK_ARCHIVES = ["https://api.chess.com/pub/player/testuser/games/2024/01"]
 
@@ -368,9 +294,8 @@ MOCK_GAMES = [
 
 
 @patch("services.api.main.import_all_games")
-def test_import_chesscom_success(mock_import_games, client_with_temp_storage):
+def test_import_chesscom_success(mock_import_games, client_with_db):
     """Test successful import of games."""
-    # Mock async generator
     async def mock_generator(username):
         from services.ingest import ChessGame
         for game_data in MOCK_GAMES:
@@ -385,10 +310,10 @@ def test_import_chesscom_success(mock_import_games, client_with_temp_storage):
                 white_result=game_data["white"]["result"],
                 black_result=game_data["black"]["result"],
             )
-            
+
     mock_import_games.side_effect = mock_generator
 
-    response = client_with_temp_storage.post("/import/chesscom?username=testuser")
+    response = client_with_db.post("/import/chesscom?username=testuser")
 
     assert response.status_code == 200
     data = response.json()
@@ -399,7 +324,7 @@ def test_import_chesscom_success(mock_import_games, client_with_temp_storage):
 
 
 @patch("services.api.main.import_all_games")
-def test_import_status_after_import(mock_import_games, client_with_temp_storage):
+def test_import_status_after_import(mock_import_games, client_with_db):
     """Test import status before and after an import."""
     async def mock_generator(username):
         from services.ingest import ChessGame
@@ -416,17 +341,17 @@ def test_import_status_after_import(mock_import_games, client_with_temp_storage)
                 black_result=game_data["black"]["result"],
             )
 
-    response = client_with_temp_storage.get("/import/status?username=testuser")
+    response = client_with_db.get("/import/status?username=testuser")
     assert response.status_code == 200
     data = response.json()
     assert data["last_imported_at"] is None
     assert data["last_new_games"] is None
 
     mock_import_games.side_effect = mock_generator
-    import_response = client_with_temp_storage.post("/import/chesscom?username=testuser")
+    import_response = client_with_db.post("/import/chesscom?username=testuser")
     assert import_response.status_code == 200
 
-    response = client_with_temp_storage.get("/import/status?username=testuser")
+    response = client_with_db.get("/import/status?username=testuser")
     assert response.status_code == 200
     data = response.json()
     assert data["last_imported_at"] is not None
@@ -434,9 +359,8 @@ def test_import_status_after_import(mock_import_games, client_with_temp_storage)
 
 
 @patch("services.api.main.import_all_games")
-def test_import_chesscom_deduplication(mock_import_games, client_with_temp_storage):
+def test_import_chesscom_deduplication(mock_import_games, client_with_db):
     """Test that duplicate games are not re-imported."""
-    # Mock async generator (reusable)
     async def mock_generator(username):
         from services.ingest import ChessGame
         for game_data in MOCK_GAMES:
@@ -451,19 +375,18 @@ def test_import_chesscom_deduplication(mock_import_games, client_with_temp_stora
                 white_result=game_data["white"]["result"],
                 black_result=game_data["black"]["result"],
             )
-    
+
     mock_import_games.side_effect = mock_generator
 
     # First import
-    response1 = client_with_temp_storage.post("/import/chesscom?username=testuser")
+    response1 = client_with_db.post("/import/chesscom?username=testuser")
     assert response1.status_code == 200
     assert response1.json()["new_games"] == 2
 
     # Second import should skip duplicates
-    # Need to reset side_effect or it works same way
     mock_import_games.side_effect = mock_generator
-    
-    response2 = client_with_temp_storage.post("/import/chesscom?username=testuser")
+
+    response2 = client_with_db.post("/import/chesscom?username=testuser")
     assert response2.status_code == 200
     data = response2.json()
     assert data["new_games"] == 0
@@ -473,51 +396,50 @@ def test_import_chesscom_deduplication(mock_import_games, client_with_temp_stora
 
 
 @patch("services.api.main.import_all_games")
-def test_import_chesscom_user_not_found(mock_import_games, client_with_temp_storage):
+def test_import_chesscom_user_not_found(mock_import_games, client_with_db):
     """Test error handling for non-existent user."""
     from services.ingest import UserNotFoundError
     mock_import_games.side_effect = UserNotFoundError("nonexistent_user")
 
-    response = client_with_temp_storage.post("/import/chesscom?username=nonexistent_user")
+    response = client_with_db.post("/import/chesscom?username=nonexistent_user")
 
     assert response.status_code == 404
     assert "not found" in response.json()["detail"].lower()
 
 
 @patch("services.api.main.import_all_games")
-def test_import_chesscom_rate_limit(mock_import_games, client_with_temp_storage):
+def test_import_chesscom_rate_limit(mock_import_games, client_with_db):
     """Test error handling for rate limiting."""
     from services.ingest import RateLimitError
     mock_import_games.side_effect = RateLimitError(retry_after=60)
 
-    response = client_with_temp_storage.post("/import/chesscom?username=testuser")
+    response = client_with_db.post("/import/chesscom?username=testuser")
 
     assert response.status_code == 429
     assert "rate limit" in response.json()["detail"].lower()
 
 
 @patch("services.api.main.import_all_games")
-def test_import_chesscom_network_error(mock_import_games, client_with_temp_storage):
+def test_import_chesscom_network_error(mock_import_games, client_with_db):
     """Test error handling for network errors."""
     from services.ingest import NetworkError
     mock_import_games.side_effect = NetworkError("Connection refused")
 
-    response = client_with_temp_storage.post("/import/chesscom?username=testuser")
+    response = client_with_db.post("/import/chesscom?username=testuser")
 
     assert response.status_code == 502
     assert "network" in response.json()["detail"].lower()
 
 
 @patch("services.api.main.import_all_games")
-def test_import_chesscom_no_games(mock_import_games, client_with_temp_storage):
+def test_import_chesscom_no_games(mock_import_games, client_with_db):
     """Test handling user with no games."""
-    # Mock async generator that yields nothing
     async def mock_generator(username):
         if False: yield  # Empty generator
-            
+
     mock_import_games.side_effect = mock_generator
 
-    response = client_with_temp_storage.post("/import/chesscom?username=newuser")
+    response = client_with_db.post("/import/chesscom?username=newuser")
 
     assert response.status_code == 200
     data = response.json()
@@ -558,137 +480,56 @@ def test_generate_puzzles_missing_username():
 
 # --- Daily puzzles endpoint tests ---
 
-@pytest.fixture
-def temp_puzzle_storage():
-    """Create a temporary puzzle storage directory for tests."""
-    from services.api.storage import PuzzleStorage
-    temp_dir = tempfile.mkdtemp()
-    storage = PuzzleStorage(temp_dir)
-    yield storage
-    shutil.rmtree(temp_dir)
-
-
-@pytest.fixture
-def client_with_temp_puzzle_storage(temp_puzzle_storage, db_session, monkeypatch):
-    """Create a test client with temporary puzzle storage and database."""
-    monkeypatch.setenv("KNIGHTMIND_STORAGE_MODE", "filesystem")
-    app.dependency_overrides[get_db] = lambda: db_session
-    with patch("services.api.main.PuzzleRepository") as mock_repo:
-        mock_repo.return_value.filesystem = temp_puzzle_storage
-        mock_repo.return_value.get_daily_puzzles.side_effect = temp_puzzle_storage.get_daily_puzzles
-        mock_repo.return_value.mark_puzzles_used.side_effect = temp_puzzle_storage.mark_puzzles_used
-        mock_repo.return_value.get_puzzle.side_effect = temp_puzzle_storage.get_puzzle
-
-        yield TestClient(app), temp_puzzle_storage
-
-    app.dependency_overrides.clear()
-
-
-def test_get_daily_puzzles_success(client_with_temp_puzzle_storage):
+def test_get_daily_puzzles_success(client_with_db, db_session):
     """Test successful retrieval of daily puzzles."""
-    from datetime import date
-    from services.api.storage import Puzzle
-    
-    client, puzzle_storage = client_with_temp_puzzle_storage
-    
-    # Create test puzzles
-    test_puzzles = [
-        Puzzle(
-            id=f"puzzle-{i}",
-            username="testuser",
-            source_game_id=f"game-{i}",
-            ply=10 + i,
-            fen="rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
-            side_to_move="white",
-            played_move_uci="e2e4",
-            best_move_uci="d2d4",
-            eval_before=0.5,
-            eval_after=-1.5,
-            swing=2.0,
-            created_at=f"2024-01-0{i+1}T12:00:00Z",
-            used_on=None
+    for i in range(5):
+        _create_puzzle(
+            db_session, f"puzzle-{i}", "testuser",
+            source_game_id=f"game-daily-{i}", ply=10 + i,
+            created_at=datetime(2024, 1, i + 1, 12, 0, 0, tzinfo=timezone.utc),
         )
-        for i in range(5)
-    ]
-    
-    # Save puzzles
-    for puzzle in test_puzzles:
-        puzzle_storage.save_puzzle(
-            username=puzzle.username,
-            source_game_id=puzzle.source_game_id,
-            ply=puzzle.ply,
-            fen=puzzle.fen,
-            side_to_move=puzzle.side_to_move,
-            played_move_uci=puzzle.played_move_uci,
-            best_move_uci=puzzle.best_move_uci,
-            eval_before=puzzle.eval_before,
-            eval_after=puzzle.eval_after,
-            swing=puzzle.swing
-        )
-    
-    # Get daily puzzles
-    response = client.post("/daily-puzzle-sessions", json={"username": "testuser", "n": 3})
+    db_session.commit()
+
+    response = client_with_db.post("/daily-puzzle-sessions", json={"username": "testuser", "n": 3})
 
     assert response.status_code == 200
     data = response.json()
     assert data["count"] == 3
     assert len(data["puzzles"]) == 3
-    
-    # Verify all returned puzzles are marked with today's date
+
     today_str = date.today().isoformat()
     for puzzle_data in data["puzzles"]:
         assert puzzle_data["used_on"] == today_str
         assert puzzle_data["username"] == "testuser"
 
 
-def test_get_daily_puzzles_rotation(client_with_temp_puzzle_storage):
+def test_get_daily_puzzles_rotation(client_with_db, db_session):
     """Test that puzzles rotate correctly - unused first, then used."""
-    from datetime import date, timedelta
-    from services.api.storage import Puzzle
-    
-    client, puzzle_storage = client_with_temp_puzzle_storage
-    
-    # Create 5 puzzles and collect IDs for the first 2 to mark as used
-    yesterday_date = date.today() - timedelta(days=1)
-    used_puzzle_ids = []
-    
+    yesterday = date.today() - timedelta(days=1)
+
     for i in range(5):
-        _, puzzle_id = puzzle_storage.save_puzzle(
-            username="testuser",
-            source_game_id=f"game-{i}",
-            ply=10 + i,
-            fen="rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
-            side_to_move="white",
-            played_move_uci="e2e4",
-            best_move_uci="d2d4",
-            eval_before=0.5,
-            eval_after=-1.5,
-            swing=2.0
+        _create_puzzle(
+            db_session, f"puzzle-rot-{i}", "testuser",
+            source_game_id=f"game-rot-{i}", ply=10 + i,
+            used_on=yesterday if i < 2 else None,
         )
-        if i < 2:
-            used_puzzle_ids.append(puzzle_id)
-    
-    # Mark the first 2 puzzles as used yesterday in a single batch
-    puzzle_storage.mark_puzzles_used("testuser", used_puzzle_ids, yesterday_date)
-    
+    db_session.commit()
+
     # Request 4 puzzles - should get 3 unused + 1 used
-    response = client.post("/daily-puzzle-sessions", json={"username": "testuser", "n": 4})
+    response = client_with_db.post("/daily-puzzle-sessions", json={"username": "testuser", "n": 4})
 
     assert response.status_code == 200
     data = response.json()
     assert data["count"] == 4
-    
-    # All should now be marked with today
+
     today_str = date.today().isoformat()
     for puzzle_data in data["puzzles"]:
         assert puzzle_data["used_on"] == today_str
 
 
-def test_get_daily_puzzles_no_puzzles(client_with_temp_puzzle_storage):
+def test_get_daily_puzzles_no_puzzles(client_with_db):
     """Test 404 when user has no puzzles."""
-    client, _ = client_with_temp_puzzle_storage
-
-    response = client.post("/daily-puzzle-sessions", json={"username": "unknownuser", "n": 5})
+    response = client_with_db.post("/daily-puzzle-sessions", json={"username": "unknownuser", "n": 5})
 
     assert response.status_code == 404
     assert "no puzzles" in response.json()["detail"].lower()
@@ -710,40 +551,30 @@ def test_get_daily_puzzles_validation():
     assert response.status_code == 400
 
 
-def test_get_daily_puzzles_idempotent(client_with_temp_puzzle_storage):
+def test_get_daily_puzzles_idempotent(client_with_db, db_session):
     """Test that calling endpoint multiple times on same day returns same puzzles."""
-    from datetime import date
-    
-    client, puzzle_storage = client_with_temp_puzzle_storage
-    
-    # Create test puzzles
     for i in range(5):
-        puzzle_storage.save_puzzle(
-            username="testuser",
-            source_game_id=f"game-{i}",
-            ply=10 + i,
-            fen="rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
-            side_to_move="white",
-            played_move_uci="e2e4",
-            best_move_uci="d2d4",
-            eval_before=0.5,
-            eval_after=-1.5,
-            swing=2.0
+        _create_puzzle(
+            db_session, f"puzzle-idem-{i}", "testuser",
+            source_game_id=f"game-idem-{i}", ply=10 + i,
         )
-    
+    db_session.commit()
+
     # First call
-    response1 = client.post("/daily-puzzle-sessions", json={"username": "testuser", "n": 3})
+    response1 = client_with_db.post("/daily-puzzle-sessions", json={"username": "testuser", "n": 3})
     assert response1.status_code == 200
     puzzle_ids_1 = {p["id"] for p in response1.json()["puzzles"]}
 
     # Second call - should return same puzzles (already marked for today)
-    response2 = client.post("/daily-puzzle-sessions", json={"username": "testuser", "n": 3})
+    response2 = client_with_db.post("/daily-puzzle-sessions", json={"username": "testuser", "n": 3})
     assert response2.status_code == 200
     puzzle_ids_2 = {p["id"] for p in response2.json()["puzzles"]}
-    
+
     # Should be the same puzzles
     assert puzzle_ids_1 == puzzle_ids_2
 
+
+# --- Engine tests ---
 
 @patch("services.api.main.is_engine_available")
 def test_engine_status_available(mock_available):
@@ -780,31 +611,13 @@ _SENTINEL = object()
 
 def _create_puzzle_stats(db_session, puzzle_id, username, fail_count, last_reviewed_at=None, title=_SENTINEL):
     """Helper to create a PuzzleStats record with required Puzzle and Game parents."""
-    from services.api.models import Game, Puzzle as PuzzleModel
-    game_id = f"game-{puzzle_id}"
-    # Create parent Game if not exists
-    existing_game = db_session.get(Game, game_id)
-    if not existing_game:
-        db_session.add(Game(
-            game_id=game_id,
-            url=f"https://chess.com/game/{game_id}",
-            username=username,
-            white_username=username,
-            black_username="opponent",
-            white_result="win",
-            black_result="lose",
-            time_control="600",
-            end_time=int(datetime.now(timezone.utc).timestamp()),
-            rated=True,
-            imported_at=datetime.now(timezone.utc),
-        ))
-    # Create parent Puzzle if not exists
+    _create_game(db_session, f"game-{puzzle_id}", username)
     existing_puzzle = db_session.get(PuzzleModel, puzzle_id)
     if not existing_puzzle:
         db_session.add(PuzzleModel(
             id=puzzle_id,
             username=username,
-            source_game_id=game_id,
+            source_game_id=f"game-{puzzle_id}",
             ply=10,
             fen="8/8/8/8/8/8/8/8 w - - 0 1",
             side_to_move="white",

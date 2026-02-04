@@ -132,6 +132,15 @@ class RatingSnapshot(Base):
     session_id: Mapped[str] = mapped_column(String, nullable=True, index=True)  # FK to training_sessions.id logical
 
 
+class ImportSummary(Base):
+    __tablename__ = "import_summaries"
+    __table_args__ = {"extend_existing": True}
+
+    username: Mapped[str] = mapped_column(String, primary_key=True)
+    last_imported_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    last_new_games: Mapped[int] = mapped_column(Integer, default=0)
+
+
 class Game(Base):
     __tablename__ = "games"
     __table_args__ = (
