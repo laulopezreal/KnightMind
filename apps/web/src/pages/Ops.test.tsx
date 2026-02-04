@@ -21,6 +21,7 @@ vi.mock('../api', () => ({
   getUsers: (...args: unknown[]) => mockGetUsers(...args),
   cancelJob: vi.fn(),
   ApiError: class extends Error { detail?: string },
+  API_TARGET: 'http://localhost:8000',
 }));
 
 const healthOk = {

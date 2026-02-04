@@ -2,6 +2,9 @@
 // If you need a different base in the future, adjust it here rather than calling raw URLs.
 export const API_BASE = '/api';
 
+/** The actual backend URL the proxy forwards to (injected at build time). */
+export const API_TARGET: string = typeof __API_TARGET__ !== 'undefined' ? __API_TARGET__ : 'unknown';
+
 const DEFAULT_TIMEOUT_MS = 30_000;
 
 export class ApiError extends Error {
@@ -34,24 +37,52 @@ export async function request<T>(endpoint: string, options: RequestOptions = {})
     }
 
     try {
-        const response = await fetch(`${API_BASE}${endpoint}`, {
+        const url = `${API_BASE}${endpoint}`;
+        const response = await fetch(url, {
             ...fetchOptions,
             signal: controller.signal,
         });
 
+        const contentType = response.headers.get('content-type') ?? '';
+
         if (!response.ok) {
+            // If the response is not JSON (e.g. proxy returned an HTML error page),
+            // provide a clear message instead of a cryptic JSON parse error.
+            if (!contentType.includes('application/json')) {
+                throw new ApiError(
+                    `${endpoint} returned ${response.status} (non-JSON response — backend may be unreachable)`,
+                    response.status,
+                    `${endpoint} → HTTP ${response.status}. The server returned HTML instead of JSON, which usually means the API is down or the proxy is misconfigured.`,
+                );
+            }
             const errorData = await response.json().catch(() => ({}));
             const detail = errorData.detail || response.statusText;
+            throw new ApiError(`${endpoint} failed: ${detail}`, response.status, detail);
+        }
 
-            // Common error handling could go here
-            throw new ApiError(`Request failed: ${detail}`, response.status, detail);
+        // Guard against 200 responses that are actually HTML (e.g. SPA fallback
+        // served by the dev server when the proxy target is unreachable).
+        if (!contentType.includes('application/json')) {
+            throw new ApiError(
+                `${endpoint} returned HTML instead of JSON — is the API running?`,
+                502,
+                `${endpoint} → received Content-Type "${contentType}". This usually means the backend is down and the dev server returned its own HTML fallback.`,
+            );
         }
 
         return response.json();
     } catch (err) {
         if (err instanceof ApiError) throw err;
         if (err instanceof DOMException && err.name === 'AbortError') {
-            throw new ApiError('Request timed out', 408, 'Request timed out');
+            throw new ApiError(`${endpoint} timed out`, 408, `${endpoint} → request timed out after ${timeout}ms.`);
+        }
+        // Network errors (e.g. ERR_CONNECTION_REFUSED)
+        if (err instanceof TypeError) {
+            throw new ApiError(
+                `${endpoint} network error`,
+                0,
+                `${endpoint} → ${err.message}. Check that the API server is running.`,
+            );
         }
         throw err;
     } finally {

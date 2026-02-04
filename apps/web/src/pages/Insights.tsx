@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getMotifPerformance, getMotifTrends, type MotifPerformanceResponse, type TrendsResponse } from '../api/users';
+import { getMotifPerformance, getMotifTrends, getTrickyPuzzles, type MotifPerformanceResponse, type TrendsResponse, type TrickyPuzzlesResponse } from '../api/users';
 import { useChessUsername } from '../context/ChessUsernameContext';
 import { TacticalRadar } from '../components/TacticalRadar';
 import { MotifTrends } from '../components/MotifTrends';
+import { RecentlyTrickyCard } from '../components/RecentlyTrickyCard';
 
 export default function Insights() {
     const { username } = useChessUsername();
@@ -11,6 +12,7 @@ export default function Insights() {
 
     const [motifPerformance, setMotifPerformance] = useState<MotifPerformanceResponse | null>(null);
     const [trends, setTrends] = useState<TrendsResponse | null>(null);
+    const [trickyPuzzles, setTrickyPuzzles] = useState<TrickyPuzzlesResponse | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const isFetchingRef = useRef(false);
@@ -49,9 +51,13 @@ export default function Insights() {
                 getMotifTrends(username, 30)
             ]);
 
+            // Supplementary: fail silently — page works without it
+            const tricky = await getTrickyPuzzles(username, 5).catch(() => null);
+
             if (isMountedRef.current) {
                 setMotifPerformance(motifs);
                 setTrends(trendsData);
+                setTrickyPuzzles(tricky);
                 hasLoadedRef.current = true;
             }
         } catch (err) {
@@ -116,9 +122,10 @@ export default function Insights() {
 
     const hasMotifs = motifPerformance && motifPerformance.motifs.length > 0;
     const hasTrends = trends && trends.motif_trends.length > 0;
+    const hasTrickyPuzzles = trickyPuzzles && trickyPuzzles.puzzles.length > 0;
 
     return (
-        <main className="container mx-auto p-6 max-w-7xl space-y-12">
+        <main className="container mx-auto p-6 max-w-7xl space-y-8">
             {/* Header */}
             <section>
                 <h1 className="text-4xl md:text-5xl font-serif text-primary mb-2">
@@ -129,46 +136,54 @@ export default function Insights() {
                 </p>
             </section>
 
-            {/* Puzzle Intelligence Section */}
-            <section className="space-y-8">
-                <h2 className="text-3xl font-serif text-primary border-b border-primary/10 pb-4">
-                    Puzzle Intelligence
-                </h2>
+            {/* Empty state — only when no data at all */}
+            {!hasMotifs && !hasTrends && (
+                <div className="bg-primary/5 border border-primary/10 rounded-sm p-12 text-center">
+                    <p className="text-primary/60 font-sans text-lg mb-4">
+                        No puzzle data yet
+                    </p>
+                    <p className="text-primary/40 font-sans text-sm mb-6">
+                        Complete a few puzzle sessions to see your tactical patterns and trends.
+                    </p>
+                    <button
+                        type="button"
+                        onClick={() => navigate('/puzzles')}
+                        className="px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif km-interactive km-focus-visible"
+                    >
+                        Start Puzzles
+                    </button>
+                </div>
+            )}
 
-                {!hasMotifs && !hasTrends && (
-                    <div className="bg-primary/5 border border-primary/10 rounded-sm p-12 text-center">
-                        <p className="text-primary/60 font-sans text-lg mb-4">
-                            No puzzle data yet
-                        </p>
-                        <p className="text-primary/40 font-sans text-sm mb-6">
-                            Complete a few puzzle sessions to see your tactical patterns and trends.
-                        </p>
-                        <button
-                            type="button"
-                            onClick={() => navigate('/puzzles')}
-                            className="px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif km-interactive km-focus-visible"
-                        >
-                            Start Puzzles
-                        </button>
-                    </div>
-                )}
+            {/* Tier 1: Tactical Radar — full width, visually dominant */}
+            {hasMotifs && (
+                <TacticalRadar
+                    motifs={motifPerformance.motifs}
+                    onMotifClick={handleMotifClick}
+                />
+            )}
 
-                {/* Tactical Radar */}
-                {hasMotifs && (
-                    <TacticalRadar
-                        motifs={motifPerformance.motifs}
-                        onMotifClick={handleMotifClick}
-                    />
-                )}
-
-                {/* Motif Trends */}
-                {hasTrends && (
-                    <MotifTrends
-                        trends={trends.motif_trends}
-                        windowDays={trends.window_days}
-                    />
-                )}
-            </section>
+            {/* Tier 2: Supporting content — trends (2/3) + tricky puzzles (1/3) */}
+            {(hasTrends || hasTrickyPuzzles) && (
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                    {hasTrends && (
+                        <div className={hasTrickyPuzzles ? 'md:col-span-2' : 'md:col-span-3'}>
+                            <MotifTrends
+                                trends={trends.motif_trends}
+                                windowDays={trends.window_days}
+                            />
+                        </div>
+                    )}
+                    {hasTrickyPuzzles && (
+                        <div className={hasTrends ? 'md:col-span-1' : 'md:col-span-3'}>
+                            <RecentlyTrickyCard
+                                puzzles={trickyPuzzles.puzzles}
+                                totalCount={trickyPuzzles.total_count}
+                            />
+                        </div>
+                    )}
+                </div>
+            )}
         </main>
     );
 }

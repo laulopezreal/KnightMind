@@ -269,6 +269,36 @@ describe('LibraryPuzzle', () => {
         });
     });
 
+    // --- Record error ---
+
+    it('should show error message when recording result fails', async () => {
+        mockReviewPuzzle.mockRejectedValue(new Error('Network error'));
+        render(<LibraryPuzzle />);
+        await waitFor(() => {
+            expect(screen.getByText('Reveal')).toBeInTheDocument();
+        });
+
+        fireEvent.click(screen.getByText('Reveal'));
+
+        await waitFor(() => {
+            expect(screen.getByText('Network error')).toBeInTheDocument();
+        });
+    });
+
+    it('should show fallback error when recording fails with non-Error', async () => {
+        mockReviewPuzzle.mockRejectedValue('unknown');
+        render(<LibraryPuzzle />);
+        await waitFor(() => {
+            expect(screen.getByText('Reveal')).toBeInTheDocument();
+        });
+
+        fireEvent.click(screen.getByText('Reveal'));
+
+        await waitFor(() => {
+            expect(screen.getByText(/Failed to save your result/i)).toBeInTheDocument();
+        });
+    });
+
     // --- API call ---
 
     it('should fetch puzzle by ID', async () => {

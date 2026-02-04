@@ -34,7 +34,6 @@ def db_session():
 @pytest.fixture
 def client(db_session, monkeypatch):
     monkeypatch.setenv("KNIGHTMIND_WORKER_DISABLED", "true")
-    monkeypatch.setenv("KNIGHTMIND_STORAGE_MODE", "database")
     app.dependency_overrides[get_db] = lambda: db_session
     yield TestClient(app)
     app.dependency_overrides.clear()
