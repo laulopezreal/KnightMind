@@ -67,6 +67,7 @@ def run_alembic_migrations(pg_url: str) -> None:
 def copy_data(pg_url: str) -> None:
     """Read all rows from SQLite and insert into PostgreSQL using psycopg v3."""
     import json as json_mod
+    from urllib.parse import urlparse, unquote
     import psycopg
     from psycopg.types.json import Jsonb
 
@@ -86,7 +87,16 @@ def copy_data(pg_url: str) -> None:
     sqlite_conn.row_factory = sqlite3.Row
     sqlite_cur = sqlite_conn.cursor()
 
-    pg_conn = psycopg.connect(pg_url)
+    # Parse the URL into keyword args so psycopg doesn't mis-parse
+    # usernames like "postgres.ref" as a hostname.
+    parsed = urlparse(pg_url)
+    pg_conn = psycopg.connect(
+        host=parsed.hostname,
+        port=parsed.port or 5432,
+        user=unquote(parsed.username or ""),
+        password=unquote(parsed.password or ""),
+        dbname=parsed.path.lstrip("/") or "postgres",
+    )
 
     total_rows = 0
 
