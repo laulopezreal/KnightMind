@@ -1048,8 +1048,11 @@ async def list_puzzles(
     available_motifs = [row[0] for row in db.execute(motifs_stmt).all()]
 
     # --- 3. Build filtered query ---
+    # Reuse status_case from corpus stats so status logic is defined once.
+    computed_status = status_case.label("computed_status")
+
     base_stmt = (
-        select(PuzzleModel, PuzzleStats)
+        select(PuzzleModel, PuzzleStats, computed_status)
         .outerjoin(PuzzleStats, join_cond)
         .where(PuzzleModel.username == username_lower)
     )
@@ -1064,33 +1067,9 @@ async def list_puzzles(
             )
         )
 
-    # Status filter
+    # Status filter (uses the same CASE expression as corpus stats)
     if status:
-        if status == "new":
-            base_stmt = base_stmt.where(
-                or_(PuzzleStats.puzzle_id.is_(None), PuzzleStats.attempts == 0)
-            )
-        elif status == "due":
-            base_stmt = base_stmt.where(
-                PuzzleStats.next_due_at.isnot(None),
-                PuzzleStats.next_due_at <= now,
-            )
-        elif status == "mastered":
-            base_stmt = base_stmt.where(
-                PuzzleStats.attempts >= 3,
-                (PuzzleStats.pass_count * 1.0 / PuzzleStats.attempts) >= 0.8,
-                or_(PuzzleStats.next_due_at.is_(None), PuzzleStats.next_due_at > now),
-            )
-        elif status == "learning":
-            base_stmt = base_stmt.where(
-                PuzzleStats.puzzle_id.isnot(None),
-                PuzzleStats.attempts > 0,
-                or_(PuzzleStats.next_due_at.is_(None), PuzzleStats.next_due_at > now),
-                or_(
-                    PuzzleStats.attempts < 3,
-                    (PuzzleStats.pass_count * 1.0 / PuzzleStats.attempts) < 0.8,
-                ),
-            )
+        base_stmt = base_stmt.where(status_case == status)
 
     # Motif filter
     if motif:
@@ -1149,7 +1128,7 @@ async def list_puzzles(
     # --- 7. Build response ---
     rows = db.execute(base_stmt).all()
     result_puzzles = []
-    for puzzle, stats in rows:
+    for puzzle, stats, row_status in rows:
         result_puzzles.append(PuzzleListItem(
             id=puzzle.id,
             title=stats.title if stats else None,
@@ -1159,7 +1138,7 @@ async def list_puzzles(
             fen=puzzle.fen,
             side_to_move=puzzle.side_to_move,
             best_move_uci=puzzle.best_move_uci,
-            status=_compute_puzzle_status(stats, now),
+            status=row_status,
             attempts=stats.attempts if stats else 0,
             pass_count=stats.pass_count if stats else 0,
             fail_count=stats.fail_count if stats else 0,
