@@ -15,11 +15,11 @@ Run the full preflight checklist before deployment. Stop at the first failure an
    ```
 3. **Backend checks**:
    ```bash
-   cd /Users/laura/git/KnightMind && python -m pytest
+   python -m pytest
    ```
 4. **Database migrations** — Confirm no pending migrations:
    ```bash
-   cd /Users/laura/git/KnightMind && python -m alembic -c services/api/alembic.ini current
+   python -m alembic -c services/api/alembic.ini current
    ```
 5. **Branch check** — Confirm on `dev` branch (all PRs target dev).
 
