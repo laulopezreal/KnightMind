@@ -31,10 +31,13 @@ mkdir -p "${BACKUP_DIR}"
 
 echo "[$(date -Iseconds)] Starting backup of ${POSTGRES_DB}..."
 
-# Dump via docker compose (connects to the db service)
+# Dump via docker compose to a temp file first, then move atomically.
+# This prevents partial/empty backup files if pg_dump fails.
+TMP_DUMP_FILE="${DUMP_FILE}.tmp.$$"
 docker compose -f /opt/knightmind/docker-compose.yml exec -T db \
     pg_dump -U "${POSTGRES_USER}" "${POSTGRES_DB}" \
-    | gzip > "${DUMP_FILE}"
+    | gzip > "${TMP_DUMP_FILE}"
+mv "${TMP_DUMP_FILE}" "${DUMP_FILE}"
 
 FILESIZE=$(du -h "${DUMP_FILE}" | cut -f1)
 echo "[$(date -Iseconds)] Backup complete: ${DUMP_FILE} (${FILESIZE})"
