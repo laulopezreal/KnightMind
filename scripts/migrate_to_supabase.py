@@ -53,11 +53,12 @@ def parse_args() -> argparse.Namespace:
 def _url_with_timeouts(url: str, connect_timeout: int = 10,
                         lock_timeout_ms: int = 15000) -> str:
     """Append connect_timeout and lock_timeout options to a Postgres URL."""
+    from urllib.parse import quote
+    opts = quote(f"-c lock_timeout={lock_timeout_ms}", safe="")
     sep = "&" if "?" in url else "?"
-    return (
-        f"{url}{sep}connect_timeout={connect_timeout}"
-        f"&options=-c%20lock_timeout%3D{lock_timeout_ms}"
-    )
+    # Double any '%' so configparser doesn't treat them as interpolation
+    raw = f"{url}{sep}connect_timeout={connect_timeout}&options={opts}"
+    return raw.replace("%", "%%")
 
 
 LOCK_TIMEOUT_HINT = (
