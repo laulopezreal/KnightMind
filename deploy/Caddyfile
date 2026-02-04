@@ -1,0 +1,30 @@
+# ============================================================================
+# KnightMind – Caddy Reverse Proxy
+# ============================================================================
+# Caddy provides automatic HTTPS via Let's Encrypt.
+# Install:  apt install caddy
+# Deploy:   cp deploy/Caddyfile /etc/caddy/Caddyfile && systemctl reload caddy
+#
+# Replace api.knightmind.dev with your actual domain.
+# ============================================================================
+
+api.knightmind.dev {
+	# Reverse proxy to the API (Docker or bare uvicorn on port 8000)
+	reverse_proxy localhost:8000
+
+	# Request logging
+	log {
+		output file /var/log/caddy/knightmind-api.log {
+			roll_size 50MiB
+			roll_keep 5
+		}
+	}
+
+	# Security headers
+	header {
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+}

@@ -1,0 +1,32 @@
+# ============================================================================
+# KnightMind API – systemd service (Docker Compose)
+# ============================================================================
+# Install:
+#   cp deploy/knightmind-api.service /etc/systemd/system/
+#   systemctl daemon-reload
+#   systemctl enable --now knightmind-api
+#
+# Logs:
+#   journalctl -u knightmind-api -f
+# ============================================================================
+
+[Unit]
+Description=KnightMind API (Docker Compose)
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/knightmind
+ExecStart=/usr/bin/docker compose up -d
+ExecStop=/usr/bin/docker compose down
+ExecReload=/usr/bin/docker compose up -d --build api
+TimeoutStartSec=120
+
+# Restart policy handled by docker compose (restart: unless-stopped),
+# but systemd will bring it back after full host reboot.
+
+[Install]
+WantedBy=multi-user.target
