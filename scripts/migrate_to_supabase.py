@@ -82,6 +82,11 @@ def copy_data(pg_url: str) -> None:
         "training_sessions": {"session_data", "achievements"},
     }
 
+    # Boolean columns per table (SQLite stores as 0/1, Postgres needs real booleans)
+    BOOL_COLUMNS: dict[str, set[str]] = {
+        "games": {"rated"},
+    }
+
     # Connect to both databases
     sqlite_conn = sqlite3.connect(str(SQLITE_PATH))
     sqlite_conn.row_factory = sqlite3.Row
@@ -130,6 +135,7 @@ def copy_data(pg_url: str) -> None:
 
         columns = [desc[0] for desc in sqlite_cur.description]
         json_cols = JSON_COLUMNS.get(table, set())
+        bool_cols = BOOL_COLUMNS.get(table, set())
         col_list = ", ".join(f'"{c}"' for c in columns)
         placeholders = ", ".join([f"%({c})s" for c in columns])
 
@@ -141,7 +147,7 @@ def copy_data(pg_url: str) -> None:
         )
 
         def make_params(row: sqlite3.Row) -> dict:
-            """Convert a SQLite row to a dict, parsing JSON text columns."""
+            """Convert a SQLite row to a dict, handling type mismatches."""
             d = dict(row)
             for col in json_cols:
                 val = d.get(col)
@@ -152,6 +158,9 @@ def copy_data(pg_url: str) -> None:
                         d[col] = Jsonb(val)
                 elif val is not None:
                     d[col] = Jsonb(val)
+            for col in bool_cols:
+                if col in d:
+                    d[col] = bool(d[col])
             return d
 
         batch_size = 500
