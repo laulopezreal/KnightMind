@@ -244,9 +244,10 @@ describe('Library', () => {
     // --- Filter interactions ---
 
     it('should debounce search input', async () => {
+        vi.useFakeTimers();
         render(<Library />);
 
-        await waitFor(() => {
+        await vi.waitFor(() => {
             expect(mockGetLibraryPuzzles).toHaveBeenCalledTimes(1);
         });
 
@@ -256,8 +257,12 @@ describe('Library', () => {
         // Should not call immediately (debounce pending)
         expect(mockGetLibraryPuzzles).toHaveBeenCalledTimes(1);
 
-        // After debounce resolves (300ms), should call with search term
-        await waitFor(() => {
+        // Advance timers past the debounce delay
+        await vi.advanceTimersByTimeAsync(300);
+
+        // Now the debounced call should have been made
+        await vi.waitFor(() => {
+            expect(mockGetLibraryPuzzles).toHaveBeenCalledTimes(2);
             expect(mockGetLibraryPuzzles).toHaveBeenCalledWith(
                 expect.objectContaining({ q: 'fork' })
             );
