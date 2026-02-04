@@ -15,10 +15,12 @@ vi.mock('../context/ChessUsernameContext', () => ({
 
 const mockGetMotifPerformance = vi.fn();
 const mockGetMotifTrends = vi.fn();
+const mockGetTrickyPuzzles = vi.fn();
 
 vi.mock('../api/users', () => ({
   getMotifPerformance: (...args: unknown[]) => mockGetMotifPerformance(...args),
   getMotifTrends: (...args: unknown[]) => mockGetMotifTrends(...args),
+  getTrickyPuzzles: (...args: unknown[]) => mockGetTrickyPuzzles(...args),
 }));
 
 vi.mock('../components/TacticalRadar', () => ({
@@ -31,12 +33,19 @@ vi.mock('../components/MotifTrends', () => ({
   MotifTrends: () => <div data-testid="motif-trends">MotifTrends</div>,
 }));
 
+vi.mock('../components/RecentlyTrickyCard', () => ({
+  RecentlyTrickyCard: ({ puzzles }: { puzzles: unknown[] }) => (
+    <div data-testid="recently-tricky-card">Tricky ({puzzles.length} puzzles)</div>
+  ),
+}));
+
 describe('Insights', () => {
   beforeEach(() => {
     vi.resetAllMocks();
     mockUsername = 'testplayer';
     mockGetMotifPerformance.mockRejectedValue(new Error('Not loaded'));
     mockGetMotifTrends.mockRejectedValue(new Error('Not loaded'));
+    mockGetTrickyPuzzles.mockResolvedValue({ puzzles: [], total_count: 0 });
   });
 
   it('should redirect to home when no username', () => {
@@ -120,5 +129,51 @@ describe('Insights', () => {
     await waitFor(() => {
       expect(screen.getByText('Insights')).toBeInTheDocument();
     });
+  });
+
+  it('should render RecentlyTrickyCard when tricky puzzles exist', async () => {
+    mockGetMotifPerformance.mockResolvedValue({ motifs: [] });
+    mockGetMotifTrends.mockResolvedValue({ motif_trends: [], window_days: 30 });
+    mockGetTrickyPuzzles.mockResolvedValue({
+      puzzles: [
+        { puzzle_id: '1', title: 'Fork', fail_count: 3, last_attempted_at: '2025-01-01T00:00:00Z' },
+      ],
+      total_count: 1,
+    });
+
+    render(<Insights />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('recently-tricky-card')).toBeInTheDocument();
+    });
+  });
+
+  it('should render page even when tricky puzzles API fails', async () => {
+    mockGetMotifPerformance.mockResolvedValue({
+      motifs: [{ name: 'Fork', accuracy: 0.8, total_puzzles: 10, correct: 8 }],
+    });
+    mockGetMotifTrends.mockResolvedValue({ motif_trends: [], window_days: 30 });
+    mockGetTrickyPuzzles.mockRejectedValue(new Error('API down'));
+
+    render(<Insights />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('tactical-radar')).toBeInTheDocument();
+    });
+
+    expect(screen.queryByTestId('recently-tricky-card')).not.toBeInTheDocument();
+  });
+
+  it('should not render Puzzle Intelligence heading', async () => {
+    mockGetMotifPerformance.mockResolvedValue({ motifs: [] });
+    mockGetMotifTrends.mockResolvedValue({ motif_trends: [], window_days: 30 });
+
+    render(<Insights />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Insights')).toBeInTheDocument();
+    });
+
+    expect(screen.queryByText('Puzzle Intelligence')).not.toBeInTheDocument();
   });
 });

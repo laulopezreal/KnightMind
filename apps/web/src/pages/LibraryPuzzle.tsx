@@ -39,6 +39,7 @@ export default function LibraryPuzzle() {
     const [feedback, setFeedback] = useState('');
     const [isRecording, setIsRecording] = useState(false);
     const [solveTimeMs, setSolveTimeMs] = useState<number | null>(null);
+    const [recordError, setRecordError] = useState<string | null>(null);
 
     const fetchPuzzle = useCallback(async () => {
         if (!username || !puzzleId) return;
@@ -67,6 +68,7 @@ export default function LibraryPuzzle() {
     const handleRecordResult = async (result: 'pass' | 'fail') => {
         if (!puzzle || !username || isRecording) return;
         setIsRecording(true);
+        setRecordError(null);
         const elapsed = solveStartRef.current > 0 ? Date.now() - solveStartRef.current : undefined;
         if (elapsed) setSolveTimeMs(elapsed);
         try {
@@ -76,7 +78,7 @@ export default function LibraryPuzzle() {
             setFeedback(res.feedback);
         } catch (err) {
             console.error('Failed to record result:', err);
-            setError(err instanceof Error ? `Failed to save result: ${err.message}` : 'Failed to save puzzle result');
+            setRecordError(err instanceof Error ? err.message : 'Failed to save your result. Please try again.');
         } finally {
             setIsRecording(false);
         }
@@ -98,7 +100,8 @@ export default function LibraryPuzzle() {
                 setStatus('incorrect');
             }
             return true;
-        } catch {
+        } catch (e) {
+            console.error('Failed to make move on board:', e);
             return false;
         }
     };
@@ -129,16 +132,13 @@ export default function LibraryPuzzle() {
         handleRecordResult('fail');
     };
 
-    const handleMarkFailedRetry = async () => {
+    const handleMarkFailedRetry = () => {
         if (!puzzle) return;
-        await handleRecordResult('fail');
+        // Don't record a failure here — only record when the user reveals the
+        // solution.  Recording on retry would double-count attempts.
         setStatus('solving');
         setUserMove('');
         setGame(new Chess(puzzle.fen));
-        setRecorded(false);
-        setNextDueAt(null);
-        setFeedback('');
-        setSolveTimeMs(null);
         solveStartRef.current = Date.now();
     };
 
@@ -286,6 +286,13 @@ export default function LibraryPuzzle() {
                                     })}
                                 </p>
                             )}
+                        </div>
+                    )}
+
+                    {/* Record error */}
+                    {recordError && (
+                        <div className="bg-red-500/10 border border-red-500/20 rounded-sm p-4 text-center animate-teedin">
+                            <p className="text-red-500 font-sans text-sm">{recordError}</p>
                         </div>
                     )}
 

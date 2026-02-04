@@ -9,8 +9,7 @@ import pytest
 from services.api.main import app, get_opponent_rating_from_pgn, calculate_expected_score
 from fastapi.testclient import TestClient
 from services.api.db import get_db
-from services.api.models import Base, RatingSnapshot
-from services.api.storage.games import GameStorage
+from services.api.models import Base, Game, RatingSnapshot
 from services.api.time_control import classify_time_control
 
 client = TestClient(app)
@@ -147,28 +146,19 @@ def test_create_rating_snapshot_missing_rating(mock_get_stats, client_with_db):
     assert "could not find rating" in response.json()["detail"].lower()
 
 
-def test_explain_rating_changes_basic(client_with_db, db_session, tmp_path, monkeypatch):
-    monkeypatch.setenv("KNIGHTMIND_STORAGE_MODE", "filesystem")
-    storage = GameStorage(base_path=tmp_path)
-    
-    from services.api.storage import GameRepository
-    with patch.object(GameRepository, "get_all_metadata", side_effect=storage.get_all_metadata), \
-         patch.object(GameRepository, "get_pgn", side_effect=storage.get_pgn), \
-         patch("services.api.storage.get_storage_mode", return_value="filesystem"):
+def test_explain_rating_changes_basic(client_with_db, db_session):
+    since_time = datetime.now(timezone.utc) - timedelta(days=2)
 
-        since_time = datetime.now(timezone.utc) - timedelta(days=2)
+    snapshot = RatingSnapshot(
+        username="testuser",
+        source="chesscom",
+        time_control="rapid",
+        rating=1400,
+        recorded_at=since_time + timedelta(hours=1)
+    )
+    db_session.add(snapshot)
 
-        snapshot = RatingSnapshot(
-            username="testuser",
-            source="chesscom",
-            time_control="rapid",
-            rating=1400,
-            recorded_at=since_time + timedelta(hours=1)
-        )
-        db_session.add(snapshot)
-        db_session.commit()
-
-        pgn_win = """[Event "Test Game"]
+    pgn_win = """[Event "Test Game"]
 [White "testuser"]
 [Black "opponent"]
 [Result "1-0"]
@@ -177,32 +167,34 @@ def test_explain_rating_changes_basic(client_with_db, db_session, tmp_path, monk
 
 1. e4 e5 2. Nf3 Nc6 1-0"""
 
-        for i in range(2):
-            storage.store_game(
-                username="testuser",
-                url=f"https://chess.com/game/{i}",
-                pgn=pgn_win,
-                white_username="testuser",
-                black_username="opponent",
-                white_result="win",
-                black_result="loss",
-                time_control="600",
-                end_time=int((since_time + timedelta(hours=2 + i)).timestamp()),
-                rated=True,
-            )
+    for i in range(2):
+        db_session.add(Game(
+            game_id=f"game-explain-{i}",
+            url=f"https://chess.com/game/{i}",
+            username="testuser",
+            white_username="testuser",
+            black_username="opponent",
+            white_result="win",
+            black_result="loss",
+            time_control="600",
+            end_time=int((since_time + timedelta(hours=2 + i)).timestamp()),
+            rated=True,
+            pgn_blob=pgn_win,
+        ))
+    db_session.commit()
 
-        response = client_with_db.get(
-            "/ratings/explain",
-            params={
-                "username": "testuser",
-                "time_control": "rapid",
-                "since": since_time.isoformat(),
-            }
-        )
+    response = client_with_db.get(
+        "/ratings/explain",
+        params={
+            "username": "testuser",
+            "time_control": "rapid",
+            "since": since_time.isoformat(),
+        }
+    )
 
-        assert response.status_code == 200
-        data = response.json()
-        assert data["stats"]["wins"] == 2
+    assert response.status_code == 200
+    data = response.json()
+    assert data["stats"]["wins"] == 2
     assert data["stats"]["losses"] == 0
     assert data["rating"]["reference_rating"] == 1400
     assert data["rating"]["reference_is_approx"] is False

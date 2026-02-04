@@ -1,6 +1,6 @@
 import uuid
+from dataclasses import dataclass
 from datetime import date, datetime, timezone
-from pathlib import Path
 
 from sqlalchemy import select, update, func
 from sqlalchemy.exc import IntegrityError
@@ -8,14 +8,29 @@ from sqlalchemy.orm import Session
 
 from services.api.models import Puzzle as PuzzleModel
 
-from .puzzles import Puzzle, get_puzzle_storage
-from .game_repository import get_storage_mode
+
+@dataclass
+class Puzzle:
+    """A chess puzzle generated from a user's blunder."""
+
+    id: str  # UUID
+    username: str
+    source_game_id: str  # ID of the game this puzzle came from
+    ply: int  # Half-move number where the blunder occurred
+    fen: str  # Position BEFORE the user's move
+    side_to_move: str  # "white" or "black"
+    played_move_uci: str  # The move the user actually played (the blunder)
+    best_move_uci: str  # The best move according to engine
+    eval_before: float  # Evaluation before the blunder (in pawns)
+    eval_after: float  # Evaluation after the blunder (in pawns)
+    swing: float  # eval_before - eval_after (magnitude of blunder)
+    created_at: str  # ISO timestamp
+    used_on: str | None  # Date when puzzle was used (YYYY-MM-DD), None if unused
 
 
 class PuzzleRepository:
-    def __init__(self, db: Session, base_path: str | Path = "data"):
+    def __init__(self, db: Session):
         self.db = db
-        self.filesystem = get_puzzle_storage(base_path)
 
     def _to_puzzle(self, puzzle: PuzzleModel) -> Puzzle:
         return Puzzle(
@@ -52,128 +67,69 @@ class PuzzleRepository:
         imported_at: datetime | None = None,
         source_path: str | None = None,
     ) -> tuple[bool, str]:
-        mode = get_storage_mode()
         username_lower = username.lower()
         puzzle_id = puzzle_id or str(uuid.uuid4())
 
-        is_new = False
-
-        if mode in {"database", "dual"}:
-            puzzle = PuzzleModel(
-                id=puzzle_id,
-                username=username_lower,
-                source_game_id=source_game_id,
-                ply=ply,
-                fen=fen,
-                side_to_move=side_to_move,
-                played_move_uci=played_move_uci,
-                best_move_uci=best_move_uci,
-                eval_before=eval_before,
-                eval_after=eval_after,
-                swing=swing,
-                created_at=created_at or datetime.now(timezone.utc),
-                used_on=used_on,
-                imported_at=imported_at or datetime.now(timezone.utc),
-                source_path=source_path,
-            )
-            self.db.add(puzzle)
-            try:
-                self.db.commit()
-                is_new = True
-            except IntegrityError:
-                self.db.rollback()
-                existing = self.db.scalars(
-                    select(PuzzleModel.id).where(
-                        PuzzleModel.username == username_lower,
-                        PuzzleModel.source_game_id == source_game_id,
-                        PuzzleModel.ply == ply,
-                    )
-                ).first()
-                if existing:
-                    puzzle_id = existing
-                is_new = False
-
-        if mode in {"filesystem", "dual"}:
-            fs_is_new, fs_id = self.filesystem.save_puzzle(
-                username=username_lower,
-                source_game_id=source_game_id,
-                ply=ply,
-                fen=fen,
-                side_to_move=side_to_move,
-                played_move_uci=played_move_uci,
-                best_move_uci=best_move_uci,
-                eval_before=eval_before,
-                eval_after=eval_after,
-                swing=swing,
-            )
-            if mode == "filesystem":
-                is_new = fs_is_new
-                puzzle_id = fs_id
-
-        return is_new, puzzle_id
+        puzzle = PuzzleModel(
+            id=puzzle_id,
+            username=username_lower,
+            source_game_id=source_game_id,
+            ply=ply,
+            fen=fen,
+            side_to_move=side_to_move,
+            played_move_uci=played_move_uci,
+            best_move_uci=best_move_uci,
+            eval_before=eval_before,
+            eval_after=eval_after,
+            swing=swing,
+            created_at=created_at or datetime.now(timezone.utc),
+            used_on=used_on,
+            imported_at=imported_at or datetime.now(timezone.utc),
+            source_path=source_path,
+        )
+        self.db.add(puzzle)
+        try:
+            self.db.commit()
+            return True, puzzle_id
+        except IntegrityError:
+            self.db.rollback()
+            existing = self.db.scalars(
+                select(PuzzleModel.id).where(
+                    PuzzleModel.username == username_lower,
+                    PuzzleModel.source_game_id == source_game_id,
+                    PuzzleModel.ply == ply,
+                )
+            ).first()
+            if existing:
+                puzzle_id = existing
+            return False, puzzle_id
 
     def get_puzzle(self, username: str, puzzle_id: str) -> Puzzle | None:
-        mode = get_storage_mode()
-        if mode == "filesystem":
-            return self.filesystem.get_puzzle(username, puzzle_id)
-
         puzzle = self.db.get(PuzzleModel, puzzle_id)
         if puzzle and puzzle.username == username.lower():
             return self._to_puzzle(puzzle)
-        if mode == "dual":
-            return self.filesystem.get_puzzle(username, puzzle_id)
         return None
 
     def get_all_puzzles(self, username: str) -> list[Puzzle]:
-        mode = get_storage_mode()
         username_lower = username.lower()
-        if mode == "filesystem":
-            return self.filesystem.get_all_puzzles(username_lower)
-
         stmt = select(PuzzleModel).where(PuzzleModel.username == username_lower)
         puzzles = self.db.scalars(stmt).all()
-        if mode == "dual" and not puzzles:
-            return self.filesystem.get_all_puzzles(username_lower)
         return [self._to_puzzle(puzzle) for puzzle in puzzles]
 
     def get_latest_puzzle_time(self, username: str) -> datetime | None:
         """Get the timestamp of the most recently created puzzle for a user."""
-        mode = get_storage_mode()
         username_lower = username.lower()
-
-        if mode == "filesystem":
-            puzzles = self.filesystem.get_all_puzzles(username_lower)
-            if not puzzles:
-                return None
-            puzzle_times = [
-                datetime.fromisoformat(p.created_at.replace("Z", "+00:00"))
-                for p in puzzles
-                if p.created_at
-            ]
-            return max(puzzle_times) if puzzle_times else None
-
-        # Database mode: use SQL aggregation
         stmt = select(func.max(PuzzleModel.created_at)).where(
             PuzzleModel.username == username_lower
         )
-        max_time = self.db.scalar(stmt)
-        if mode == "dual" and max_time is None:
-            puzzles = self.filesystem.get_all_puzzles(username_lower)
-            if not puzzles:
-                return None
-            puzzle_times = [
-                datetime.fromisoformat(p.created_at.replace("Z", "+00:00"))
-                for p in puzzles
-                if p.created_at
-            ]
-            return max(puzzle_times) if puzzle_times else None
-        return max_time
+        result = self.db.scalar(stmt)
+        if result is None:
+            return None
+        if result.tzinfo is None:
+            return result.replace(tzinfo=timezone.utc)
+        return result
 
     def get_daily_puzzles(self, username: str, n: int = 5) -> list[Puzzle]:
-        mode = get_storage_mode()
-        if mode == "filesystem":
-            return self.filesystem.get_daily_puzzles(username, n)
-
         all_puzzles = self.get_all_puzzles(username)
         today_str = date.today().isoformat()
 
@@ -198,11 +154,7 @@ class PuzzleRepository:
         if used_date is None:
             used_date = date.today()
 
-        mode = get_storage_mode()
         username_lower = username.lower()
-        if mode == "filesystem":
-            return self.filesystem.mark_puzzles_used(username_lower, puzzle_ids, used_date)
-
         stmt = (
             update(PuzzleModel)
             .where(PuzzleModel.username == username_lower, PuzzleModel.id.in_(puzzle_ids))
@@ -210,30 +162,14 @@ class PuzzleRepository:
         )
         result = self.db.execute(stmt)
         self.db.commit()
-        marked = result.rowcount or 0
-
-        if mode == "dual":
-            self.filesystem.mark_puzzles_used(username_lower, puzzle_ids, used_date)
-
-        return marked
+        return result.rowcount or 0
 
     def get_puzzle_count(self, username: str) -> int:
-        mode = get_storage_mode()
         username_lower = username.lower()
-        if mode == "filesystem":
-            return self.filesystem.get_puzzle_count(username_lower)
-
         stmt = select(func.count()).select_from(PuzzleModel).where(PuzzleModel.username == username_lower)
-        count = self.db.scalar(stmt) or 0
-        if mode == "dual" and count == 0:
-            return self.filesystem.get_puzzle_count(username_lower)
-        return count
+        return self.db.scalar(stmt) or 0
 
     def get_puzzle_stats(self, username: str, puzzle_id: str) -> dict:
-        mode = get_storage_mode()
-        if mode == "filesystem":
-            return self.filesystem.get_puzzle_stats(username, puzzle_id)
-
         puzzle = self.db.get(PuzzleModel, puzzle_id)
         if puzzle and puzzle.username == username.lower():
             return {
@@ -242,6 +178,4 @@ class PuzzleRepository:
                 "side_to_move": puzzle.side_to_move,
                 "swing": puzzle.swing,
             }
-        if mode == "dual":
-            return self.filesystem.get_puzzle_stats(username, puzzle_id)
         return {}

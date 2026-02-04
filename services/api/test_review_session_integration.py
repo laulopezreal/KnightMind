@@ -11,8 +11,7 @@ from sqlalchemy.pool import StaticPool
 
 from services.api.db import Base, get_db
 from services.api.main import app
-from services.api.models import TrainingSession
-from services.api.storage.puzzles import PuzzleStorage
+from services.api.models import TrainingSession, Game, Puzzle as PuzzleModel
 
 
 @pytest.fixture
@@ -41,23 +40,49 @@ def client(test_db):
             yield test_db
         finally:
             pass
-    
+
     app.dependency_overrides[get_db] = override_get_db
     client = TestClient(app)
     yield client
     app.dependency_overrides.clear()
 
-@pytest.fixture
-def puzzle_storage(tmp_path, monkeypatch):
-    storage = PuzzleStorage(base_path=tmp_path)
-    monkeypatch.setattr("services.api.storage.puzzles._default_puzzle_storage", storage)
-    return storage
 
-def test_review_endpoint_increments_session_counters(client, test_db, puzzle_storage):
+def _create_puzzle(db, puzzle_id: str, username: str, source_game_id: str, ply: int):
+    """Helper: create a Game + Puzzle in the DB."""
+    existing_game = db.get(Game, source_game_id)
+    if not existing_game:
+        db.add(Game(
+            game_id=source_game_id,
+            url=f"https://chess.com/game/{source_game_id}",
+            username=username,
+            white_username=username,
+            black_username="opponent",
+            white_result="win",
+            black_result="lose",
+            time_control="600",
+            end_time=1704067200,
+            rated=True,
+        ))
+    db.add(PuzzleModel(
+        id=puzzle_id,
+        username=username,
+        source_game_id=source_game_id,
+        ply=ply,
+        fen="rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+        side_to_move="white",
+        played_move_uci="e2e4",
+        best_move_uci="d2d4",
+        eval_before=0.5,
+        eval_after=-1.5,
+        swing=2.0,
+        created_at=datetime.now(timezone.utc),
+    ))
+    db.commit()
+
+
+def test_review_endpoint_increments_session_counters(client, test_db):
     """
     Integration test: POST /puzzles/{id}/review increments session counters.
-    
-    This tests the critical business logic that was missing test coverage.
     """
     # 1. Create a training session
     session_id = str(uuid.uuid4())
@@ -73,18 +98,8 @@ def test_review_endpoint_increments_session_counters(client, test_db, puzzle_sto
     test_db.commit()
 
     # 2. Create a puzzle for the user
-    _, puzzle_id = puzzle_storage.save_puzzle(
-        username="testuser",
-        source_game_id="game-1",
-        ply=10,
-        fen="rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
-        side_to_move="white",
-        played_move_uci="e2e4",
-        best_move_uci="d2d4",
-        eval_before=0.5,
-        eval_after=-1.5,
-        swing=2.0,
-    )
+    puzzle_id = str(uuid.uuid4())
+    _create_puzzle(test_db, puzzle_id, "testuser", "game-1", 10)
 
     # 3. Submit a passing review
     response = client.post(f"/puzzles/{puzzle_id}/review", json={
@@ -121,19 +136,9 @@ def test_review_endpoint_increments_session_counters(client, test_db, puzzle_sto
     assert updated_session.best_streak == 1
 
 
-def test_review_endpoint_session_not_found(client, puzzle_storage):
-    _, puzzle_id = puzzle_storage.save_puzzle(
-        username="testuser",
-        source_game_id="game-1",
-        ply=10,
-        fen="rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
-        side_to_move="white",
-        played_move_uci="e2e4",
-        best_move_uci="d2d4",
-        eval_before=0.5,
-        eval_after=-1.5,
-        swing=2.0,
-    )
+def test_review_endpoint_session_not_found(client, test_db):
+    puzzle_id = str(uuid.uuid4())
+    _create_puzzle(test_db, puzzle_id, "testuser", "game-1", 10)
 
     response = client.post(f"/puzzles/{puzzle_id}/review", json={
         "username": "testuser",
@@ -145,7 +150,7 @@ def test_review_endpoint_session_not_found(client, puzzle_storage):
     assert "session not found" in response.json()["detail"].lower()
 
 
-def test_review_endpoint_session_wrong_user(client, test_db, puzzle_storage):
+def test_review_endpoint_session_wrong_user(client, test_db):
     session_id = str(uuid.uuid4())
     session = TrainingSession(
         id=session_id,
@@ -158,18 +163,8 @@ def test_review_endpoint_session_wrong_user(client, test_db, puzzle_storage):
     test_db.add(session)
     test_db.commit()
 
-    _, puzzle_id = puzzle_storage.save_puzzle(
-        username="testuser",
-        source_game_id="game-2",
-        ply=12,
-        fen="rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
-        side_to_move="white",
-        played_move_uci="e2e4",
-        best_move_uci="d2d4",
-        eval_before=0.5,
-        eval_after=-1.5,
-        swing=2.0,
-    )
+    puzzle_id = str(uuid.uuid4())
+    _create_puzzle(test_db, puzzle_id, "testuser", "game-2", 12)
 
     response = client.post(f"/puzzles/{puzzle_id}/review", json={
         "username": "testuser",
@@ -181,7 +176,7 @@ def test_review_endpoint_session_wrong_user(client, test_db, puzzle_storage):
     assert "different user" in response.json()["detail"].lower()
 
 
-def test_review_endpoint_session_completed(client, test_db, puzzle_storage):
+def test_review_endpoint_session_completed(client, test_db):
     session_id = str(uuid.uuid4())
     session = TrainingSession(
         id=session_id,
@@ -195,18 +190,8 @@ def test_review_endpoint_session_completed(client, test_db, puzzle_storage):
     test_db.add(session)
     test_db.commit()
 
-    _, puzzle_id = puzzle_storage.save_puzzle(
-        username="testuser",
-        source_game_id="game-3",
-        ply=14,
-        fen="rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
-        side_to_move="white",
-        played_move_uci="e2e4",
-        best_move_uci="d2d4",
-        eval_before=0.5,
-        eval_after=-1.5,
-        swing=2.0,
-    )
+    puzzle_id = str(uuid.uuid4())
+    _create_puzzle(test_db, puzzle_id, "testuser", "game-3", 14)
 
     response = client.post(f"/puzzles/{puzzle_id}/review", json={
         "username": "testuser",

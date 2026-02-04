@@ -290,7 +290,7 @@ async def import_chesscom_games(username: str, db: Session = Depends(get_db)):
             else:
                 skipped += 1
                 
-        game_repository.filesystem.record_import_summary(username, new_games)
+        game_repository.record_import_summary(username, new_games)
 
         return ImportResponse(
             message=f"Successfully processed {count} games for {username}",
@@ -321,7 +321,7 @@ async def get_import_status(username: str, db: Session = Depends(get_db)):
     if not username:
         raise HTTPException(status_code=400, detail="Username is required")
     game_repository = GameRepository(db)
-    summary = game_repository.filesystem.get_last_import_summary(username)
+    summary = game_repository.get_last_import_summary(username)
     if not summary:
         return ImportStatusResponse(last_imported_at=None, last_new_games=None)
     return ImportStatusResponse(
@@ -765,21 +765,6 @@ async def get_due_puzzles_endpoint(
     }
 
 
-def _compute_puzzle_status(stats: PuzzleStats | None, now: datetime) -> str:
-    """Derive user-facing status from puzzle_stats."""
-    if stats is None or stats.attempts == 0:
-        return "new"
-    if stats.next_due_at is not None:
-        due = stats.next_due_at
-        if due.tzinfo is None:
-            due = due.replace(tzinfo=timezone.utc)
-        if due <= now:
-            return "due"
-    if stats.attempts > 0 and stats.pass_count / stats.attempts >= 0.8 and stats.attempts >= 3:
-        return "mastered"
-    return "learning"
-
-
 def _swing_to_difficulty(swing: float) -> str:
     if swing < 2.0:
         return "easy"
@@ -858,8 +843,11 @@ async def list_puzzles(
     available_motifs = [row[0] for row in db.execute(motifs_stmt).all()]
 
     # --- 3. Build filtered query ---
+    # Reuse status_case from corpus stats so status logic is defined once.
+    computed_status = status_case.label("computed_status")
+
     base_stmt = (
-        select(PuzzleModel, PuzzleStats)
+        select(PuzzleModel, PuzzleStats, computed_status)
         .outerjoin(PuzzleStats, join_cond)
         .where(PuzzleModel.username == username_lower)
     )
@@ -874,33 +862,9 @@ async def list_puzzles(
             )
         )
 
-    # Status filter
+    # Status filter (uses the same CASE expression as corpus stats)
     if status:
-        if status == "new":
-            base_stmt = base_stmt.where(
-                or_(PuzzleStats.puzzle_id.is_(None), PuzzleStats.attempts == 0)
-            )
-        elif status == "due":
-            base_stmt = base_stmt.where(
-                PuzzleStats.next_due_at.isnot(None),
-                PuzzleStats.next_due_at <= now,
-            )
-        elif status == "mastered":
-            base_stmt = base_stmt.where(
-                PuzzleStats.attempts >= 3,
-                (PuzzleStats.pass_count * 1.0 / PuzzleStats.attempts) >= 0.8,
-                or_(PuzzleStats.next_due_at.is_(None), PuzzleStats.next_due_at > now),
-            )
-        elif status == "learning":
-            base_stmt = base_stmt.where(
-                PuzzleStats.puzzle_id.isnot(None),
-                PuzzleStats.attempts > 0,
-                or_(PuzzleStats.next_due_at.is_(None), PuzzleStats.next_due_at > now),
-                or_(
-                    PuzzleStats.attempts < 3,
-                    (PuzzleStats.pass_count * 1.0 / PuzzleStats.attempts) < 0.8,
-                ),
-            )
+        base_stmt = base_stmt.where(status_case == status)
 
     # Motif filter
     if motif:
@@ -959,7 +923,7 @@ async def list_puzzles(
     # --- 7. Build response ---
     rows = db.execute(base_stmt).all()
     result_puzzles = []
-    for puzzle, stats in rows:
+    for puzzle, stats, row_status in rows:
         result_puzzles.append(PuzzleListItem(
             id=puzzle.id,
             title=stats.title if stats else None,
@@ -969,7 +933,7 @@ async def list_puzzles(
             fen=puzzle.fen,
             side_to_move=puzzle.side_to_move,
             best_move_uci=puzzle.best_move_uci,
-            status=_compute_puzzle_status(stats, now),
+            status=row_status,
             attempts=stats.attempts if stats else 0,
             pass_count=stats.pass_count if stats else 0,
             fail_count=stats.fail_count if stats else 0,
@@ -1007,8 +971,22 @@ async def get_puzzle_detail(
     username_lower = username.lower()
     now = datetime.now(timezone.utc)
 
+
+    detail_status_case = case(
+        (or_(PuzzleStats.puzzle_id.is_(None), PuzzleStats.attempts == 0), literal("new")),
+        (and_(PuzzleStats.next_due_at.isnot(None), PuzzleStats.next_due_at <= now), literal("due")),
+        (
+            and_(
+                PuzzleStats.attempts >= 3,
+                (PuzzleStats.pass_count * 1.0 / PuzzleStats.attempts) >= 0.8,
+            ),
+            literal("mastered"),
+        ),
+        else_=literal("learning"),
+    )
+
     stmt = (
-        select(PuzzleModel, PuzzleStats)
+        select(PuzzleModel, PuzzleStats, detail_status_case.label("computed_status"))
         .outerjoin(
             PuzzleStats,
             (PuzzleModel.id == PuzzleStats.puzzle_id)
@@ -1020,7 +998,7 @@ async def get_puzzle_detail(
     if not row:
         raise HTTPException(status_code=404, detail="Puzzle not found")
 
-    puzzle, stats = row
+    puzzle, stats, computed_status = row
     return PuzzleListItem(
         id=puzzle.id,
         title=stats.title if stats else None,
@@ -1030,7 +1008,7 @@ async def get_puzzle_detail(
         fen=puzzle.fen,
         side_to_move=puzzle.side_to_move,
         best_move_uci=puzzle.best_move_uci,
-        status=_compute_puzzle_status(stats, now),
+        status=computed_status,
         attempts=stats.attempts if stats else 0,
         pass_count=stats.pass_count if stats else 0,
         fail_count=stats.fail_count if stats else 0,

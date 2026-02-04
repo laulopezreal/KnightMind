@@ -1,7 +1,6 @@
 import hashlib
-import os
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from pathlib import Path
 
 from sqlalchemy import select, func
 from sqlalchemy.exc import IntegrityError
@@ -9,23 +8,26 @@ from sqlalchemy.orm import Session
 
 from services.api.models import Game
 
-from .games import GameMetadata, get_storage
 
-
-StorageMode = str
-
-
-def get_storage_mode() -> StorageMode:
-    mode = os.environ.get("KNIGHTMIND_STORAGE_MODE", "filesystem").lower()
-    if mode not in {"filesystem", "dual", "database"}:
-        return "filesystem"
-    return mode
+@dataclass
+class GameMetadata:
+    """Metadata for a stored chess game."""
+    game_id: str  # Hash of the game URL (unique identifier)
+    url: str
+    username: str  # The user who imported this game
+    white_username: str
+    black_username: str
+    white_result: str
+    black_result: str
+    time_control: str
+    end_time: int
+    rated: bool
+    imported_at: str
 
 
 class GameRepository:
-    def __init__(self, db: Session, base_path: str | Path = "data"):
+    def __init__(self, db: Session):
         self.db = db
-        self.filesystem = get_storage(base_path)
 
     @staticmethod
     def _game_id_from_url(url: str) -> str:
@@ -59,132 +61,98 @@ class GameRepository:
         end_time: int,
         rated: bool,
         imported_at: datetime | None = None,
-        source_path: str | None = None,
-        write_pgn_blob: bool = True,
     ) -> tuple[bool, str]:
-        mode = get_storage_mode()
         username_lower = username.lower()
         game_id = self._game_id_from_url(url)
 
-        is_new = False
+        existing = self.db.get(Game, game_id)
+        if existing is not None:
+            return False, game_id
 
-        if mode in {"database", "dual"}:
-            existing = self.db.get(Game, game_id)
-            if existing is None:
-                game = Game(
-                    game_id=game_id,
-                    url=url,
-                    username=username_lower,
-                    white_username=white_username,
-                    black_username=black_username,
-                    white_result=white_result,
-                    black_result=black_result,
-                    time_control=time_control,
-                    end_time=end_time,
-                    rated=rated,
-                    imported_at=imported_at or datetime.now(timezone.utc),
-                    source_path=source_path,
-                    pgn_blob=pgn if write_pgn_blob else None,
-                )
-                self.db.add(game)
-                try:
-                    self.db.commit()
-                    is_new = True
-                except IntegrityError:
-                    self.db.rollback()
-                    is_new = False
-
-        if mode in {"filesystem", "dual"}:
-            fs_is_new, _ = self.filesystem.store_game(
-                username=username_lower,
-                url=url,
-                pgn=pgn,
-                white_username=white_username,
-                black_username=black_username,
-                white_result=white_result,
-                black_result=black_result,
-                time_control=time_control,
-                end_time=end_time,
-                rated=rated,
-            )
-            if mode == "filesystem":
-                is_new = fs_is_new
-
-        return is_new, game_id
+        game = Game(
+            game_id=game_id,
+            url=url,
+            username=username_lower,
+            white_username=white_username,
+            black_username=black_username,
+            white_result=white_result,
+            black_result=black_result,
+            time_control=time_control,
+            end_time=end_time,
+            rated=rated,
+            imported_at=imported_at or datetime.now(timezone.utc),
+            pgn_blob=pgn,
+        )
+        self.db.add(game)
+        try:
+            self.db.commit()
+            return True, game_id
+        except IntegrityError:
+            self.db.rollback()
+            return False, game_id
 
     def get_users(self) -> list[str]:
-        mode = get_storage_mode()
-        if mode == "filesystem":
-            return self.filesystem.get_users()
-
         stmt = select(Game.username).distinct().order_by(Game.username.asc())
-        users = [row[0] for row in self.db.execute(stmt).all()]
-        if mode == "dual" and not users:
-            return self.filesystem.get_users()
-        return users
+        return [row[0] for row in self.db.execute(stmt).all()]
 
     def get_game_count(self, username: str) -> int:
-        mode = get_storage_mode()
         username_lower = username.lower()
-        if mode == "filesystem":
-            return self.filesystem.get_game_count(username_lower)
-
         stmt = select(func.count()).select_from(Game).where(Game.username == username_lower)
-        count = self.db.scalar(stmt) or 0
-        if mode == "dual" and count == 0:
-            return self.filesystem.get_game_count(username_lower)
-        return count
+        return self.db.scalar(stmt) or 0
 
     def get_all_metadata(self, username: str) -> list[GameMetadata]:
-        mode = get_storage_mode()
         username_lower = username.lower()
-        if mode == "filesystem":
-            return self.filesystem.get_all_metadata(username_lower)
-
         stmt = (
             select(Game)
             .where(Game.username == username_lower)
             .order_by(Game.end_time.desc())
         )
         games = self.db.scalars(stmt).all()
-        if mode == "dual" and not games:
-            return self.filesystem.get_all_metadata(username_lower)
         return [self._to_metadata(game) for game in games]
 
     def get_latest_game_time(self, username: str) -> datetime | None:
         """Get the timestamp of the most recent game for a user."""
-        mode = get_storage_mode()
         username_lower = username.lower()
-
-        if mode == "filesystem":
-            metadata = self.filesystem.get_all_metadata(username_lower)
-            return (
-                datetime.fromtimestamp(metadata[0].end_time, tz=timezone.utc)
-                if metadata
-                else None
-            )
-
-        # Database mode: use SQL to get just the max end_time
         stmt = select(func.max(Game.end_time)).where(Game.username == username_lower)
         max_time = self.db.scalar(stmt)
-        if mode == "dual" and max_time is None:
-            metadata = self.filesystem.get_all_metadata(username_lower)
-            return (
-                datetime.fromtimestamp(metadata[0].end_time, tz=timezone.utc)
-                if metadata
-                else None
-            )
         return datetime.fromtimestamp(max_time, tz=timezone.utc) if max_time else None
 
     def get_pgn(self, username: str, game_id: str) -> str | None:
-        mode = get_storage_mode()
-        if mode == "filesystem":
-            return self.filesystem.get_pgn(username, game_id)
-
         game = self.db.get(Game, game_id)
         if game and game.username == username.lower() and game.pgn_blob:
             return game.pgn_blob
-
-        if mode == "dual":
-            return self.filesystem.get_pgn(username, game_id)
         return None
+
+    def record_import_summary(self, username: str, new_games: int, imported_at: str | None = None) -> None:
+        """Store the last import summary for a user in the database."""
+        from services.api.models import ImportSummary
+
+        username_lower = username.lower()
+        if imported_at is None:
+            ts = datetime.now(timezone.utc)
+        else:
+            ts = datetime.fromisoformat(imported_at)
+
+        existing = self.db.get(ImportSummary, username_lower)
+        if existing:
+            existing.last_imported_at = ts
+            existing.last_new_games = new_games
+        else:
+            self.db.add(ImportSummary(
+                username=username_lower,
+                last_imported_at=ts,
+                last_new_games=new_games,
+            ))
+        self.db.commit()
+
+    def get_last_import_summary(self, username: str) -> dict[str, str | int] | None:
+        """Get the last import summary for a user from the database."""
+        from services.api.models import ImportSummary
+
+        summary = self.db.get(ImportSummary, username.lower())
+        if not summary:
+            return None
+        return {
+            "last_imported_at": summary.last_imported_at.replace(tzinfo=timezone.utc).isoformat(),
+            "last_new_games": summary.last_new_games,
+        }
