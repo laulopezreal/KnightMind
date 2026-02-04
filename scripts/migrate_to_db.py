@@ -283,36 +283,10 @@ def migrate_import_summaries(data_dir: Path, dry_run: bool) -> int:
 
 
 def _flush_batch(batch: list, model_class) -> int:
-    """Insert a batch of records, skipping duplicates. Returns count of new records."""
+    """Insert a batch of records one at a time, skipping duplicates. Returns count of new records."""
     inserted = 0
     with SessionLocal() as db:
         for record in batch:
-            db.add(record)
-            try:
-                db.flush()
-                inserted += 1
-            except Exception:
-                db.rollback()
-                # Re-add successfully inserted items would be complex;
-                # instead, fall back to one-at-a-time for this batch
-                pass
-
-    # If bulk flush failed, try one at a time
-    if inserted == 0 and len(batch) > 0:
-        inserted = _flush_one_at_a_time(batch)
-
-    return inserted
-
-
-def _flush_one_at_a_time(batch: list) -> int:
-    """Insert records one at a time, skipping duplicates."""
-    inserted = 0
-    with SessionLocal() as db:
-        for record in batch:
-            # Detach from any previous session
-            from sqlalchemy.orm import make_transient
-            make_transient(record)
-
             db.add(record)
             try:
                 db.commit()
