@@ -87,15 +87,26 @@ def copy_data(pg_url: str) -> None:
     sqlite_conn.row_factory = sqlite3.Row
     sqlite_cur = sqlite_conn.cursor()
 
-    # Parse the URL into keyword args so psycopg doesn't mis-parse
-    # usernames like "postgres.ref" as a hostname.
-    parsed = urlparse(pg_url)
+    # Build a libpq conninfo string from the URL components.
+    # We can't use urlparse because passwords with '#' break it
+    # (Python treats '#' as a fragment delimiter).
+    # Instead, use psycopg's own conninfo parser via make_conninfo
+    # with the raw URL converted to keyword args by regex.
+    import re as _re
+    m = _re.match(
+        r'postgresql(?:\+psycopg)?://([^:]+):(.+)@([^:]+):(\d+)/(.+)',
+        pg_url,
+    )
+    if not m:
+        print(f"ERROR: Could not parse connection URL.")
+        sys.exit(1)
+    pg_user, pg_pass, pg_host, pg_port, pg_dbname = m.groups()
     pg_conn = psycopg.connect(
-        host=parsed.hostname,
-        port=parsed.port or 5432,
-        user=unquote(parsed.username or ""),
-        password=unquote(parsed.password or ""),
-        dbname=parsed.path.lstrip("/") or "postgres",
+        host=pg_host,
+        port=int(pg_port),
+        user=unquote(pg_user),
+        password=unquote(pg_pass),
+        dbname=pg_dbname,
     )
 
     total_rows = 0
