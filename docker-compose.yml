@@ -19,15 +19,15 @@ services:
     image: postgres:16-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-knightmind}
-      POSTGRES_USER: ${POSTGRES_USER:-knightmind}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-knightmind_dev}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-knightmind}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -46,7 +46,7 @@ services:
       - .env.docker
     environment:
       # Override DATABASE_URL to point to the compose postgres service
-      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-knightmind}:${POSTGRES_PASSWORD:-knightmind_dev}@db:5432/${POSTGRES_DB:-knightmind}
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
       STOCKFISH_PATH: /usr/games/stockfish
 
 volumes:

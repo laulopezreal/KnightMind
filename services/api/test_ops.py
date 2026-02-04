@@ -78,10 +78,32 @@ def client(db_session):
     
     app.dependency_overrides.clear()
 
+def test_ping_endpoint(client):
+    response = client.get("/ops/ping")
+    assert response.status_code == 200
+    assert response.json()["status"] == "pong"
+
 def test_health_endpoint(client):
     response = client.get("/ops/health")
     assert response.status_code == 200
     data = response.json()
+    assert data["db"] == "ok"
+
+def test_health_returns_version(client):
+    response = client.get("/ops/health")
+    data = response.json()
+    assert "version" in data
+    assert "sha" in data["version"]
+
+def test_ready_endpoint(client):
+    response = client.get("/ops/ready")
+    # Stockfish may or may not be available in test env,
+    # but the endpoint should return a valid response either way.
+    assert response.status_code in (200, 503)
+    data = response.json()
+    assert "ready" in data
+    assert "db" in data
+    assert "stockfish" in data
     assert data["db"] == "ok"
 
 def test_ops_status_basic(client, db_session):
