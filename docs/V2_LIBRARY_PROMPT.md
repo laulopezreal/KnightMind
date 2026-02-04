@@ -9,7 +9,7 @@ You are implementing 5 features for the Library puzzle exploration surface in Kn
 **KnightMind** lets users import their chess.com games, auto-generate tactical puzzles from their mistakes, and train with spaced repetition.
 
 **Tech stack:**
-- Backend: FastAPI (Python), SQLAlchemy ORM, SQLite/Postgres
+- Backend: FastAPI (Python), SQLAlchemy ORM, Postgres
 - Frontend: React + Vite + TypeScript, Tailwind CSS
 - Tests: pytest (backend), vitest + @testing-library/react (frontend)
 
@@ -1036,4 +1036,4 @@ After implementing each feature:
 4. **Build:** `cd apps/web && npm run build`
 5. **Manual verification:** Start dev servers, navigate to `/library`, test each feature interactively.
 
-For the saved puzzles feature specifically, verify that `Base.metadata.create_all()` picks up the new column (it should for SQLite in dev).
+For the saved puzzles feature specifically, verify that Alembic migrations pick up the new column (`alembic upgrade head`).
