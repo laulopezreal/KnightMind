@@ -97,7 +97,8 @@ export default function LibraryPuzzle() {
                 setStatus('incorrect');
             }
             return true;
-        } catch {
+        } catch (e) {
+            console.error('Failed to make move on board:', e);
             return false;
         }
     };
@@ -130,14 +131,11 @@ export default function LibraryPuzzle() {
 
     const handleMarkFailedRetry = () => {
         if (!puzzle) return;
-        handleRecordResult('fail');
+        // Don't record a failure here — only record when the user reveals the
+        // solution.  Recording on retry would double-count attempts.
         setStatus('solving');
         setUserMove('');
         setGame(new Chess(puzzle.fen));
-        setRecorded(false);
-        setNextDueAt(null);
-        setFeedback('');
-        setSolveTimeMs(null);
         solveStartRef.current = Date.now();
     };
 

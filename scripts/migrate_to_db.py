@@ -24,6 +24,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from sqlalchemy import select, func
+from sqlalchemy.exc import IntegrityError
 
 from services.api.db import SessionLocal
 from services.api.models import Base, Game, Puzzle, ImportSummary
@@ -291,7 +292,7 @@ def _flush_batch(batch: list, model_class) -> int:
             try:
                 db.commit()
                 inserted += 1
-            except Exception:
+            except IntegrityError:
                 db.rollback()
     return inserted
 
