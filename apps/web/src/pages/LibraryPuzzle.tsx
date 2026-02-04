@@ -76,6 +76,7 @@ export default function LibraryPuzzle() {
             setFeedback(res.feedback);
         } catch (err) {
             console.error('Failed to record result:', err);
+            setError(err instanceof Error ? `Failed to save result: ${err.message}` : 'Failed to save puzzle result');
         } finally {
             setIsRecording(false);
         }
@@ -128,9 +129,9 @@ export default function LibraryPuzzle() {
         handleRecordResult('fail');
     };
 
-    const handleMarkFailedRetry = () => {
+    const handleMarkFailedRetry = async () => {
         if (!puzzle) return;
-        handleRecordResult('fail');
+        await handleRecordResult('fail');
         setStatus('solving');
         setUserMove('');
         setGame(new Chess(puzzle.fen));
