@@ -8,10 +8,15 @@ export default defineConfig(({ mode }) => {
   // Set the third parameter to '' to load all env regardless of the `VITE_` prefix.
   const env = loadEnv(mode, process.cwd(), '')
   const useLocalApi = env.VITE_USE_LOCAL_API === 'true'
+  const apiTarget = useLocalApi ? 'http://localhost:8000' : 'https://knightmind-api.onrender.com'
 
-  console.log('Using API target:', useLocalApi ? 'http://localhost:8000' : 'https://knightmind-api.onrender.com')
+  console.log('Using API target:', apiTarget)
 
   return {
+    define: {
+      // Expose the proxy target so the frontend can display it in diagnostics.
+      '__API_TARGET__': JSON.stringify(apiTarget),
+    },
     plugins: [react(), tailwindcss()],
     server: {
       proxy: {

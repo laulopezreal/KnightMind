@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { getHealth, getOpsStatus, getStorageReport, getUsers, ApiError } from '../api';
+import { getHealth, getOpsStatus, getStorageReport, getUsers, ApiError, API_TARGET } from '../api';
 import type { HealthResponse, OpsStatusResponse, RecentJob, StorageReportResponse } from '../api';
 import { useChessUsername } from '../context/ChessUsernameContext';
 
@@ -119,8 +119,8 @@ export default function Ops() {
                     </span>
                     <div className="text-xs text-red-500/70 space-y-1">
                         <span className="text-[10px] uppercase tracking-widest block">Attempted endpoints</span>
-                        <code className="block font-mono text-[11px]">/api/ops/health</code>
-                        <code className="block font-mono text-[11px]">/api/ops/status</code>
+                        <code className="block font-mono text-[11px]">{API_TARGET}/ops/health</code>
+                        <code className="block font-mono text-[11px]">{API_TARGET}/ops/status</code>
                     </div>
                     {backendIssueDetails && (
                         <span className="text-[10px] uppercase tracking-widest opacity-70">

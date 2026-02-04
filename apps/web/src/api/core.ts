@@ -2,6 +2,9 @@
 // If you need a different base in the future, adjust it here rather than calling raw URLs.
 export const API_BASE = '/api';
 
+/** The actual backend URL the proxy forwards to (injected at build time). */
+export const API_TARGET: string = typeof __API_TARGET__ !== 'undefined' ? __API_TARGET__ : 'unknown';
+
 const DEFAULT_TIMEOUT_MS = 30_000;
 
 export class ApiError extends Error {
