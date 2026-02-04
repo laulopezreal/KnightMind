@@ -166,13 +166,16 @@ def main() -> None:
     args = parse_args()
     pg_url = args.pg_url
 
+    # Ensure SQLAlchemy uses psycopg v3 (not psycopg2) for the Alembic step
+    alembic_url = pg_url.replace("postgresql://", "postgresql+psycopg://", 1)
+
     # Ensure project imports work
     sys.path.insert(0, str(PROJECT_ROOT))
 
     # Step 1: Schema
     print("STEP 1: Create schema via Alembic")
     print("-" * 40)
-    run_alembic_migrations(pg_url)
+    run_alembic_migrations(alembic_url)
 
     # Step 2: Data
     print("STEP 2: Copy data from SQLite")
