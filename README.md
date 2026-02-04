@@ -112,8 +112,7 @@ If an environment ever needs a different base, update `API_BASE` in `apps/web/sr
 
 The **Ops** page (`/ops` in the web app) surfaces admin-oriented endpoints to keep operational workflows close to the UI. (Assumption: these remain admin-only until role-based access is in place.)
 
-- **User index (`GET /users`)** – Powers the Ops “User Switcher,” letting admins set the active username without retyping it.
-- **Storage parity report (`GET /ops/storage/report`)** – Powers the Ops “Data Integrity” panel, reporting filesystem vs. database gaps per user to support migration checks.
+- **User index (`GET /users`)** – Powers the Ops "User Switcher," letting admins set the active username without retyping it.
 
 ## Testing
 
@@ -135,85 +134,50 @@ pytest            # Run tests
 
 ## Data Schema
 
-### Storage Modes (Games + Puzzles)
+### Games (`games` table)
 
-KnightMind now supports database-backed metadata for games and puzzles with a dual-write migration path.
-Set `KNIGHTMIND_STORAGE_MODE` to control behavior:
+All game data is stored in the database. PGN content is stored inline in `pgn_blob`.
 
-- `filesystem` (default): read/write from `data/` directories only.
-- `dual`: write to both filesystem and Postgres; read from DB first and fall back to filesystem when missing.
-- `database`: read/write from Postgres only (filesystem untouched).
-
-During migration, run `python scripts/backfill_storage.py` to ingest legacy `data/` files into Postgres and
-print a per-user parity report. For auditability, the database stores `imported_at` and `source_path` for
-every imported record.
-
-Assumption: PGN content is stored in `games.pgn_blob` when using database-backed storage.
-
-### Games Storage
-
-Games are stored as PGN files with JSON metadata:
-
-```
-data/
-  pgn/<username>/<game_id>.pgn
-  metadata/<username>/<game_id>.json
-  index/<username>.json
-```
-
-**GameMetadata fields:**
-- `game_id`: SHA256 hash of game URL (unique identifier)
+**Columns:**
+- `game_id` (PK): SHA256 hash of game URL
 - `url`: Chess.com game URL
-- `username`: User who imported the game
+- `username`: User who imported the game (lowercased)
 - `white_username`, `black_username`: Player usernames
 - `white_result`, `black_result`: Game results
 - `time_control`: Time control string
 - `end_time`: Unix timestamp
 - `rated`: Boolean
-- `imported_at`: ISO timestamp
+- `pgn_blob`: Full PGN text
+- `imported_at`: Timestamp
+- `source_path`: Original filesystem path (for audit trail)
 
-Database table: `games` (includes `pgn_blob`, `imported_at`, and `source_path`).
-### Import Status
+### Import Status (`import_summaries` table)
 
-The API stores the last import timestamp and number of new games per user to surface sync status in the UI.
+Tracks the last import per user to surface sync status in the UI.
 
-```
-data/
-  imports/<username>.json
-```
+- `username` (PK): Lowercased username
+- `last_imported_at`: Timestamp of last import
+- `last_new_games`: Number of new games in the last import
 
-**Import status fields:**
-- `last_imported_at`: ISO timestamp
-- `last_new_games`: integer count of new games in the last import
+### Puzzles (`puzzles` table)
 
-### Puzzles Storage
+Puzzles are generated from user blunders and stored in the database.
 
-Puzzles are generated from user blunders and stored as JSON:
-
-```
-data/
-  puzzles/<username>/<puzzle_id>.json
-  puzzle_index/<username>.json
-```
-
-**Puzzle fields:**
-- `id`: UUID (unique identifier)
-- `username`: User who played the game
-- `source_game_id`: ID of the game this puzzle came from
+**Columns:**
+- `id` (PK): UUID
+- `username`: User who played the game (lowercased)
+- `source_game_id`: FK to `games.game_id`
 - `ply`: Half-move number where blunder occurred
-- `fen`: Position BEFORE the user's move
+- `fen`: Position before the user's move
 - `side_to_move`: "white" or "black"
 - `played_move_uci`: The move the user actually played (blunder)
 - `best_move_uci`: The best move according to engine
-- `eval_before`: Evaluation before the move (in pawns)
-- `eval_after`: Evaluation after the move (in pawns)
+- `eval_before`, `eval_after`: Evaluation in pawns
 - `swing`: `eval_before - eval_after` (magnitude of blunder)
-- `created_at`: ISO timestamp
-- `used_on`: Date when puzzle was used (YYYY-MM-DD), null if unused
+- `created_at`: Timestamp
+- `used_on`: Date when puzzle was used, null if unused
 
 **Unique constraint:** `(username, source_game_id, ply)` prevents duplicate puzzles.
-
-Database table: `puzzles` (includes `created_at`, `used_on`, `imported_at`, and `source_path`).
 
 ### Spaced Repetition Data
 
@@ -222,7 +186,7 @@ Spaced repetition statistics and review history are stored in the database for p
 #### `puzzle_stats` Table
 
 Tracks aggregate performance and scheduling info for each puzzle.
-- `puzzle_id`: Links to the JSON file ID
+- `puzzle_id`: FK to `puzzles.id`
 - `username`: Owner of the puzzle
 - `attempts`: Total sessions
 - `pass_count`: Sessions marked 'pass'
@@ -281,6 +245,16 @@ Alembic migrations read the same `DATABASE_URL` value, so ensure it is set befor
  
  This should be part of your Build Command or Run (Start) Command script.
  
+ ### Legacy Filesystem Migration
+
+ If migrating from an older version that stored data in `data/` directories, run:
+
+ ```bash
+ python -m scripts.migrate_to_db --data-dir services/api/data
+ ```
+
+ Use `--dry-run` to preview counts before committing. The script is idempotent and skips duplicates.
+
  ### Background Worker
  
  The API process runs a background worker to generate puzzles.
