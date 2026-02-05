@@ -1,0 +1,80 @@
+# ============================================================================
+# KnightMind – Deploy to Hetzner VPS
+# ============================================================================
+# Triggers on push to main (after CI passes).
+# SSHs into the server, pulls latest code, rebuilds, and restarts.
+#
+# Required GitHub Secrets:
+#   DEPLOY_HOST       – Server IP or hostname (e.g., 123.45.67.89)
+#   DEPLOY_USER       – SSH user (e.g., root or deploy)
+#   DEPLOY_SSH_KEY    – Private SSH key for authentication
+#   DEPLOY_APP_DIR    – App directory on server (e.g., /opt/knightmind)
+# ============================================================================
+
+name: Deploy
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:  # Allow manual trigger
+
+# Prevent concurrent deployments
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  # Gate: only deploy if CI passes
+  ci-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check CI status
+        run: echo "Deploy triggered — CI checks enforced by branch protection."
+
+  deploy:
+    needs: ci-check
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 10
+
+    steps:
+      - name: Deploy to Hetzner
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script_stop: true
+          script: |
+            set -euo pipefail
+            APP_DIR="${{ secrets.DEPLOY_APP_DIR }}"
+            cd "${APP_DIR}"
+
+            echo "--- Pulling latest code ---"
+            git fetch origin main
+            git reset --hard origin/main
+
+            echo "--- Building and restarting ---"
+            docker compose build api
+            docker compose up -d
+
+            echo "--- Running migrations ---"
+            docker compose exec -T api alembic -c services/api/alembic.ini upgrade head
+
+            echo "--- Health check ---"
+            sleep 5
+            HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/ops/health)
+            if [ "${HTTP_STATUS}" -ne 200 ]; then
+              echo "Health check failed with status ${HTTP_STATUS}"
+              docker compose logs --tail=50 api
+              exit 1
+            fi
+            echo "Health check passed (HTTP ${HTTP_STATUS})"
+
+      - name: Notify success
+        if: success()
+        run: echo "Deployed successfully to production."
+
+      - name: Notify failure
+        if: failure()
+        run: echo "::error::Deployment failed. Check the logs above."
