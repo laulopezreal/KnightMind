@@ -86,13 +86,22 @@ def test_ping_endpoint(client):
     assert response.status_code == 200
     assert response.json()["status"] == "pong"
 
-def test_health_endpoint(client):
+def test_health_endpoint(client, monkeypatch):
+    from services.api import ops as ops_module
+    # Mock stockfish as available so health check passes
+    monkeypatch.setattr(ops_module, "is_engine_available", lambda: (True, "OK"))
+
     response = client.get("/ops/health")
     assert response.status_code == 200
     data = response.json()
     assert data["db"] == "ok"
+    assert data["stockfish"] == "ok"
 
-def test_health_returns_version(client):
+def test_health_returns_version(client, monkeypatch):
+    from services.api import ops as ops_module
+    # Mock stockfish as available so health check passes
+    monkeypatch.setattr(ops_module, "is_engine_available", lambda: (True, "OK"))
+
     response = client.get("/ops/health")
     data = response.json()
     assert "version" in data
