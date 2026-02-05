@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 import os
 from fastapi import APIRouter, Depends
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import select, func, text
 
@@ -11,8 +12,19 @@ from services.api.engine import is_engine_available
 
 router = APIRouter(prefix="/ops", tags=["ops"])
 
+
+@router.get("/ping")
+def ping():
+    """Lightweight liveness probe. No DB or engine checks."""
+    return {"status": "pong"}
+
+
 @router.get("/health")
 def get_health(db: Session = Depends(get_db)):
+    """
+    Full health check. Returns HTTP 503 if any critical service is down.
+    Used by Docker HEALTHCHECK and uptime monitors.
+    """
     # 1. Check DB
     db_status = "ok"
     try:
@@ -21,7 +33,11 @@ def get_health(db: Session = Depends(get_db)):
         db_status = "error"
 
     # 2. Check Worker
-    worker_status = "ok" if worker.is_running else "not_running"
+    worker_disabled = os.environ.get("KNIGHTMIND_WORKER_DISABLED") == "true"
+    if worker_disabled:
+        worker_status = "disabled"
+    else:
+        worker_status = "ok" if worker.is_running else "not_running"
 
     # 3. Check Stockfish
     engine_ok, _ = is_engine_available()
@@ -33,13 +49,44 @@ def get_health(db: Session = Depends(get_db)):
         "built_at": os.environ.get("BUILD_TIME", datetime.now(timezone.utc).isoformat())
     }
 
-    return {
-        "ok": db_status == "ok" and worker_status == "ok",
+    all_ok = db_status == "ok" and worker_status in ("ok", "disabled")
+    body = {
+        "ok": all_ok,
         "db": db_status,
         "worker": worker_status,
         "stockfish": stockfish_status,
-        "version": version
+        "version": version,
     }
+
+    status_code = 200 if all_ok else 503
+    return JSONResponse(content=body, status_code=status_code)
+
+
+@router.get("/ready")
+def get_ready(db: Session = Depends(get_db)):
+    """
+    Readiness probe. Returns 200 only when the API can serve traffic:
+    DB is reachable AND Stockfish is available.
+    Lighter than /health (skips worker check) — suitable for load balancer routing.
+    """
+    # DB check
+    db_ok = True
+    try:
+        db.execute(text("SELECT 1"))
+    except Exception:
+        db_ok = False
+
+    # Stockfish check
+    engine_ok, _ = is_engine_available()
+
+    ready = db_ok and engine_ok
+    body = {
+        "ready": ready,
+        "db": "ok" if db_ok else "error",
+        "stockfish": "ok" if engine_ok else "missing",
+    }
+    status_code = 200 if ready else 503
+    return JSONResponse(content=body, status_code=status_code)
 
 @router.get("/status")
 def get_ops_status(db: Session = Depends(get_db)):
