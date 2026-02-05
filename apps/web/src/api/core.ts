@@ -1,6 +1,5 @@
-// Use the Vite dev proxy `/api` base so all frontend requests share the same origin.
-// If you need a different base in the future, adjust it here rather than calling raw URLs.
-export const API_BASE = '/api';
+// Use VITE_API_BASE env var in production, fallback to /api for local dev proxy.
+export const API_BASE = import.meta.env.VITE_API_BASE || '/api';
 
 /** The actual backend URL the proxy forwards to (injected at build time). */
 export const API_TARGET: string = typeof __API_TARGET__ !== 'undefined' ? __API_TARGET__ : 'unknown';
