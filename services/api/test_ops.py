@@ -19,21 +19,24 @@ def test_db_instance(monkeypatch):
     """
     db_filename = f"test_ops_{uuid.uuid4()}.db"
     db_url = f"sqlite:///./{db_filename}"
-    
+
     # Create engine for this specific test
     # Use NullPool to ensure connections are closed promptly, avoiding file locks
     engine = create_engine(db_url, connect_args={"check_same_thread": False}, poolclass=NullPool)
     TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-    
+
+    # Disable worker for tests (so health check doesn't fail)
+    monkeypatch.setenv("KNIGHTMIND_WORKER_DISABLED", "true")
+
     # CRITICAL: Monkeypatch EVERYTHING to use this specific engine/session
     from services.api import db as db_module
     from services.api import worker as worker_module
-    
+
     monkeypatch.setattr(db_module, "SQLALCHEMY_DATABASE_URL", db_url)
     monkeypatch.setattr(db_module, "engine", engine)
     monkeypatch.setattr(db_module, "SessionLocal", TestingSessionLocal)
     monkeypatch.setattr(worker_module, "SessionLocal", TestingSessionLocal)
-    
+
     try:
         from services.api import main as main_module
         monkeypatch.setattr(main_module, "SessionLocal", TestingSessionLocal)
@@ -45,7 +48,7 @@ def test_db_instance(monkeypatch):
     # Ensure models are imported so they are registered in Base
     import services.api.models
     Base.metadata.create_all(bind=engine)
-    
+
     yield TestingSessionLocal
 
     # Teardown
@@ -69,25 +72,56 @@ def db_session(test_db_instance):
 def client(db_session):
     from services.api.main import app
     from services.api.db import get_db
-    
+
     # Override dependency to use our test session
     app.dependency_overrides[get_db] = lambda: db_session
-    
+
     with TestClient(app) as c:
         yield c
-    
+
     app.dependency_overrides.clear()
 
-def test_health_endpoint(client):
+def test_ping_endpoint(client):
+    response = client.get("/ops/ping")
+    assert response.status_code == 200
+    assert response.json()["status"] == "pong"
+
+def test_health_endpoint(client, monkeypatch):
+    from services.api import ops as ops_module
+    # Mock stockfish as available so health check passes
+    monkeypatch.setattr(ops_module, "is_engine_available", lambda: (True, "OK"))
+
     response = client.get("/ops/health")
     assert response.status_code == 200
     data = response.json()
+    assert data["db"] == "ok"
+    assert data["stockfish"] == "ok"
+
+def test_health_returns_version(client, monkeypatch):
+    from services.api import ops as ops_module
+    # Mock stockfish as available so health check passes
+    monkeypatch.setattr(ops_module, "is_engine_available", lambda: (True, "OK"))
+
+    response = client.get("/ops/health")
+    data = response.json()
+    assert "version" in data
+    assert "sha" in data["version"]
+
+def test_ready_endpoint(client):
+    response = client.get("/ops/ready")
+    # Stockfish may or may not be available in test env,
+    # but the endpoint should return a valid response either way.
+    assert response.status_code in (200, 503)
+    data = response.json()
+    assert "ready" in data
+    assert "db" in data
+    assert "stockfish" in data
     assert data["db"] == "ok"
 
 def test_ops_status_basic(client, db_session):
     from services.api.models import Job, JobStatus
     from datetime import datetime, timezone, timedelta
-    
+
     job1 = Job(
         type="puzzle_generation",
         username="testuser",
@@ -207,7 +241,7 @@ def test_cancel_job_returns_error_field(client, db_session):
 
 def test_ops_status_active_job(client, db_session):
     from services.api.models import Job, JobStatus
-    
+
     job = Job(
         type="puzzle_generation",
         username="active_user",
@@ -224,3 +258,63 @@ def test_ops_status_active_job(client, db_session):
     assert data["active_job"] is not None
     assert data["active_job"]["username"] == "active_user"
     assert data["active_job"]["status"] == "running"
+
+
+# --- Failure path tests for /health and /ready endpoints ---
+
+def test_health_returns_503_when_stockfish_unavailable(client, monkeypatch):
+    """Test that /health returns 503 when Stockfish is not available."""
+    from services.api import ops as ops_module
+    monkeypatch.setattr(ops_module, "is_engine_available", lambda: (False, "Not found"))
+
+    response = client.get("/ops/health")
+    assert response.status_code == 503
+    data = response.json()
+    assert data["ok"] is False
+    assert data["stockfish"] == "missing"
+
+
+def test_health_returns_503_when_worker_not_running(client, monkeypatch):
+    """Test that /health returns 503 when the worker is not running."""
+    from services.api import ops as ops_module
+    from services.api import worker as worker_module
+
+    # Make stockfish available
+    monkeypatch.setattr(ops_module, "is_engine_available", lambda: (True, "OK"))
+    # Make worker appear stopped (and not disabled)
+    monkeypatch.delenv("KNIGHTMIND_WORKER_DISABLED", raising=False)
+    monkeypatch.setattr(worker_module.worker, "is_running", False)
+
+    response = client.get("/ops/health")
+    assert response.status_code == 503
+    data = response.json()
+    assert data["ok"] is False
+    assert data["worker"] == "not_running"
+
+
+def test_ready_returns_503_when_stockfish_unavailable(client, monkeypatch):
+    """Test that /ready returns 503 when Stockfish is not available."""
+    from services.api import ops as ops_module
+    monkeypatch.setattr(ops_module, "is_engine_available", lambda: (False, "Not found"))
+
+    response = client.get("/ops/ready")
+    assert response.status_code == 503
+    data = response.json()
+    assert data["ready"] is False
+    assert data["stockfish"] == "missing"
+    assert data["db"] == "ok"
+
+
+def test_health_ok_when_worker_disabled(client, monkeypatch):
+    """Test that /health returns 200 when worker is disabled (not an error state)."""
+    from services.api import ops as ops_module
+
+    # Make stockfish available
+    monkeypatch.setattr(ops_module, "is_engine_available", lambda: (True, "OK"))
+    # Worker is disabled via env var (set in fixture)
+
+    response = client.get("/ops/health")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ok"] is True
+    assert data["worker"] == "disabled"
