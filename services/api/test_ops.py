@@ -19,12 +19,12 @@ def test_db_instance(monkeypatch):
     """
     db_filename = f"test_ops_{uuid.uuid4()}.db"
     db_url = f"sqlite:///./{db_filename}"
-    
+
     # Create engine for this specific test
     # Use NullPool to ensure connections are closed promptly, avoiding file locks
     engine = create_engine(db_url, connect_args={"check_same_thread": False}, poolclass=NullPool)
     TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-    
+
     # Disable worker for tests (so health check doesn't fail)
     monkeypatch.setenv("KNIGHTMIND_WORKER_DISABLED", "true")
 
@@ -36,7 +36,7 @@ def test_db_instance(monkeypatch):
     monkeypatch.setattr(db_module, "engine", engine)
     monkeypatch.setattr(db_module, "SessionLocal", TestingSessionLocal)
     monkeypatch.setattr(worker_module, "SessionLocal", TestingSessionLocal)
-    
+
     try:
         from services.api import main as main_module
         monkeypatch.setattr(main_module, "SessionLocal", TestingSessionLocal)
@@ -48,7 +48,7 @@ def test_db_instance(monkeypatch):
     # Ensure models are imported so they are registered in Base
     import services.api.models
     Base.metadata.create_all(bind=engine)
-    
+
     yield TestingSessionLocal
 
     # Teardown
@@ -72,13 +72,13 @@ def db_session(test_db_instance):
 def client(db_session):
     from services.api.main import app
     from services.api.db import get_db
-    
+
     # Override dependency to use our test session
     app.dependency_overrides[get_db] = lambda: db_session
-    
+
     with TestClient(app) as c:
         yield c
-    
+
     app.dependency_overrides.clear()
 
 def test_ping_endpoint(client):
@@ -121,7 +121,7 @@ def test_ready_endpoint(client):
 def test_ops_status_basic(client, db_session):
     from services.api.models import Job, JobStatus
     from datetime import datetime, timezone, timedelta
-    
+
     job1 = Job(
         type="puzzle_generation",
         username="testuser",
