@@ -1,0 +1,55 @@
+# Dependencies & virtual environments
+node_modules/
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Frontend (not needed in API image)
+apps/
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+
+# IDE & editor
+.vscode/
+.idea/
+.cursor/
+*.swp
+*.swo
+
+# Git
+.git/
+.gitignore
+
+# Environment files (secrets – use env_file or Docker secrets)
+.env
+.env.*
+!.env.example
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Data & databases
+data/
+*.db
+*.sqlite3
+
+# Testing & coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Docs (not needed at runtime)
+docs/
+
+# CI & misc
+.github/
+render.yaml
+CLAUDE.md
+AGENTS.md
+WARP.md
+README.md

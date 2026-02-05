@@ -22,7 +22,20 @@ A platform for analyzing chess games, tracking progress, and gaining insights us
 - FastAPI (Python)
 - Postgres (metadata storage)
 - Optional: Neo4j (graph analysis, future)
-- Stockfish (chess engine analysis service)
+- Stockfish (local binary, chess engine analysis)
+
+## Infrastructure & Deployment
+
+### Current State
+- **Database**: Migrated from SQLite to Supabase (PostgreSQL). Migration complete (~65k games).
+- **RLS**: Enabled on all tables, no policies (FastAPI connects as DB owner, bypasses RLS).
+- **API**: FastAPI connects to Postgres via `DATABASE_URL` (direct connection string, not Supabase client SDK).
+- **Stockfish**: Local binary (`STOCKFISH_PATH`), not a separate service.
+
+### Target Architecture (planned)
+- **Hetzner VPS (64GB RAM)**: FastAPI + Stockfish + Postgres — all on one machine.
+- **Frontend**: React/Vite static site deployed to Vercel or Cloudflare Pages.
+- **Supabase**: To be replaced by self-hosted Postgres on Hetzner.
 
 ## Development Rules
 

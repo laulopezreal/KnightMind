@@ -9,7 +9,7 @@ You are implementing 5 features for the Library puzzle exploration surface in Kn
 **KnightMind** lets users import their chess.com games, auto-generate tactical puzzles from their mistakes, and train with spaced repetition.
 
 **Tech stack:**
-- Backend: FastAPI (Python), SQLAlchemy ORM, SQLite/Postgres
+- Backend: FastAPI (Python), SQLAlchemy ORM, Postgres
 - Frontend: React + Vite + TypeScript, Tailwind CSS
 - Tests: pytest (backend), vitest + @testing-library/react (frontend)
 
@@ -127,14 +127,6 @@ def _swing_to_difficulty(swing: float) -> str:
     if swing < 5.0:
         return "medium"
     return "hard"
-
-def _difficulty_to_swing_range(difficulty: str) -> tuple[float, float | None]:
-    """Return (min_swing, max_swing) for a difficulty bucket. max is None for 'hard'."""
-    if difficulty == "easy":
-        return (0.0, 2.0)
-    if difficulty == "medium":
-        return (2.0, 5.0)
-    return (5.0, None)  # hard
 ```
 
 #### List Puzzles Endpoint (`services/api/main.py:791-956`)
@@ -637,32 +629,22 @@ async def get_similar_puzzles(
     # If motif match found too few, fall back to difficulty bucket
     if len(rows) < limit and motif:
         diff_bucket = _swing_to_difficulty(puzzle.swing)
-        swing_min, swing_max = _difficulty_to_swing_range(diff_bucket)
-        existing_ids = [r[0].id for r in rows]
-
-        # Build fallback query that filters by difficulty in the DB
-        # to avoid fetching all user puzzles into memory
-        fallback_conditions = [
-            PuzzleModel.username == username_lower,
-            PuzzleModel.id != puzzle_id,
-            PuzzleModel.id.notin_(existing_ids),
-            PuzzleModel.swing >= swing_min,
-            PuzzleStats.primary_motif != motif,  # Exclude primary motif puzzles
-        ]
-        if swing_max is not None:
-            fallback_conditions.append(PuzzleModel.swing < swing_max)
-
         stmt_fallback = (
             select(PuzzleModel, PuzzleStats)
             .outerjoin(
                 PuzzleStats,
                 (PuzzleModel.id == PuzzleStats.puzzle_id) & (PuzzleStats.username == username_lower)
             )
-            .where(*fallback_conditions)
-            .limit(limit - len(rows))
+            .where(PuzzleModel.username == username_lower)
+            .where(PuzzleModel.id != puzzle_id)
         )
         fallback_rows = db.execute(stmt_fallback).all()
-        rows.extend(fallback_rows)
+        existing_ids = {r[0].id for r in rows}
+        for r in fallback_rows:
+            if r[0].id not in existing_ids and _swing_to_difficulty(r[0].swing) == diff_bucket:
+                rows.append(r)
+                if len(rows) >= limit:
+                    break
 
     # Sort by swing proximity
     rows.sort(key=lambda r: abs(r[0].swing - puzzle.swing))
@@ -1054,4 +1036,4 @@ After implementing each feature:
 4. **Build:** `cd apps/web && npm run build`
 5. **Manual verification:** Start dev servers, navigate to `/library`, test each feature interactively.
 
-For the saved puzzles feature specifically, verify that `Base.metadata.create_all()` picks up the new column (it should for SQLite in dev).
+For the saved puzzles feature specifically, verify that Alembic migrations pick up the new column (`alembic upgrade head`).
