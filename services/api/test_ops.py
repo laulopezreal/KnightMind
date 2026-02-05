@@ -25,10 +25,13 @@ def test_db_instance(monkeypatch):
     engine = create_engine(db_url, connect_args={"check_same_thread": False}, poolclass=NullPool)
     TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
     
+    # Disable worker for tests (so health check doesn't fail)
+    monkeypatch.setenv("KNIGHTMIND_WORKER_DISABLED", "true")
+
     # CRITICAL: Monkeypatch EVERYTHING to use this specific engine/session
     from services.api import db as db_module
     from services.api import worker as worker_module
-    
+
     monkeypatch.setattr(db_module, "SQLALCHEMY_DATABASE_URL", db_url)
     monkeypatch.setattr(db_module, "engine", engine)
     monkeypatch.setattr(db_module, "SessionLocal", TestingSessionLocal)
@@ -269,7 +272,8 @@ def test_health_returns_503_when_worker_not_running(client, monkeypatch):
 
     # Make stockfish available
     monkeypatch.setattr(ops_module, "is_engine_available", lambda: (True, "OK"))
-    # Make worker appear stopped
+    # Make worker appear stopped (and not disabled)
+    monkeypatch.delenv("KNIGHTMIND_WORKER_DISABLED", raising=False)
     monkeypatch.setattr(worker_module.worker, "is_running", False)
 
     response = client.get("/ops/health")
@@ -290,3 +294,18 @@ def test_ready_returns_503_when_stockfish_unavailable(client, monkeypatch):
     assert data["ready"] is False
     assert data["stockfish"] == "missing"
     assert data["db"] == "ok"
+
+
+def test_health_ok_when_worker_disabled(client, monkeypatch):
+    """Test that /health returns 200 when worker is disabled (not an error state)."""
+    from services.api import ops as ops_module
+
+    # Make stockfish available
+    monkeypatch.setattr(ops_module, "is_engine_available", lambda: (True, "OK"))
+    # Worker is disabled via env var (set in fixture)
+
+    response = client.get("/ops/health")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ok"] is True
+    assert data["worker"] == "disabled"

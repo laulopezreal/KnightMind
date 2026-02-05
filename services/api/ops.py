@@ -33,7 +33,11 @@ def get_health(db: Session = Depends(get_db)):
         db_status = "error"
 
     # 2. Check Worker
-    worker_status = "ok" if worker.is_running else "not_running"
+    worker_disabled = os.environ.get("KNIGHTMIND_WORKER_DISABLED") == "true"
+    if worker_disabled:
+        worker_status = "disabled"
+    else:
+        worker_status = "ok" if worker.is_running else "not_running"
 
     # 3. Check Stockfish
     engine_ok, _ = is_engine_available()
@@ -45,7 +49,7 @@ def get_health(db: Session = Depends(get_db)):
         "built_at": os.environ.get("BUILD_TIME", datetime.now(timezone.utc).isoformat())
     }
 
-    all_ok = db_status == "ok" and worker_status == "ok" and stockfish_status == "ok"
+    all_ok = db_status == "ok" and worker_status in ("ok", "disabled") and stockfish_status == "ok"
     body = {
         "ok": all_ok,
         "db": db_status,
