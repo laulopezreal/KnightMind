@@ -24,7 +24,12 @@ export default function Puzzles() {
     const [userMove, setUserMove] = useState('');
     const [status, setStatus] = useState<PuzzleStatus>('solving');
     const [showUciInput, setShowUciInput] = useState(false);
-    const [activeJobId, setActiveJobId] = useState<string | null>(null);
+    // Load persisted job ID from local storage, synced with username
+    const [activeJobId, setActiveJobId] = useState<string | null>(() => {
+        if (!username) return null;
+        return localStorage.getItem(`knightmind:lastJob:${username}`);
+    });
+    const prevUsernameRef = useRef(username);
     const [game, setGame] = useState(new Chess());
 
     // Get motif filter and warmup mode from URL query params
@@ -101,16 +106,14 @@ export default function Puzzles() {
     const finishButtonDisabled = isFinalPuzzle ? sessionState !== 'active' : false;
     const controlsEnabled = sessionState === 'idle' || sessionState === 'error';
 
-    // Load persisted job ID from local storage on mount or username change
-    useEffect(() => {
-        if (!username) return;
-        const savedJobId = localStorage.getItem(`knightmind:lastJob:${username}`);
-        if (savedJobId) {
-            setActiveJobId(savedJobId);
-        } else {
-            setActiveJobId(null);
-        }
-    }, [username]);
+    // Sync activeJobId when username changes (during render, not in effect)
+    if (prevUsernameRef.current !== username) {
+        prevUsernameRef.current = username;
+        const savedJobId = username
+            ? localStorage.getItem(`knightmind:lastJob:${username}`)
+            : null;
+        setActiveJobId(savedJobId);
+    }
 
     const { job, isPolling: isJobPolling } = useJobPolling(activeJobId, {
         enabled: !!activeJobId,
@@ -300,9 +303,16 @@ export default function Puzzles() {
         }
     };
 
+    // Sync game board when puzzle changes (setState during render, not in effect)
+    const prevPuzzleRef = useRef(currentPuzzle);
+    if (currentPuzzle && currentPuzzle !== prevPuzzleRef.current) {
+        prevPuzzleRef.current = currentPuzzle;
+        setGame(new Chess(currentPuzzle.fen));
+    }
+
+    // Reset clue and start timer when puzzle changes (side effects in effect)
     useEffect(() => {
         if (currentPuzzle) {
-            setGame(new Chess(currentPuzzle.fen));
             clueReset();
             startPuzzleTimer();
         }
