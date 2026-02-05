@@ -86,13 +86,22 @@ def test_ping_endpoint(client):
     assert response.status_code == 200
     assert response.json()["status"] == "pong"
 
-def test_health_endpoint(client):
+def test_health_endpoint(client, monkeypatch):
+    from services.api import ops as ops_module
+    # Mock stockfish as available so health check passes
+    monkeypatch.setattr(ops_module, "is_engine_available", lambda: (True, "OK"))
+
     response = client.get("/ops/health")
     assert response.status_code == 200
     data = response.json()
     assert data["db"] == "ok"
+    assert data["stockfish"] == "ok"
 
-def test_health_returns_version(client):
+def test_health_returns_version(client, monkeypatch):
+    from services.api import ops as ops_module
+    # Mock stockfish as available so health check passes
+    monkeypatch.setattr(ops_module, "is_engine_available", lambda: (True, "OK"))
+
     response = client.get("/ops/health")
     data = response.json()
     assert "version" in data
@@ -232,7 +241,7 @@ def test_cancel_job_returns_error_field(client, db_session):
 
 def test_ops_status_active_job(client, db_session):
     from services.api.models import Job, JobStatus
-    
+
     job = Job(
         type="puzzle_generation",
         username="active_user",
@@ -249,3 +258,63 @@ def test_ops_status_active_job(client, db_session):
     assert data["active_job"] is not None
     assert data["active_job"]["username"] == "active_user"
     assert data["active_job"]["status"] == "running"
+
+
+# --- Failure path tests for /health and /ready endpoints ---
+
+def test_health_returns_503_when_stockfish_unavailable(client, monkeypatch):
+    """Test that /health returns 503 when Stockfish is not available."""
+    from services.api import ops as ops_module
+    monkeypatch.setattr(ops_module, "is_engine_available", lambda: (False, "Not found"))
+
+    response = client.get("/ops/health")
+    assert response.status_code == 503
+    data = response.json()
+    assert data["ok"] is False
+    assert data["stockfish"] == "missing"
+
+
+def test_health_returns_503_when_worker_not_running(client, monkeypatch):
+    """Test that /health returns 503 when the worker is not running."""
+    from services.api import ops as ops_module
+    from services.api import worker as worker_module
+
+    # Make stockfish available
+    monkeypatch.setattr(ops_module, "is_engine_available", lambda: (True, "OK"))
+    # Make worker appear stopped (and not disabled)
+    monkeypatch.delenv("KNIGHTMIND_WORKER_DISABLED", raising=False)
+    monkeypatch.setattr(worker_module.worker, "is_running", False)
+
+    response = client.get("/ops/health")
+    assert response.status_code == 503
+    data = response.json()
+    assert data["ok"] is False
+    assert data["worker"] == "not_running"
+
+
+def test_ready_returns_503_when_stockfish_unavailable(client, monkeypatch):
+    """Test that /ready returns 503 when Stockfish is not available."""
+    from services.api import ops as ops_module
+    monkeypatch.setattr(ops_module, "is_engine_available", lambda: (False, "Not found"))
+
+    response = client.get("/ops/ready")
+    assert response.status_code == 503
+    data = response.json()
+    assert data["ready"] is False
+    assert data["stockfish"] == "missing"
+    assert data["db"] == "ok"
+
+
+def test_health_ok_when_worker_disabled(client, monkeypatch):
+    """Test that /health returns 200 when worker is disabled (not an error state)."""
+    from services.api import ops as ops_module
+
+    # Make stockfish available
+    monkeypatch.setattr(ops_module, "is_engine_available", lambda: (True, "OK"))
+    # Worker is disabled via env var (set in fixture)
+
+    response = client.get("/ops/health")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ok"] is True
+    assert data["worker"] == "disabled"
