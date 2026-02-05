@@ -65,7 +65,7 @@ export function HeroTrainCard({
         </div>
 
         {/* Right: Due Count + CTA + Next Review */}
-        <div className="flex flex-col items-center text-center shrink-0 md:min-w-[180px]">
+        <div className="flex flex-col items-center text-center shrink-0 md:min-w-44">
           <div className="mb-4">
             <p className="text-4xl md:text-5xl font-mono text-primary leading-none">
               {dueCount}
