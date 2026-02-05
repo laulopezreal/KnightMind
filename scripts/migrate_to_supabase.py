@@ -104,7 +104,7 @@ def run_alembic_migrations(pg_url: str) -> None:
 def copy_data(pg_url: str) -> None:
     """Read all rows from SQLite and insert into PostgreSQL using psycopg v3."""
     import json as json_mod
-    from urllib.parse import urlparse, unquote
+    from urllib.parse import urlparse
     import psycopg
     from psycopg.types.json import Jsonb
 
@@ -129,31 +129,24 @@ def copy_data(pg_url: str) -> None:
     sqlite_conn.row_factory = sqlite3.Row
     sqlite_cur = sqlite_conn.cursor()
 
-    # Build a libpq conninfo string from the URL components.
-    # We can't use urlparse because passwords with '#' break it
-    # (Python treats '#' as a fragment delimiter).
-    # Instead, use psycopg's own conninfo parser via make_conninfo
-    # with the raw URL converted to keyword args by regex.
-    import re as _re
-    m = _re.match(
-        r'postgresql(?:\+psycopg)?://([^:]+):(.+)@([^:]+):(\d+)/(.+)',
-        pg_url,
-    )
-    if not m:
-        print(f"ERROR: Could not parse connection URL.")
-        sys.exit(1)
-    pg_user, pg_pass, pg_host, pg_port, pg_dbname = m.groups()
+    # Use psycopg's built-in conninfo parsing for robustness.
+    # This handles special characters in passwords (e.g. '@', '#') correctly
+    # as long as they are properly URL-encoded in the connection string.
     try:
-        pg_conn = psycopg.connect(
-            host=pg_host,
-            port=int(pg_port),
-            user=unquote(pg_user),
-            password=unquote(pg_pass),
-            dbname=pg_dbname,
+        conninfo = psycopg.conninfo.make_conninfo(
+            pg_url,
             connect_timeout=10,
             options="-c lock_timeout=15000 -c statement_timeout=30000",
         )
+        pg_conn = psycopg.connect(conninfo)
     except Exception as exc:
+        pg_host, pg_port = "unknown", "unknown"
+        try:
+            parsed_url = urlparse(pg_url)
+            pg_host, pg_port = parsed_url.hostname, parsed_url.port
+        except Exception:
+            pass
+
         msg = str(exc).lower()
         if "timeout" in msg or "could not connect" in msg:
             print(
