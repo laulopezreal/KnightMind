@@ -226,7 +226,7 @@ export default function LibraryPuzzle() {
                                 onPieceDrop: ({ sourceSquare, targetSquare }) =>
                                     targetSquare ? onPieceDrop(sourceSquare, targetSquare) : false,
                                 boardOrientation: puzzle.side_to_move === 'white' ? 'white' : 'black',
-                                darkSquareStyle: { backgroundColor: 'var(--color-chess-brown-700)' },
+                                darkSquareStyle: { backgroundColor: 'var(--color-chess-board-dark)' },
                                 lightSquareStyle: { backgroundColor: 'var(--color-chess-cream-300)' },
                             }}
                         />

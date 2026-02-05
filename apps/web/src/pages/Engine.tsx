@@ -216,7 +216,7 @@ export default function Engine() {
                 arrows: showBestMove && evaluation ? [{ startSquare: evaluation.bestMove.slice(0, 2), endSquare: evaluation.bestMove.slice(2, 4), color: 'rgba(16, 185, 129, 0.8)' }] : [],
                 squareStyles: clue.squareStyles,
                 boardOrientation: "white",
-                darkSquareStyle: { backgroundColor: 'var(--color-chess-brown-700)' },
+                darkSquareStyle: { backgroundColor: 'var(--color-chess-board-dark)' },
                 lightSquareStyle: { backgroundColor: 'var(--color-chess-cream-300)' },
               }}
             />
