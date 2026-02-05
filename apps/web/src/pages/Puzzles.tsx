@@ -92,7 +92,7 @@ export default function Puzzles() {
         streak, bestStreak, hintsUsed, reviewedCount, performanceHistory,
         puzzles, currentIndex, isLoading, error, lastFeedback,
         setPuzzles, setCurrentIndex, setError, setLastFeedback,
-        setSessionSummary, setSessionState, setReviewedCount, setIsLoading,
+        setSessionSummary, setSessionState,
         handleStartSession, handleReviewPuzzle, handleUseHint,
         calculateRecentPerformance, getPerformanceTrend,
     } = session;
@@ -153,8 +153,6 @@ export default function Puzzles() {
     const isGenerating = isJobPolling || (job?.status === 'queued' || job?.status === 'running');
     const controlsDisabled = !controlsEnabled || isLoading || isGenerating;
     const generateNewDisabled = !controlsEnabled || isLoading || isGenerating || !userStatus?.has_new_games;
-    const loadPuzzlesDisabled = !username || isLoading || isGenerating || (sessionState !== 'idle' && sessionState !== 'error' && sessionState !== 'completed') || userStatus?.puzzles_count === 0;
-
     const handleGeneratePuzzles = async () => {
         if (!username.trim()) {
             setError('Please enter a username');
@@ -184,44 +182,6 @@ export default function Puzzles() {
                 setError(err instanceof Error ? err.message : 'Failed to generate puzzles');
             }
             setSessionState('error');
-        }
-    };
-
-    const handleLoadPuzzles = async () => {
-        if (!username.trim()) {
-            setError('Please enter a username');
-            return;
-        }
-        setSessionState('loading');
-        setIsLoading(true);
-        setError(null);
-
-        try {
-            const dailyPuzzles = await getDailyPuzzles(username.trim(), 5);
-            setPuzzles(dailyPuzzles.puzzles);
-            setCurrentIndex(0);
-            setStatus('solving');
-            setUserMove('');
-            setError(null);
-            setReviewedCount(0); // Reset reviewed count
-            if (dailyPuzzles.puzzles.length > 0) {
-                setSessionState('active');
-            } else {
-                setSessionState('error');
-            }
-        } catch (err) {
-            if (err instanceof ApiError) {
-                if (err.statusCode === 404) {
-                    setError('No puzzles found. Generate puzzles first or check back later when more are due.');
-                } else {
-                    setError(err.detail || err.message);
-                }
-            } else {
-                setError(err instanceof Error ? err.message : 'Failed to load puzzles');
-            }
-            setSessionState('error');
-        } finally {
-            setIsLoading(false);
         }
     };
 
@@ -339,6 +299,7 @@ export default function Puzzles() {
             setCurrentIndex(currentIndex + 1);
             setStatus('solving');
             setUserMove('');
+            setLastFeedback('');
             clue.reset();
         }
     };
@@ -413,21 +374,6 @@ export default function Puzzles() {
                                 Start Session
                             </button>
                         )}
-                        <button
-                            type="button"
-                            onClick={handleLoadPuzzles}
-                            disabled={loadPuzzlesDisabled}
-                            title={
-                                !username ? 'Set username to continue' :
-                                isLoading ? 'Loading puzzles...' :
-                                isGenerating ? 'Wait for generation to complete' :
-                                sessionState === 'active' ? 'Finish current session to reload puzzles' :
-                                userStatus?.puzzles_count === 0 ? 'Generate puzzles first' :
-                                'Load puzzles for training'
-                            }
-                            className={`px-6 py-2 border border-primary/20 text-primary rounded-sm font-serif transition-all km-focus-visible ${loadPuzzlesDisabled ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'}`}>
-                            {isLoading ? 'Loading...' : 'Load Puzzles'}
-                        </button>
                         <button
                             type="button"
                             onClick={handleGeneratePuzzles}
@@ -584,7 +530,7 @@ export default function Puzzles() {
                         <div className="bg-primary/5 border border-primary/10 rounded-sm p-6 backdrop-blur-sm text-center space-y-4">
                             <h3 className="font-serif text-xl text-primary">Ready to train</h3>
                             <p className="text-primary/60 font-sans">
-                                Click &quot;Load Puzzles&quot; to start a training session, or &quot;Generate New&quot; to create fresh puzzles from your games.
+                                Click &quot;Start Session&quot; to begin training, or &quot;Generate New&quot; to create fresh puzzles from your games.
                             </p>
                         </div>
                     )}
@@ -594,11 +540,11 @@ export default function Puzzles() {
                             <div className="flex flex-wrap justify-center gap-3">
                                 <button
                                     type="button"
-                                    onClick={handleLoadPuzzles}
+                                    onClick={handleStartSession}
                                     disabled={!canRetryLoad}
                                     className={`px-6 py-2 border border-primary/20 text-primary rounded-sm font-serif transition-all km-focus-visible ${!canRetryLoad ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'}`}
                                 >
-                                    Retry Load
+                                    Retry
                                 </button>
                                 {userStatus?.has_new_games && (
                                     <button
