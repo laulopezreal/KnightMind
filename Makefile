@@ -12,7 +12,8 @@
 
 .PHONY: help dev front back test test-front test-back lint lint-front lint-back \
         build build-front preflight preflight-front preflight-back \
-        migrate db-current kill
+        migrate db-current kill \
+        docker-up docker-down docker-build docker-logs docker-migrate docker-shell
 
 # Colors
 GREEN  := \033[0;32m
@@ -109,3 +110,30 @@ preflight-front: lint-front build-front ## Frontend preflight (lint + build)
 
 preflight-back: test-back lint-back db-current ## Backend preflight (tests + lint + migrations)
 	@echo "$(GREEN)Backend preflight passed.$(NC)"
+
+# ---------------------------------------------------------------------------
+# Docker
+# ---------------------------------------------------------------------------
+
+docker-up: ## Start API + Postgres via Docker Compose
+	@echo "$(GREEN)Starting Docker services...$(NC)"
+	docker compose up -d
+	@echo "$(GREEN)Services started. API at http://localhost:$${API_PORT:-8000}$(NC)"
+
+docker-down: ## Stop Docker Compose services
+	@echo "$(YELLOW)Stopping Docker services...$(NC)"
+	docker compose down
+
+docker-build: ## Rebuild the API Docker image
+	@echo "$(GREEN)Building API image...$(NC)"
+	docker compose build api
+
+docker-logs: ## Tail Docker Compose logs
+	docker compose logs -f
+
+docker-migrate: ## Run Alembic migrations inside the API container
+	@echo "$(GREEN)Running migrations in container...$(NC)"
+	docker compose exec api alembic -c services/api/alembic.ini upgrade head
+
+docker-shell: ## Open a shell in the running API container
+	docker compose exec api bash

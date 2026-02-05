@@ -25,10 +25,13 @@ def test_db_instance(monkeypatch):
     engine = create_engine(db_url, connect_args={"check_same_thread": False}, poolclass=NullPool)
     TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
     
+    # Disable worker for tests (so health check doesn't fail)
+    monkeypatch.setenv("KNIGHTMIND_WORKER_DISABLED", "true")
+
     # CRITICAL: Monkeypatch EVERYTHING to use this specific engine/session
     from services.api import db as db_module
     from services.api import worker as worker_module
-    
+
     monkeypatch.setattr(db_module, "SQLALCHEMY_DATABASE_URL", db_url)
     monkeypatch.setattr(db_module, "engine", engine)
     monkeypatch.setattr(db_module, "SessionLocal", TestingSessionLocal)
@@ -78,10 +81,32 @@ def client(db_session):
     
     app.dependency_overrides.clear()
 
+def test_ping_endpoint(client):
+    response = client.get("/ops/ping")
+    assert response.status_code == 200
+    assert response.json()["status"] == "pong"
+
 def test_health_endpoint(client):
     response = client.get("/ops/health")
     assert response.status_code == 200
     data = response.json()
+    assert data["db"] == "ok"
+
+def test_health_returns_version(client):
+    response = client.get("/ops/health")
+    data = response.json()
+    assert "version" in data
+    assert "sha" in data["version"]
+
+def test_ready_endpoint(client):
+    response = client.get("/ops/ready")
+    # Stockfish may or may not be available in test env,
+    # but the endpoint should return a valid response either way.
+    assert response.status_code in (200, 503)
+    data = response.json()
+    assert "ready" in data
+    assert "db" in data
+    assert "stockfish" in data
     assert data["db"] == "ok"
 
 def test_ops_status_basic(client, db_session):
