@@ -24,12 +24,11 @@ export default function Puzzles() {
     const [userMove, setUserMove] = useState('');
     const [status, setStatus] = useState<PuzzleStatus>('solving');
     const [showUciInput, setShowUciInput] = useState(false);
-    // Load persisted job ID from local storage, synced with username
     const [activeJobId, setActiveJobId] = useState<string | null>(() => {
         if (!username) return null;
         return localStorage.getItem(`knightmind:lastJob:${username}`);
     });
-    const prevUsernameRef = useRef(username);
+    const [prevUsername, setPrevUsername] = useState(username);
     const [game, setGame] = useState(new Chess());
 
     // Get motif filter and warmup mode from URL query params
@@ -109,8 +108,8 @@ export default function Puzzles() {
     const controlsEnabled = sessionState === 'idle' || sessionState === 'error';
 
     // Sync activeJobId when username changes (during render, not in effect)
-    if (prevUsernameRef.current !== username) {
-        prevUsernameRef.current = username;
+    if (prevUsername !== username) {
+        setPrevUsername(username);
         const savedJobId = username
             ? localStorage.getItem(`knightmind:lastJob:${username}`)
             : null;
@@ -266,9 +265,9 @@ export default function Puzzles() {
     };
 
     // Sync game board when puzzle changes (setState during render, not in effect)
-    const prevPuzzleRef = useRef(currentPuzzle);
-    if (currentPuzzle && currentPuzzle !== prevPuzzleRef.current) {
-        prevPuzzleRef.current = currentPuzzle;
+    const [prevPuzzle, setPrevPuzzle] = useState(currentPuzzle);
+    if (currentPuzzle && currentPuzzle !== prevPuzzle) {
+        setPrevPuzzle(currentPuzzle);
         setGame(new Chess(currentPuzzle.fen));
     }
 
