@@ -53,7 +53,9 @@ export default function Puzzles() {
     } = insights;
 
     const statusRef = useRef(status);
-    statusRef.current = status;
+    useEffect(() => {
+        statusRef.current = status;
+    }, [status]);
 
     const handleReviewPuzzleRef = useRef<((result: 'pass' | 'fail', timeMs?: number) => Promise<void>)>(async () => { });
 
