@@ -45,7 +45,7 @@ def get_health(db: Session = Depends(get_db)):
         "built_at": os.environ.get("BUILD_TIME", datetime.now(timezone.utc).isoformat())
     }
 
-    all_ok = db_status == "ok" and worker_status == "ok"
+    all_ok = db_status == "ok" and worker_status == "ok" and stockfish_status == "ok"
     body = {
         "ok": all_ok,
         "db": db_status,

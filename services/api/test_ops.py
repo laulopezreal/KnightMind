@@ -229,7 +229,7 @@ def test_cancel_job_returns_error_field(client, db_session):
 
 def test_ops_status_active_job(client, db_session):
     from services.api.models import Job, JobStatus
-    
+
     job = Job(
         type="puzzle_generation",
         username="active_user",
@@ -246,3 +246,47 @@ def test_ops_status_active_job(client, db_session):
     assert data["active_job"] is not None
     assert data["active_job"]["username"] == "active_user"
     assert data["active_job"]["status"] == "running"
+
+
+# --- Failure path tests for /health and /ready endpoints ---
+
+def test_health_returns_503_when_stockfish_unavailable(client, monkeypatch):
+    """Test that /health returns 503 when Stockfish is not available."""
+    from services.api import ops as ops_module
+    monkeypatch.setattr(ops_module, "is_engine_available", lambda: (False, "Not found"))
+
+    response = client.get("/ops/health")
+    assert response.status_code == 503
+    data = response.json()
+    assert data["ok"] is False
+    assert data["stockfish"] == "missing"
+
+
+def test_health_returns_503_when_worker_not_running(client, monkeypatch):
+    """Test that /health returns 503 when the worker is not running."""
+    from services.api import ops as ops_module
+    from services.api import worker as worker_module
+
+    # Make stockfish available
+    monkeypatch.setattr(ops_module, "is_engine_available", lambda: (True, "OK"))
+    # Make worker appear stopped
+    monkeypatch.setattr(worker_module.worker, "is_running", False)
+
+    response = client.get("/ops/health")
+    assert response.status_code == 503
+    data = response.json()
+    assert data["ok"] is False
+    assert data["worker"] == "not_running"
+
+
+def test_ready_returns_503_when_stockfish_unavailable(client, monkeypatch):
+    """Test that /ready returns 503 when Stockfish is not available."""
+    from services.api import ops as ops_module
+    monkeypatch.setattr(ops_module, "is_engine_available", lambda: (False, "Not found"))
+
+    response = client.get("/ops/ready")
+    assert response.status_code == 503
+    data = response.json()
+    assert data["ready"] is False
+    assert data["stockfish"] == "missing"
+    assert data["db"] == "ok"
