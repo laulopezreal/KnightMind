@@ -701,7 +701,7 @@ export default function Puzzles() {
                                     position: game.fen(),
                                     onPieceDrop: ({ sourceSquare, targetSquare }) => targetSquare ? onPieceDrop(sourceSquare, targetSquare) : false,
                                     boardOrientation: currentPuzzle.side_to_move === 'white' ? 'white' : 'black',
-                                    darkSquareStyle: { backgroundColor: 'var(--color-chess-brown-700)' },
+                                    darkSquareStyle: { backgroundColor: 'var(--color-chess-board-dark)' },
                                     lightSquareStyle: { backgroundColor: 'var(--color-chess-cream-300)' },
                                     squareStyles: clue.squareStyles,
                                 }}
