@@ -1,0 +1,22 @@
+name: Documentation improvement
+description: Suggest an improvement to README, docs, onboarding, or developer docs
+title: "docs: "
+labels: ["documentation"]
+body:
+  - type: textarea
+    id: gap
+    attributes:
+      label: Documentation gap
+      description: What was unclear, missing, or outdated?
+    validations:
+      required: true
+  - type: textarea
+    id: audience
+    attributes:
+      label: Who is affected?
+      placeholder: New users, contributors, maintainers, etc.
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Suggested change
+      description: What should be added or rewritten?
