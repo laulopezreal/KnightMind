@@ -61,7 +61,7 @@ export default function Sidebar() {
 
                     {/* Train (formerly Puzzles) with sub-items */}
                     <div>
-                        <NavItem to="/puzzles" label="Train" isActive={location.pathname === '/puzzles'} />
+                        <NavItem to="/puzzles" label="Train (Puzzles)" isActive={location.pathname === '/puzzles'} />
                         {isPuzzlesRoute && (
                             <div className="ml-6 mt-2 space-y-1 border-l border-primary/10 pl-2">
                                 <SubNavItem
