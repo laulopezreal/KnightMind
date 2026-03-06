@@ -6,6 +6,8 @@ import { useChessUsername } from '../context/ChessUsernameContext';
 import { OpeningGraph, type OpeningGraphHandle } from '../components/OpeningGraph';
 import { getWinRateColor } from '../utils/openings';
 import { useLocalStorage } from '../hooks/useLocalStorage';
+import { PageHeader } from '../components/PageHeader';
+import { DataStateEmpty, DataStateLoading } from '../components/DataState';
 
 function countAllNodes(node: OpeningNode): number {
   let count = 1;
@@ -80,11 +82,7 @@ export default function Openings() {
 
   return (
     <div className="space-y-8 animate-teedin">
-      {/* Header */}
-      <section className="mb-2">
-        <h1 className="text-4xl md:text-5xl font-serif text-primary mb-3">Opening Explorer</h1>
-        <p className="text-base text-primary/50 font-sans">{subtitle}</p>
-      </section>
+      <PageHeader title="Opening Explorer" subtitle={subtitle} />
 
       {/* Controls */}
       <section className="flex flex-wrap gap-4 items-center px-5 py-3 border border-primary/10 rounded-sm bg-primary/5 backdrop-blur-sm">
@@ -135,17 +133,23 @@ export default function Openings() {
       {/* Graph */}
       <section className="relative min-h-[300px] md:min-h-[500px] max-h-[70vh] bg-primary/5 border border-primary/10 rounded-sm overflow-hidden">
         {!treeData && !loading && !error && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center">
-            <span className="text-9xl font-serif text-primary/10">♔</span>
-            <p className="mt-4 text-primary/30 font-sans text-sm">
-              Load your openings to see your repertoire
-            </p>
+          <div className="absolute inset-0 flex items-center justify-center px-6">
+            <div className="w-full max-w-xl">
+              <DataStateEmpty
+                title="No opening data loaded"
+                description="Load your openings to visualize your repertoire and performance by move."
+                actionLabel="Load Openings"
+                onAction={handleFetchClick}
+              />
+            </div>
           </div>
         )}
 
         {loading && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center">
-            <p className="font-serif text-xl animate-pulse text-primary/60">Tracing paths...</p>
+          <div className="absolute inset-0 flex items-center justify-center px-6">
+            <div className="w-full max-w-xl">
+              <DataStateLoading label="Tracing paths..." />
+            </div>
           </div>
         )}
 

@@ -162,6 +162,13 @@ If an environment ever needs a different base, update `API_BASE` in `apps/web/sr
 - Once a user has set their Chess.com username, the home screen emphasizes exploration and treats game syncing as an optional “Sync” action rather than a primary prompt to import games.
 - Syncing reports “No new games found” when existing games are already in the database.
 - Engine Analysis “Clue” mirrors the puzzle flow: first reveals which piece to move, then highlights the from/to squares for the best move. Analysis auto-runs after board changes, with manual re-run available.
+- UI improvement proposals are prioritized for maximum visible impact with minimal engineering effort, assuming no backend/API contract changes are required for the first pass.
+- Mobile navigation polish assumes existing routes and username/theme controls remain functionally unchanged (visual/responsive updates only).
+- Shared page UI primitives (header + data states) are intentionally lightweight and style-only, so product copy and API behavior remain unchanged in this pass.
+- This consistency pass extends shared header/error patterns to Library, Rating Insights, and Engine without changing filtering, analysis, or rating calculation logic.
+- Loading-state consistency in Library, Rating Insights, and Engine is presentational only; fetch cadence and existing async behavior are intentionally unchanged.
+- Session-window loading in Rating Insights now uses the shared loading primitive for visual consistency only, with identical session-fetch logic.
+- Opening Explorer graph-loading state now uses the shared loading primitive; rendering and fetch flow are unchanged.
 
 ## Admin Ops Utilities
 

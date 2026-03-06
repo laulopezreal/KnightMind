@@ -78,7 +78,7 @@ describe('Openings', () => {
     mockGetOpenings.mockReturnValue(new Promise(() => {}));
     render(<Openings />);
 
-    expect(screen.getByText('Tracing paths...')).toBeInTheDocument();
+    expect(screen.getByRole('status')).toBeInTheDocument();
   });
 
   it('should show error when fetch fails', async () => {

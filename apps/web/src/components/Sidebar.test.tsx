@@ -28,7 +28,7 @@ describe('Sidebar', () => {
     expect(screen.getByText('Dashboard')).toBeInTheDocument();
     expect(screen.getByText('Openings')).toBeInTheDocument();
     expect(screen.getByText('Engine')).toBeInTheDocument();
-    expect(screen.getByText('Puzzles')).toBeInTheDocument();
+    expect(screen.getByText('Train')).toBeInTheDocument();
     expect(screen.getByText('Insights')).toBeInTheDocument();
     expect(screen.getByText('Ratings')).toBeInTheDocument();
     expect(screen.getByText('Ops')).toBeInTheDocument();

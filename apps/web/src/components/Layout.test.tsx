@@ -56,7 +56,7 @@ describe('Layout', () => {
       </Layout>
     );
 
-    expect(screen.getByTestId('theme-toggle')).toBeInTheDocument();
+    expect(screen.getAllByTestId('theme-toggle').length).toBeGreaterThan(0);
   });
 
   it('should render report problem button', () => {
