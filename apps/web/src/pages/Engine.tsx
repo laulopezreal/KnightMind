@@ -4,6 +4,8 @@ import { Chessboard } from 'react-chessboard';
 import { Chess } from 'chess.js';
 import { evaluateFen, getEngineStatus, ApiError } from '../api';
 import { useClue } from '../hooks/useClue';
+import { PageHeader } from '../components/PageHeader';
+import { DataStateError, DataStateLoading } from '../components/DataState';
 
 const STARTING_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
 
@@ -194,10 +196,10 @@ export default function Engine() {
             {engineAvailable === null ? 'Checking' : engineAvailable ? 'Engine ready' : 'Engine offline'}
           </div>
           <div className="space-y-4 pr-32">
-            <h1 className="text-4xl md:text-5xl font-serif text-primary">Engine Analysis</h1>
-            <p className="text-sm text-primary/60 font-sans max-w-xl leading-relaxed">
-              Evaluate any position and surface the best next move.
-            </p>
+            <PageHeader
+              title="Engine Analysis"
+              subtitle="Evaluate any position and surface the best next move."
+            />
             <p className="text-xs font-sans uppercase tracking-widest text-primary/40">
               Drag pieces or paste a FEN position
             </p>
@@ -264,16 +266,20 @@ export default function Engine() {
                   {formatEval(evaluation.eval)}
                 </span>
               ) : loading ? (
-                <span className="text-primary/40 font-serif italic animate-pulse">Calculating…</span>
+                <DataStateLoading label="Calculating..." compact />
               ) : (
                 <span className="text-primary/40 font-serif italic">Waiting for position</span>
               )}
             </div>
 
             {evaluationError && (
-              <div className="rounded-sm border border-red-500/20 bg-red-500/5 px-4 py-3 text-xs font-sans text-red-500">
-                {evaluationError}
-              </div>
+              <DataStateError
+                message={evaluationError}
+                onRetry={handleEvaluate}
+                retryLabel="Retry"
+                ariaLabel="Retry evaluating position"
+                compact
+              />
             )}
 
             {evaluation ? (

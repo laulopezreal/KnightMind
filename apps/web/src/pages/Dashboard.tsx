@@ -8,6 +8,8 @@ import { RecentlyTrickyCard } from '../components/RecentlyTrickyCard';
 import { MomentumCard } from '../components/MomentumCard';
 import { StreakCard } from '../components/StreakCard';
 import { RecentSessionsCard } from '../components/RecentSessionsCard';
+import { PageHeader } from '../components/PageHeader';
+import { DataStateError, DataStateLoading } from '../components/DataState';
 
 export default function Dashboard() {
     const { username } = useChessUsername();
@@ -93,43 +95,23 @@ export default function Dashboard() {
     }, [loadDashboardData]);
 
     if (loading) {
-        return (
-            <div className="flex items-center justify-center min-h-screen" role="status" aria-live="polite">
-                <div className="animate-spin h-12 w-12 border-4 border-primary/20 border-t-primary rounded-full" aria-hidden="true" />
-                <span className="sr-only">Loading dashboard...</span>
-            </div>
-        );
+        return <DataStateLoading label="Loading dashboard..." />;
     }
 
     if (error || !dashboardData) {
         return (
-            <div className="max-w-md mx-auto mt-32 text-center" role="alert" aria-live="assertive">
-                <p className="text-red-500 mb-4">
-                    {error || 'Failed to load dashboard data'}
-                </p>
-                <button
-                    type="button"
-                    onClick={() => window.location.reload()}
-                    className="px-6 py-2 border border-primary/20 rounded-sm km-interactive km-focus-visible"
-                    aria-label="Retry loading dashboard"
-                >
-                    Retry
-                </button>
-            </div>
+            <DataStateError
+                message={error || 'Failed to load dashboard data'}
+                onRetry={loadDashboardData}
+                retryLabel="Retry"
+                ariaLabel="Retry loading dashboard"
+            />
         );
     }
 
     return (
         <main className="container mx-auto p-6 max-w-7xl space-y-8">
-            {/* Header */}
-            <section>
-                <h1 className="text-4xl md:text-5xl font-serif text-primary mb-2">
-                    Dashboard
-                </h1>
-                <p className="text-lg text-primary/60 font-sans">
-                    Your chess training overview
-                </p>
-            </section>
+            <PageHeader title="Dashboard" subtitle="Your chess training overview" />
 
             {/* SECTION 1: Hero Train Card */}
             <HeroTrainCard

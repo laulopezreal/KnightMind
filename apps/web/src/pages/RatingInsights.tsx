@@ -4,6 +4,8 @@ import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceD
 import { useChessUsername } from '../context/ChessUsernameContext';
 import { createSnapshot, getRatingExplain, getRatingHistory, type ExplainResponse, type HighlightGame, type SnapshotResponse, type SnapshotHistoryItem } from '../api/ratings';
 import { getRecentSessions } from '../api/sessions';
+import { PageHeader } from '../components/PageHeader';
+import { DataStateError, DataStateLoading } from '../components/DataState';
 
 const LS_KEYS = {
     RATINGS_TIME_CONTROL: 'knightmind:ratings:time_control',
@@ -215,12 +217,10 @@ export default function RatingInsights() {
     return (
         <div className="space-y-12 animate-teedin pb-20">
             <section className="flex flex-col md:flex-row justify-between items-end gap-6">
-                <div>
-                    <h1 className="text-4xl md:text-5xl font-serif text-primary mb-4">Rating Insights</h1>
-                    <p className="text-lg text-primary/60 font-sans max-w-2xl">
-                        Understand your progress using session-based drivers.
-                    </p>
-                </div>
+                <PageHeader
+                    title="Rating Insights"
+                    subtitle="Understand your progress using session-based drivers."
+                />
 
                 <div className="flex flex-wrap gap-4 items-start">
                     {/* Window Selector */}
@@ -255,9 +255,9 @@ export default function RatingInsights() {
                             </p>
                         )}
                         {sessionsLoading && (
-                            <p className="text-[10px] text-primary/40 font-sans ml-1 uppercase tracking-wider">
-                                Loading sessions...
-                            </p>
+                            <div className="ml-1">
+                                <DataStateLoading label="Loading sessions..." compact />
+                            </div>
                         )}
                         {hasSessions === true && (
                             <p className="text-[10px] text-primary/40 font-sans ml-1 uppercase tracking-wider">
@@ -305,12 +305,18 @@ export default function RatingInsights() {
                 </div>
             </section>
 
-            {error && <p className="text-red-500/80 font-sans">{error}</p>}
+            {error && (
+                <DataStateError
+                    message={error}
+                    onRetry={() => fetchData()}
+                    retryLabel="Retry"
+                    ariaLabel="Retry loading rating insights"
+                    compact
+                />
+            )}
 
             {loading && !data && (
-                <div className="py-20 text-center text-primary/40 font-serif animate-pulse">
-                    Analyzing games...
-                </div>
+                <DataStateLoading label="Analyzing games..." />
             )}
 
             {/* Latest Snapshot Confirmation Card */}

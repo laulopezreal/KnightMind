@@ -9,6 +9,8 @@ import {
     type PuzzleDifficulty,
     type PuzzleSort,
 } from '../api/puzzles';
+import { PageHeader } from '../components/PageHeader';
+import { DataStateError, DataStateLoading } from '../components/DataState';
 
 const PAGE_SIZE = 50;
 
@@ -190,10 +192,10 @@ export default function Library() {
     if (!username) {
         return (
             <div className="space-y-12 animate-teedin">
-                <section>
-                    <h1 className="text-4xl md:text-5xl font-serif text-primary mb-2">Library</h1>
-                    <p className="text-lg text-primary/60 font-sans">Puzzles from your own games. Every position here is a moment you can learn from.</p>
-                </section>
+                <PageHeader
+                    title="Library"
+                    subtitle="Puzzles from your own games. Every position here is a moment you can learn from."
+                />
                 <div className="bg-primary/5 border border-primary/10 rounded-sm p-6 text-center space-y-4">
                     <h3 className="font-serif text-xl text-primary">Set your username to get started</h3>
                     <button
@@ -211,12 +213,10 @@ export default function Library() {
     return (
         <div className="space-y-8 animate-teedin">
             {/* Header */}
-            <section>
-                <h1 className="text-4xl md:text-5xl font-serif text-primary mb-2">Library</h1>
-                <p className="text-lg text-primary/60 font-sans">
-                    Puzzles from your own games. Every position here is a moment you can learn from.
-                </p>
-            </section>
+            <PageHeader
+                title="Library"
+                subtitle="Puzzles from your own games. Every position here is a moment you can learn from."
+            />
 
             {/* Corpus stats */}
             {corpusStats && corpusStats.total > 0 && (
@@ -300,7 +300,7 @@ export default function Library() {
                 {/* Result count */}
                 <div className="text-xs font-sans text-primary/40">
                     {isLoading ? (
-                        <span className="animate-pulse">Loading...</span>
+                        <DataStateLoading label="Loading library puzzles..." compact />
                     ) : (
                         <span>{total} puzzle{total !== 1 ? 's' : ''}</span>
                     )}
@@ -309,9 +309,18 @@ export default function Library() {
 
             {/* Error */}
             {error && (
-                <div className="bg-red-500/10 border border-red-500/20 rounded-sm p-4 text-red-500 font-sans text-sm">
-                    {error}
-                </div>
+                <DataStateError
+                    message={error}
+                    onRetry={fetchPuzzles}
+                    retryLabel="Retry"
+                    ariaLabel="Retry loading library puzzles"
+                    compact
+                />
+            )}
+
+
+            {isLoading && puzzles.length === 0 && !error && (
+                <DataStateLoading label="Loading library puzzles..." />
             )}
 
             {/* Puzzle list */}
