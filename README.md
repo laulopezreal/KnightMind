@@ -2,6 +2,61 @@
 
 Personal Chess Intelligence Platform - Analyze your games, track progress, and gain insights.
 
+
+## Why KnightMind
+
+KnightMind helps improving chess players turn raw game history into clear, repeatable training decisions. Instead of generic puzzles, it generates personalized puzzles from your own mistakes and tracks progress over time.
+
+## Core Features
+
+- **Personalized puzzle generation** from your imported Chess.com games
+- **Spaced repetition training** to revisit the right puzzles at the right time
+- **Progress dashboards** for momentum, streaks, and recurring motifs
+- **Engine-assisted review** powered by local Stockfish
+
+## Quickstart
+
+1. Start backend (`services/api`) on `http://localhost:8000`
+2. Start frontend (`apps/web`) on `http://localhost:5173`
+3. Set Chess.com username in-app and run **Sync**
+4. Generate puzzles and begin training
+
+Detailed setup: [docs/onboarding.md](docs/onboarding.md)
+
+## Documentation
+
+- [Documentation index](docs/README.md)
+- [Onboarding](docs/onboarding.md)
+- [Architecture](docs/architecture.md)
+- [Discoverability audit](docs/discoverability-audit.md)
+
+## Findability (SEO & search intent)
+
+This repository is intentionally optimized for searches like:
+
+- "personal chess training app"
+- "chess game analysis platform"
+- "fastapi react chess dashboard"
+- "stockfish puzzle generator"
+
+Confirmed canonical public web URL is `https://knightmind.dev` (from `.env.example` production guidance). If this changes, update `apps/web/index.html`, `apps/web/public/robots.txt`, and `apps/web/public/sitemap.xml`.
+
+## GitHub Discoverability
+
+Recommended repository topics:
+
+- `chess`
+- `react`
+- `fastapi`
+- `stockfish`
+- `spaced-repetition`
+- `analytics`
+
+Contribution entry points:
+
+- Use the issue templates in `.github/ISSUE_TEMPLATE/` for bug reports, feature requests, and docs improvements.
+- Use `.github/pull_request_template.md` to keep PR context and validation consistent.
+
 ## Project Structure
 
 ```
