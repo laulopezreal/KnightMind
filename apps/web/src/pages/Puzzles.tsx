@@ -16,6 +16,7 @@ import { usePuzzleTimer } from '../hooks/usePuzzleTimer';
 import { useAchievements } from '../hooks/useAchievements';
 import { usePuzzleInsights } from '../hooks/usePuzzleInsights';
 import { usePuzzleSession, type PuzzleStatus } from '../hooks/usePuzzleSession';
+import { getModeLabels, getPuzzleActionA11yCopy, getSessionDetailsA11yCopy } from '../utils/a11yCopy';
 
 export default function Puzzles() {
     const { username, setEditorOpen } = useChessUsername();
@@ -38,6 +39,7 @@ export default function Puzzles() {
 
     // Warmup state
     const [warmupMode, setWarmupMode] = useState(isWarmupMode);
+    const [showSessionDetails, setShowSessionDetails] = useState(false);
 
     // Shared state: activeSessionId is needed by both timer and session hooks
     const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
@@ -52,9 +54,18 @@ export default function Puzzles() {
     } = insights;
 
     const statusRef = useRef(status);
+    const [previousSessionId, setPreviousSessionId] = useState<string | null>(null);
     useEffect(() => {
         statusRef.current = status;
     }, [status]);
+
+    // Keep advanced stats collapsed when a new session starts.
+    if (activeSessionId !== previousSessionId) {
+        setPreviousSessionId(activeSessionId);
+        if (activeSessionId) {
+            setShowSessionDetails(false);
+        }
+    }
 
     const handleReviewPuzzleRef = useRef<((result: 'pass' | 'fail', timeMs?: number) => Promise<void>)>(async () => { });
 
@@ -154,6 +165,33 @@ export default function Puzzles() {
     const isGenerating = isJobPolling || (job?.status === 'queued' || job?.status === 'running');
     const controlsDisabled = !controlsEnabled || isLoading || isGenerating;
     const generateNewDisabled = !controlsEnabled || isLoading || isGenerating || !userStatus?.has_new_games;
+    const { selectedModeLabel, screenReaderModeLabel } = getModeLabels(sessionType);
+    const modeAvailabilityLabel = sessionType === 'standard' ? 'Active' : 'Beta';
+    const startSessionDisabledReason = !username
+        ? 'Set your username first to start training.'
+        : controlsDisabled
+            ? 'Please wait for the current loading or generation task to finish.'
+            : !userStatus
+                ? 'Loading your training data...'
+                : userStatus.puzzles_count === 0
+                    ? 'Generate puzzles first to unlock sessions.'
+                    : userStatus.due_count === 0
+                        ? 'No puzzles are due right now. Generate new puzzles to keep training.'
+                        : sessionType !== 'standard'
+                            ? 'Only Standard mode can start sessions for now. Switch mode in the sidebar.'
+                            : null;
+    const generateDisabledReason = !username
+        ? 'Set your username first to generate puzzles.'
+        : isGenerating
+            ? 'Puzzle generation is already in progress.'
+            : !controlsEnabled || isLoading
+                ? 'Please finish the current flow before generating more puzzles.'
+                : !userStatus?.has_new_games
+                    ? 'No new games found. Import more games to generate fresh puzzles.'
+                    : null;
+    const sessionDetailsA11yCopy = getSessionDetailsA11yCopy(showSessionDetails, screenReaderModeLabel);
+    const puzzleActionA11yCopy = getPuzzleActionA11yCopy(activeSessionId, hintsUsed);
+
     const handleGeneratePuzzles = async () => {
         if (!username.trim()) {
             setError('Please enter a username');
@@ -329,6 +367,14 @@ export default function Puzzles() {
                         <h1 className="text-4xl md:text-5xl font-serif text-primary mb-2">
                             {motifFilter ? `${motifFilter} Puzzles` : 'Daily Puzzles'}
                         </h1>
+                        <div className="flex items-center gap-2 mb-3">
+                            <span className="text-xs font-sans uppercase tracking-wider px-2 py-1 rounded-sm border border-primary/20 bg-primary/5 text-primary/80">
+                                {selectedModeLabel} {modeAvailabilityLabel}
+                            </span>
+                            {sessionType !== 'standard' && (
+                                <span className="text-xs font-sans text-primary/50">Switch to Standard to start sessions.</span>
+                            )}
+                        </div>
                         <p className="text-lg text-primary/60 font-sans">
                             {motifFilter ? `Practice ${motifFilter} tactical patterns` : 'Tactical patterns from your own games.'}
                         </p>
@@ -364,13 +410,7 @@ export default function Puzzles() {
                                 type="button"
                                 onClick={handleStartSession}
                                 disabled={controlsDisabled || !userStatus || userStatus.puzzles_count === 0 || userStatus.due_count === 0 || sessionType !== 'standard'}
-                                title={
-                                    !username ? 'Set username to continue' :
-                                    userStatus?.puzzles_count === 0 ? 'Generate puzzles first' :
-                                    userStatus?.due_count === 0 ? 'No puzzles due for review right now' :
-                                    sessionType !== 'standard' ? '🚧 This mode is coming soon! Only Standard mode is available currently.' :
-                                    'Start a new training session'
-                                }
+                                title={startSessionDisabledReason ?? 'Start a new training session'}
                                 className={`px-6 py-2 bg-accent text-bg-primary rounded-sm font-serif transition-colors km-focus-visible ${(controlsDisabled || !userStatus || userStatus.puzzles_count === 0 || userStatus.due_count === 0 || sessionType !== 'standard') ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'}`}>
                                 Start Session
                             </button>
@@ -379,17 +419,18 @@ export default function Puzzles() {
                             type="button"
                             onClick={handleGeneratePuzzles}
                             disabled={generateNewDisabled}
-                            title={
-                                !username ? 'Set username to continue' :
-                                isGenerating ? 'Generation in progress...' :
-                                !userStatus?.has_new_games ? 'No new games available for puzzle generation' :
-                                'Generate puzzles from new games'
-                            }
+                            title={generateDisabledReason ?? 'Generate puzzles from new games'}
                             className={`px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-colors km-focus-visible ${generateNewDisabled ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'}`}>
                             {isGenerating ? 'Generating...' : 'Generate New'}
                         </button>
                     </div>
                 </div>
+
+                {(startSessionDisabledReason || generateDisabledReason) && (
+                    <p className="text-sm text-primary/60 font-sans" role="status" aria-live="polite">
+                        {startSessionDisabledReason ?? generateDisabledReason}
+                    </p>
+                )}
 
                 {/* User status - full width below buttons */}
                 {username && userStatus && !isLoadingStatus && (
@@ -693,7 +734,7 @@ export default function Puzzles() {
                                                 />
                                             </div>
 
-                                            {/* Enhanced Session Stats */}
+                                            {/* Core Session Stats */}
                                             <div className="flex justify-between mt-3 text-xs">
                                                 <div className="flex items-center">
                                                     <span className="text-primary/60 mr-1">🔥</span>
@@ -708,45 +749,69 @@ export default function Puzzles() {
                                                 </div>
                                             </div>
 
-                                            {/* Performance Visualization */}
-                                            {performanceHistory.length > 0 && (
-                                                <div className="mt-3">
-                                                    <div className="flex justify-between text-xs text-primary/60 mb-1">
-                                                        <span>Recent Performance:</span>
-                                                        <span>{calculateRecentPerformance(performanceHistory)}% accuracy (5min)</span>
-                                                    </div>
-                                                    <div className="flex h-2 rounded-full overflow-hidden bg-primary/10">
-                                                        {performanceHistory.slice(-10).map((item, index) => (
-                                                            <div
-                                                                key={index}
-                                                                className={`flex-1 ${item.result === 'pass' ? 'bg-green-500' : 'bg-red-500'}`}
-                                                                title={`${item.result.toUpperCase()} - ${new Date(item.time).toLocaleTimeString()}`}
-                                                            />
-                                                        ))}
-                                                    </div>
-                                                    <div className="flex justify-between text-xs text-primary/60 mt-1">
-                                                        <span>
-                                                            Trend:
-                                                            <span className={`ml-1 ${getPerformanceTrend(performanceHistory) === 'improving' ? 'text-green-500' :
-                                                                getPerformanceTrend(performanceHistory) === 'declining' ? 'text-red-500' : 'text-primary/60'
-                                                                }`}>
-                                                                {getPerformanceTrend(performanceHistory) === 'improving' ? '↗ Improving' :
-                                                                    getPerformanceTrend(performanceHistory) === 'declining' ? '↘ Declining' : '→ Stable'}
-                                                            </span>
-                                                        </span>
-                                                        <span>
-                                                            Time: {timer.currentPuzzleTime}s
-                                                        </span>
-                                                    </div>
-                                                </div>
-                                            )}
+                                            <div className="mt-3">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setShowSessionDetails((prev) => !prev)}
+                                                    aria-expanded={showSessionDetails}
+                                                    aria-controls="session-details-panel"
+                                                    aria-label={sessionDetailsA11yCopy.toggleLabel}
+                                                    aria-describedby="session-details-helper"
+                                                    className="text-xs font-sans text-primary/70 km-inline-link km-focus-visible"
+                                                >
+                                                    {showSessionDetails ? 'Hide details' : 'Show details'}
+                                                </button>
+                                                <span id="session-details-helper" className="sr-only">
+                                                    {sessionDetailsA11yCopy.helperText}
+                                                </span>
+                                                <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+                                                    {sessionDetailsA11yCopy.liveStatus}
+                                                </span>
+                                            </div>
 
-                                            {/* Timed Session Timer */}
-                                            {sessionSummary.session_type === 'timed' && timer.timeRemaining > 0 && (
-                                                <div className="mt-2 text-center">
-                                                    <span className={`font-mono text-sm ${timer.timeRemaining < 60 ? 'text-red-500' : 'text-primary/80'}`}>
-                                                        Time Remaining: {Math.floor(timer.timeRemaining / 60)}:{(timer.timeRemaining % 60).toString().padStart(2, '0')}
-                                                    </span>
+                                            {showSessionDetails && (
+                                                <div id="session-details-panel" className="mt-3 space-y-3">
+                                                    {/* Performance Visualization */}
+                                                    {performanceHistory.length > 0 && (
+                                                        <div>
+                                                            <div className="flex justify-between text-xs text-primary/60 mb-1">
+                                                                <span>Recent Performance:</span>
+                                                                <span>{calculateRecentPerformance(performanceHistory)}% accuracy (5min)</span>
+                                                            </div>
+                                                            <div className="flex h-2 rounded-full overflow-hidden bg-primary/10">
+                                                                {performanceHistory.slice(-10).map((item, index) => (
+                                                                    <div
+                                                                        key={index}
+                                                                        className={`flex-1 ${item.result === 'pass' ? 'bg-green-500' : 'bg-red-500'}`}
+                                                                        title={`${item.result.toUpperCase()} - ${new Date(item.time).toLocaleTimeString()}`}
+                                                                    />
+                                                                ))}
+                                                            </div>
+                                                            <div className="flex justify-between text-xs text-primary/60 mt-1">
+                                                                <span>
+                                                                    Trend:
+                                                                    <span className={`ml-1 ${getPerformanceTrend(performanceHistory) === 'improving' ? 'text-green-500' :
+                                                                        getPerformanceTrend(performanceHistory) === 'declining' ? 'text-red-500' : 'text-primary/60'
+                                                                        }`}>
+                                                                        {getPerformanceTrend(performanceHistory) === 'improving' ? '↗ Improving' :
+                                                                            getPerformanceTrend(performanceHistory) === 'declining' ? '↘ Declining' : '→ Stable'}
+                                                                    </span>
+                                                                </span>
+                                                                <span>
+                                                                    Time: {timer.currentPuzzleTime}s
+                                                                </span>
+                                                            </div>
+                                                        </div>
+                                                    )}
+
+                                                    {/* Timed Session Timer */}
+                                                    {sessionSummary.session_type === 'timed' && timer.timeRemaining > 0 && (
+                                                        <div className="text-center">
+                                                            <span className={`font-mono text-sm ${timer.timeRemaining < 60 ? 'text-red-500' : 'text-primary/80'}`}>
+                                                                Time Remaining: {Math.floor(timer.timeRemaining / 60)}:{(timer.timeRemaining % 60).toString().padStart(2, '0')}
+                                                            </span>
+                                                        </div>
+                                                    )}
                                                 </div>
                                             )}
 
@@ -844,6 +909,7 @@ export default function Puzzles() {
                                         type="button"
                                         onClick={handleCheckAnswer}
                                         disabled={!userMove}
+                                        aria-label={puzzleActionA11yCopy.checkMoveLabel}
                                         className={`px-6 py-4 bg-primary text-bg-primary rounded-sm font-serif text-lg transition-all shadow-lg shadow-primary/5 km-focus-visible disabled:opacity-50 ${!userMove ? 'km-interactive-disabled' : 'km-interactive'}`}>
                                         Check Move
                                     </button>
@@ -853,13 +919,15 @@ export default function Puzzles() {
                                         disabled={activeSessionId
                                             ? (!currentPuzzle?.best_move_uci || hintsUsed >= 3)
                                             : clue.isDisabled}
+                                        aria-label={puzzleActionA11yCopy.hintLabel}
                                         className="px-6 py-4 border border-primary/20 text-primary rounded-sm font-serif text-lg transition-all km-interactive km-focus-visible disabled:opacity-50 disabled:cursor-default">
                                         {activeSessionId ? `Hint (${hintsUsed}/3)` : 'Clue'}
                                     </button>
                                     <button
                                         type="button"
                                         onClick={handleRevealSolution}
-                                        className="px-6 py-4 border border-primary/20 text-primary rounded-sm font-serif text-lg transition-all km-interactive km-focus-visible">
+                                        aria-label={puzzleActionA11yCopy.revealLabel}
+                                        className="px-6 py-4 border border-primary/10 text-primary/70 rounded-sm font-serif text-lg transition-all km-interactive km-focus-visible hover:text-primary hover:border-primary/30">
                                         Reveal
                                     </button>
                                 </div>
@@ -926,6 +994,7 @@ export default function Puzzles() {
                                         <button
                                             type="button"
                                             onClick={handleRevealSolution}
+                                            aria-label={puzzleActionA11yCopy.showSolutionLabel}
                                             className="px-6 py-4 bg-primary text-bg-primary rounded-sm font-serif text-lg transition-all km-interactive km-focus-visible">
                                             Show Solution
                                         </button>
