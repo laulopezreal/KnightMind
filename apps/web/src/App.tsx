@@ -9,6 +9,7 @@ import LibraryPuzzle from './pages/LibraryPuzzle';
 import Insights from './pages/Insights';
 import RatingInsights from './pages/RatingInsights';
 import Ops from './pages/Ops';
+import HowItWorks from './pages/HowItWorks';
 import Layout from './components/Layout';
 import { ChessUsernameProvider } from './context/ChessUsernameContext';
 import { PuzzleModeProvider } from './context/PuzzleModeContext';
@@ -34,6 +35,7 @@ function App() {
                   <Route path="/insights" element={<Insights />} />
                   <Route path="/rating-insights" element={<RatingInsights />} />
                   <Route path="/ops" element={<Ops />} />
+                  <Route path="/how-it-works" element={<HowItWorks />} />
                 </Routes>
               </Layout>
             </BrowserRouter>
