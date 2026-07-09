@@ -201,6 +201,77 @@ def test_store_game_batch_mode_deduplicates_within_batch(repository, db_session)
     assert repository.get_game_count("testuser") == 1
 
 
+def test_store_game_batch_mode_survives_concurrent_insert_race(repository, db_session):
+    """A flush-time IntegrityError (concurrent-writer race) is contained.
+
+    Exercises the savepoint branch in store_game: when another session commits
+    the same game between our existence check and the INSERT, the flush raises
+    IntegrityError inside the savepoint. Only that row must roll back — the
+    duplicate is reported as (False, game_id), previously flushed batch rows
+    survive, and the batch session keeps working.
+    """
+
+    def _store_in_batch(url):
+        return repository.store_game(
+            username="testuser",
+            url=url,
+            pgn='[Event "Test"]\n1. e4 e5 *',
+            white_username="testuser",
+            black_username="opponent",
+            white_result="win",
+            black_result="lose",
+            time_control="600",
+            end_time=1704067200,
+            rated=True,
+            commit=False,
+        )
+
+    dup_url = "https://chess.com/game/raced"
+
+    # Simulate the concurrent importer: a second session commits the same
+    # game before the batch session tries to insert it.
+    other_session = sessionmaker(bind=db_session.get_bind())()
+    try:
+        is_new_other, dup_id = GameRepository(other_session).store_game(
+            username="testuser",
+            url=dup_url,
+            pgn='[Event "Test"]\n1. e4 e5 *',
+            white_username="testuser",
+            black_username="opponent",
+            white_result="win",
+            black_result="lose",
+            time_control="600",
+            end_time=1704067200,
+            rated=True,
+        )
+        assert is_new_other is True
+    finally:
+        other_session.close()
+
+    # Flush one row in the batch first, to prove the later savepoint rollback
+    # does not take previously flushed batch rows down with it.
+    is_new_a, _ = _store_in_batch("https://chess.com/game/a")
+    assert is_new_a is True
+
+    # store_game's db.get() guard would see the already-committed row and
+    # short-circuit before ever reaching the INSERT, so the flush-time race
+    # cannot be reproduced naturally in a single-threaded test. Patch the
+    # guard lookup to miss, reproducing the real race where the concurrent
+    # row lands between the guard SELECT and the INSERT.
+    with patch.object(db_session, "get", return_value=None):
+        is_new_dup, returned_id = _store_in_batch(dup_url)
+    assert is_new_dup is False
+    assert returned_id == dup_id
+
+    # The batch session is still usable after the contained rollback.
+    is_new_c, _ = _store_in_batch("https://chess.com/game/c")
+    assert is_new_c is True
+
+    # The outer commit persists every non-duplicate row exactly once.
+    db_session.commit()
+    assert repository.get_game_count("testuser") == 3
+
+
 def test_game_repository_import_summary(repository):
     assert repository.get_last_import_summary("testuser") is None
 
