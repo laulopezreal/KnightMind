@@ -97,14 +97,6 @@ def generate_puzzles(
         # Take most recent games (already sorted by end_time descending)
         recent_games = all_metadata[:max_games]
 
-        # Bulk-load PGNs keyed by game_id (one query per 1000 ids instead of
-        # one per game). A dict rather than iter_pgns because each PGN must
-        # stay paired with its game_id for save_puzzle(source_game_id=...);
-        # memory is bounded by max_games PGN blobs.
-        pgns_by_game_id = game_repository.get_pgns(
-            username, [game.game_id for game in recent_games]
-        )
-
         # Get configuration
         swing_threshold = get_swing_threshold()
         ply_start, ply_end = get_ply_range()
@@ -116,6 +108,15 @@ def generate_puzzles(
             # If engine creation fails, we can't generate anything
             # (logging would be good here)
             return GenerationResult(generated=0, skipped=0, analyzed_positions=0)
+
+        # Bulk-load PGNs keyed by game_id (one query per 1000 ids instead of
+        # one per game). A dict rather than iter_pgns because each PGN must
+        # stay paired with its game_id for save_puzzle(source_game_id=...);
+        # memory is bounded by max_games PGN blobs (capped at the endpoint
+        # and worker). Fetched only after the engine is known to be usable.
+        pgns_by_game_id = game_repository.get_pgns(
+            username, [game.game_id for game in recent_games]
+        )
 
         generated = 0
         skipped = 0
