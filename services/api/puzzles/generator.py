@@ -97,6 +97,14 @@ def generate_puzzles(
         # Take most recent games (already sorted by end_time descending)
         recent_games = all_metadata[:max_games]
 
+        # Bulk-load PGNs keyed by game_id (one query per 1000 ids instead of
+        # one per game). A dict rather than iter_pgns because each PGN must
+        # stay paired with its game_id for save_puzzle(source_game_id=...);
+        # memory is bounded by max_games PGN blobs.
+        pgns_by_game_id = game_repository.get_pgns(
+            username, [game.game_id for game in recent_games]
+        )
+
         # Get configuration
         swing_threshold = get_swing_threshold()
         ply_start, ply_end = get_ply_range()
@@ -123,8 +131,8 @@ def generate_puzzles(
             if generated >= max_puzzles:
                 break
 
-            # Load PGN
-            pgn_text = game_repository.get_pgn(username, game_meta.game_id)
+            # Load PGN (bulk-fetched above)
+            pgn_text = pgns_by_game_id.get(game_meta.game_id)
             if not pgn_text:
                 continue
 
