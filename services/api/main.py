@@ -7,46 +7,54 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).resolve().parent / ".env")
 
+import re
 from contextlib import asynccontextmanager
 from dataclasses import asdict
-from datetime import date, datetime, timezone, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Literal
 
-from fastapi import FastAPI, HTTPException, Query, Depends
+import anyio
+from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from sqlalchemy import select, or_, and_, func, case, literal
+from sqlalchemy import and_, case, func, literal, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
-
-import anyio
-import re
 
 # Add project root to path to verify imports work even if CWD is services/api
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
+import asyncio
+
 from services.api.db import SessionLocal, get_db
-from services.api.models import Job, JobStatus, PuzzleStats, PuzzleReview, PuzzleResult
-from services.api.worker import worker
 from services.api.engine import (
     EngineNotAvailableError,
     InvalidFenError,
-    evaluate_position,
-    is_engine_available,
     get_or_compute_eval,
+    is_engine_available,
 )
+from services.api.jobs.cleanup_sessions import cleanup_abandoned_sessions
+from services.api.models import (
+    Job,
+    JobStatus,
+    PuzzleResult,
+    PuzzleStats,
+    RatingSnapshot,
+)
+from services.api.motifs import MotifPerformanceResponse, get_user_motif_performance
 from services.api.openings import build_opening_tree
-from services.api.puzzles import generate_puzzles
+from services.api.puzzles.identity import backfill_puzzle_identity
 from services.api.storage import GameRepository, PuzzleRepository
 from services.api.storage.spaced_repetition import (
     get_adaptive_puzzles,
     get_all_puzzle_stats,
     get_due_puzzle_count,
-    get_due_puzzles,
     get_next_due_date,
     insert_puzzle_review,
     update_puzzle_stats,
 )
+from services.api.time_control import classify_time_control
+from services.api.worker import worker
 from services.ingest import (
     ImportError as ChessComImportError,
 )
@@ -54,27 +62,9 @@ from services.ingest import (
     NetworkError,
     RateLimitError,
     UserNotFoundError,
-    fetch_games_from_archive,
-    get_player_archives,
     get_player_stats,
-    parse_game,
     import_all_games,
 )
-
-from services.api.models import (
-    Job,
-    JobStatus,
-    PuzzleStats,
-    PuzzleReview,
-    PuzzleResult,
-    RatingSnapshot,
-)
-
-from services.api.puzzles.identity import backfill_puzzle_identity
-from services.api.jobs.cleanup_sessions import cleanup_abandoned_sessions
-from services.api.motifs import get_user_motif_performance, MotifPerformanceResponse
-from services.api.time_control import classify_time_control
-import asyncio
 
 CLEANUP_INTERVAL_SECONDS = 3600
 
@@ -1109,7 +1099,8 @@ async def review_puzzle(
 
     # If session_id provided, validate session and update counters
     if request.session_id:
-        from services.api.models import TrainingSession, PuzzleResult as PR
+        from services.api.models import PuzzleResult as PR
+        from services.api.models import TrainingSession
 
         stmt = select(TrainingSession).where(TrainingSession.id == request.session_id)
         session = db.scalars(stmt).first()

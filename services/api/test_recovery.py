@@ -1,14 +1,12 @@
-import pytest
-from datetime import datetime, timezone, timedelta
-from sqlalchemy.orm import Session
-from services.api.models import Job, JobStatus, Base
-from services.api.db import engine, SessionLocal
-from services.api.worker import JobWorker
+import os
+from datetime import datetime, timedelta, timezone
 
+import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-import os
+from services.api.models import Base, Job, JobStatus
+from services.api.worker import JobWorker
 
 # Use a temporary file for tests
 TEST_DB_PATH = "test_jobs.db"

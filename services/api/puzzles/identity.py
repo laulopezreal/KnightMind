@@ -5,6 +5,7 @@ Handles motif assignment, title generation, and backfilling identity data.
 """
 
 import logging
+
 from sqlalchemy import select
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session

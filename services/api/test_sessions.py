@@ -2,24 +2,25 @@
 Tests for training session endpoints and integration.
 """
 
-import pytest
 import uuid
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
+
+import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from services.api.db import Base
-from services.api.models import TrainingSession, PuzzleReview, PuzzleResult
+from services.api.models import PuzzleResult, TrainingSession
 from services.api.sessions import (
-    start_session,
+    CompleteSessionRequest,
+    StartSessionRequest,
+    UseHintRequest,
     complete_session,
     get_recent_sessions,
     get_session,
+    start_session,
     use_hint,
-    StartSessionRequest,
-    CompleteSessionRequest,
-    UseHintRequest,
 )
 from services.api.storage.spaced_repetition import insert_puzzle_review
 

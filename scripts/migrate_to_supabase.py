@@ -11,8 +11,8 @@ What it does:
 """
 
 import argparse
-import sys
 import sqlite3
+import sys
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -85,8 +85,8 @@ LOCK_TIMEOUT_HINT = (
 
 def run_alembic_migrations(pg_url: str) -> None:
     """Run alembic upgrade head against Supabase."""
-    from alembic.config import Config
     from alembic import command
+    from alembic.config import Config
 
     alembic_ini = str(API_DIR / "alembic.ini")
     alembic_cfg = Config(alembic_ini)
@@ -108,6 +108,7 @@ def copy_data(pg_url: str) -> None:
     """Read all rows from SQLite and insert into PostgreSQL using psycopg v3."""
     import json as json_mod
     from urllib.parse import urlparse
+
     import psycopg
     from psycopg.types.json import Jsonb
 

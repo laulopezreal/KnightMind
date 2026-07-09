@@ -4,9 +4,9 @@ Chess.com game import service.
 This module handles fetching and parsing games from the Chess.com API.
 """
 
+import ssl
 from dataclasses import dataclass
 from typing import AsyncIterator
-import ssl
 
 import httpx
 import truststore

@@ -1,19 +1,21 @@
 import os
 
 os.environ["KNIGHTMIND_WORKER_DISABLED"] = "true"
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
+
+import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
-import pytest
+
+from services.api.db import get_db
 from services.api.main import (
     app,
-    get_opponent_rating_from_pgn,
     calculate_expected_score,
+    get_opponent_rating_from_pgn,
 )
-from fastapi.testclient import TestClient
-from services.api.db import get_db
 from services.api.models import Base, Game, RatingSnapshot
 from services.api.time_control import classify_time_control
 

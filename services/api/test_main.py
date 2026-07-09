@@ -1,8 +1,8 @@
 import os
 
 os.environ["KNIGHTMIND_WORKER_DISABLED"] = "true"
+from datetime import date, datetime, timedelta, timezone
 from unittest.mock import patch
-from datetime import datetime, date, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
@@ -13,10 +13,12 @@ from sqlalchemy.pool import StaticPool
 from services.api.main import app, get_db
 from services.api.models import (
     Base,
+    Game,
     Job,
     JobStatus,
     PuzzleStats,
-    Game,
+)
+from services.api.models import (
     Puzzle as PuzzleModel,
 )
 

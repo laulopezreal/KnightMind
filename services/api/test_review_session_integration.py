@@ -2,9 +2,10 @@
 Integration test for review endpoint with session tracking.
 """
 
-import pytest
 import uuid
 from datetime import datetime, timezone
+
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
@@ -12,7 +13,8 @@ from sqlalchemy.pool import StaticPool
 
 from services.api.db import Base, get_db
 from services.api.main import app
-from services.api.models import TrainingSession, Game, Puzzle as PuzzleModel
+from services.api.models import Game, TrainingSession
+from services.api.models import Puzzle as PuzzleModel
 
 
 @pytest.fixture

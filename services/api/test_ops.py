@@ -1,7 +1,8 @@
-import pytest
 import os
 import sys
 import uuid
+
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -48,10 +49,8 @@ def test_db_instance(monkeypatch, tmp_path):
         pass
 
     # Create tables
-    from services.api.models import Base
-
     # Ensure models are imported so they are registered in Base
-    import services.api.models
+    from services.api.models import Base
 
     Base.metadata.create_all(bind=engine)
 
@@ -78,8 +77,8 @@ def db_session(test_db_instance):
 
 @pytest.fixture(scope="function")
 def client(db_session):
-    from services.api.main import app
     from services.api.db import get_db
+    from services.api.main import app
 
     # Override dependency to use our test session
     app.dependency_overrides[get_db] = lambda: db_session
@@ -134,8 +133,9 @@ def test_ready_endpoint(client):
 
 
 def test_ops_status_basic(client, db_session):
+    from datetime import datetime, timedelta, timezone
+
     from services.api.models import Job, JobStatus
-    from datetime import datetime, timezone, timedelta
 
     job1 = Job(
         type="puzzle_generation",
@@ -157,8 +157,9 @@ def test_ops_status_basic(client, db_session):
 
 
 def test_ops_metrics_succeeded_count(client, db_session):
+    from datetime import datetime, timedelta, timezone
+
     from services.api.models import Job, JobStatus
-    from datetime import datetime, timezone, timedelta
 
     job = Job(
         type="puzzle_generation",
@@ -180,8 +181,9 @@ def test_ops_metrics_succeeded_count(client, db_session):
 
 
 def test_ops_metrics_failed_count(client, db_session):
+    from datetime import datetime, timedelta, timezone
+
     from services.api.models import Job, JobStatus
-    from datetime import datetime, timezone, timedelta
 
     job = Job(
         type="puzzle_generation",
@@ -201,8 +203,9 @@ def test_ops_metrics_failed_count(client, db_session):
 
 
 def test_ops_metrics_excludes_old_jobs(client, db_session):
+    from datetime import datetime, timedelta, timezone
+
     from services.api.models import Job, JobStatus
-    from datetime import datetime, timezone, timedelta
 
     job = Job(
         type="puzzle_generation",

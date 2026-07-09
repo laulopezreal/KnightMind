@@ -5,12 +5,12 @@ Provides a simple interface to evaluate chess positions using Stockfish,
 returning the best move and evaluation in pawns from the side-to-move perspective.
 """
 
-import os
 import hashlib
 import logging
+import os
 from dataclasses import dataclass
-from typing import Optional
 from datetime import datetime, timezone
+from typing import Optional
 
 try:
     from stockfish import Stockfish as StockfishEngine
@@ -309,7 +309,7 @@ def get_or_compute_eval(
                 cached = db.get(FenEvalCache, cache_key)
                 if cached:
                     logger.debug(
-                        f"Concurrent insert detected, using existing cache entry"
+                        "Concurrent insert detected, using existing cache entry"
                     )
                     return EvalResult(
                         best_move_uci=cached.best_move_uci, eval=cached.eval_pawns

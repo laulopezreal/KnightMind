@@ -13,7 +13,8 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from services.api.main import app, get_db
-from services.api.models import Base, Game, Puzzle as PuzzleModel, PuzzleStats
+from services.api.models import Base, Game, PuzzleStats
+from services.api.models import Puzzle as PuzzleModel
 
 
 @pytest.fixture

@@ -1,13 +1,15 @@
+from datetime import datetime, timezone
+
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from datetime import datetime, timezone
+
 from services.api.models import Base
 from services.api.storage.spaced_repetition import (
+    get_adaptive_puzzles,
+    get_puzzle_stats,
     insert_puzzle_review,
     update_puzzle_stats,
-    get_puzzle_stats,
-    get_adaptive_puzzles,
 )
 
 # Use in-memory SQLite for tests
@@ -89,6 +91,7 @@ def test_get_puzzle_stats_none(db_session):
 
 def test_get_adaptive_puzzles_accuracy_goal_sorting(db_session):
     from datetime import timedelta
+
     from services.api.models import PuzzleStats
 
     now = datetime.now(timezone.utc)

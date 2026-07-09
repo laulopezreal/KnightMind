@@ -1,6 +1,4 @@
-import pytest
 from services.api.storage.spaced_repetition import calculate_next_interval
-from services.api.models import PuzzleResult
 
 
 def test_first_pass():

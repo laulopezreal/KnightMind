@@ -2,16 +2,16 @@
 Tests for session cleanup job.
 """
 
+from datetime import datetime, timedelta, timezone
+
 import pytest
-import asyncio
-from datetime import datetime, timezone, timedelta
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from services.api.db import Base
-from services.api.models import TrainingSession
 from services.api.jobs.cleanup_sessions import cleanup_abandoned_sessions
+from services.api.models import TrainingSession
 
 
 @pytest.fixture

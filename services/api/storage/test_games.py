@@ -1,12 +1,12 @@
 """Tests for the game repository module."""
 
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 from scripts.backfill_storage import validate_game_metadata
 from services.api.db import Base
 from services.api.storage.game_repository import GameRepository
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
 
 
 @pytest.fixture

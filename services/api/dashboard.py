@@ -8,16 +8,16 @@ Provides comprehensive dashboard data including:
 - Improvement trends over time
 """
 
-from datetime import date, datetime, timezone, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Literal
-from sqlalchemy.orm import Session
-from sqlalchemy import select, desc, func, case
+
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
-from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import case, desc, func, select
+from sqlalchemy.orm import Session
 
 from services.api.db import get_db
-from services.api.models import TrainingSession, PuzzleStats, PuzzleReview
-from services.api.storage import PuzzleRepository
+from services.api.models import PuzzleReview, PuzzleStats, TrainingSession
 from services.api.storage.spaced_repetition import (
     get_due_puzzle_count,
     get_next_due_date,

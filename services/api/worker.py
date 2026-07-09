@@ -1,15 +1,15 @@
 import asyncio
 import logging
 import traceback
-from datetime import datetime, timezone, timedelta
 from dataclasses import asdict
+from datetime import datetime, timedelta, timezone
 
-from sqlalchemy.orm import Session
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from services.api.db import SessionLocal
 from services.api.models import Job, JobStatus
-from services.api.puzzles.generator import generate_puzzles, GenerationResult
+from services.api.puzzles.generator import generate_puzzles
 
 logger = logging.getLogger(__name__)
 

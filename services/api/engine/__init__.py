@@ -10,8 +10,8 @@ from .stockfish import (
     StockfishNotFoundError,
     create_engine,
     evaluate_fen,
-    is_stockfish_available,
     get_or_compute_eval,
+    is_stockfish_available,
 )
 
 # Aliases for backward compatibility/main.py usage

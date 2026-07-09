@@ -1,12 +1,12 @@
-import pytest
 from unittest.mock import MagicMock
-from services.api.puzzles.identity import (
-    assign_primary_motif,
-    generate_puzzle_title,
-    backfill_puzzle_identity,
-    MOTIF_TITLES,
-)
+
 from services.api.models import PuzzleStats
+from services.api.puzzles.identity import (
+    MOTIF_TITLES,
+    assign_primary_motif,
+    backfill_puzzle_identity,
+    generate_puzzle_title,
+)
 
 
 def test_assign_primary_motif_default():

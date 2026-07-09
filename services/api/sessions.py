@@ -7,13 +7,14 @@ Handles session lifecycle: start, complete, and recent sessions query.
 import logging
 import uuid
 from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
-from sqlalchemy import select, desc
 from pydantic import BaseModel
+from sqlalchemy import desc, select
+from sqlalchemy.orm import Session
 
 from services.api.db import get_db
-from services.api.models import TrainingSession, RatingSnapshot
+from services.api.models import RatingSnapshot, TrainingSession
 from services.ingest import get_player_stats
 
 logger = logging.getLogger(__name__)

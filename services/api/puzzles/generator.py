@@ -6,16 +6,16 @@ Uses bounded compute to work on Render and similar platforms.
 """
 
 import io
+import logging
 import os
 from dataclasses import dataclass
 
 import chess
 import chess.pgn
 
-from services.api.engine import create_engine, get_or_compute_eval
 from services.api.db import SessionLocal
+from services.api.engine import create_engine, get_or_compute_eval
 from services.api.storage import GameRepository, PuzzleRepository
-import logging
 
 logger = logging.getLogger(__name__)
 

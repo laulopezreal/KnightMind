@@ -2,7 +2,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 
-from sqlalchemy import select, update, func
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 

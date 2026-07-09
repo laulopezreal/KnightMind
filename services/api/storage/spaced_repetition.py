@@ -3,10 +3,12 @@ Spaced repetition storage module.
 Handles database operations for puzzle reviews and statistics.
 """
 
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
+
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
-from sqlalchemy import select, func
-from services.api.models import PuzzleStats, PuzzleReview, PuzzleResult
+
+from services.api.models import PuzzleResult, PuzzleReview, PuzzleStats
 from services.api.puzzles.identity import assign_primary_motif, generate_puzzle_title
 from services.api.storage.puzzle_repository import PuzzleRepository
 

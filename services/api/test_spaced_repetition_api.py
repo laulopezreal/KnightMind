@@ -1,18 +1,20 @@
+from datetime import datetime, timedelta, timezone
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
-from sqlalchemy.pool import StaticPool
 from sqlalchemy.orm import sessionmaker
-from datetime import datetime, timezone, timedelta
+from sqlalchemy.pool import StaticPool
 
-from services.api.main import app
 from services.api.db import get_db
+from services.api.main import app
 from services.api.models import (
     Base,
     Game,
-    Puzzle as PuzzleModel,
     PuzzleStats,
-    PuzzleReview,
+)
+from services.api.models import (
+    Puzzle as PuzzleModel,
 )
 
 # Setup test DB
@@ -27,7 +29,6 @@ TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=test_
 @pytest.fixture(autouse=True)
 def init_db():
     # Force registration of models by importing them
-    from services.api.models import Job, FenEvalCache, PuzzleStats, PuzzleReview
 
     Base.metadata.create_all(bind=test_engine)
     yield
@@ -45,7 +46,6 @@ def db_session():
 
 @pytest.fixture
 def client(db_session):
-    from services.api.db import get_db
 
     def override_get_db():
         try:

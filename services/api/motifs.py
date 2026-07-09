@@ -4,9 +4,11 @@ Provides analytics on user performance across different chess tactical patterns/
 """
 
 from typing import Literal
-from sqlalchemy.orm import Session
-from sqlalchemy import select, func
+
 from pydantic import BaseModel
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
+
 from services.api.models import PuzzleStats
 
 MotifRank = Literal["needs_work", "learning", "mastered"]

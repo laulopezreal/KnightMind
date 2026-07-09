@@ -23,11 +23,11 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from sqlalchemy import select, func
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
 from services.api.db import SessionLocal
-from services.api.models import Base, Game, Puzzle, ImportSummary
+from services.api.models import Game, ImportSummary, Puzzle
 
 
 def _parse_datetime(value: str | None) -> datetime | None:

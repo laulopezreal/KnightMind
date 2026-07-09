@@ -1,9 +1,11 @@
 import os
+from unittest.mock import patch
+
 import pytest
-from unittest.mock import patch, MagicMock
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+
 from services.api.db import Base, get_db
 from services.api.main import app
 from services.api.models import Job, JobStatus
@@ -131,8 +133,8 @@ async def run_sync_in_thread(func, *args, **kwargs):
 @pytest.mark.asyncio
 async def test_worker_execute_job(mock_to_thread, mock_generate, db_session):
     # Test execute_job directly to verify logic without claiming loop complexity
-    from services.api.worker import worker
     from services.api.puzzles.generator import GenerationResult
+    from services.api.worker import worker
 
     # Create running job
     job = Job(username="exectest", status=JobStatus.RUNNING)

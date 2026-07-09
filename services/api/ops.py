@@ -1,14 +1,15 @@
-from datetime import datetime, timedelta, timezone
 import os
+from datetime import datetime, timedelta, timezone
+
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
-from sqlalchemy import select, func, text
 
-from services.api.db import get_db, engine
+from services.api.db import get_db
+from services.api.engine import is_engine_available
 from services.api.models import Job, JobStatus
 from services.api.worker import worker
-from services.api.engine import is_engine_available
 
 router = APIRouter(prefix="/ops", tags=["ops"])
 
