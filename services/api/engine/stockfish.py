@@ -5,12 +5,12 @@ Provides a simple interface to evaluate chess positions using Stockfish,
 returning the best move and evaluation in pawns from the side-to-move perspective.
 """
 
-import os
 import hashlib
 import logging
+import os
 from dataclasses import dataclass
-from typing import Optional
 from datetime import datetime, timezone
+from typing import Optional
 
 try:
     from stockfish import Stockfish as StockfishEngine
@@ -27,17 +27,20 @@ logger = logging.getLogger(__name__)
 
 class StockfishNotFoundError(Exception):
     """Raised when Stockfish binary is not available."""
+
     pass
 
 
 class StockfishError(Exception):
     """Raised when Stockfish encounters an error during evaluation."""
+
     pass
 
 
 @dataclass
 class EvalResult:
     """Result of a position evaluation."""
+
     best_move_uci: str
     eval: float  # In pawns, from side-to-move perspective
 
@@ -69,83 +72,85 @@ def create_engine() -> "StockfishEngine":
             "The 'stockfish' Python package is not installed. "
             "Install it with: pip install stockfish"
         )
-    
+
     path = get_stockfish_path()
-    
+
     try:
         engine = StockfishEngine(path=path)
     except Exception as e:
         error_msg = str(e).lower()
-        if "no such file" in error_msg or "not found" in error_msg or "permission" in error_msg:
+        if (
+            "no such file" in error_msg
+            or "not found" in error_msg
+            or "permission" in error_msg
+        ):
             raise StockfishNotFoundError(
                 f"Stockfish binary not found at '{path}'. "
                 "Please install Stockfish and ensure it's in your PATH, "
                 "or set STOCKFISH_PATH environment variable. "
                 "On macOS: brew install stockfish. "
                 "On Ubuntu: apt install stockfish."
-            )
-        raise StockfishError(f"Failed to initialize Stockfish: {e}")
-    
+            ) from e
+        raise StockfishError(f"Failed to initialize Stockfish: {e}") from e
+
     return engine
 
 
 def evaluate_fen(fen: str, engine: Optional["StockfishEngine"] = None) -> EvalResult:
     """
     Evaluate a chess position given its FEN string.
-    
+
     Args:
         fen: FEN string representing the position to evaluate
         engine: Optional existing Stockfish engine instance to reuse
-        
+
     Returns:
         EvalResult with best_move_uci and eval (in pawns, from side-to-move POV)
-        
+
     Raises:
         StockfishNotFoundError: If Stockfish is not available
         StockfishError: If evaluation fails
     """
-    should_close_engine = False
     if engine is None:
         engine = create_engine()
-        should_close_engine = True
-    
+
     try:
         # Set position
         if not engine.is_fen_valid(fen):
             raise StockfishError(f"Invalid FEN: {fen}")
-        
+
         engine.set_fen_position(fen)
-        
+
         # Get analysis parameters and configure engine
         params = get_analysis_params()
         if params:
             engine.update_engine_parameters(params)
-            
+
         # Set search limits
         depth = get_search_depth()
         engine.set_depth(depth)
-        
+
         # Get best move
         best_move = engine.get_best_move()
         if not best_move:
             raise StockfishError("No legal moves available")
-        
+
         # Get evaluation
         evaluation = engine.get_evaluation()
-        
+
         # Convert evaluation to pawns from side-to-move perspective
         eval_pawns = _convert_eval_to_pawns(evaluation)
-        
+
         return EvalResult(best_move_uci=best_move, eval=eval_pawns)
-        
+
     except (StockfishNotFoundError, StockfishError):
         raise
     except Exception as e:
-        raise StockfishError(f"Evaluation failed: {e}")
+        raise StockfishError(f"Evaluation failed: {e}") from e
     finally:
-        # Only close if we created it locally. 
+        # Only close if we created it locally.
         # Note: The stockfish library wrapper might not have a close/quit method exposed simply,
-        # but generally for a local variable it's fine. 
+        # but generally for a local variable it's fine.
         # If we passed it in, the caller is responsible.
         pass
 
@@ -157,16 +162,16 @@ MATE_EVALUATION = 100.0
 def _convert_eval_to_pawns(evaluation: dict) -> float:
     """
     Convert Stockfish evaluation to pawns.
-    
+
     Stockfish returns evaluation as either:
     - {"type": "cp", "value": centipawns} for normal positions
     - {"type": "mate", "value": moves_to_mate} for mate positions
-    
+
     Returns value in pawns from side-to-move perspective.
     """
     eval_type = evaluation.get("type")
     value = evaluation.get("value", 0)
-    
+
     if eval_type == "cp":
         # Centipawns to pawns
         return value / 100.0
@@ -188,22 +193,26 @@ def is_stockfish_available() -> bool:
     try:
         engine = create_engine()
         # Quick test
-        engine.set_fen_position("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1")
+        engine.set_fen_position(
+            "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+        )
         return True
     except (StockfishNotFoundError, StockfishError):
         return False
 
 
-def _compute_cache_key(fen: str, depth: int, movetime_ms: Optional[int], engine_name: str) -> str:
+def _compute_cache_key(
+    fen: str, depth: int, movetime_ms: Optional[int], engine_name: str
+) -> str:
     """
     Compute deterministic cache key for a FEN + engine settings.
-    
+
     Args:
         fen: FEN string
         depth: Search depth
         movetime_ms: Move time in milliseconds (if used instead of depth)
         engine_name: Engine identifier
-        
+
     Returns:
         SHA256 hash as hex string
     """
@@ -212,33 +221,33 @@ def _compute_cache_key(fen: str, depth: int, movetime_ms: Optional[int], engine_
         f"fen={fen}",
         f"depth={depth}",
         f"movetime={movetime_ms}" if movetime_ms else "",
-        f"engine={engine_name}"
+        f"engine={engine_name}",
     ]
     key_string = "|".join(p for p in key_parts if p)
-    
+
     # Hash for consistent key length
     return hashlib.sha256(key_string.encode()).hexdigest()
 
 
 def get_or_compute_eval(
-    fen: str, 
+    fen: str,
     engine: Optional["StockfishEngine"] = None,
-    cache_stats: Optional[dict] = None
+    cache_stats: Optional[dict] = None,
 ) -> EvalResult:
     """
     Get evaluation from cache or compute with Stockfish.
-    
+
     This is the main entry point for all evaluations - it checks the cache first,
     and only calls Stockfish if there's a cache miss.
-    
+
     Args:
         fen: FEN string to evaluate
         engine: Optional existing Stockfish engine instance
         cache_stats: Optional dict to track cache hits/misses (will be updated in-place)
-        
+
     Returns:
         EvalResult with best_move_uci and eval
-        
+
     Raises:
         StockfishNotFoundError: If Stockfish is not available
         StockfishError: If evaluation fails
@@ -247,10 +256,10 @@ def get_or_compute_eval(
     depth = get_search_depth()
     movetime_ms = None  # We're using depth-based search
     engine_name = get_stockfish_path()
-    
+
     # Compute cache key
     cache_key = _compute_cache_key(fen, depth, movetime_ms, engine_name)
-    
+
     # Try cache lookup
     try:
         with SessionLocal() as db:
@@ -258,23 +267,22 @@ def get_or_compute_eval(
             if cached:
                 # Cache hit!
                 if cache_stats is not None:
-                    cache_stats['hits'] = cache_stats.get('hits', 0) + 1
+                    cache_stats["hits"] = cache_stats.get("hits", 0) + 1
                 logger.debug(f"Cache hit for FEN: {fen[:50]}...")
                 return EvalResult(
-                    best_move_uci=cached.best_move_uci,
-                    eval=cached.eval_pawns
+                    best_move_uci=cached.best_move_uci, eval=cached.eval_pawns
                 )
     except Exception as e:
         # Cache lookup failed, log but continue to compute
         logger.warning(f"Cache lookup failed: {e}")
-    
+
     # Cache miss - compute evaluation
     if cache_stats is not None:
-        cache_stats['misses'] = cache_stats.get('misses', 0) + 1
-    
+        cache_stats["misses"] = cache_stats.get("misses", 0) + 1
+
     logger.debug(f"Cache miss for FEN: {fen[:50]}...")
     result = evaluate_fen(fen, engine=engine)
-    
+
     # Store in cache
     try:
         with SessionLocal() as db:
@@ -287,7 +295,7 @@ def get_or_compute_eval(
                 movetime_ms=movetime_ms,
                 engine_name=engine_name,
                 engine_version=None,  # Could extract from engine if available
-                created_at=datetime.now(timezone.utc)
+                created_at=datetime.now(timezone.utc),
             )
             db.add(cache_entry)
             try:
@@ -298,15 +306,18 @@ def get_or_compute_eval(
                 # Re-select to get the value inserted by another process
                 cached = db.get(FenEvalCache, cache_key)
                 if cached:
-                    logger.debug(f"Concurrent insert detected, using existing cache entry")
+                    logger.debug(
+                        "Concurrent insert detected, using existing cache entry"
+                    )
                     return EvalResult(
-                        best_move_uci=cached.best_move_uci,
-                        eval=cached.eval_pawns
+                        best_move_uci=cached.best_move_uci, eval=cached.eval_pawns
                     )
                 # If still not found, something else went wrong
-                logger.error(f"Failed to cache evaluation after integrity error: {commit_error}")
+                logger.error(
+                    f"Failed to cache evaluation after integrity error: {commit_error}"
+                )
     except Exception as e:
         # Cache insert failed, log but return the computed result
         logger.error(f"Failed to cache evaluation: {e}")
-    
+
     return result

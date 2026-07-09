@@ -23,11 +23,11 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from sqlalchemy import select, func
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
 from services.api.db import SessionLocal
-from services.api.models import Base, Game, Puzzle, ImportSummary
+from services.api.models import Game, ImportSummary, Puzzle
 
 
 def _parse_datetime(value: str | None) -> datetime | None:
@@ -94,7 +94,9 @@ def migrate_games(data_dir: Path, batch_size: int, dry_run: bool) -> dict:
             game_id = meta.get("game_id") or _game_id_from_url(url)
 
             # Read PGN
-            pgn_file = user_pgn_dir / f"{game_id}.pgn" if user_pgn_dir.exists() else None
+            pgn_file = (
+                user_pgn_dir / f"{game_id}.pgn" if user_pgn_dir.exists() else None
+            )
             pgn_text = None
             if pgn_file and pgn_file.exists():
                 try:
@@ -106,21 +108,23 @@ def migrate_games(data_dir: Path, batch_size: int, dry_run: bool) -> dict:
 
             imported_at = _parse_datetime(meta.get("imported_at"))
 
-            batch.append(Game(
-                game_id=game_id,
-                url=url,
-                username=meta.get("username", username).lower(),
-                white_username=meta.get("white_username", ""),
-                black_username=meta.get("black_username", ""),
-                white_result=meta.get("white_result", ""),
-                black_result=meta.get("black_result", ""),
-                time_control=meta.get("time_control", ""),
-                end_time=meta.get("end_time", 0),
-                rated=meta.get("rated", False),
-                imported_at=imported_at or datetime.now(timezone.utc),
-                pgn_blob=pgn_text,
-                source_path=str(metadata_file),
-            ))
+            batch.append(
+                Game(
+                    game_id=game_id,
+                    url=url,
+                    username=meta.get("username", username).lower(),
+                    white_username=meta.get("white_username", ""),
+                    black_username=meta.get("black_username", ""),
+                    white_result=meta.get("white_result", ""),
+                    black_result=meta.get("black_result", ""),
+                    time_control=meta.get("time_control", ""),
+                    end_time=meta.get("end_time", 0),
+                    rated=meta.get("rated", False),
+                    imported_at=imported_at or datetime.now(timezone.utc),
+                    pgn_blob=pgn_text,
+                    source_path=str(metadata_file),
+                )
+            )
 
             if len(batch) >= batch_size:
                 if not dry_run:
@@ -132,7 +136,9 @@ def migrate_games(data_dir: Path, batch_size: int, dry_run: bool) -> dict:
                 batch = []
 
                 if (imported + skipped) % 5000 == 0:
-                    print(f"    {username}: {imported + skipped}/{len(files)} processed...")
+                    print(
+                        f"    {username}: {imported + skipped}/{len(files)} processed..."
+                    )
 
         # Flush remaining
         if batch:
@@ -150,9 +156,11 @@ def migrate_games(data_dir: Path, batch_size: int, dry_run: bool) -> dict:
             "errors": errors,
             "missing_pgn": missing_pgn,
         }
-        print(f"  {username}: {imported} imported, {skipped} duplicates, "
-              f"{errors} errors, {missing_pgn} missing PGN "
-              f"(from {len(files)} files)")
+        print(
+            f"  {username}: {imported} imported, {skipped} duplicates, "
+            f"{errors} errors, {missing_pgn} missing PGN "
+            f"(from {len(files)} files)"
+        )
 
     return results
 
@@ -191,23 +199,25 @@ def migrate_puzzles(data_dir: Path, batch_size: int, dry_run: bool) -> dict:
             created_at = _parse_datetime(data.get("created_at"))
             used_on = _parse_date(data.get("used_on"))
 
-            batch.append(Puzzle(
-                id=data["id"],
-                username=data.get("username", username).lower(),
-                source_game_id=data["source_game_id"],
-                ply=data["ply"],
-                fen=data["fen"],
-                side_to_move=data["side_to_move"],
-                played_move_uci=data["played_move_uci"],
-                best_move_uci=data["best_move_uci"],
-                eval_before=data["eval_before"],
-                eval_after=data["eval_after"],
-                swing=data["swing"],
-                created_at=created_at or datetime.now(timezone.utc),
-                used_on=used_on,
-                imported_at=created_at or datetime.now(timezone.utc),
-                source_path=str(puzzle_file),
-            ))
+            batch.append(
+                Puzzle(
+                    id=data["id"],
+                    username=data.get("username", username).lower(),
+                    source_game_id=data["source_game_id"],
+                    ply=data["ply"],
+                    fen=data["fen"],
+                    side_to_move=data["side_to_move"],
+                    played_move_uci=data["played_move_uci"],
+                    best_move_uci=data["best_move_uci"],
+                    eval_before=data["eval_before"],
+                    eval_after=data["eval_after"],
+                    swing=data["swing"],
+                    created_at=created_at or datetime.now(timezone.utc),
+                    used_on=used_on,
+                    imported_at=created_at or datetime.now(timezone.utc),
+                    source_path=str(puzzle_file),
+                )
+            )
 
             if len(batch) >= batch_size:
                 if not dry_run:
@@ -219,7 +229,9 @@ def migrate_puzzles(data_dir: Path, batch_size: int, dry_run: bool) -> dict:
                 batch = []
 
                 if (imported + skipped) % 5000 == 0:
-                    print(f"    {username}: {imported + skipped}/{len(files)} processed...")
+                    print(
+                        f"    {username}: {imported + skipped}/{len(files)} processed..."
+                    )
 
         if batch:
             if not dry_run:
@@ -235,8 +247,10 @@ def migrate_puzzles(data_dir: Path, batch_size: int, dry_run: bool) -> dict:
             "skipped_duplicate": skipped,
             "errors": errors,
         }
-        print(f"  {username}: {imported} imported, {skipped} duplicates, "
-              f"{errors} errors (from {len(files)} files)")
+        print(
+            f"  {username}: {imported} imported, {skipped} duplicates, "
+            f"{errors} errors (from {len(files)} files)"
+        )
 
     return results
 
@@ -266,14 +280,19 @@ def migrate_import_summaries(data_dir: Path, dry_run: bool) -> int:
             if not dry_run:
                 existing = db.get(ImportSummary, username)
                 if existing:
-                    existing.last_imported_at = last_imported_at or datetime.now(timezone.utc)
+                    existing.last_imported_at = last_imported_at or datetime.now(
+                        timezone.utc
+                    )
                     existing.last_new_games = last_new_games
                 else:
-                    db.add(ImportSummary(
-                        username=username,
-                        last_imported_at=last_imported_at or datetime.now(timezone.utc),
-                        last_new_games=last_new_games,
-                    ))
+                    db.add(
+                        ImportSummary(
+                            username=username,
+                            last_imported_at=last_imported_at
+                            or datetime.now(timezone.utc),
+                            last_new_games=last_new_games,
+                        )
+                    )
             count += 1
 
         if not dry_run:
@@ -309,9 +328,15 @@ def verify_counts(data_dir: Path):
     puzzles_root = data_dir / "puzzles"
     imports_dir = data_dir / "imports"
 
-    fs_games = sum(1 for _ in metadata_root.rglob("*.json")) if metadata_root.exists() else 0
-    fs_puzzles = sum(1 for _ in puzzles_root.rglob("*.json")) if puzzles_root.exists() else 0
-    fs_summaries = sum(1 for _ in imports_dir.glob("*.json")) if imports_dir.exists() else 0
+    fs_games = (
+        sum(1 for _ in metadata_root.rglob("*.json")) if metadata_root.exists() else 0
+    )
+    fs_puzzles = (
+        sum(1 for _ in puzzles_root.rglob("*.json")) if puzzles_root.exists() else 0
+    )
+    fs_summaries = (
+        sum(1 for _ in imports_dir.glob("*.json")) if imports_dir.exists() else 0
+    )
 
     print(f"  Games:            DB={game_count}, filesystem={fs_games}")
     print(f"  Puzzles:          DB={puzzle_count}, filesystem={fs_puzzles}")
@@ -320,14 +345,25 @@ def verify_counts(data_dir: Path):
     if game_count >= fs_games and puzzle_count >= fs_puzzles:
         print("\n  Migration looks complete.")
     else:
-        print("\n  WARNING: DB counts are lower than filesystem. Check for errors above.")
+        print(
+            "\n  WARNING: DB counts are lower than filesystem. Check for errors above."
+        )
 
 
 def main():
     parser = argparse.ArgumentParser(description="Migrate filesystem data to database")
-    parser.add_argument("--data-dir", default="data", help="Path to data directory (default: data)")
-    parser.add_argument("--batch-size", type=int, default=1000, help="Batch size for inserts (default: 1000)")
-    parser.add_argument("--dry-run", action="store_true", help="Count files without inserting")
+    parser.add_argument(
+        "--data-dir", default="data", help="Path to data directory (default: data)"
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=1000,
+        help="Batch size for inserts (default: 1000)",
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Count files without inserting"
+    )
     args = parser.parse_args()
 
     data_dir = Path(args.data_dir)
@@ -343,11 +379,11 @@ def main():
 
     # Games first (puzzles have FK to games)
     print("1. Migrating games...")
-    game_results = migrate_games(data_dir, args.batch_size, args.dry_run)
+    migrate_games(data_dir, args.batch_size, args.dry_run)
     print()
 
     print("2. Migrating puzzles...")
-    puzzle_results = migrate_puzzles(data_dir, args.batch_size, args.dry_run)
+    migrate_puzzles(data_dir, args.batch_size, args.dry_run)
     print()
 
     print("3. Migrating import summaries...")

@@ -2,7 +2,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 
-from sqlalchemy import select, update, func
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -135,7 +135,9 @@ class PuzzleRepository:
 
         used_today = [p for p in all_puzzles if p.used_on == today_str]
         unused = [p for p in all_puzzles if p.used_on is None]
-        used_other_days = [p for p in all_puzzles if p.used_on and p.used_on != today_str]
+        used_other_days = [
+            p for p in all_puzzles if p.used_on and p.used_on != today_str
+        ]
 
         unused.sort(key=lambda p: p.created_at)
         used_other_days.sort(key=lambda p: p.created_at, reverse=True)
@@ -157,7 +159,9 @@ class PuzzleRepository:
         username_lower = username.lower()
         stmt = (
             update(PuzzleModel)
-            .where(PuzzleModel.username == username_lower, PuzzleModel.id.in_(puzzle_ids))
+            .where(
+                PuzzleModel.username == username_lower, PuzzleModel.id.in_(puzzle_ids)
+            )
             .values(used_on=used_date)
         )
         result = self.db.execute(stmt)
@@ -166,7 +170,11 @@ class PuzzleRepository:
 
     def get_puzzle_count(self, username: str) -> int:
         username_lower = username.lower()
-        stmt = select(func.count()).select_from(PuzzleModel).where(PuzzleModel.username == username_lower)
+        stmt = (
+            select(func.count())
+            .select_from(PuzzleModel)
+            .where(PuzzleModel.username == username_lower)
+        )
         return self.db.scalar(stmt) or 0
 
     def get_puzzle_stats(self, username: str, puzzle_id: str) -> dict:

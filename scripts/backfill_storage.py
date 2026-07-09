@@ -3,7 +3,6 @@ from pathlib import Path
 
 from services.api.storage import GameRepository, PuzzleRepository
 
-
 REQUIRED_GAME_FIELDS = {
     "game_id",
     "url",
@@ -83,17 +82,23 @@ def _parse_date(value: str | None) -> date | None:
 
 def backfill_games(game_repository: GameRepository, base_path: Path) -> dict:
     """Deprecated: filesystem storage has been removed. Use migrate_to_db.py instead."""
-    raise NotImplementedError("Filesystem storage has been removed. Use migrate_to_db.py instead.")
+    raise NotImplementedError(
+        "Filesystem storage has been removed. Use migrate_to_db.py instead."
+    )
 
 
 def backfill_puzzles(puzzle_repository: PuzzleRepository, base_path: Path) -> dict:
     """Deprecated: filesystem storage has been removed. Use migrate_to_db.py instead."""
-    raise NotImplementedError("Filesystem storage has been removed. Use migrate_to_db.py instead.")
+    raise NotImplementedError(
+        "Filesystem storage has been removed. Use migrate_to_db.py instead."
+    )
 
 
 def main() -> None:
     """Deprecated: filesystem storage has been removed. Use migrate_to_db.py instead."""
-    raise NotImplementedError("Filesystem storage has been removed. Use migrate_to_db.py instead.")
+    raise NotImplementedError(
+        "Filesystem storage has been removed. Use migrate_to_db.py instead."
+    )
 
 
 if __name__ == "__main__":

@@ -11,8 +11,8 @@ What it does:
 """
 
 import argparse
-import sys
 import sqlite3
+import sys
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -28,9 +28,9 @@ TABLE_ORDER = [
     "jobs",
     "fen_eval_cache",
     "games",
-    "puzzles",           # FK → games
-    "puzzle_stats",      # FK → puzzles
-    "puzzle_reviews",    # FK → puzzles
+    "puzzles",  # FK → games
+    "puzzle_stats",  # FK → puzzles
+    "puzzle_reviews",  # FK → puzzles
     "training_sessions",
     "rating_snapshots",
 ]
@@ -38,6 +38,7 @@ TABLE_ORDER = [
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -50,10 +51,12 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _url_with_timeouts(url: str, connect_timeout: int = 10,
-                        lock_timeout_ms: int = 15000) -> str:
+def _url_with_timeouts(
+    url: str, connect_timeout: int = 10, lock_timeout_ms: int = 15000
+) -> str:
     """Append connect_timeout and lock_timeout options to a Postgres URL."""
     from urllib.parse import quote
+
     opts = quote(f"-c lock_timeout={lock_timeout_ms}", safe="")
     sep = "&" if "?" in url else "?"
     # Double any '%' so configparser doesn't treat them as interpolation
@@ -82,8 +85,8 @@ LOCK_TIMEOUT_HINT = (
 
 def run_alembic_migrations(pg_url: str) -> None:
     """Run alembic upgrade head against Supabase."""
-    from alembic.config import Config
     from alembic import command
+    from alembic.config import Config
 
     alembic_ini = str(API_DIR / "alembic.ini")
     alembic_cfg = Config(alembic_ini)
@@ -105,6 +108,7 @@ def copy_data(pg_url: str) -> None:
     """Read all rows from SQLite and insert into PostgreSQL using psycopg v3."""
     import json as json_mod
     from urllib.parse import urlparse
+
     import psycopg
     from psycopg.types.json import Jsonb
 
@@ -191,11 +195,13 @@ def copy_data(pg_url: str) -> None:
         # Upsert: skip rows that already exist (idempotent re-runs)
         pk_col = columns[0]  # All our tables use the first column as PK
         insert_sql = (
-            f'INSERT INTO {table} ({col_list}) VALUES ({placeholders}) '
+            f"INSERT INTO {table} ({col_list}) VALUES ({placeholders}) "
             f'ON CONFLICT ("{pk_col}") DO NOTHING'
         )
 
-        def make_params(row: sqlite3.Row) -> dict:
+        def make_params(
+            row: sqlite3.Row, json_cols=json_cols, bool_cols=bool_cols
+        ) -> dict:
             """Convert a SQLite row to a dict, handling type mismatches."""
             d = dict(row)
             for col in json_cols:
@@ -222,8 +228,7 @@ def copy_data(pg_url: str) -> None:
                     pg_cur.executemany(insert_sql, params_list)
                     pg_conn.commit()
                     inserted += len(batch)
-                    print(f"    {table}: {inserted}/{len(rows)} rows...",
-                          flush=True)
+                    print(f"    {table}: {inserted}/{len(rows)} rows...", flush=True)
         except Exception as exc:
             pg_conn.rollback()
             msg = str(exc).lower()
@@ -262,6 +267,7 @@ def copy_data(pg_url: str) -> None:
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+
 
 def main() -> None:
     print("=" * 60)

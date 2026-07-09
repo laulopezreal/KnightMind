@@ -8,18 +8,20 @@ Provides comprehensive dashboard data including:
 - Improvement trends over time
 """
 
-from datetime import date, datetime, timezone, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Literal
-from sqlalchemy.orm import Session
-from sqlalchemy import select, desc, func, case
+
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
-from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import case, desc, func, select
+from sqlalchemy.orm import Session
 
 from services.api.db import get_db
-from services.api.models import TrainingSession, PuzzleStats, PuzzleReview
-from services.api.storage import PuzzleRepository
-from services.api.storage.spaced_repetition import get_due_puzzle_count, get_next_due_date
-
+from services.api.models import PuzzleReview, PuzzleStats, TrainingSession
+from services.api.storage.spaced_repetition import (
+    get_due_puzzle_count,
+    get_next_due_date,
+)
 
 router = APIRouter(prefix="/users", tags=["dashboard"])
 
@@ -27,6 +29,7 @@ router = APIRouter(prefix="/users", tags=["dashboard"])
 # Response Models
 class RecentFormData(BaseModel):
     """Recent performance data for last 20 puzzles."""
+
     last_20_results: list[Literal["pass", "fail"]]
     accuracy: float
     trend: Literal["up", "down", "steady"]
@@ -34,6 +37,7 @@ class RecentFormData(BaseModel):
 
 class ScheduleData(BaseModel):
     """Training schedule information."""
+
     due_now: int
     due_in_4h: int
     next_review_at: datetime | None
@@ -41,6 +45,7 @@ class ScheduleData(BaseModel):
 
 class DashboardSummary(BaseModel):
     """Complete dashboard summary."""
+
     username: str
     last_session_at: datetime | None
     days_since_last_session: int
@@ -53,12 +58,14 @@ class DashboardSummary(BaseModel):
 
 class TrendDataPoint(BaseModel):
     """Single data point in a trend."""
+
     date: str  # ISO date string
     accuracy: float
 
 
 class MotifTrend(BaseModel):
     """Trend data for a single motif."""
+
     motif: str
     start_accuracy: float
     end_accuracy: float
@@ -69,12 +76,14 @@ class MotifTrend(BaseModel):
 
 class TrendsResponse(BaseModel):
     """Motif performance trends over time."""
+
     window_days: int
     motif_trends: list[MotifTrend]
 
 
 class TrickyPuzzle(BaseModel):
     """A puzzle the user has struggled with."""
+
     puzzle_id: str
     title: str
     fail_count: int
@@ -83,6 +92,7 @@ class TrickyPuzzle(BaseModel):
 
 class TrickyPuzzlesResponse(BaseModel):
     """Response containing tricky puzzles."""
+
     puzzles: list[TrickyPuzzle]
     total_count: int
 
@@ -109,11 +119,7 @@ def calculate_recent_form(db: Session, username: str) -> RecentFormData:
     reviews = db.scalars(stmt).all()
 
     if not reviews:
-        return RecentFormData(
-            last_20_results=[],
-            accuracy=0.0,
-            trend="steady"
-        )
+        return RecentFormData(last_20_results=[], accuracy=0.0, trend="steady")
 
     # Extract results
     results = [r.result for r in reversed(reviews)]  # Oldest first
@@ -140,11 +146,7 @@ def calculate_recent_form(db: Session, username: str) -> RecentFormData:
     else:
         trend = "steady"
 
-    return RecentFormData(
-        last_20_results=results,
-        accuracy=accuracy,
-        trend=trend
-    )
+    return RecentFormData(last_20_results=results, accuracy=accuracy, trend=trend)
 
 
 def calculate_training_streak(db: Session, username: str) -> int:
@@ -163,7 +165,7 @@ def calculate_training_streak(db: Session, username: str) -> int:
         select(func.date(TrainingSession.completed_at))
         .where(
             TrainingSession.username == username,
-            TrainingSession.completed_at.isnot(None)
+            TrainingSession.completed_at.isnot(None),
         )
         .distinct()
         .order_by(desc(func.date(TrainingSession.completed_at)))
@@ -197,10 +199,7 @@ def calculate_training_streak(db: Session, username: str) -> int:
 
 
 @router.get("/{username}/dashboard", response_model=DashboardSummary)
-async def get_dashboard_summary(
-    username: str,
-    db: Session = Depends(get_db)
-):
+async def get_dashboard_summary(username: str, db: Session = Depends(get_db)):
     """
     Get comprehensive dashboard summary for a user.
 
@@ -215,7 +214,7 @@ async def get_dashboard_summary(
         select(TrainingSession)
         .where(
             TrainingSession.username == username,
-            TrainingSession.completed_at.isnot(None)
+            TrainingSession.completed_at.isnot(None),
         )
         .order_by(desc(TrainingSession.completed_at))
     )
@@ -233,13 +232,15 @@ async def get_dashboard_summary(
         needs_warmup = days_since_last > 7
 
     # Count total completed sessions
-    total_sessions_count = db.scalar(
-        select(func.count(TrainingSession.id))
-        .where(
-            TrainingSession.username == username,
-            TrainingSession.completed_at.isnot(None)
+    total_sessions_count = (
+        db.scalar(
+            select(func.count(TrainingSession.id)).where(
+                TrainingSession.username == username,
+                TrainingSession.completed_at.isnot(None),
+            )
         )
-    ) or 0
+        or 0
+    )
 
     # Calculate streak
     streak = calculate_training_streak(db, username)
@@ -253,22 +254,22 @@ async def get_dashboard_summary(
 
     # Calculate due in 4 hours
     four_hours_from_now = datetime.now(timezone.utc) + timedelta(hours=4)
-    due_in_4h_count = db.scalar(
-        select(func.count(PuzzleStats.puzzle_id))
-        .where(
-            PuzzleStats.username == username,
-            PuzzleStats.next_due_at.isnot(None),
-            PuzzleStats.next_due_at <= four_hours_from_now
+    due_in_4h_count = (
+        db.scalar(
+            select(func.count(PuzzleStats.puzzle_id)).where(
+                PuzzleStats.username == username,
+                PuzzleStats.next_due_at.isnot(None),
+                PuzzleStats.next_due_at <= four_hours_from_now,
+            )
         )
-    ) or 0
+        or 0
+    )
 
     # Subtract already due puzzles
     due_in_4h_count = max(0, due_in_4h_count - due_now)
 
     schedule = ScheduleData(
-        due_now=due_now,
-        due_in_4h=due_in_4h_count,
-        next_review_at=next_review
+        due_now=due_now, due_in_4h=due_in_4h_count, next_review_at=next_review
     )
 
     return DashboardSummary(
@@ -279,7 +280,7 @@ async def get_dashboard_summary(
         training_streak_days=streak,
         recent_form=recent_form,
         schedule=schedule,
-        needs_warmup=needs_warmup
+        needs_warmup=needs_warmup,
     )
 
 
@@ -287,7 +288,7 @@ async def get_dashboard_summary(
 async def get_motif_trends(
     username: str,
     window: int = Query(30, ge=7, le=90, description="Number of days to analyze"),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     """
     Get motif performance trends over time.
@@ -306,15 +307,15 @@ async def get_motif_trends(
     stmt = (
         select(
             PuzzleStats.primary_motif,
-            func.date(PuzzleReview.reviewed_at).label('week'),
-            func.count(PuzzleReview.id).label('total'),
-            func.sum(case((PuzzleReview.result == 'pass', 1), else_=0)).label('passed')
+            func.date(PuzzleReview.reviewed_at).label("week"),
+            func.count(PuzzleReview.id).label("total"),
+            func.sum(case((PuzzleReview.result == "pass", 1), else_=0)).label("passed"),
         )
         .join(PuzzleStats, PuzzleReview.puzzle_id == PuzzleStats.puzzle_id)
         .where(
             PuzzleReview.username == username,
             PuzzleReview.reviewed_at >= cutoff_date,
-            PuzzleStats.primary_motif.isnot(None)
+            PuzzleStats.primary_motif.isnot(None),
         )
         .group_by(PuzzleStats.primary_motif, func.date(PuzzleReview.reviewed_at))
         .order_by(PuzzleStats.primary_motif, func.date(PuzzleReview.reviewed_at))
@@ -369,35 +370,40 @@ async def get_motif_trends(
         # func.date() returns a string on SQLite, a date object on PostgreSQL
         formatted_points = [
             TrendDataPoint(
-                date=dp_date.strftime('%Y-%m-%d') if isinstance(dp_date, (date, datetime)) else str(dp_date),
-                accuracy=round(accuracy, 3)
+                date=(
+                    dp_date.strftime("%Y-%m-%d")
+                    if isinstance(dp_date, (date, datetime))
+                    else str(dp_date)
+                ),
+                accuracy=round(accuracy, 3),
             )
             for dp_date, accuracy in data_points
         ]
 
-        trends.append(MotifTrend(
-            motif=motif,
-            start_accuracy=round(start_accuracy, 3),
-            end_accuracy=round(end_accuracy, 3),
-            change=round(change, 3),
-            trend=trend,
-            data_points=formatted_points
-        ))
+        trends.append(
+            MotifTrend(
+                motif=motif,
+                start_accuracy=round(start_accuracy, 3),
+                end_accuracy=round(end_accuracy, 3),
+                change=round(change, 3),
+                trend=trend,
+                data_points=formatted_points,
+            )
+        )
 
     # Sort by change (worst to best)
     trends.sort(key=lambda t: t.change)
 
-    return TrendsResponse(
-        window_days=window,
-        motif_trends=trends
-    )
+    return TrendsResponse(window_days=window, motif_trends=trends)
 
 
 @router.get("/{username}/puzzles/tricky", response_model=TrickyPuzzlesResponse)
 async def get_tricky_puzzles(
     username: str,
-    limit: int = Query(5, ge=1, le=20, description="Maximum number of puzzles to return"),
-    db: Session = Depends(get_db)
+    limit: int = Query(
+        5, ge=1, le=20, description="Maximum number of puzzles to return"
+    ),
+    db: Session = Depends(get_db),
 ):
     """
     Get puzzles the user has failed multiple times.
@@ -417,19 +423,18 @@ async def get_tricky_puzzles(
     base_query = select(PuzzleStats).where(
         PuzzleStats.username == username,
         PuzzleStats.fail_count >= 2,
-        PuzzleStats.last_reviewed_at.isnot(None)
+        PuzzleStats.last_reviewed_at.isnot(None),
     )
 
     # Count total tricky puzzles
-    total_count = db.scalar(
-        select(func.count()).select_from(base_query.subquery())
-    ) or 0
+    total_count = (
+        db.scalar(select(func.count()).select_from(base_query.subquery())) or 0
+    )
 
     # Get paginated and sorted results
     stats = db.scalars(
         base_query.order_by(
-            desc(PuzzleStats.fail_count),
-            desc(PuzzleStats.last_reviewed_at)
+            desc(PuzzleStats.fail_count), desc(PuzzleStats.last_reviewed_at)
         ).limit(limit)
     ).all()
 
@@ -438,12 +443,9 @@ async def get_tricky_puzzles(
             puzzle_id=stat.puzzle_id,
             title=stat.title or "Untitled Puzzle",
             fail_count=stat.fail_count,
-            last_attempted_at=stat.last_reviewed_at
+            last_attempted_at=stat.last_reviewed_at,
         )
         for stat in stats
     ]
 
-    return TrickyPuzzlesResponse(
-        puzzles=puzzles,
-        total_count=total_count
-    )
+    return TrickyPuzzlesResponse(puzzles=puzzles, total_count=total_count)
