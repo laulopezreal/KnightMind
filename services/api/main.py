@@ -1150,7 +1150,8 @@ async def review_puzzle(
     # 3. Get puzzle details for feedback
     puzzle_stats = puzzle_repository.get_puzzle_stats(request.username, puzzle_id)
 
-    # 4. Commit all changes atomically
+    # 4. Commit all changes atomically (single transaction boundary;
+    #    the storage helpers above only flush, they never commit)
     db.commit()
 
     # 5. Generate feedback message

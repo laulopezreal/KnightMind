@@ -7,13 +7,13 @@ from datetime import datetime, timezone
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from services.api.db import Base, get_db
 from services.api.main import app
-from services.api.models import Game, TrainingSession
+from services.api.models import Game, PuzzleReview, PuzzleStats, TrainingSession
 from services.api.models import Puzzle as PuzzleModel
 
 
@@ -148,6 +148,66 @@ def test_review_endpoint_increments_session_counters(client, test_db):
     assert updated_session.total_time_ms == 7000
     assert updated_session.current_streak == 0
     assert updated_session.best_streak == 1
+
+
+def test_review_endpoint_rolls_back_atomically_on_failure(client, test_db, monkeypatch):
+    """
+    If the review flow fails midway (after the review row and session counters
+    are staged but before scheduling is updated), NOTHING may be persisted.
+
+    Regression test for a partial-commit bug: the storage helpers used to
+    commit internally, so a failure in update_puzzle_stats persisted the
+    review row and session counters while next_due_at/interval were lost.
+    """
+    # 1. Create a training session and a puzzle
+    session_id = str(uuid.uuid4())
+    session = TrainingSession(
+        id=session_id,
+        username="testuser",
+        requested_n=5,
+        pass_count=0,
+        fail_count=0,
+        total_time_ms=0,
+    )
+    test_db.add(session)
+    test_db.commit()
+
+    puzzle_id = str(uuid.uuid4())
+    _create_puzzle(test_db, puzzle_id, "testuser", "game-atomic", 10)
+
+    # 2. Make update_puzzle_stats fail midway through the flow
+    def boom(*args, **kwargs):
+        raise RuntimeError("simulated failure during stats update")
+
+    monkeypatch.setattr("services.api.main.update_puzzle_stats", boom)
+
+    with pytest.raises(RuntimeError, match="simulated failure"):
+        client.post(
+            f"/puzzles/{puzzle_id}/review",
+            json={
+                "username": "testuser",
+                "result": "pass",
+                "time_spent_ms": 5000,
+                "session_id": session_id,
+            },
+        )
+
+    # 3. Discard any uncommitted (flushed-only) state, then verify that
+    #    nothing was persisted: no review row, no stats row, counters intact.
+    test_db.rollback()
+
+    review_count = test_db.scalar(select(func.count()).select_from(PuzzleReview))
+    assert review_count == 0
+
+    stats_count = test_db.scalar(select(func.count()).select_from(PuzzleStats))
+    assert stats_count == 0
+
+    persisted_session = test_db.get(TrainingSession, session_id)
+    assert persisted_session.pass_count == 0
+    assert persisted_session.fail_count == 0
+    assert persisted_session.total_time_ms == 0
+    assert persisted_session.current_streak == 0
+    assert persisted_session.best_streak == 0
 
 
 def test_review_endpoint_session_not_found(client, test_db):
