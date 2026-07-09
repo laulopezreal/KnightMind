@@ -434,6 +434,43 @@ def test_import_chesscom_deduplication(mock_import_games, client_with_db):
 
 
 @patch("services.api.main.import_all_games")
+def test_import_chesscom_batches_commits(mock_import_games, client_with_db, db_session):
+    """A large import commits per batch, never once per game."""
+    from services.api.main import IMPORT_COMMIT_BATCH_SIZE
+    from services.ingest import ChessGame
+
+    total_games = IMPORT_COMMIT_BATCH_SIZE + 50
+
+    async def mock_generator(username):
+        for i in range(total_games):
+            yield ChessGame(
+                url=f"https://www.chess.com/game/live/{i}",
+                pgn='[Event "Test"]\n\n1. e4 e5 1/2-1/2',
+                time_control="600",
+                end_time=1704067200 + i,
+                rated=True,
+                white_username="testuser",
+                black_username=f"opponent{i}",
+                white_result="win",
+                black_result="lose",
+            )
+
+    mock_import_games.side_effect = mock_generator
+
+    with patch.object(db_session, "commit", wraps=db_session.commit) as mock_commit:
+        response = client_with_db.post("/import/chesscom?username=testuser")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["games_count"] == total_games
+    assert data["new_games"] == total_games
+    assert data["skipped_duplicates"] == 0
+
+    # Two game batches (200 + 50) plus the import-summary write.
+    assert mock_commit.call_count == 3
+
+
+@patch("services.api.main.import_all_games")
 def test_import_chesscom_user_not_found(mock_import_games, client_with_db):
     """Test error handling for non-existent user."""
     from services.ingest import UserNotFoundError
