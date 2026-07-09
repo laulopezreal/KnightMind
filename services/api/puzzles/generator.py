@@ -109,6 +109,15 @@ def generate_puzzles(
             # (logging would be good here)
             return GenerationResult(generated=0, skipped=0, analyzed_positions=0)
 
+        # Bulk-load PGNs keyed by game_id (one query per 1000 ids instead of
+        # one per game). A dict rather than iter_pgns because each PGN must
+        # stay paired with its game_id for save_puzzle(source_game_id=...);
+        # memory is bounded by max_games PGN blobs (capped at the endpoint
+        # and worker). Fetched only after the engine is known to be usable.
+        pgns_by_game_id = game_repository.get_pgns(
+            username, [game.game_id for game in recent_games]
+        )
+
         generated = 0
         skipped = 0
         analyzed_positions = 0
@@ -123,8 +132,8 @@ def generate_puzzles(
             if generated >= max_puzzles:
                 break
 
-            # Load PGN
-            pgn_text = game_repository.get_pgn(username, game_meta.game_id)
+            # Load PGN (bulk-fetched above)
+            pgn_text = pgns_by_game_id.get(game_meta.game_id)
             if not pgn_text:
                 continue
 

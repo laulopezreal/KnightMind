@@ -558,8 +558,12 @@ async def evaluate_fen(request: EvalRequest):
 @app.post("/puzzles/generate", response_model=JobStatusResponse)
 async def generate_puzzles_endpoint(
     username: str = Query(..., description="Username to generate puzzles for"),
-    max_games: int = Query(30, description="Maximum number of recent games to analyze"),
-    max_puzzles: int = Query(30, description="Maximum number of puzzles to generate"),
+    max_games: int = Query(
+        30, ge=1, le=2000, description="Maximum number of recent games to analyze"
+    ),
+    max_puzzles: int = Query(
+        30, ge=1, le=2000, description="Maximum number of puzzles to generate"
+    ),
     db: Session = Depends(get_db),
 ):
     """Start a background job to generate puzzles."""

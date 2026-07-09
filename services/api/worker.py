@@ -135,8 +135,11 @@ class JobWorker:
                 username = job.username
                 # Use params from job if available, otherwise defaults
                 params = job.params or {}
-                max_games = params.get("max_games", 30)
-                max_puzzles = params.get("max_puzzles", 30)
+                # Job params bypass FastAPI validation; clamp to the same
+                # bounds as the endpoint so a stored job can't trigger an
+                # unbounded bulk PGN load.
+                max_games = min(max(int(params.get("max_games", 30)), 1), 2000)
+                max_puzzles = min(max(int(params.get("max_puzzles", 30)), 1), 2000)
 
             # Create a cancellation check function
             def check_cancellation() -> bool:
