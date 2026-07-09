@@ -1,5 +1,7 @@
 """Tests for the game repository module."""
 
+from unittest.mock import patch
+
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -145,6 +147,58 @@ def test_game_repository_username_case_insensitive(repository):
 
     assert repository.get_game_count("testuser") == 1
     assert repository.get_game_count("TESTUSER") == 1
+
+
+def test_store_game_batch_mode_defers_commit(repository, db_session):
+    """With commit=False, store_game never commits; the caller owns it."""
+    with patch.object(db_session, "commit", wraps=db_session.commit) as mock_commit:
+        for i in range(3):
+            is_new, _ = repository.store_game(
+                username="testuser",
+                url=f"https://chess.com/game/{i}",
+                pgn='[Event "Test"]\n1. e4 e5 *',
+                white_username="testuser",
+                black_username="opponent",
+                white_result="win",
+                black_result="lose",
+                time_control="600",
+                end_time=1704067200 + i,
+                rated=True,
+                commit=False,
+            )
+            assert is_new is True
+        mock_commit.assert_not_called()
+
+    db_session.commit()
+    assert repository.get_game_count("testuser") == 3
+
+
+def test_store_game_batch_mode_deduplicates_within_batch(repository, db_session):
+    """Duplicates inside an uncommitted batch are still detected."""
+    url = "https://chess.com/game/12345"
+    results = [
+        repository.store_game(
+            username="testuser",
+            url=url,
+            pgn='[Event "Test"]\n1. e4 e5 *',
+            white_username="testuser",
+            black_username="opponent",
+            white_result="win",
+            black_result="lose",
+            time_control="600",
+            end_time=1704067200,
+            rated=True,
+            commit=False,
+        )
+        for _ in range(2)
+    ]
+
+    assert results[0][0] is True
+    assert results[1][0] is False
+    assert results[0][1] == results[1][1]
+
+    db_session.commit()
+    assert repository.get_game_count("testuser") == 1
 
 
 def test_game_repository_import_summary(repository):

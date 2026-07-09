@@ -62,7 +62,14 @@ class GameRepository:
         end_time: int,
         rated: bool,
         imported_at: datetime | None = None,
+        commit: bool = True,
     ) -> tuple[bool, str]:
+        """Store a game, returning (is_new, game_id).
+
+        When ``commit`` is False the row is only flushed (inside a savepoint)
+        and the caller owns the transaction: this lets bulk importers batch
+        many inserts into a single commit instead of one commit per game.
+        """
         username_lower = username.lower()
         game_id = self._game_id_from_url(url)
 
@@ -84,13 +91,16 @@ class GameRepository:
             imported_at=imported_at or datetime.now(timezone.utc),
             pgn_blob=pgn,
         )
-        self.db.add(game)
         try:
-            self.db.commit()
-            return True, game_id
+            # Savepoint so a duplicate-insert race only rolls back this row,
+            # never previously flushed rows in the caller's batch.
+            with self.db.begin_nested():
+                self.db.add(game)
         except IntegrityError:
-            self.db.rollback()
             return False, game_id
+        if commit:
+            self.db.commit()
+        return True, game_id
 
     def get_users(self) -> list[str]:
         stmt = select(Game.username).distinct().order_by(Game.username.asc())

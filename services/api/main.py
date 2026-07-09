@@ -56,17 +56,22 @@ from services.api.storage.spaced_repetition import (
 from services.api.time_control import classify_time_control
 from services.api.worker import worker
 from services.ingest import (
-    ImportError as ChessComImportError,
-)
-from services.ingest import (
+    ChessGame,
     NetworkError,
     RateLimitError,
     UserNotFoundError,
     get_player_stats,
     import_all_games,
 )
+from services.ingest import (
+    ImportError as ChessComImportError,
+)
 
 CLEANUP_INTERVAL_SECONDS = 3600
+
+# Commit imported games in batches instead of once per game: a full import can
+# span tens of thousands of games, and per-game commits hammer Postgres.
+IMPORT_COMMIT_BATCH_SIZE = 200
 
 # Rating explain thresholds
 PERFORMANCE_DIFF_THRESHOLD = 0.5
@@ -291,30 +296,48 @@ async def import_chesscom_games(username: str, db: Session = Depends(get_db)):
 
         game_repository = GameRepository(db)
 
-        # Create generator
-        games_generator = import_all_games(username)
+        def persist_batch(games: list[ChessGame]) -> None:
+            """Store a batch of games in a single transaction.
 
-        async for game in games_generator:
+            Runs on a worker thread (via asyncio.to_thread) so the blocking
+            SQLAlchemy work never starves the event loop. Batches are awaited
+            sequentially, so only one thread touches the session at a time.
+            """
+            nonlocal new_games, skipped
+            for game in games:
+                is_new, _ = game_repository.store_game(
+                    username=username,
+                    url=game.url,
+                    pgn=game.pgn,
+                    white_username=game.white_username,
+                    black_username=game.black_username,
+                    white_result=game.white_result,
+                    black_result=game.black_result,
+                    time_control=game.time_control,
+                    end_time=game.end_time,
+                    rated=game.rated,
+                    commit=False,
+                )
+                if is_new:
+                    new_games += 1
+                else:
+                    skipped += 1
+            db.commit()
+
+        batch: list[ChessGame] = []
+        async for game in import_all_games(username):
             count += 1
-            is_new, _ = game_repository.store_game(
-                username=username,
-                url=game.url,
-                pgn=game.pgn,
-                white_username=game.white_username,
-                black_username=game.black_username,
-                white_result=game.white_result,
-                black_result=game.black_result,
-                time_control=game.time_control,
-                end_time=game.end_time,
-                rated=game.rated,
-            )
+            batch.append(game)
+            if len(batch) >= IMPORT_COMMIT_BATCH_SIZE:
+                await asyncio.to_thread(persist_batch, batch)
+                batch = []
 
-            if is_new:
-                new_games += 1
-            else:
-                skipped += 1
+        if batch:
+            await asyncio.to_thread(persist_batch, batch)
 
-        game_repository.record_import_summary(username, new_games)
+        await asyncio.to_thread(
+            game_repository.record_import_summary, username, new_games
+        )
 
         return ImportResponse(
             message=f"Successfully processed {count} games for {username}",
