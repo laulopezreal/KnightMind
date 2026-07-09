@@ -115,25 +115,30 @@ preflight-back: test-back lint-back db-current ## Backend preflight (tests + lin
 # Docker
 # ---------------------------------------------------------------------------
 
+# Compose only auto-loads a file literally named ".env" for ${VAR}
+# interpolation; this project keeps its values in .env.docker, so every
+# compose invocation must pass --env-file explicitly.
+COMPOSE := docker compose --env-file .env.docker
+
 docker-up: ## Start API + Postgres via Docker Compose
 	@echo "$(GREEN)Starting Docker services...$(NC)"
-	docker compose up -d
+	$(COMPOSE) up -d
 	@echo "$(GREEN)Services started. API at http://localhost:$${API_PORT:-8000}$(NC)"
 
 docker-down: ## Stop Docker Compose services
 	@echo "$(YELLOW)Stopping Docker services...$(NC)"
-	docker compose down
+	$(COMPOSE) down
 
 docker-build: ## Rebuild the API Docker image
 	@echo "$(GREEN)Building API image...$(NC)"
-	docker compose build api
+	$(COMPOSE) build api
 
 docker-logs: ## Tail Docker Compose logs
-	docker compose logs -f
+	$(COMPOSE) logs -f
 
 docker-migrate: ## Run Alembic migrations inside the API container
 	@echo "$(GREEN)Running migrations in container...$(NC)"
-	docker compose exec api alembic -c services/api/alembic.ini upgrade head
+	$(COMPOSE) exec api alembic -c services/api/alembic.ini upgrade head
 
 docker-shell: ## Open a shell in the running API container
-	docker compose exec api bash
+	$(COMPOSE) exec api bash

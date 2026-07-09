@@ -50,12 +50,17 @@ jobs:
             APP_DIR="${{ secrets.DEPLOY_APP_DIR }}"
             cd "${APP_DIR}"
 
+            # Compose only auto-loads a file literally named ".env" for
+            # ${POSTGRES_*} interpolation; this project uses .env.docker,
+            # so every compose invocation must pass --env-file explicitly.
+            COMPOSE="docker compose --env-file ${APP_DIR}/.env.docker"
+
             echo "--- Pulling latest code ---"
             git fetch origin main
             git reset --hard origin/main
 
             echo "--- Building new image ---"
-            docker compose build api
+            ${COMPOSE} build api
 
             echo "--- Running migrations (new image, before switching traffic) ---"
             # One-off container on the freshly built image; set -e aborts the
@@ -63,17 +68,17 @@ jobs:
             # No --no-deps: compose run must start db (and wait for its
             # healthcheck via depends_on) so deploys self-heal from a stopped
             # stack (fresh server, or after systemctl stop knightmind-api).
-            docker compose run --rm api alembic -c services/api/alembic.ini upgrade head
+            ${COMPOSE} run --rm api alembic -c services/api/alembic.ini upgrade head
 
             echo "--- Restarting with new code ---"
-            docker compose up -d
+            ${COMPOSE} up -d
 
             echo "--- Health check ---"
             sleep 5
             HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/ops/health)
             if [ "${HTTP_STATUS}" -ne 200 ]; then
               echo "Health check failed with status ${HTTP_STATUS}"
-              docker compose logs --tail=50 api
+              ${COMPOSE} logs --tail=50 api
               exit 1
             fi
             echo "Health check passed (HTTP ${HTTP_STATUS})"

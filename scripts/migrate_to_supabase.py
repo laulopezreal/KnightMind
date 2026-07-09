@@ -214,7 +214,9 @@ def copy_data(pg_url: str) -> None:
                 elif val is not None:
                     d[col] = Jsonb(val)
             for col in bool_cols:
-                if col in d:
+                # Skip None: bool(None) would silently turn SQL NULL into
+                # False for nullable boolean columns.
+                if d.get(col) is not None:
                     d[col] = bool(d[col])
             return d
 

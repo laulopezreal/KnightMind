@@ -34,7 +34,14 @@ echo "[$(date -Iseconds)] Starting backup of ${POSTGRES_DB}..."
 # Dump via docker compose to a temp file first, then move atomically.
 # This prevents partial/empty backup files if pg_dump fails.
 TMP_DUMP_FILE="${DUMP_FILE}.tmp.$$"
-docker compose -f /opt/knightmind/docker-compose.yml exec -T db \
+# Clean up the temp file on any exit (set -e abort, signal, etc.) so failed
+# backups don't leave orphaned *.tmp.* files behind. The successful path
+# renames it first, so the trap is then a no-op.
+trap 'rm -f "${TMP_DUMP_FILE}"' EXIT
+# --env-file: compose only auto-loads a file literally named ".env" for
+# ${POSTGRES_*} interpolation; this project uses .env.docker.
+docker compose -f /opt/knightmind/docker-compose.yml \
+    --env-file /opt/knightmind/.env.docker exec -T db \
     pg_dump -U "${POSTGRES_USER}" "${POSTGRES_DB}" \
     | gzip > "${TMP_DUMP_FILE}"
 mv "${TMP_DUMP_FILE}" "${DUMP_FILE}"
