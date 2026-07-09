@@ -171,7 +171,7 @@ describe('Library', () => {
     it('should show loading state', async () => {
         mockGetLibraryPuzzles.mockReturnValue(new Promise(() => {})); // never resolves
         render(<Library />);
-        expect(screen.getByText(/Loading/i)).toBeInTheDocument();
+        expect(screen.getAllByText(/Loading library puzzles/i).length).toBeGreaterThan(0);
     });
 
     it('should display puzzle titles', async () => {

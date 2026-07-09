@@ -6,6 +6,7 @@ with statistics for each position (games count, win/draw/loss).
 """
 
 import io
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -15,6 +16,7 @@ import chess.pgn
 @dataclass
 class OpeningStats:
     """Statistics for a position in the opening tree."""
+
     games: int = 0
     wins: int = 0
     draws: int = 0
@@ -41,6 +43,7 @@ class OpeningStats:
 @dataclass
 class OpeningNode:
     """A node in the opening tree representing a position after a move."""
+
     move_san: str  # The move in SAN notation (e.g., "e4", "Nf3")
     ply: int  # Half-move number (1 = white's first move, 2 = black's first move, etc.)
     stats: OpeningStats = field(default_factory=OpeningStats)
@@ -65,7 +68,7 @@ class OpeningNode:
 class OpeningTreeBuilder:
     """
     Builds an opening tree from a collection of PGN games.
-    
+
     The tree represents the player's opening repertoire with statistics
     for each position showing how many games reached that position and
     the results (win/draw/loss from the player's perspective).
@@ -74,7 +77,7 @@ class OpeningTreeBuilder:
     def __init__(self, max_ply: int = 12):
         """
         Initialize the tree builder.
-        
+
         Args:
             max_ply: Maximum number of half-moves to include in the tree (default 12 = 6 full moves)
         """
@@ -85,16 +88,16 @@ class OpeningTreeBuilder:
         self,
         pgn_text: str,
         player_username: str,
-        color_filter: Literal["white", "black", "both"] = "both"
+        color_filter: Literal["white", "black", "both"] = "both",
     ) -> bool:
         """
         Add a game to the opening tree.
-        
+
         Args:
             pgn_text: The PGN text of the game
             player_username: The username of the player we're building the tree for
             color_filter: Which games to include based on player's color
-            
+
         Returns:
             True if the game was added, False if skipped (wrong color or parse error)
         """
@@ -144,7 +147,7 @@ class OpeningTreeBuilder:
         self,
         game: chess.pgn.Game,
         result: Literal["win", "draw", "loss"],
-        player_color: Literal["white", "black"]
+        player_color: Literal["white", "black"],
     ) -> None:
         """Add moves from a game to the tree."""
         node = game
@@ -165,8 +168,7 @@ class OpeningTreeBuilder:
             # Get or create child node
             if move_san not in current_tree_node.children:
                 current_tree_node.children[move_san] = OpeningNode(
-                    move_san=move_san,
-                    ply=ply
+                    move_san=move_san, ply=ply
                 )
 
             child_node = current_tree_node.children[move_san]
@@ -178,7 +180,7 @@ class OpeningTreeBuilder:
     def build_tree(self) -> dict:
         """
         Build and return the opening tree as a dictionary.
-        
+
         Returns:
             Dictionary representation of the opening tree suitable for JSON serialization
         """
@@ -191,25 +193,25 @@ class OpeningTreeBuilder:
             "draws": self.root.stats.draws,
             "losses": self.root.stats.losses,
             "win_rate": round(self.root.stats.win_rate, 1),
-            "children": [child.to_dict() for child in self.root.children.values()]
+            "children": [child.to_dict() for child in self.root.children.values()],
         }
 
 
 def build_opening_tree(
-    pgn_texts: list[str],
+    pgn_texts: Iterable[str],
     player_username: str,
     color_filter: Literal["white", "black", "both"] = "both",
-    max_ply: int = 12
+    max_ply: int = 12,
 ) -> dict:
     """
-    Convenience function to build an opening tree from a list of PGN texts.
-    
+    Convenience function to build an opening tree from PGN texts.
+
     Args:
-        pgn_texts: List of PGN game strings
+        pgn_texts: Iterable of PGN game strings
         player_username: Username to build the tree for
         color_filter: Filter by player's color ("white", "black", or "both")
         max_ply: Maximum number of half-moves to include
-        
+
     Returns:
         Dictionary representation of the opening tree
     """

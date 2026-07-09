@@ -9,6 +9,7 @@ function jsonResponse(body: unknown, status = 200) {
         ok: status >= 200 && status < 300,
         status,
         statusText: status === 200 ? 'OK' : 'Error',
+        headers: new Headers({ 'content-type': 'application/json' }),
         json: () => Promise.resolve(body),
     });
 }
@@ -39,12 +40,13 @@ describe('request()', () => {
         expect(err.detail).toBe('Not found');
     });
 
-    it('should handle non-JSON error bodies gracefully', async () => {
+    it('should handle unparseable JSON error bodies gracefully', async () => {
         mockFetch.mockReturnValue(
             Promise.resolve({
                 ok: false,
                 status: 500,
                 statusText: 'Internal Server Error',
+                headers: new Headers({ 'content-type': 'application/json' }),
                 json: () => Promise.reject(new Error('not json')),
             }),
         );
@@ -53,6 +55,40 @@ describe('request()', () => {
         expect(err).toBeInstanceOf(ApiError);
         expect(err.statusCode).toBe(500);
         expect(err.detail).toBe('Internal Server Error');
+    });
+
+    it('should flag non-JSON error responses (e.g. HTML error pages)', async () => {
+        mockFetch.mockReturnValue(
+            Promise.resolve({
+                ok: false,
+                status: 502,
+                statusText: 'Bad Gateway',
+                headers: new Headers({ 'content-type': 'text/html' }),
+                json: () => Promise.reject(new Error('not json')),
+            }),
+        );
+
+        const err = await request('/bad').catch((e: unknown) => e) as ApiError;
+        expect(err).toBeInstanceOf(ApiError);
+        expect(err.statusCode).toBe(502);
+        expect(err.message).toContain('non-JSON response');
+    });
+
+    it('should flag 200 responses that are not JSON (SPA fallback)', async () => {
+        mockFetch.mockReturnValue(
+            Promise.resolve({
+                ok: true,
+                status: 200,
+                statusText: 'OK',
+                headers: new Headers({ 'content-type': 'text/html' }),
+                json: () => Promise.reject(new Error('not json')),
+            }),
+        );
+
+        const err = await request('/fallback').catch((e: unknown) => e) as ApiError;
+        expect(err).toBeInstanceOf(ApiError);
+        expect(err.statusCode).toBe(502);
+        expect(err.message).toContain('HTML instead of JSON');
     });
 
     it('should throw ApiError with status 408 on timeout', async () => {
@@ -67,7 +103,7 @@ describe('request()', () => {
         const err = await request('/slow', { timeout: 50 }).catch((e: unknown) => e) as ApiError;
         expect(err).toBeInstanceOf(ApiError);
         expect(err.statusCode).toBe(408);
-        expect(err.detail).toBe('Request timed out');
+        expect(err.detail).toBe('/slow → request timed out after 50ms.');
     });
 
     it('should respect custom timeout', async () => {
@@ -85,10 +121,14 @@ describe('request()', () => {
         await expect(request('/slow', { timeout: 100 })).rejects.toThrow(ApiError);
     });
 
-    it('should propagate network errors', async () => {
+    it('should wrap network errors in ApiError with status 0', async () => {
         mockFetch.mockRejectedValue(new TypeError('Failed to fetch'));
 
-        await expect(request('/down')).rejects.toThrow(TypeError);
+        const err = await request('/down').catch((e: unknown) => e) as ApiError;
+        expect(err).toBeInstanceOf(ApiError);
+        expect(err.statusCode).toBe(0);
+        expect(err.message).toBe('/down network error');
+        expect(err.detail).toContain('Failed to fetch');
     });
 
     it('should pass through request options', async () => {

@@ -18,6 +18,10 @@ export default defineConfig(({ mode }) => {
       '__API_TARGET__': JSON.stringify(apiTarget),
     },
     plugins: [react(), tailwindcss()],
+    // No manualChunks: Rollup's automatic splitting already produces truly
+    // lazy shared vendor chunks for the lazy routes. Object-form manualChunks
+    // pulls each package's whole dependency graph (including React itself via
+    // react-chessboard) into an eagerly-preloaded chunk, inflating first load.
     server: {
       proxy: {
         '/api': useLocalApi

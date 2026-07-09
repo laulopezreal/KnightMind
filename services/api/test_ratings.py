@@ -1,31 +1,40 @@
 import os
+
 os.environ["KNIGHTMIND_WORKER_DISABLED"] = "true"
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
+
+import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
-import pytest
-from services.api.main import app, get_opponent_rating_from_pgn, calculate_expected_score
-from fastapi.testclient import TestClient
+
 from services.api.db import get_db
+from services.api.main import (
+    app,
+    calculate_expected_score,
+    get_opponent_rating_from_pgn,
+)
 from services.api.models import Base, Game, RatingSnapshot
 from services.api.time_control import classify_time_control
 
 client = TestClient(app)
 
+
 def test_pgn_parsing():
     pgn = '[Event "Live Chess"]\n[White "player1"]\n[Black "player2"]\n[Result "1-0"]\n[WhiteElo "1500"]\n[BlackElo "1400"]\n...'
-    
+
     # Check black elo (user is white)
     assert get_opponent_rating_from_pgn(pgn, user_is_white=True) == 1400
-    
+
     # Check white elo (user is black)
     assert get_opponent_rating_from_pgn(pgn, user_is_white=False) == 1500
-    
+
     # Missing elo
     pgn_missing = '[Event "Live Chess"]\n[White "player1"]'
     assert get_opponent_rating_from_pgn(pgn_missing, user_is_white=True) is None
+
 
 def test_expected_score_logic():
     # If opp=1400, ref=1400 -> 1 / (1 + 1) = 0.5
@@ -74,10 +83,10 @@ def test_classify_time_control_passthrough():
 
 def test_classify_time_control_edge_cases():
     """Boundary cases."""
-    assert classify_time_control("179") == "bullet"   # just under 180
-    assert classify_time_control("180") == "blitz"     # exactly 180
-    assert classify_time_control("599") == "blitz"     # just under 600
-    assert classify_time_control("600") == "rapid"     # exactly 600
+    assert classify_time_control("179") == "bullet"  # just under 180
+    assert classify_time_control("180") == "blitz"  # exactly 180
+    assert classify_time_control("599") == "blitz"  # just under 600
+    assert classify_time_control("600") == "rapid"  # exactly 600
 
 
 def test_classify_time_control_unrecognized():
@@ -105,10 +114,19 @@ def db_session():
 
 
 @pytest.fixture
-def client_with_db(db_session):
+def client_with_db(db_session, monkeypatch):
     def override_get_db():
         yield db_session
+
     app.dependency_overrides[get_db] = override_get_db
+    # `with TestClient(app)` runs the app lifespan, whose puzzle-identity
+    # backfill uses the module-level SessionLocal directly (dependency
+    # overrides don't apply there). Point it at the test engine so startup
+    # never touches the real dev-SQLite database (./knightmind.db) — same
+    # pattern as test_ops.py's test_db_instance fixture.
+    monkeypatch.setattr(
+        "services.api.main.SessionLocal", sessionmaker(bind=db_session.get_bind())
+    )
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.clear()
@@ -118,10 +136,9 @@ def client_with_db(db_session):
 def test_create_rating_snapshot_success(mock_get_stats, client_with_db, db_session):
     mock_get_stats.return_value = {"chess_rapid": {"last": {"rating": 1500}}}
 
-    response = client_with_db.post("/ratings/snapshot", json={
-        "username": "testuser",
-        "time_control": "rapid"
-    })
+    response = client_with_db.post(
+        "/ratings/snapshot", json={"username": "testuser", "time_control": "rapid"}
+    )
 
     assert response.status_code == 200
     data = response.json()
@@ -137,10 +154,9 @@ def test_create_rating_snapshot_success(mock_get_stats, client_with_db, db_sessi
 def test_create_rating_snapshot_missing_rating(mock_get_stats, client_with_db):
     mock_get_stats.return_value = {"chess_rapid": {"last": {}}}
 
-    response = client_with_db.post("/ratings/snapshot", json={
-        "username": "testuser",
-        "time_control": "rapid"
-    })
+    response = client_with_db.post(
+        "/ratings/snapshot", json={"username": "testuser", "time_control": "rapid"}
+    )
 
     assert response.status_code == 502
     assert "could not find rating" in response.json()["detail"].lower()
@@ -154,7 +170,7 @@ def test_explain_rating_changes_basic(client_with_db, db_session):
         source="chesscom",
         time_control="rapid",
         rating=1400,
-        recorded_at=since_time + timedelta(hours=1)
+        recorded_at=since_time + timedelta(hours=1),
     )
     db_session.add(snapshot)
 
@@ -168,19 +184,21 @@ def test_explain_rating_changes_basic(client_with_db, db_session):
 1. e4 e5 2. Nf3 Nc6 1-0"""
 
     for i in range(2):
-        db_session.add(Game(
-            game_id=f"game-explain-{i}",
-            url=f"https://chess.com/game/{i}",
-            username="testuser",
-            white_username="testuser",
-            black_username="opponent",
-            white_result="win",
-            black_result="loss",
-            time_control="600",
-            end_time=int((since_time + timedelta(hours=2 + i)).timestamp()),
-            rated=True,
-            pgn_blob=pgn_win,
-        ))
+        db_session.add(
+            Game(
+                game_id=f"game-explain-{i}",
+                url=f"https://chess.com/game/{i}",
+                username="testuser",
+                white_username="testuser",
+                black_username="opponent",
+                white_result="win",
+                black_result="loss",
+                time_control="600",
+                end_time=int((since_time + timedelta(hours=2 + i)).timestamp()),
+                rated=True,
+                pgn_blob=pgn_win,
+            )
+        )
     db_session.commit()
 
     response = client_with_db.get(
@@ -189,7 +207,7 @@ def test_explain_rating_changes_basic(client_with_db, db_session):
             "username": "testuser",
             "time_control": "rapid",
             "since": since_time.isoformat(),
-        }
+        },
     )
 
     assert response.status_code == 200
@@ -205,21 +223,25 @@ def test_rating_history_returns_snapshots(client_with_db, db_session):
     """GET /ratings/history returns snapshots in chronological order."""
     now = datetime.now(timezone.utc)
     for i, rating in enumerate([1400, 1420, 1415]):
-        db_session.add(RatingSnapshot(
+        db_session.add(
+            RatingSnapshot(
+                username="testuser",
+                source="chesscom",
+                time_control="rapid",
+                rating=rating,
+                recorded_at=now - timedelta(days=3 - i),
+            )
+        )
+    # Different time control — should not appear
+    db_session.add(
+        RatingSnapshot(
             username="testuser",
             source="chesscom",
-            time_control="rapid",
-            rating=rating,
-            recorded_at=now - timedelta(days=3 - i),
-        ))
-    # Different time control — should not appear
-    db_session.add(RatingSnapshot(
-        username="testuser",
-        source="chesscom",
-        time_control="blitz",
-        rating=1300,
-        recorded_at=now,
-    ))
+            time_control="blitz",
+            rating=1300,
+            recorded_at=now,
+        )
+    )
     db_session.commit()
 
     response = client_with_db.get(
@@ -239,13 +261,15 @@ def test_rating_history_returns_most_recent(client_with_db, db_session):
     now = datetime.now(timezone.utc)
     # Create 5 snapshots: ratings 1400..1440
     for i in range(5):
-        db_session.add(RatingSnapshot(
-            username="testuser",
-            source="chesscom",
-            time_control="rapid",
-            rating=1400 + i * 10,
-            recorded_at=now - timedelta(days=5 - i),
-        ))
+        db_session.add(
+            RatingSnapshot(
+                username="testuser",
+                source="chesscom",
+                time_control="rapid",
+                rating=1400 + i * 10,
+                recorded_at=now - timedelta(days=5 - i),
+            )
+        )
     db_session.commit()
 
     # Request only 3 — should get the 3 most recent (1420, 1430, 1440) in chrono order
@@ -277,13 +301,15 @@ def test_auto_snapshot_skips_unchanged_rating(mock_stats, client_with_db, db_ses
     from services.api.models import TrainingSession
 
     # Seed a snapshot with rating 1500 for rapid
-    db_session.add(RatingSnapshot(
-        username="testuser",
-        source="chesscom",
-        time_control="rapid",
-        rating=1500,
-        recorded_at=datetime.now(timezone.utc) - timedelta(hours=1),
-    ))
+    db_session.add(
+        RatingSnapshot(
+            username="testuser",
+            source="chesscom",
+            time_control="rapid",
+            rating=1500,
+            recorded_at=datetime.now(timezone.utc) - timedelta(hours=1),
+        )
+    )
     # Create a session
     session = TrainingSession(
         id="sess-dup-test",
@@ -328,17 +354,21 @@ def test_auto_snapshot_skips_unchanged_rating(mock_stats, client_with_db, db_ses
 
 
 @patch("services.api.sessions.get_player_stats")
-def test_auto_snapshot_creates_on_changed_rating(mock_stats, client_with_db, db_session):
+def test_auto_snapshot_creates_on_changed_rating(
+    mock_stats, client_with_db, db_session
+):
     """_auto_snapshot should create a new snapshot when rating has changed."""
     from services.api.models import TrainingSession
 
-    db_session.add(RatingSnapshot(
-        username="testuser",
-        source="chesscom",
-        time_control="rapid",
-        rating=1500,
-        recorded_at=datetime.now(timezone.utc) - timedelta(hours=1),
-    ))
+    db_session.add(
+        RatingSnapshot(
+            username="testuser",
+            source="chesscom",
+            time_control="rapid",
+            rating=1500,
+            recorded_at=datetime.now(timezone.utc) - timedelta(hours=1),
+        )
+    )
     session = TrainingSession(
         id="sess-change-test",
         username="testuser",
@@ -363,10 +393,14 @@ def test_auto_snapshot_creates_on_changed_rating(mock_stats, client_with_db, db_
     )
     assert response.status_code == 200
 
-    stmt = select(RatingSnapshot).where(
-        RatingSnapshot.username == "testuser",
-        RatingSnapshot.time_control == "rapid",
-    ).order_by(RatingSnapshot.recorded_at.asc())
+    stmt = (
+        select(RatingSnapshot)
+        .where(
+            RatingSnapshot.username == "testuser",
+            RatingSnapshot.time_control == "rapid",
+        )
+        .order_by(RatingSnapshot.recorded_at.asc())
+    )
     rapid_snapshots = db_session.scalars(stmt).all()
     assert len(rapid_snapshots) == 2
     assert rapid_snapshots[0].rating == 1500

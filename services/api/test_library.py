@@ -1,5 +1,7 @@
 """Tests for the GET /puzzles/list (Library) endpoint."""
+
 import os
+
 os.environ["KNIGHTMIND_WORKER_DISABLED"] = "true"
 
 from datetime import datetime, timedelta, timezone
@@ -11,7 +13,8 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from services.api.main import app, get_db
-from services.api.models import Base, Game, Puzzle as PuzzleModel, PuzzleStats
+from services.api.models import Base, Game, PuzzleStats
+from services.api.models import Puzzle as PuzzleModel
 
 
 @pytest.fixture
@@ -44,18 +47,20 @@ def _create_game(db, game_id: str, username: str = "testuser"):
     existing = db.get(Game, game_id)
     if existing:
         return
-    db.add(Game(
-        game_id=game_id,
-        url=f"https://chess.com/game/{game_id}",
-        username=username,
-        white_username=username,
-        black_username="opponent",
-        white_result="win",
-        black_result="lose",
-        time_control="600",
-        end_time=int(datetime.now(timezone.utc).timestamp()),
-        rated=True,
-    ))
+    db.add(
+        Game(
+            game_id=game_id,
+            url=f"https://chess.com/game/{game_id}",
+            username=username,
+            white_username=username,
+            black_username="opponent",
+            white_result="win",
+            black_result="lose",
+            time_control="600",
+            end_time=int(datetime.now(timezone.utc).timestamp()),
+            rated=True,
+        )
+    )
     db.flush()
 
 
@@ -70,20 +75,22 @@ def _create_puzzle(
     """Helper: create a Puzzle row (and parent Game if needed)."""
     game_id = f"game-{puzzle_id}"
     _create_game(db, game_id, username)
-    db.add(PuzzleModel(
-        id=puzzle_id,
-        username=username,
-        source_game_id=game_id,
-        ply=10,
-        fen=fen,
-        side_to_move="white",
-        played_move_uci="e2e4",
-        best_move_uci="d2d4",
-        eval_before=0.2,
-        eval_after=-0.5,
-        swing=swing,
-        created_at=created_at or datetime.now(timezone.utc),
-    ))
+    db.add(
+        PuzzleModel(
+            id=puzzle_id,
+            username=username,
+            source_game_id=game_id,
+            ply=10,
+            fen=fen,
+            side_to_move="white",
+            played_move_uci="e2e4",
+            best_move_uci="d2d4",
+            eval_before=0.2,
+            eval_after=-0.5,
+            swing=swing,
+            created_at=created_at or datetime.now(timezone.utc),
+        )
+    )
     db.flush()
 
 
@@ -101,20 +108,22 @@ def _create_stats(
     next_due_at: datetime | None = None,
 ):
     """Helper: create a PuzzleStats row."""
-    db.add(PuzzleStats(
-        puzzle_id=puzzle_id,
-        username=username,
-        title=title,
-        primary_motif=primary_motif,
-        attempts=attempts,
-        pass_count=pass_count,
-        fail_count=fail_count,
-        last_reviewed_at=last_reviewed_at,
-        last_result=last_result,
-        next_due_at=next_due_at,
-        interval_days=1 if next_due_at else None,
-        ease_factor=2.0,
-    ))
+    db.add(
+        PuzzleStats(
+            puzzle_id=puzzle_id,
+            username=username,
+            title=title,
+            primary_motif=primary_motif,
+            attempts=attempts,
+            pass_count=pass_count,
+            fail_count=fail_count,
+            last_reviewed_at=last_reviewed_at,
+            last_result=last_result,
+            next_due_at=next_due_at,
+            interval_days=1 if next_due_at else None,
+            ease_factor=2.0,
+        )
+    )
     db.flush()
 
 
@@ -126,10 +135,17 @@ def _seed_puzzles(db, count: int = 5, username: str = "testuser"):
 
     for i in range(count):
         pid = f"p-{i}"
-        _create_puzzle(db, pid, username, swing=swings[i % len(swings)],
-                       created_at=now - timedelta(days=count - i))
+        _create_puzzle(
+            db,
+            pid,
+            username,
+            swing=swings[i % len(swings)],
+            created_at=now - timedelta(days=count - i),
+        )
         _create_stats(
-            db, pid, username,
+            db,
+            pid,
+            username,
             title=f"Puzzle {i}",
             primary_motif=motifs[i % len(motifs)],
             attempts=i + 1,
@@ -143,6 +159,7 @@ def _seed_puzzles(db, count: int = 5, username: str = "testuser"):
 
 
 # ---- Basic endpoint tests ----
+
 
 class TestListPuzzlesBasic:
     def test_missing_username(self, client):
@@ -158,7 +175,13 @@ class TestListPuzzlesBasic:
         assert data["puzzles"] == []
         assert data["total"] == 0
         assert data["available_motifs"] == []
-        assert data["stats"] == {"total": 0, "due": 0, "new": 0, "learning": 0, "mastered": 0}
+        assert data["stats"] == {
+            "total": 0,
+            "due": 0,
+            "new": 0,
+            "learning": 0,
+            "mastered": 0,
+        }
 
     def test_returns_all_puzzles(self, client, db_session):
         """Returns all puzzles for a user with correct structure."""
@@ -172,18 +195,37 @@ class TestListPuzzlesBasic:
     def test_response_shape(self, client, db_session):
         """Each puzzle in response has required fields."""
         _create_puzzle(db_session, "p-shape", swing=2.5)
-        _create_stats(db_session, "p-shape", title="Shape Test", primary_motif="Fork",
-                      attempts=3, pass_count=2, fail_count=1)
+        _create_stats(
+            db_session,
+            "p-shape",
+            title="Shape Test",
+            primary_motif="Fork",
+            attempts=3,
+            pass_count=2,
+            fail_count=1,
+        )
         db_session.commit()
 
         response = client.get("/puzzles/list?username=testuser")
         puzzle = response.json()["puzzles"][0]
 
         required_fields = [
-            "id", "title", "primary_motif", "difficulty", "swing",
-            "fen", "side_to_move", "best_move_uci", "status",
-            "attempts", "pass_count", "fail_count",
-            "last_reviewed_at", "last_result", "next_due_at", "created_at",
+            "id",
+            "title",
+            "primary_motif",
+            "difficulty",
+            "swing",
+            "fen",
+            "side_to_move",
+            "best_move_uci",
+            "status",
+            "attempts",
+            "pass_count",
+            "fail_count",
+            "last_reviewed_at",
+            "last_result",
+            "next_due_at",
+            "created_at",
         ]
         for field in required_fields:
             assert field in puzzle, f"Missing field: {field}"
@@ -214,6 +256,7 @@ class TestListPuzzlesBasic:
 
 # ---- Status computation tests ----
 
+
 class TestStatusComputation:
     def test_status_new(self, client, db_session):
         """Puzzle with no stats → 'new'."""
@@ -225,8 +268,13 @@ class TestStatusComputation:
     def test_status_due(self, client, db_session):
         """Puzzle with next_due_at in the past → 'due'."""
         _create_puzzle(db_session, "p-due")
-        _create_stats(db_session, "p-due", attempts=1, pass_count=1,
-                      next_due_at=datetime.now(timezone.utc) - timedelta(hours=1))
+        _create_stats(
+            db_session,
+            "p-due",
+            attempts=1,
+            pass_count=1,
+            next_due_at=datetime.now(timezone.utc) - timedelta(hours=1),
+        )
         db_session.commit()
         puzzle = client.get("/puzzles/list?username=testuser").json()["puzzles"][0]
         assert puzzle["status"] == "due"
@@ -234,8 +282,14 @@ class TestStatusComputation:
     def test_status_learning(self, client, db_session):
         """Puzzle with recent activity but below mastery threshold → 'learning'."""
         _create_puzzle(db_session, "p-learning")
-        _create_stats(db_session, "p-learning", attempts=2, pass_count=1, fail_count=1,
-                      next_due_at=datetime.now(timezone.utc) + timedelta(days=1))
+        _create_stats(
+            db_session,
+            "p-learning",
+            attempts=2,
+            pass_count=1,
+            fail_count=1,
+            next_due_at=datetime.now(timezone.utc) + timedelta(days=1),
+        )
         db_session.commit()
         puzzle = client.get("/puzzles/list?username=testuser").json()["puzzles"][0]
         assert puzzle["status"] == "learning"
@@ -243,8 +297,14 @@ class TestStatusComputation:
     def test_status_mastered(self, client, db_session):
         """Puzzle with ≥80% success rate and ≥3 attempts → 'mastered'."""
         _create_puzzle(db_session, "p-mastered")
-        _create_stats(db_session, "p-mastered", attempts=5, pass_count=5, fail_count=0,
-                      next_due_at=datetime.now(timezone.utc) + timedelta(days=30))
+        _create_stats(
+            db_session,
+            "p-mastered",
+            attempts=5,
+            pass_count=5,
+            fail_count=0,
+            next_due_at=datetime.now(timezone.utc) + timedelta(days=30),
+        )
         db_session.commit()
         puzzle = client.get("/puzzles/list?username=testuser").json()["puzzles"][0]
         assert puzzle["status"] == "mastered"
@@ -252,16 +312,28 @@ class TestStatusComputation:
 
 # ---- Corpus stats tests ----
 
+
 class TestCorpusStats:
     def test_stats_reflect_all_statuses(self, client, db_session):
         """Stats object counts each status category."""
         _create_puzzle(db_session, "p-new1")
         _create_puzzle(db_session, "p-due1")
-        _create_stats(db_session, "p-due1", attempts=1, pass_count=1,
-                      next_due_at=datetime.now(timezone.utc) - timedelta(hours=1))
+        _create_stats(
+            db_session,
+            "p-due1",
+            attempts=1,
+            pass_count=1,
+            next_due_at=datetime.now(timezone.utc) - timedelta(hours=1),
+        )
         _create_puzzle(db_session, "p-mastered1")
-        _create_stats(db_session, "p-mastered1", attempts=5, pass_count=5, fail_count=0,
-                      next_due_at=datetime.now(timezone.utc) + timedelta(days=30))
+        _create_stats(
+            db_session,
+            "p-mastered1",
+            attempts=5,
+            pass_count=5,
+            fail_count=0,
+            next_due_at=datetime.now(timezone.utc) + timedelta(days=30),
+        )
         db_session.commit()
 
         data = client.get("/puzzles/list?username=testuser").json()
@@ -285,6 +357,7 @@ class TestCorpusStats:
 
 
 # ---- Difficulty bucketing tests ----
+
 
 class TestDifficultyBucketing:
     def test_easy(self, client, db_session):
@@ -325,6 +398,7 @@ class TestDifficultyBucketing:
 
 # ---- Filter tests ----
 
+
 class TestFilters:
     def test_search_by_title(self, client, db_session):
         """Search by title substring."""
@@ -362,8 +436,13 @@ class TestFilters:
         """Filter by status."""
         _create_puzzle(db_session, "p-new")  # no stats → new
         _create_puzzle(db_session, "p-due")
-        _create_stats(db_session, "p-due", attempts=1, pass_count=1,
-                      next_due_at=datetime.now(timezone.utc) - timedelta(hours=1))
+        _create_stats(
+            db_session,
+            "p-due",
+            attempts=1,
+            pass_count=1,
+            next_due_at=datetime.now(timezone.utc) - timedelta(hours=1),
+        )
         db_session.commit()
 
         response = client.get("/puzzles/list?username=testuser&status=new")
@@ -425,7 +504,9 @@ class TestFilters:
         _create_stats(db_session, "p-wrong-diff", primary_motif="Fork")
         db_session.commit()
 
-        response = client.get("/puzzles/list?username=testuser&motif=Fork&difficulty=hard")
+        response = client.get(
+            "/puzzles/list?username=testuser&motif=Fork&difficulty=hard"
+        )
         data = response.json()
         assert data["total"] == 1
         assert data["puzzles"][0]["id"] == "p-target"
@@ -441,16 +522,27 @@ class TestFilters:
 
 # ---- Sort tests ----
 
+
 class TestSorting:
     def test_sort_due_soonest(self, client, db_session):
         """Default sort puts due puzzles first, then new, then future."""
         now = datetime.now(timezone.utc)
         _create_puzzle(db_session, "p-future")
-        _create_stats(db_session, "p-future", attempts=1, pass_count=1,
-                      next_due_at=now + timedelta(days=10))
+        _create_stats(
+            db_session,
+            "p-future",
+            attempts=1,
+            pass_count=1,
+            next_due_at=now + timedelta(days=10),
+        )
         _create_puzzle(db_session, "p-due")
-        _create_stats(db_session, "p-due", attempts=1, pass_count=1,
-                      next_due_at=now - timedelta(hours=2))
+        _create_stats(
+            db_session,
+            "p-due",
+            attempts=1,
+            pass_count=1,
+            next_due_at=now - timedelta(hours=2),
+        )
         _create_puzzle(db_session, "p-new")  # no stats
         db_session.commit()
 
@@ -500,6 +592,7 @@ class TestSorting:
 
 # ---- Pagination tests ----
 
+
 class TestPagination:
     def test_default_pagination(self, client, db_session):
         """Default limit is 50, offset 0."""
@@ -538,6 +631,7 @@ class TestPagination:
 
 
 # ---- Available motifs tests ----
+
 
 class TestAvailableMotifs:
     def test_returns_distinct_motifs(self, client, db_session):
@@ -585,8 +679,13 @@ class TestGetPuzzleDetail:
     def test_returns_puzzle_by_id(self, client, db_session):
         _create_puzzle(db_session, "p-detail", swing=3.0)
         _create_stats(
-            db_session, "p-detail", title="Detail Test", primary_motif="Fork",
-            attempts=5, pass_count=4, fail_count=1,
+            db_session,
+            "p-detail",
+            title="Detail Test",
+            primary_motif="Fork",
+            attempts=5,
+            pass_count=4,
+            fail_count=1,
         )
         db_session.commit()
 
@@ -635,9 +734,21 @@ class TestGetPuzzleDetail:
         response = client.get("/puzzles/p-shape?username=testuser")
         data = response.json()
         expected_keys = {
-            "id", "title", "primary_motif", "difficulty", "swing",
-            "fen", "side_to_move", "best_move_uci", "status",
-            "attempts", "pass_count", "fail_count",
-            "last_reviewed_at", "last_result", "next_due_at", "created_at",
+            "id",
+            "title",
+            "primary_motif",
+            "difficulty",
+            "swing",
+            "fen",
+            "side_to_move",
+            "best_move_uci",
+            "status",
+            "attempts",
+            "pass_count",
+            "fail_count",
+            "last_reviewed_at",
+            "last_result",
+            "next_due_at",
+            "created_at",
         }
         assert set(data.keys()) == expected_keys

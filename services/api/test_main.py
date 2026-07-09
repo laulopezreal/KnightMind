@@ -1,7 +1,8 @@
 import os
+
 os.environ["KNIGHTMIND_WORKER_DISABLED"] = "true"
+from datetime import date, datetime, timedelta, timezone
 from unittest.mock import patch
-from datetime import datetime, date, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
@@ -10,7 +11,16 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from services.api.main import app, get_db
-from services.api.models import Base, Job, JobStatus, PuzzleStats, Game, Puzzle as PuzzleModel
+from services.api.models import (
+    Base,
+    Game,
+    Job,
+    JobStatus,
+    PuzzleStats,
+)
+from services.api.models import (
+    Puzzle as PuzzleModel,
+)
 
 
 @pytest.fixture
@@ -29,6 +39,7 @@ def db_session():
         session.close()
         Base.metadata.drop_all(bind=engine)
 
+
 @pytest.fixture
 def client_with_db(db_session, monkeypatch):
     monkeypatch.setenv("KNIGHTMIND_WORKER_DISABLED", "true")
@@ -42,24 +53,33 @@ client = TestClient(app)
 
 # --- Helpers ---
 
-def _create_game(db, game_id: str, username: str = "testuser", pgn: str = "", end_time: int | None = None):
+
+def _create_game(
+    db,
+    game_id: str,
+    username: str = "testuser",
+    pgn: str = "",
+    end_time: int | None = None,
+):
     """Helper: create a Game row."""
     existing = db.get(Game, game_id)
     if existing:
         return
-    db.add(Game(
-        game_id=game_id,
-        url=f"https://chess.com/game/{game_id}",
-        username=username,
-        white_username=username,
-        black_username="opponent",
-        white_result="win",
-        black_result="lose",
-        time_control="600",
-        end_time=end_time or int(datetime.now(timezone.utc).timestamp()),
-        rated=True,
-        pgn_blob=pgn or '[Event "Test"]\n\n1. e4 e5 1/2-1/2',
-    ))
+    db.add(
+        Game(
+            game_id=game_id,
+            url=f"https://chess.com/game/{game_id}",
+            username=username,
+            white_username=username,
+            black_username="opponent",
+            white_result="win",
+            black_result="lose",
+            time_control="600",
+            end_time=end_time or int(datetime.now(timezone.utc).timestamp()),
+            rated=True,
+            pgn_blob=pgn or '[Event "Test"]\n\n1. e4 e5 1/2-1/2',
+        )
+    )
     db.flush()
 
 
@@ -76,25 +96,28 @@ def _create_puzzle(
     """Helper: create a Puzzle row (and parent Game if needed)."""
     game_id = source_game_id or f"game-{puzzle_id}"
     _create_game(db, game_id, username)
-    db.add(PuzzleModel(
-        id=puzzle_id,
-        username=username,
-        source_game_id=game_id,
-        ply=ply,
-        fen="rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
-        side_to_move="white",
-        played_move_uci="e2e4",
-        best_move_uci="d2d4",
-        eval_before=0.5,
-        eval_after=-1.5,
-        swing=swing,
-        created_at=created_at or datetime.now(timezone.utc),
-        used_on=used_on,
-    ))
+    db.add(
+        PuzzleModel(
+            id=puzzle_id,
+            username=username,
+            source_game_id=game_id,
+            ply=ply,
+            fen="rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+            side_to_move="white",
+            played_move_uci="e2e4",
+            best_move_uci="d2d4",
+            eval_before=0.5,
+            eval_after=-1.5,
+            swing=swing,
+            created_at=created_at or datetime.now(timezone.utc),
+            used_on=used_on,
+        )
+    )
     db.flush()
 
 
 # --- Basic tests ---
+
 
 def test_root():
     response = client.get("/")
@@ -117,11 +140,14 @@ def test_get_openings_missing_username():
 
 # --- Openings tests ---
 
+
 @patch("services.api.main.import_all_games")
 def test_get_openings_with_games(mock_import_games, client_with_db):
     """Test /openings endpoint with imported games."""
+
     async def mock_generator(username):
         from services.ingest import ChessGame
+
         for game_data in MOCK_GAMES:
             yield ChessGame(
                 url=game_data["url"],
@@ -164,6 +190,7 @@ def test_get_openings_no_games(client_with_db):
 
 
 # --- User tests ---
+
 
 def test_get_users_list(client_with_db, db_session):
     """Test retrieving list of users."""
@@ -214,13 +241,19 @@ def test_user_status_with_due_puzzles(client_with_db, db_session):
     puzzle_id_one = "puzzle-due-1"
     puzzle_id_two = "puzzle-due-2"
     _create_puzzle(
-        db_session, puzzle_id_one, "testuser",
-        source_game_id=game_id, ply=10,
+        db_session,
+        puzzle_id_one,
+        "testuser",
+        source_game_id=game_id,
+        ply=10,
         created_at=datetime.now(timezone.utc) - timedelta(days=2),
     )
     _create_puzzle(
-        db_session, puzzle_id_two, "testuser",
-        source_game_id=game_id, ply=12,
+        db_session,
+        puzzle_id_two,
+        "testuser",
+        source_game_id=game_id,
+        ply=12,
         created_at=datetime.now(timezone.utc) - timedelta(days=1),
     )
 
@@ -296,8 +329,10 @@ MOCK_GAMES = [
 @patch("services.api.main.import_all_games")
 def test_import_chesscom_success(mock_import_games, client_with_db):
     """Test successful import of games."""
+
     async def mock_generator(username):
         from services.ingest import ChessGame
+
         for game_data in MOCK_GAMES:
             yield ChessGame(
                 url=game_data["url"],
@@ -326,8 +361,10 @@ def test_import_chesscom_success(mock_import_games, client_with_db):
 @patch("services.api.main.import_all_games")
 def test_import_status_after_import(mock_import_games, client_with_db):
     """Test import status before and after an import."""
+
     async def mock_generator(username):
         from services.ingest import ChessGame
+
         for game_data in MOCK_GAMES:
             yield ChessGame(
                 url=game_data["url"],
@@ -361,8 +398,10 @@ def test_import_status_after_import(mock_import_games, client_with_db):
 @patch("services.api.main.import_all_games")
 def test_import_chesscom_deduplication(mock_import_games, client_with_db):
     """Test that duplicate games are not re-imported."""
+
     async def mock_generator(username):
         from services.ingest import ChessGame
+
         for game_data in MOCK_GAMES:
             yield ChessGame(
                 url=game_data["url"],
@@ -394,11 +433,48 @@ def test_import_chesscom_deduplication(mock_import_games, client_with_db):
     assert data["games_count"] == 2  # Total processed this run
 
 
+@patch("services.api.main.import_all_games")
+def test_import_chesscom_batches_commits(mock_import_games, client_with_db, db_session):
+    """A large import commits per batch, never once per game."""
+    from services.api.main import IMPORT_COMMIT_BATCH_SIZE
+    from services.ingest import ChessGame
+
+    total_games = IMPORT_COMMIT_BATCH_SIZE + 50
+
+    async def mock_generator(username):
+        for i in range(total_games):
+            yield ChessGame(
+                url=f"https://www.chess.com/game/live/{i}",
+                pgn='[Event "Test"]\n\n1. e4 e5 1/2-1/2',
+                time_control="600",
+                end_time=1704067200 + i,
+                rated=True,
+                white_username="testuser",
+                black_username=f"opponent{i}",
+                white_result="win",
+                black_result="lose",
+            )
+
+    mock_import_games.side_effect = mock_generator
+
+    with patch.object(db_session, "commit", wraps=db_session.commit) as mock_commit:
+        response = client_with_db.post("/import/chesscom?username=testuser")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["games_count"] == total_games
+    assert data["new_games"] == total_games
+    assert data["skipped_duplicates"] == 0
+
+    # Two game batches (200 + 50) plus the import-summary write.
+    assert mock_commit.call_count == 3
+
 
 @patch("services.api.main.import_all_games")
 def test_import_chesscom_user_not_found(mock_import_games, client_with_db):
     """Test error handling for non-existent user."""
     from services.ingest import UserNotFoundError
+
     mock_import_games.side_effect = UserNotFoundError("nonexistent_user")
 
     response = client_with_db.post("/import/chesscom?username=nonexistent_user")
@@ -411,6 +487,7 @@ def test_import_chesscom_user_not_found(mock_import_games, client_with_db):
 def test_import_chesscom_rate_limit(mock_import_games, client_with_db):
     """Test error handling for rate limiting."""
     from services.ingest import RateLimitError
+
     mock_import_games.side_effect = RateLimitError(retry_after=60)
 
     response = client_with_db.post("/import/chesscom?username=testuser")
@@ -423,6 +500,7 @@ def test_import_chesscom_rate_limit(mock_import_games, client_with_db):
 def test_import_chesscom_network_error(mock_import_games, client_with_db):
     """Test error handling for network errors."""
     from services.ingest import NetworkError
+
     mock_import_games.side_effect = NetworkError("Connection refused")
 
     response = client_with_db.post("/import/chesscom?username=testuser")
@@ -434,8 +512,10 @@ def test_import_chesscom_network_error(mock_import_games, client_with_db):
 @patch("services.api.main.import_all_games")
 def test_import_chesscom_no_games(mock_import_games, client_with_db):
     """Test handling user with no games."""
+
     async def mock_generator(username):
-        if False: yield  # Empty generator
+        if False:
+            yield  # Empty generator
 
     mock_import_games.side_effect = mock_generator
 
@@ -448,6 +528,7 @@ def test_import_chesscom_no_games(mock_import_games, client_with_db):
 
 
 # --- Puzzle generation endpoint tests ---
+
 
 def test_generate_puzzles_success(client_with_db, db_session):
     """Test puzzle generation enqueues a job with default params."""
@@ -463,7 +544,9 @@ def test_generate_puzzles_success(client_with_db, db_session):
 
 def test_generate_puzzles_custom_params(client_with_db, db_session):
     """Test puzzle generation stores custom params on the job."""
-    response = client_with_db.post("/puzzles/generate?username=testuser&max_games=5&max_puzzles=7")
+    response = client_with_db.post(
+        "/puzzles/generate?username=testuser&max_games=5&max_puzzles=7"
+    )
     assert response.status_code == 200
     data = response.json()
 
@@ -480,17 +563,23 @@ def test_generate_puzzles_missing_username():
 
 # --- Daily puzzles endpoint tests ---
 
+
 def test_get_daily_puzzles_success(client_with_db, db_session):
     """Test successful retrieval of daily puzzles."""
     for i in range(5):
         _create_puzzle(
-            db_session, f"puzzle-{i}", "testuser",
-            source_game_id=f"game-daily-{i}", ply=10 + i,
+            db_session,
+            f"puzzle-{i}",
+            "testuser",
+            source_game_id=f"game-daily-{i}",
+            ply=10 + i,
             created_at=datetime(2024, 1, i + 1, 12, 0, 0, tzinfo=timezone.utc),
         )
     db_session.commit()
 
-    response = client_with_db.post("/daily-puzzle-sessions", json={"username": "testuser", "n": 3})
+    response = client_with_db.post(
+        "/daily-puzzle-sessions", json={"username": "testuser", "n": 3}
+    )
 
     assert response.status_code == 200
     data = response.json()
@@ -509,14 +598,19 @@ def test_get_daily_puzzles_rotation(client_with_db, db_session):
 
     for i in range(5):
         _create_puzzle(
-            db_session, f"puzzle-rot-{i}", "testuser",
-            source_game_id=f"game-rot-{i}", ply=10 + i,
+            db_session,
+            f"puzzle-rot-{i}",
+            "testuser",
+            source_game_id=f"game-rot-{i}",
+            ply=10 + i,
             used_on=yesterday if i < 2 else None,
         )
     db_session.commit()
 
     # Request 4 puzzles - should get 3 unused + 1 used
-    response = client_with_db.post("/daily-puzzle-sessions", json={"username": "testuser", "n": 4})
+    response = client_with_db.post(
+        "/daily-puzzle-sessions", json={"username": "testuser", "n": 4}
+    )
 
     assert response.status_code == 200
     data = response.json()
@@ -529,7 +623,9 @@ def test_get_daily_puzzles_rotation(client_with_db, db_session):
 
 def test_get_daily_puzzles_no_puzzles(client_with_db):
     """Test 404 when user has no puzzles."""
-    response = client_with_db.post("/daily-puzzle-sessions", json={"username": "unknownuser", "n": 5})
+    response = client_with_db.post(
+        "/daily-puzzle-sessions", json={"username": "unknownuser", "n": 5}
+    )
 
     assert response.status_code == 404
     assert "no puzzles" in response.json()["detail"].lower()
@@ -555,18 +651,25 @@ def test_get_daily_puzzles_idempotent(client_with_db, db_session):
     """Test that calling endpoint multiple times on same day returns same puzzles."""
     for i in range(5):
         _create_puzzle(
-            db_session, f"puzzle-idem-{i}", "testuser",
-            source_game_id=f"game-idem-{i}", ply=10 + i,
+            db_session,
+            f"puzzle-idem-{i}",
+            "testuser",
+            source_game_id=f"game-idem-{i}",
+            ply=10 + i,
         )
     db_session.commit()
 
     # First call
-    response1 = client_with_db.post("/daily-puzzle-sessions", json={"username": "testuser", "n": 3})
+    response1 = client_with_db.post(
+        "/daily-puzzle-sessions", json={"username": "testuser", "n": 3}
+    )
     assert response1.status_code == 200
     puzzle_ids_1 = {p["id"] for p in response1.json()["puzzles"]}
 
     # Second call - should return same puzzles (already marked for today)
-    response2 = client_with_db.post("/daily-puzzle-sessions", json={"username": "testuser", "n": 3})
+    response2 = client_with_db.post(
+        "/daily-puzzle-sessions", json={"username": "testuser", "n": 3}
+    )
     assert response2.status_code == 200
     puzzle_ids_2 = {p["id"] for p in response2.json()["puzzles"]}
 
@@ -575,6 +678,7 @@ def test_get_daily_puzzles_idempotent(client_with_db, db_session):
 
 
 # --- Engine tests ---
+
 
 @patch("services.api.main.is_engine_available")
 def test_engine_status_available(mock_available):
@@ -609,38 +713,45 @@ def test_engine_eval_unavailable(mock_eval):
 
 _SENTINEL = object()
 
-def _create_puzzle_stats(db_session, puzzle_id, username, fail_count, last_reviewed_at=None, title=_SENTINEL):
+
+def _create_puzzle_stats(
+    db_session, puzzle_id, username, fail_count, last_reviewed_at=None, title=_SENTINEL
+):
     """Helper to create a PuzzleStats record with required Puzzle and Game parents."""
     _create_game(db_session, f"game-{puzzle_id}", username)
     existing_puzzle = db_session.get(PuzzleModel, puzzle_id)
     if not existing_puzzle:
-        db_session.add(PuzzleModel(
-            id=puzzle_id,
+        db_session.add(
+            PuzzleModel(
+                id=puzzle_id,
+                username=username,
+                source_game_id=f"game-{puzzle_id}",
+                ply=10,
+                fen="8/8/8/8/8/8/8/8 w - - 0 1",
+                side_to_move="white",
+                played_move_uci="e2e4",
+                best_move_uci="d2d4",
+                eval_before=0.2,
+                eval_after=-0.5,
+                swing=0.7,
+                created_at=datetime.now(timezone.utc),
+            )
+        )
+    db_session.add(
+        PuzzleStats(
+            puzzle_id=puzzle_id,
             username=username,
-            source_game_id=f"game-{puzzle_id}",
-            ply=10,
-            fen="8/8/8/8/8/8/8/8 w - - 0 1",
-            side_to_move="white",
-            played_move_uci="e2e4",
-            best_move_uci="d2d4",
-            eval_before=0.2,
-            eval_after=-0.5,
-            swing=0.7,
-            created_at=datetime.now(timezone.utc),
-        ))
-    db_session.add(PuzzleStats(
-        puzzle_id=puzzle_id,
-        username=username,
-        title=f"Puzzle {puzzle_id}" if title is _SENTINEL else title,
-        attempts=fail_count + 1,
-        pass_count=1,
-        fail_count=fail_count,
-        last_reviewed_at=last_reviewed_at,
-        last_result="fail",
-        next_due_at=datetime.now(timezone.utc),
-        interval_days=1,
-        ease_factor=2.0,
-    ))
+            title=f"Puzzle {puzzle_id}" if title is _SENTINEL else title,
+            attempts=fail_count + 1,
+            pass_count=1,
+            fail_count=fail_count,
+            last_reviewed_at=last_reviewed_at,
+            last_result="fail",
+            next_due_at=datetime.now(timezone.utc),
+            interval_days=1,
+            ease_factor=2.0,
+        )
+    )
     db_session.commit()
 
 
@@ -655,8 +766,13 @@ def test_tricky_puzzles_empty(client_with_db):
 
 def test_tricky_puzzles_filters_below_threshold(client_with_db, db_session):
     """Puzzles with fewer than 2 failures are excluded."""
-    _create_puzzle_stats(db_session, "p-1fail", "testuser", fail_count=1,
-                         last_reviewed_at=datetime.now(timezone.utc))
+    _create_puzzle_stats(
+        db_session,
+        "p-1fail",
+        "testuser",
+        fail_count=1,
+        last_reviewed_at=datetime.now(timezone.utc),
+    )
     response = client_with_db.get("/users/testuser/puzzles/tricky")
     assert response.status_code == 200
     data = response.json()
@@ -667,8 +783,14 @@ def test_tricky_puzzles_filters_below_threshold(client_with_db, db_session):
 def test_tricky_puzzles_includes_at_threshold(client_with_db, db_session):
     """Puzzles with exactly 2 failures are included."""
     reviewed_at = datetime.now(timezone.utc) - timedelta(hours=1)
-    _create_puzzle_stats(db_session, "p-2fail", "testuser", fail_count=2,
-                         last_reviewed_at=reviewed_at, title="Fork Tactic")
+    _create_puzzle_stats(
+        db_session,
+        "p-2fail",
+        "testuser",
+        fail_count=2,
+        last_reviewed_at=reviewed_at,
+        title="Fork Tactic",
+    )
     response = client_with_db.get("/users/testuser/puzzles/tricky")
     assert response.status_code == 200
     data = response.json()
@@ -682,12 +804,23 @@ def test_tricky_puzzles_includes_at_threshold(client_with_db, db_session):
 def test_tricky_puzzles_sorted_by_fail_count_desc(client_with_db, db_session):
     """Puzzles are sorted by fail_count descending, then by last_reviewed_at descending."""
     now = datetime.now(timezone.utc)
-    _create_puzzle_stats(db_session, "p-low", "testuser", fail_count=2,
-                         last_reviewed_at=now - timedelta(hours=1))
-    _create_puzzle_stats(db_session, "p-high", "testuser", fail_count=5,
-                         last_reviewed_at=now - timedelta(hours=2))
-    _create_puzzle_stats(db_session, "p-mid", "testuser", fail_count=3,
-                         last_reviewed_at=now)
+    _create_puzzle_stats(
+        db_session,
+        "p-low",
+        "testuser",
+        fail_count=2,
+        last_reviewed_at=now - timedelta(hours=1),
+    )
+    _create_puzzle_stats(
+        db_session,
+        "p-high",
+        "testuser",
+        fail_count=5,
+        last_reviewed_at=now - timedelta(hours=2),
+    )
+    _create_puzzle_stats(
+        db_session, "p-mid", "testuser", fail_count=3, last_reviewed_at=now
+    )
 
     response = client_with_db.get("/users/testuser/puzzles/tricky")
     assert response.status_code == 200
@@ -699,8 +832,13 @@ def test_tricky_puzzles_respects_limit(client_with_db, db_session):
     """The limit parameter caps the number of returned puzzles."""
     now = datetime.now(timezone.utc)
     for i in range(5):
-        _create_puzzle_stats(db_session, f"p-limit-{i}", "testuser", fail_count=3,
-                             last_reviewed_at=now - timedelta(hours=i))
+        _create_puzzle_stats(
+            db_session,
+            f"p-limit-{i}",
+            "testuser",
+            fail_count=3,
+            last_reviewed_at=now - timedelta(hours=i),
+        )
 
     response = client_with_db.get("/users/testuser/puzzles/tricky?limit=2")
     assert response.status_code == 200
@@ -712,10 +850,16 @@ def test_tricky_puzzles_respects_limit(client_with_db, db_session):
 
 def test_tricky_puzzles_excludes_null_last_reviewed(client_with_db, db_session):
     """Puzzles with null last_reviewed_at are excluded even if fail_count >= 2."""
-    _create_puzzle_stats(db_session, "p-null-date", "testuser", fail_count=3,
-                         last_reviewed_at=None)
-    _create_puzzle_stats(db_session, "p-has-date", "testuser", fail_count=2,
-                         last_reviewed_at=datetime.now(timezone.utc))
+    _create_puzzle_stats(
+        db_session, "p-null-date", "testuser", fail_count=3, last_reviewed_at=None
+    )
+    _create_puzzle_stats(
+        db_session,
+        "p-has-date",
+        "testuser",
+        fail_count=2,
+        last_reviewed_at=datetime.now(timezone.utc),
+    )
 
     response = client_with_db.get("/users/testuser/puzzles/tricky")
     assert response.status_code == 200
@@ -728,10 +872,10 @@ def test_tricky_puzzles_excludes_null_last_reviewed(client_with_db, db_session):
 def test_tricky_puzzles_scoped_to_username(client_with_db, db_session):
     """Tricky puzzles for one user don't leak into another user's results."""
     now = datetime.now(timezone.utc)
-    _create_puzzle_stats(db_session, "p-alice", "alice", fail_count=4,
-                         last_reviewed_at=now)
-    _create_puzzle_stats(db_session, "p-bob", "bob", fail_count=3,
-                         last_reviewed_at=now)
+    _create_puzzle_stats(
+        db_session, "p-alice", "alice", fail_count=4, last_reviewed_at=now
+    )
+    _create_puzzle_stats(db_session, "p-bob", "bob", fail_count=3, last_reviewed_at=now)
 
     response = client_with_db.get("/users/alice/puzzles/tricky")
     assert response.status_code == 200
@@ -742,8 +886,14 @@ def test_tricky_puzzles_scoped_to_username(client_with_db, db_session):
 
 def test_tricky_puzzles_title_fallback(client_with_db, db_session):
     """Puzzles with no title get 'Untitled Puzzle' as fallback."""
-    _create_puzzle_stats(db_session, "p-no-title", "testuser", fail_count=2,
-                         last_reviewed_at=datetime.now(timezone.utc), title=None)
+    _create_puzzle_stats(
+        db_session,
+        "p-no-title",
+        "testuser",
+        fail_count=2,
+        last_reviewed_at=datetime.now(timezone.utc),
+        title=None,
+    )
 
     response = client_with_db.get("/users/testuser/puzzles/tricky")
     assert response.status_code == 200

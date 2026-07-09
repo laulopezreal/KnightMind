@@ -7,7 +7,9 @@
   --color-chess-brown-900: #1A120B;
   /* Deep Espresso */
   --color-chess-brown-800: #2B2118;
-  --color-chess-brown-700: #3E2C20;
+  --color-chess-brown-700: #6B4F3E;
+
+  --color-chess-board-dark: #6B4F3E;
 
   --color-chess-cream-50: #FDFBF7;
   /* Paper */
@@ -16,15 +18,15 @@
   /* Classic Cream */
   --color-chess-cream-300: #E6DCC8;
 
-  --animate-switchedin: switchedin 3s ease-in-out forwards;
-  --animate-switchedout: switchedout 3s ease-in-out forwards;
-  --animate-teedin: teedin 4s ease-in-out forwards;
-  --animate-teedout: teedout 4s ease-in-out forwards;
+  --animate-switchedin: switchedin 0.35s ease-out forwards;
+  --animate-switchedout: switchedout 0.35s ease-out forwards;
+  --animate-teedin: teedin 0.45s ease-out forwards;
+  --animate-teedout: teedout 0.45s ease-out forwards;
 }
 
 /* Custom Utilities for the slow vibe */
 @utility transition-slow {
-  transition: background-color 3s ease-in-out, color 3s ease-in-out, border-color 3s ease-in-out;
+  transition: background-color 250ms ease-out, color 250ms ease-out, border-color 250ms ease-out;
 }
 
 :root {
@@ -49,7 +51,7 @@ body {
   background-color: var(--bg-primary);
   color: var(--text-primary);
   font-family: var(--font-serif);
-  transition: background-color 3s ease-in-out, color 3s ease-in-out;
+  transition: background-color 250ms ease-out, color 250ms ease-out;
   min-height: 100vh;
   margin: 0;
   -webkit-font-smoothing: antialiased;

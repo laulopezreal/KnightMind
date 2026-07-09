@@ -32,7 +32,12 @@ COPY pyproject.toml ./
 RUN mkdir -p services/api services/ingest scripts && \
     touch services/__init__.py services/api/__init__.py services/ingest/__init__.py scripts/__init__.py
 
-RUN pip install --no-cache-dir .
+# Install to pull in dependencies, then uninstall the "knightmind" package
+# itself: it was built from the dummy __init__.py stubs above, and leaving it
+# in site-packages could shadow the real services/ and scripts/ code copied
+# into /app in the runtime stage. Dependencies stay installed.
+RUN pip install --no-cache-dir . && \
+    pip uninstall -y knightmind
 
 # ---------------------------------------------------------------------------
 # Application layer

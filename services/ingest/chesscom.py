@@ -4,9 +4,9 @@ Chess.com game import service.
 This module handles fetching and parsing games from the Chess.com API.
 """
 
+import ssl
 from dataclasses import dataclass
 from typing import AsyncIterator
-import ssl
 
 import httpx
 import truststore
@@ -18,11 +18,13 @@ SSL_CONTEXT = truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
 
 class ImportError(Exception):
     """Base exception for import errors."""
+
     pass
 
 
 class UserNotFoundError(ImportError):
     """Raised when the Chess.com user is not found."""
+
     def __init__(self, username: str):
         self.username = username
         super().__init__(f"Chess.com user '{username}' not found")
@@ -30,6 +32,7 @@ class UserNotFoundError(ImportError):
 
 class RateLimitError(ImportError):
     """Raised when Chess.com API rate limit is exceeded."""
+
     def __init__(self, retry_after: int | None = None):
         self.retry_after = retry_after
         msg = "Chess.com API rate limit exceeded"
@@ -40,6 +43,7 @@ class RateLimitError(ImportError):
 
 class NetworkError(ImportError):
     """Raised when a network error occurs."""
+
     def __init__(self, message: str, original_error: Exception | None = None):
         self.original_error = original_error
         super().__init__(f"Network error: {message}")
@@ -48,6 +52,7 @@ class NetworkError(ImportError):
 @dataclass
 class ChessGame:
     """Represents a chess game from Chess.com."""
+
     url: str
     pgn: str
     time_control: str
@@ -67,7 +72,9 @@ DEFAULT_HEADERS = {
 }
 
 
-def _handle_response_error(response: httpx.Response, username: str | None = None) -> None:
+def _handle_response_error(
+    response: httpx.Response, username: str | None = None
+) -> None:
     """Handle HTTP error responses from Chess.com API."""
     if response.status_code == 404:
         if username:
@@ -79,26 +86,30 @@ def _handle_response_error(response: httpx.Response, username: str | None = None
     elif response.status_code >= 500:
         raise NetworkError(f"Chess.com server error: {response.status_code}")
     elif response.status_code >= 400:
-        raise ImportError(f"Chess.com API error: {response.status_code} - {response.text}")
+        raise ImportError(
+            f"Chess.com API error: {response.status_code} - {response.text}"
+        )
 
 
 async def get_player_archives(username: str) -> list[str]:
     """
     Get list of monthly archive URLs for a player.
-    
+
     Args:
         username: Chess.com username
-        
+
     Returns:
         List of archive URLs
-        
+
     Raises:
         UserNotFoundError: If the user doesn't exist
         RateLimitError: If rate limited by Chess.com
         NetworkError: If a network error occurs
     """
     try:
-        async with httpx.AsyncClient(headers=DEFAULT_HEADERS, timeout=30.0, verify=SSL_CONTEXT) as client:
+        async with httpx.AsyncClient(
+            headers=DEFAULT_HEADERS, timeout=30.0, verify=SSL_CONTEXT
+        ) as client:
             response = await client.get(
                 f"{CHESSCOM_API_BASE}/player/{username}/games/archives"
             )
@@ -116,19 +127,21 @@ async def get_player_archives(username: str) -> list[str]:
 async def fetch_games_from_archive(archive_url: str) -> list[dict]:
     """
     Fetch games from a monthly archive.
-    
+
     Args:
         archive_url: URL to the monthly archive
-        
+
     Returns:
         List of game data dictionaries
-        
+
     Raises:
         RateLimitError: If rate limited by Chess.com
         NetworkError: If a network error occurs
     """
     try:
-        async with httpx.AsyncClient(headers=DEFAULT_HEADERS, timeout=60.0, verify=SSL_CONTEXT) as client:
+        async with httpx.AsyncClient(
+            headers=DEFAULT_HEADERS, timeout=60.0, verify=SSL_CONTEXT
+        ) as client:
             response = await client.get(archive_url)
             if not response.is_success:
                 _handle_response_error(response)
@@ -144,10 +157,10 @@ async def fetch_games_from_archive(archive_url: str) -> list[dict]:
 def parse_game(game_data: dict) -> ChessGame:
     """
     Parse raw game data into a ChessGame object.
-    
+
     Args:
         game_data: Raw game data from Chess.com API
-        
+
     Returns:
         Parsed ChessGame object
     """
@@ -167,13 +180,13 @@ def parse_game(game_data: dict) -> ChessGame:
 async def import_all_games(username: str) -> AsyncIterator[ChessGame]:
     """
     Import all games for a Chess.com user.
-    
+
     Args:
         username: Chess.com username
-        
+
     Yields:
         ChessGame objects for each game
-        
+
     Raises:
         UserNotFoundError: If the user doesn't exist
         RateLimitError: If rate limited by Chess.com
@@ -189,23 +202,23 @@ async def import_all_games(username: str) -> AsyncIterator[ChessGame]:
 async def get_player_stats(username: str) -> dict:
     """
     Get player stats including current ratings.
-    
+
     Args:
         username: Chess.com username
-        
+
     Returns:
         Dict containing stats from Chess.com API
-        
+
     Raises:
         UserNotFoundError: If the user doesn't exist
         RateLimitError: If rate limited by Chess.com
         NetworkError: If a network error occurs
     """
     try:
-        async with httpx.AsyncClient(headers=DEFAULT_HEADERS, timeout=30.0, verify=SSL_CONTEXT) as client:
-            response = await client.get(
-                f"{CHESSCOM_API_BASE}/player/{username}/stats"
-            )
+        async with httpx.AsyncClient(
+            headers=DEFAULT_HEADERS, timeout=30.0, verify=SSL_CONTEXT
+        ) as client:
+            response = await client.get(f"{CHESSCOM_API_BASE}/player/{username}/stats")
             if not response.is_success:
                 _handle_response_error(response, username)
             return response.json()

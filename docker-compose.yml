@@ -12,6 +12,13 @@
 #   Edit .env.docker with your values
 #   make docker-up
 #   make docker-migrate  → Run Alembic migrations
+#
+# NOTE: The ${POSTGRES_*} placeholders below are resolved by Docker Compose
+# *variable interpolation*, which only auto-loads a file literally named
+# ".env" — not .env.docker. Every `docker compose` invocation must therefore
+# pass `--env-file .env.docker` (the Makefile targets, systemd unit, deploy
+# workflow, and backup script all do). Running bare `docker compose up`
+# would otherwise initialize Postgres with an EMPTY password.
 # ============================================================================
 
 services:

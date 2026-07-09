@@ -262,7 +262,7 @@ export default function Home() {
       </section>
 
       {/* ── Primary CTA Section ── */}
-      <section aria-label="Primary action">
+      <section aria-label="Primary action" className="bg-primary/5 border border-primary/10 rounded-sm p-6 md:p-8 max-w-2xl">
         {/* No username → connect account */}
         {isNewUser && (
           <div className="space-y-4 max-w-lg">

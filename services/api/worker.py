@@ -1,26 +1,24 @@
 import asyncio
 import logging
 import traceback
-from datetime import datetime, timezone, timedelta
 from dataclasses import asdict
+from datetime import datetime, timedelta, timezone
 
-from sqlalchemy.orm import Session
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from services.api.db import SessionLocal
 from services.api.models import Job, JobStatus
-from services.api.puzzles.generator import generate_puzzles, GenerationResult
+from services.api.puzzles.generator import generate_puzzles
 
 logger = logging.getLogger(__name__)
+
 
 class JobWorker:
     def __init__(self):
         self.is_running = False
         self._task = None
-        self.recovery_stats = {
-            "recovered_count": 0,
-            "last_recovery_at": None
-        }
+        self.recovery_stats = {"recovered_count": 0, "last_recovery_at": None}
 
     def start(self):
         """Start the worker background task."""
@@ -40,7 +38,7 @@ class JobWorker:
     async def run_worker_loop(self):
         """Main worker loop trying to fetch and process jobs."""
         logger.info("Worker loop running")
-        
+
         # Cleanup stuck jobs on startup
         await self.cleanup_stuck_jobs()
 
@@ -57,13 +55,13 @@ class JobWorker:
 
     async def cleanup_stuck_jobs(self):
         """Reset jobs that have been 'running' for too long (e.g. crash recovery)."""
+
         def _cleanup(db: Session):
             # Cleanup jobs that have been RUNNING for more than 15 minutes.
             # This is a safe threshold for crash recovery.
             limit = datetime.now(timezone.utc) - timedelta(minutes=15)
             stmt = select(Job).where(
-                Job.status == JobStatus.RUNNING,
-                Job.updated_at < limit
+                Job.status == JobStatus.RUNNING, Job.updated_at < limit
             )
             stuck_jobs = db.scalars(stmt).all()
             count = 0
@@ -80,7 +78,9 @@ class JobWorker:
                 count = await asyncio.to_thread(_cleanup, db)
                 if count > 0:
                     self.recovery_stats["recovered_count"] += count
-                    self.recovery_stats["last_recovery_at"] = datetime.now(timezone.utc).isoformat()
+                    self.recovery_stats["last_recovery_at"] = datetime.now(
+                        timezone.utc
+                    ).isoformat()
                     logger.warning(f"Recovered {count} stuck jobs")
         except Exception as e:
             logger.error(f"Failed to cleanup stuck jobs: {e}")
@@ -90,10 +90,16 @@ class JobWorker:
         Fetch and process the next queued job.
         Returns True if a job was processed, False otherwise.
         """
+
         def _claim_job(db: Session):
             # Simple atomic claim: select for update (if supported) or just basic transaction
             # SQLite doesn't strictly support FOR UPDATE the same way, but single writer wins.
-            stmt = select(Job).where(Job.status == JobStatus.QUEUED).order_by(Job.created_at.asc()).limit(1)
+            stmt = (
+                select(Job)
+                .where(Job.status == JobStatus.QUEUED)
+                .order_by(Job.created_at.asc())
+                .limit(1)
+            )
             job = db.scalars(stmt).first()
             if job:
                 job.status = JobStatus.RUNNING
@@ -107,7 +113,7 @@ class JobWorker:
         job_id = None
         with SessionLocal() as db:
             job_id = await asyncio.to_thread(_claim_job, db)
-        
+
         if not job_id:
             return False
 
@@ -119,49 +125,22 @@ class JobWorker:
     async def execute_job(self, job_id: str):
         """Execute the actual job logic."""
         # Re-fetch job to update status
-        
-        try: 
-            # We need to read job parameters.
-            # For puzzle generation, we need inputs.
-            # Currently Job model doesn't strictly store inputs in separate columns, 
-            # but we can assume 'username' is there.
-            # If we needed arguments like 'max_games', we should have stored them in JSON parameters or separate columns.
-            # The prompt said: POST /puzzles/generate?username=...&max_games=...
-            # The Job model has `username`.
-            # I should probably default max_games if not stored, or better, add 'params' JSON column?
-            # The user provided valid Job model spec: type(text), username(text).
-            # It didn't specify extra params. I'll stick to username and defaults, 
-            # OR I'll assume we can use defaults for now since the prompt didn't strictly require parameter persistence 
-            # other than what's needed for the job type. 
-            # But wait, `max_games` is variable. 
-            # I should hack it: maybe `type` can parse it? "puzzle_generation_30_30"? 
-            # Or just update `Job` model to store `params`?
-            # The prompt definition for Job model was:
-            # - type, username, status, progress..., message, result_json, error_message.
-            # It didn't list `params`. 
-            # I will check `generate_puzzles` signature. It takes `max_games`.
-            # Usage: `POST /puzzles/generate?username=...&max_games=...`
-            # If I don't persist `max_games`, I can't restart the job with same params.
-            # I'll stick to default 30 if not present, OR I'll add `params` column in a migration?
-            # User said "But must be operationally reliable".
-            # I'll decide to hardcode defaults or extract from somewhere. 
-            # "convert it to async and persisted" -> usually implies persisting arguments.
-            # I didn't add `params` column in the model I just created (followed prompt spec).
-            # Prompt spec: "type (text), username (text)..."
-            # It didn't explicitly say params.
-            # I will use the default values used in `main.py` -> max_games=30, max_puzzles=30.
-            
+
+        try:
             with SessionLocal() as db:
                 stmt = select(Job).where(Job.id == job_id)
                 job = db.scalars(stmt).first()
                 if not job:
-                    return # Should not happen
+                    return  # Should not happen
                 username = job.username
                 # Use params from job if available, otherwise defaults
                 params = job.params or {}
-                max_games = params.get("max_games", 30)
-                max_puzzles = params.get("max_puzzles", 30)
-            
+                # Job params bypass FastAPI validation; clamp to the same
+                # bounds as the endpoint so a stored job can't trigger an
+                # unbounded bulk PGN load.
+                max_games = min(max(int(params.get("max_games", 30)), 1), 2000)
+                max_puzzles = min(max(int(params.get("max_puzzles", 30)), 1), 2000)
+
             # Create a cancellation check function
             def check_cancellation() -> bool:
                 """Check if the job has been canceled."""
@@ -171,14 +150,14 @@ class JobWorker:
                     if job and job.status == JobStatus.CANCELED:
                         return True
                 return False
-            
+
             # Run generation (CPU bound) with cancellation check
             result = await asyncio.to_thread(
-                generate_puzzles, 
-                username=username, 
-                max_games=max_games, 
+                generate_puzzles,
+                username=username,
+                max_games=max_games,
                 max_puzzles=max_puzzles,
-                cancellation_check=check_cancellation
+                cancellation_check=check_cancellation,
             )
 
             # Check if job was canceled during execution
@@ -202,7 +181,7 @@ class JobWorker:
                     job.message = "Analysis complete"
                     job.updated_at = datetime.now(timezone.utc)
                     db.commit()
-            
+
             logger.info(f"Job {job_id} succeeded")
 
         except Exception as e:
@@ -218,5 +197,6 @@ class JobWorker:
                         job.error_message = str(e)
                         job.updated_at = datetime.now(timezone.utc)
                     db.commit()
+
 
 worker = JobWorker()

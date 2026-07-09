@@ -1,17 +1,24 @@
 import hashlib
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from sqlalchemy import select, func
+from sqlalchemy import Row, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from services.api.models import Game
 
+# Max number of game ids per IN clause when bulk-loading PGNs. Postgres copes
+# with much larger IN lists, but capping the batch keeps each statement small
+# and bounds memory to roughly one batch of PGN blobs at a time.
+PGN_BATCH_SIZE = 1000
+
 
 @dataclass
 class GameMetadata:
     """Metadata for a stored chess game."""
+
     game_id: str  # Hash of the game URL (unique identifier)
     url: str
     username: str  # The user who imported this game
@@ -33,7 +40,7 @@ class GameRepository:
     def _game_id_from_url(url: str) -> str:
         return hashlib.sha256(url.encode()).hexdigest()
 
-    def _to_metadata(self, game: Game) -> GameMetadata:
+    def _to_metadata(self, game: Game | Row) -> GameMetadata:
         return GameMetadata(
             game_id=game.game_id,
             url=game.url,
@@ -61,7 +68,14 @@ class GameRepository:
         end_time: int,
         rated: bool,
         imported_at: datetime | None = None,
+        commit: bool = True,
     ) -> tuple[bool, str]:
+        """Store a game, returning (is_new, game_id).
+
+        When ``commit`` is False the row is only flushed (inside a savepoint)
+        and the caller owns the transaction: this lets bulk importers batch
+        many inserts into a single commit instead of one commit per game.
+        """
         username_lower = username.lower()
         game_id = self._game_id_from_url(url)
 
@@ -83,13 +97,16 @@ class GameRepository:
             imported_at=imported_at or datetime.now(timezone.utc),
             pgn_blob=pgn,
         )
-        self.db.add(game)
         try:
-            self.db.commit()
-            return True, game_id
+            # Savepoint so a duplicate-insert race only rolls back this row,
+            # never previously flushed rows in the caller's batch.
+            with self.db.begin_nested():
+                self.db.add(game)
         except IntegrityError:
-            self.db.rollback()
             return False, game_id
+        if commit:
+            self.db.commit()
+        return True, game_id
 
     def get_users(self) -> list[str]:
         stmt = select(Game.username).distinct().order_by(Game.username.asc())
@@ -97,18 +114,35 @@ class GameRepository:
 
     def get_game_count(self, username: str) -> int:
         username_lower = username.lower()
-        stmt = select(func.count()).select_from(Game).where(Game.username == username_lower)
+        stmt = (
+            select(func.count())
+            .select_from(Game)
+            .where(Game.username == username_lower)
+        )
         return self.db.scalar(stmt) or 0
 
     def get_all_metadata(self, username: str) -> list[GameMetadata]:
         username_lower = username.lower()
+        # Select only the metadata columns: full Game rows would drag every
+        # PGN blob into memory alongside the metadata.
         stmt = (
-            select(Game)
+            select(
+                Game.game_id,
+                Game.url,
+                Game.username,
+                Game.white_username,
+                Game.black_username,
+                Game.white_result,
+                Game.black_result,
+                Game.time_control,
+                Game.end_time,
+                Game.rated,
+                Game.imported_at,
+            )
             .where(Game.username == username_lower)
             .order_by(Game.end_time.desc())
         )
-        games = self.db.scalars(stmt).all()
-        return [self._to_metadata(game) for game in games]
+        return [self._to_metadata(row) for row in self.db.execute(stmt)]
 
     def get_latest_game_time(self, username: str) -> datetime | None:
         """Get the timestamp of the most recent game for a user."""
@@ -123,7 +157,50 @@ class GameRepository:
             return game.pgn_blob
         return None
 
-    def record_import_summary(self, username: str, new_games: int, imported_at: str | None = None) -> None:
+    def get_pgns(self, username: str, game_ids: Sequence[str]) -> dict[str, str]:
+        """Bulk-load PGNs for the given game ids.
+
+        Runs one query per PGN_BATCH_SIZE ids instead of one query per game.
+        Only games owned by ``username`` are returned; ids belonging to other
+        users (or games without PGN content) are silently omitted.
+        """
+        pgns: dict[str, str] = {}
+        for start in range(0, len(game_ids), PGN_BATCH_SIZE):
+            pgns.update(
+                self._fetch_pgn_batch(
+                    username, game_ids[start : start + PGN_BATCH_SIZE]
+                )
+            )
+        return pgns
+
+    def iter_pgns(self, username: str, game_ids: Sequence[str]) -> Iterator[str]:
+        """Stream PGNs for the given game ids in ``game_ids`` order.
+
+        Loads PGN_BATCH_SIZE blobs per query, so at most one batch is held in
+        memory at a time. Ids without PGN content (or owned by another user)
+        are skipped.
+        """
+        for start in range(0, len(game_ids), PGN_BATCH_SIZE):
+            batch = game_ids[start : start + PGN_BATCH_SIZE]
+            pgns = self._fetch_pgn_batch(username, batch)
+            for game_id in batch:
+                pgn = pgns.get(game_id)
+                if pgn:
+                    yield pgn
+
+    def _fetch_pgn_batch(
+        self, username: str, game_ids: Sequence[str]
+    ) -> dict[str, str]:
+        username_lower = username.lower()
+        stmt = select(Game.game_id, Game.pgn_blob).where(
+            Game.username == username_lower,
+            Game.game_id.in_(game_ids),
+        )
+        return {game_id: pgn for game_id, pgn in self.db.execute(stmt) if pgn}
+
+    def record_import_summary(
+        self, username: str, new_games: int, imported_at: str | None = None
+    ) -> None:
         """Store the last import summary for a user in the database."""
         from services.api.models import ImportSummary
 
@@ -138,11 +215,13 @@ class GameRepository:
             existing.last_imported_at = ts
             existing.last_new_games = new_games
         else:
-            self.db.add(ImportSummary(
-                username=username_lower,
-                last_imported_at=ts,
-                last_new_games=new_games,
-            ))
+            self.db.add(
+                ImportSummary(
+                    username=username_lower,
+                    last_imported_at=ts,
+                    last_new_games=new_games,
+                )
+            )
         self.db.commit()
 
     def get_last_import_summary(self, username: str) -> dict[str, str | int] | None:
@@ -153,6 +232,8 @@ class GameRepository:
         if not summary:
             return None
         return {
-            "last_imported_at": summary.last_imported_at.replace(tzinfo=timezone.utc).isoformat(),
+            "last_imported_at": summary.last_imported_at.replace(
+                tzinfo=timezone.utc
+            ).isoformat(),
             "last_new_games": summary.last_new_games,
         }

@@ -5,6 +5,8 @@ import { useChessUsername } from '../context/ChessUsernameContext';
 import { TacticalRadar } from '../components/TacticalRadar';
 import { MotifTrends } from '../components/MotifTrends';
 import { RecentlyTrickyCard } from '../components/RecentlyTrickyCard';
+import { PageHeader } from '../components/PageHeader';
+import { DataStateEmpty, DataStateError, DataStateLoading } from '../components/DataState';
 
 export default function Insights() {
     const { username } = useChessUsername();
@@ -96,27 +98,17 @@ export default function Insights() {
     };
 
     if (loading) {
-        return (
-            <div className="flex items-center justify-center min-h-screen" role="status" aria-live="polite">
-                <div className="animate-spin h-12 w-12 border-4 border-primary/20 border-t-primary rounded-full" aria-hidden="true" />
-                <span className="sr-only">Loading insights...</span>
-            </div>
-        );
+        return <DataStateLoading label="Loading insights..." />;
     }
 
     if (error) {
         return (
-            <div className="max-w-md mx-auto mt-32 text-center" role="alert" aria-live="assertive">
-                <p className="text-red-500 mb-4">{error}</p>
-                <button
-                    type="button"
-                    onClick={() => window.location.reload()}
-                    className="px-6 py-2 border border-primary/20 rounded-sm km-interactive km-focus-visible"
-                    aria-label="Retry loading insights"
-                >
-                    Retry
-                </button>
-            </div>
+            <DataStateError
+                message={error}
+                onRetry={loadInsightsData}
+                retryLabel="Retry"
+                ariaLabel="Retry loading insights"
+            />
         );
     }
 
@@ -126,33 +118,16 @@ export default function Insights() {
 
     return (
         <main className="container mx-auto p-6 max-w-7xl space-y-8">
-            {/* Header */}
-            <section>
-                <h1 className="text-4xl md:text-5xl font-serif text-primary mb-2">
-                    Insights
-                </h1>
-                <p className="text-lg text-primary/60 font-sans">
-                    Deep analysis of your puzzle performance
-                </p>
-            </section>
+            <PageHeader title="Insights" subtitle="Deep analysis of your puzzle performance" />
 
             {/* Empty state — only when no data at all */}
             {!hasMotifs && !hasTrends && (
-                <div className="bg-primary/5 border border-primary/10 rounded-sm p-12 text-center">
-                    <p className="text-primary/60 font-sans text-lg mb-4">
-                        No puzzle data yet
-                    </p>
-                    <p className="text-primary/40 font-sans text-sm mb-6">
-                        Complete a few puzzle sessions to see your tactical patterns and trends.
-                    </p>
-                    <button
-                        type="button"
-                        onClick={() => navigate('/puzzles')}
-                        className="px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif km-interactive km-focus-visible"
-                    >
-                        Start Puzzles
-                    </button>
-                </div>
+                <DataStateEmpty
+                    title="No puzzle data yet"
+                    description="Complete a few puzzle sessions to see your tactical patterns and trends."
+                    actionLabel="Start Puzzles"
+                    onAction={() => navigate('/puzzles')}
+                />
             )}
 
             {/* Tier 1: Tactical Radar — full width, visually dominant */}

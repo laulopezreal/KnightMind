@@ -3,16 +3,18 @@ Training session endpoints.
 
 Handles session lifecycle: start, complete, and recent sessions query.
 """
+
 import logging
 import uuid
 from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
-from sqlalchemy import select, desc
 from pydantic import BaseModel
+from sqlalchemy import desc, select
+from sqlalchemy.orm import Session
 
 from services.api.db import get_db
-from services.api.models import TrainingSession, RatingSnapshot
+from services.api.models import RatingSnapshot, TrainingSession
 from services.ingest import get_player_stats
 
 logger = logging.getLogger(__name__)
@@ -30,7 +32,9 @@ class StartSessionRequest(BaseModel):
     session_type: str = "standard"  # "standard", "timed", "accuracy_goal"
     target_accuracy: float | None = None  # Target accuracy percentage (0.0-100.0)
     target_time_minutes: int | None = None  # Target session time in minutes
-    session_data: dict | None = None  # Flexible storage for session-specific data (e.g., warmup flag)
+    session_data: dict | None = (
+        None  # Flexible storage for session-specific data (e.g., warmup flag)
+    )
 
 
 class StartSessionResponse(BaseModel):
@@ -67,17 +71,14 @@ class UseHintRequest(BaseModel):
 
 
 @router.post("/start", response_model=StartSessionResponse)
-async def start_session(
-    request: StartSessionRequest,
-    db: Session = Depends(get_db)
-):
+async def start_session(request: StartSessionRequest, db: Session = Depends(get_db)):
     """
     Start a new training session.
-    
+
     Creates a session record and returns the session_id for tracking reviews.
     """
     session_id = str(uuid.uuid4())
-    
+
     session = TrainingSession(
         id=session_id,
         username=request.username,
@@ -91,26 +92,24 @@ async def start_session(
         current_streak=0,
         best_streak=0,
         hints_used=0,
-        session_data=request.session_data or {}
+        session_data=request.session_data or {},
     )
-    
+
     db.add(session)
     db.commit()
-    
+
     return StartSessionResponse(
         session_id=session_id,
         requested_n=request.n,
         session_type=request.session_type,
         target_accuracy=request.target_accuracy,
-        target_time_minutes=request.target_time_minutes
+        target_time_minutes=request.target_time_minutes,
     )
 
 
 @router.get("/recent", response_model=list[SessionSummary])
 async def get_recent_sessions(
-    username: str,
-    limit: int = 10,
-    db: Session = Depends(get_db)
+    username: str, limit: int = 10, db: Session = Depends(get_db)
 ):
     """
     Get recent training sessions for a user.
@@ -144,17 +143,14 @@ async def get_recent_sessions(
             target_time_minutes=s.target_time_minutes,
             current_streak=s.current_streak,
             best_streak=s.best_streak,
-            hints_used=s.hints_used
+            hints_used=s.hints_used,
         )
         for s in sessions
     ]
 
 
 @router.get("/{session_id}", response_model=SessionSummary)
-async def get_session(
-    session_id: str,
-    db: Session = Depends(get_db)
-):
+async def get_session(session_id: str, db: Session = Depends(get_db)):
     """
     Get session details by ID.
 
@@ -179,7 +175,7 @@ async def get_session(
         target_time_minutes=session.target_time_minutes,
         current_streak=session.current_streak,
         best_streak=session.best_streak,
-        hints_used=session.hints_used
+        hints_used=session.hints_used,
     )
 
 
@@ -192,7 +188,9 @@ async def _auto_snapshot(username: str, session_id: str, db: Session) -> None:
     try:
         stats = await get_player_stats(username)
     except Exception as e:
-        logger.debug("Auto-snapshot: could not fetch Chess.com stats for %s: %s", username, e)
+        logger.debug(
+            "Auto-snapshot: could not fetch Chess.com stats for %s: %s", username, e
+        )
         return
 
     now = datetime.now(timezone.utc)
@@ -239,9 +237,7 @@ async def _auto_snapshot(username: str, session_id: str, db: Session) -> None:
 
 @router.post("/{session_id}/complete", response_model=SessionSummary)
 async def complete_session(
-    session_id: str,
-    request: CompleteSessionRequest,
-    db: Session = Depends(get_db)
+    session_id: str, request: CompleteSessionRequest, db: Session = Depends(get_db)
 ):
     """
     Mark a session as complete.
@@ -282,7 +278,7 @@ async def complete_session(
         target_time_minutes=session.target_time_minutes,
         current_streak=session.current_streak,
         best_streak=session.best_streak,
-        hints_used=session.hints_used
+        hints_used=session.hints_used,
     )
 
     # Best-effort auto-snapshot after response is built
@@ -294,33 +290,31 @@ async def complete_session(
 
 @router.post("/{session_id}/use_hint", response_model=SessionSummary)
 async def use_hint(
-    session_id: str,
-    request: UseHintRequest,
-    db: Session = Depends(get_db)
+    session_id: str, request: UseHintRequest, db: Session = Depends(get_db)
 ):
     """
     Use a hint during a training session.
-    
+
     Updates the session's hint counter.
     """
     # Fetch session
     stmt = select(TrainingSession).where(TrainingSession.id == session_id)
     session = db.scalars(stmt).first()
-    
+
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-    
+
     if session.username != request.username:
         raise HTTPException(status_code=403, detail="Session belongs to different user")
-    
+
     if session.completed_at is not None:
         raise HTTPException(status_code=400, detail="Session already completed")
-    
+
     # Increment hints used
     session.hints_used += 1
     db.commit()
     db.refresh(session)
-    
+
     return SessionSummary(
         session_id=session.id,
         requested_n=session.requested_n,
@@ -334,5 +328,5 @@ async def use_hint(
         target_time_minutes=session.target_time_minutes,
         current_streak=session.current_streak,
         best_streak=session.best_streak,
-        hints_used=session.hints_used
+        hints_used=session.hints_used,
     )

@@ -2,6 +2,61 @@
 
 Personal Chess Intelligence Platform - Analyze your games, track progress, and gain insights.
 
+
+## Why KnightMind
+
+KnightMind helps improving chess players turn raw game history into clear, repeatable training decisions. Instead of generic puzzles, it generates personalized puzzles from your own mistakes and tracks progress over time.
+
+## Core Features
+
+- **Personalized puzzle generation** from your imported Chess.com games
+- **Spaced repetition training** to revisit the right puzzles at the right time
+- **Progress dashboards** for momentum, streaks, and recurring motifs
+- **Engine-assisted review** powered by local Stockfish
+
+## Quickstart
+
+1. Start backend (`services/api`) on `http://localhost:8000`
+2. Start frontend (`apps/web`) on `http://localhost:5173`
+3. Set Chess.com username in-app and run **Sync**
+4. Generate puzzles and begin training
+
+Detailed setup: [docs/onboarding.md](docs/onboarding.md)
+
+## Documentation
+
+- [Documentation index](docs/README.md)
+- [Onboarding](docs/onboarding.md)
+- [Architecture](docs/architecture.md)
+- [Discoverability audit](docs/discoverability-audit.md)
+
+## Findability (SEO & search intent)
+
+This repository is intentionally optimized for searches like:
+
+- "personal chess training app"
+- "chess game analysis platform"
+- "fastapi react chess dashboard"
+- "stockfish puzzle generator"
+
+Confirmed canonical public web URL is `https://knightmind.dev` (from `.env.example` production guidance). If this changes, update `apps/web/index.html`, `apps/web/public/robots.txt`, and `apps/web/public/sitemap.xml`.
+
+## GitHub Discoverability
+
+Recommended repository topics:
+
+- `chess`
+- `react`
+- `fastapi`
+- `stockfish`
+- `spaced-repetition`
+- `analytics`
+
+Contribution entry points:
+
+- Use the issue templates in `.github/ISSUE_TEMPLATE/` for bug reports, feature requests, and docs improvements.
+- Use `.github/pull_request_template.md` to keep PR context and validation consistent.
+
 ## Project Structure
 
 ```
@@ -78,6 +133,9 @@ source venv/bin/activate
 uvicorn main:app --reload --port 8000
 ```
 
+The API requires a database: set `DATABASE_URL` (e.g. in `services/api/.env`), or for a
+quick local start without Postgres set `KNIGHTMIND_DEV_SQLITE=1` to use a local SQLite file.
+
 API will be available at http://localhost:8000
 
 ### CORS configuration
@@ -107,6 +165,13 @@ If an environment ever needs a different base, update `API_BASE` in `apps/web/sr
 - Once a user has set their Chess.com username, the home screen emphasizes exploration and treats game syncing as an optional “Sync” action rather than a primary prompt to import games.
 - Syncing reports “No new games found” when existing games are already in the database.
 - Engine Analysis “Clue” mirrors the puzzle flow: first reveals which piece to move, then highlights the from/to squares for the best move. Analysis auto-runs after board changes, with manual re-run available.
+- UI improvement proposals are prioritized for maximum visible impact with minimal engineering effort, assuming no backend/API contract changes are required for the first pass.
+- Mobile navigation polish assumes existing routes and username/theme controls remain functionally unchanged (visual/responsive updates only).
+- Shared page UI primitives (header + data states) are intentionally lightweight and style-only, so product copy and API behavior remain unchanged in this pass.
+- This consistency pass extends shared header/error patterns to Library, Rating Insights, and Engine without changing filtering, analysis, or rating calculation logic.
+- Loading-state consistency in Library, Rating Insights, and Engine is presentational only; fetch cadence and existing async behavior are intentionally unchanged.
+- Session-window loading in Rating Insights now uses the shared loading primitive for visual consistency only, with identical session-fetch logic.
+- Opening Explorer graph-loading state now uses the shared loading primitive; rendering and fetch flow are unchanged.
 
 ## Admin Ops Utilities
 
@@ -224,14 +289,17 @@ The system uses a simple deterministic scheduling algorithm:
 
 ## Database Configuration
 
-KnightMind supports SQLite for local development and Postgres for production. Configure the
-database connection via `DATABASE_URL`.
+KnightMind uses Postgres in production and supports SQLite for local development. The
+database connection is configured via `DATABASE_URL`, which is **required** — the API
+fails fast at startup if it is unset, rather than silently writing to an ephemeral
+SQLite file.
 
-- **Default (local):** `sqlite:///./knightmind.db`
 - **Postgres example:** `postgresql+psycopg://user:password@host:5432/knightmind`
+- **Local-dev escape hatch:** set `KNIGHTMIND_DEV_SQLITE=1` to opt into
+  `sqlite:///./knightmind.db` without setting `DATABASE_URL`. Never use this in production.
 
-Alembic migrations read the same `DATABASE_URL` value, so ensure it is set before running
-`alembic upgrade head`.
+Alembic migrations load `services/api/.env` (the same file the API reads) and use the same
+`DATABASE_URL` value, so `alembic upgrade head` runs against the database the app uses.
 
 ## Operations & Deployment
  
@@ -281,7 +349,7 @@ Alembic migrations read the same `DATABASE_URL` value, so ensure it is set befor
 
 - **Frontend**: React, Vite, TypeScript, Tailwind CSS, D3.js
 - **Backend**: FastAPI, Pydantic, python-chess
-- **Database**: Postgres (recommended via `DATABASE_URL`), SQLite (default for local)
+- **Database**: Postgres (via `DATABASE_URL`), SQLite (local-dev opt-in via `KNIGHTMIND_DEV_SQLITE=1`)
 - **Engine**: Stockfish (via `stockfish` PyPI package)
 - **Future**: Neo4j
 

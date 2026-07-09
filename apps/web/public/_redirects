@@ -1,0 +1,2 @@
+# Proxy API requests to backend
+/api/*  https://api.guessme.world/:splat  200

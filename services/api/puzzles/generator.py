@@ -6,16 +6,16 @@ Uses bounded compute to work on Render and similar platforms.
 """
 
 import io
+import logging
 import os
 from dataclasses import dataclass
 
 import chess
 import chess.pgn
 
-from services.api.engine import create_engine, get_or_compute_eval
 from services.api.db import SessionLocal
+from services.api.engine import create_engine, get_or_compute_eval
 from services.api.storage import GameRepository, PuzzleRepository
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +43,9 @@ class GenerationResult:
     cache_misses: int = 0  # Number of cache misses
 
 
-def _is_user_move(board: chess.Board, username: str, white_username: str, black_username: str) -> bool:
+def _is_user_move(
+    board: chess.Board, username: str, white_username: str, black_username: str
+) -> bool:
     """
     Check if it's the user's turn to move.
 
@@ -107,22 +109,31 @@ def generate_puzzles(
             # (logging would be good here)
             return GenerationResult(generated=0, skipped=0, analyzed_positions=0)
 
+        # Bulk-load PGNs keyed by game_id (one query per 1000 ids instead of
+        # one per game). A dict rather than iter_pgns because each PGN must
+        # stay paired with its game_id for save_puzzle(source_game_id=...);
+        # memory is bounded by max_games PGN blobs (capped at the endpoint
+        # and worker). Fetched only after the engine is known to be usable.
+        pgns_by_game_id = game_repository.get_pgns(
+            username, [game.game_id for game in recent_games]
+        )
+
         generated = 0
         skipped = 0
         analyzed_positions = 0
-        cache_stats = {'hits': 0, 'misses': 0}  # Track cache performance
+        cache_stats = {"hits": 0, "misses": 0}  # Track cache performance
 
         for game_meta in recent_games:
             # Check for cancellation before processing each game
             if cancellation_check and cancellation_check():
                 logger.info(f"Puzzle generation canceled for {username}")
                 break
-                
+
             if generated >= max_puzzles:
                 break
 
-            # Load PGN
-            pgn_text = game_repository.get_pgn(username, game_meta.game_id)
+            # Load PGN (bulk-fetched above)
+            pgn_text = pgns_by_game_id.get(game_meta.game_id)
             if not pgn_text:
                 continue
 
@@ -161,7 +172,9 @@ def generate_puzzles(
 
                 try:
                     # Evaluate position before the move (with cache)
-                    eval_result_before = get_or_compute_eval(fen_before, engine=engine, cache_stats=cache_stats)
+                    eval_result_before = get_or_compute_eval(
+                        fen_before, engine=engine, cache_stats=cache_stats
+                    )
                     eval_before = eval_result_before.eval
                     best_move_uci = eval_result_before.best_move_uci
 
@@ -171,7 +184,9 @@ def generate_puzzles(
 
                     # Evaluate position after the move (with cache)
                     fen_after = board.fen()
-                    eval_result_after = get_or_compute_eval(fen_after, engine=engine, cache_stats=cache_stats)
+                    eval_result_after = get_or_compute_eval(
+                        fen_after, engine=engine, cache_stats=cache_stats
+                    )
                     eval_after = eval_result_after.eval
 
                     # Calculate swing
@@ -205,13 +220,15 @@ def generate_puzzles(
                 except Exception as e:
                     # Skip positions that fail to evaluate
                     # (e.g., checkmate, stalemate, engine errors)
-                    logger.warning(f"Failed to generate puzzle for FEN {fen_before}", exc_info=e)
+                    logger.warning(
+                        f"Failed to generate puzzle for FEN {fen_before}", exc_info=e
+                    )
                     continue
 
         return GenerationResult(
             generated=generated,
             skipped=skipped,
             analyzed_positions=analyzed_positions,
-            cache_hits=cache_stats['hits'],
-            cache_misses=cache_stats['misses'],
+            cache_hits=cache_stats["hits"],
+            cache_misses=cache_stats["misses"],
         )

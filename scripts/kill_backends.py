@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Kill processes listening on backend ports 8000 (API) and 8001 (Stockfish)."""
+
 import os
 import signal
 import subprocess

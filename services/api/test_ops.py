@@ -1,7 +1,8 @@
-import pytest
 import os
 import sys
 import uuid
+
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -12,17 +13,20 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")
 
 
 @pytest.fixture(scope="function")
-def test_db_instance(monkeypatch):
+def test_db_instance(monkeypatch, tmp_path):
     """
     Creates a completely isolated file-based database for each test function.
     This avoids all issues with SQLite in-memory sharing, threading, and state leakage.
+    The DB file lives in pytest's tmp_path so no artifacts land in the repo.
     """
-    db_filename = f"test_ops_{uuid.uuid4()}.db"
-    db_url = f"sqlite:///./{db_filename}"
+    db_path = tmp_path / f"test_ops_{uuid.uuid4()}.db"
+    db_url = f"sqlite:///{db_path}"
 
     # Create engine for this specific test
     # Use NullPool to ensure connections are closed promptly, avoiding file locks
-    engine = create_engine(db_url, connect_args={"check_same_thread": False}, poolclass=NullPool)
+    engine = create_engine(
+        db_url, connect_args={"check_same_thread": False}, poolclass=NullPool
+    )
     TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
     # Disable worker for tests (so health check doesn't fail)
@@ -39,25 +43,27 @@ def test_db_instance(monkeypatch):
 
     try:
         from services.api import main as main_module
+
         monkeypatch.setattr(main_module, "SessionLocal", TestingSessionLocal)
     except (ImportError, AttributeError):
         pass
 
     # Create tables
-    from services.api.models import Base
     # Ensure models are imported so they are registered in Base
-    import services.api.models
+    from services.api.models import Base
+
     Base.metadata.create_all(bind=engine)
 
     yield TestingSessionLocal
 
-    # Teardown
+    # Teardown (tmp_path itself is cleaned up by pytest)
     engine.dispose()
-    if os.path.exists(db_filename):
+    if db_path.exists():
         try:
-            os.remove(db_filename)
+            db_path.unlink()
         except PermissionError:
             pass
+
 
 @pytest.fixture(scope="function")
 def db_session(test_db_instance):
@@ -68,10 +74,11 @@ def db_session(test_db_instance):
     finally:
         session.close()
 
+
 @pytest.fixture(scope="function")
 def client(db_session):
-    from services.api.main import app
     from services.api.db import get_db
+    from services.api.main import app
 
     # Override dependency to use our test session
     app.dependency_overrides[get_db] = lambda: db_session
@@ -81,13 +88,16 @@ def client(db_session):
 
     app.dependency_overrides.clear()
 
+
 def test_ping_endpoint(client):
     response = client.get("/ops/ping")
     assert response.status_code == 200
     assert response.json()["status"] == "pong"
 
+
 def test_health_endpoint(client, monkeypatch):
     from services.api import ops as ops_module
+
     # Mock stockfish as available so health check passes
     monkeypatch.setattr(ops_module, "is_engine_available", lambda: (True, "OK"))
 
@@ -97,8 +107,10 @@ def test_health_endpoint(client, monkeypatch):
     assert data["db"] == "ok"
     assert data["stockfish"] == "ok"
 
+
 def test_health_returns_version(client, monkeypatch):
     from services.api import ops as ops_module
+
     # Mock stockfish as available so health check passes
     monkeypatch.setattr(ops_module, "is_engine_available", lambda: (True, "OK"))
 
@@ -106,6 +118,7 @@ def test_health_returns_version(client, monkeypatch):
     data = response.json()
     assert "version" in data
     assert "sha" in data["version"]
+
 
 def test_ready_endpoint(client):
     response = client.get("/ops/ready")
@@ -118,9 +131,11 @@ def test_ready_endpoint(client):
     assert "stockfish" in data
     assert data["db"] == "ok"
 
+
 def test_ops_status_basic(client, db_session):
+    from datetime import datetime, timedelta, timezone
+
     from services.api.models import Job, JobStatus
-    from datetime import datetime, timezone, timedelta
 
     job1 = Job(
         type="puzzle_generation",
@@ -129,7 +144,7 @@ def test_ops_status_basic(client, db_session):
         progress_current=100,
         result_json={"generated": 5, "cache_hits": 10, "cache_misses": 2},
         created_at=datetime.now(timezone.utc) - timedelta(minutes=10),
-        updated_at=datetime.now(timezone.utc) - timedelta(minutes=9)
+        updated_at=datetime.now(timezone.utc) - timedelta(minutes=9),
     )
     db_session.add(job1)
     db_session.commit()
@@ -140,9 +155,11 @@ def test_ops_status_basic(client, db_session):
     assert len(data["recent_jobs"]) >= 1
     assert data["recent_jobs"][0]["username"] == "testuser"
 
+
 def test_ops_metrics_succeeded_count(client, db_session):
+    from datetime import datetime, timedelta, timezone
+
     from services.api.models import Job, JobStatus
-    from datetime import datetime, timezone, timedelta
 
     job = Job(
         type="puzzle_generation",
@@ -151,7 +168,7 @@ def test_ops_metrics_succeeded_count(client, db_session):
         progress_current=100,
         result_json={"generated": 3},
         created_at=datetime.now(timezone.utc) - timedelta(minutes=30),
-        updated_at=datetime.now(timezone.utc) - timedelta(minutes=29)
+        updated_at=datetime.now(timezone.utc) - timedelta(minutes=29),
     )
     db_session.add(job)
     db_session.commit()
@@ -162,9 +179,11 @@ def test_ops_metrics_succeeded_count(client, db_session):
     assert data["metrics"]["last_24h"]["jobs_succeeded"] == 1
     assert data["metrics"]["last_24h"]["jobs_failed"] == 0
 
+
 def test_ops_metrics_failed_count(client, db_session):
+    from datetime import datetime, timedelta, timezone
+
     from services.api.models import Job, JobStatus
-    from datetime import datetime, timezone, timedelta
 
     job = Job(
         type="puzzle_generation",
@@ -172,7 +191,7 @@ def test_ops_metrics_failed_count(client, db_session):
         status=JobStatus.FAILED,
         error_message="Stockfish not found",
         created_at=datetime.now(timezone.utc) - timedelta(minutes=5),
-        updated_at=datetime.now(timezone.utc) - timedelta(minutes=4)
+        updated_at=datetime.now(timezone.utc) - timedelta(minutes=4),
     )
     db_session.add(job)
     db_session.commit()
@@ -182,9 +201,11 @@ def test_ops_metrics_failed_count(client, db_session):
     data = response.json()
     assert data["metrics"]["last_24h"]["jobs_failed"] == 1
 
+
 def test_ops_metrics_excludes_old_jobs(client, db_session):
+    from datetime import datetime, timedelta, timezone
+
     from services.api.models import Job, JobStatus
-    from datetime import datetime, timezone, timedelta
 
     job = Job(
         type="puzzle_generation",
@@ -193,7 +214,7 @@ def test_ops_metrics_excludes_old_jobs(client, db_session):
         progress_current=100,
         result_json={"generated": 5},
         created_at=datetime.now(timezone.utc) - timedelta(hours=25),
-        updated_at=datetime.now(timezone.utc) - timedelta(hours=24, minutes=59)
+        updated_at=datetime.now(timezone.utc) - timedelta(hours=24, minutes=59),
     )
     db_session.add(job)
     db_session.commit()
@@ -203,6 +224,7 @@ def test_ops_metrics_excludes_old_jobs(client, db_session):
     data = response.json()
     assert data["metrics"]["last_24h"]["jobs_succeeded"] == 0
     assert data["metrics"]["last_24h"]["jobs_failed"] == 0
+
 
 def test_job_status_returns_error_field(client, db_session):
     from services.api.models import Job, JobStatus
@@ -223,6 +245,7 @@ def test_job_status_returns_error_field(client, db_session):
     assert data["error"] == "Stockfish binary not found at /usr/bin/stockfish"
     assert data["message"] == "Processing games"
 
+
 def test_cancel_job_returns_error_field(client, db_session):
     from services.api.models import Job, JobStatus
 
@@ -239,6 +262,7 @@ def test_cancel_job_returns_error_field(client, db_session):
     data = response.json()
     assert data["error"] is None
 
+
 def test_ops_status_active_job(client, db_session):
     from services.api.models import Job, JobStatus
 
@@ -247,7 +271,7 @@ def test_ops_status_active_job(client, db_session):
         username="active_user",
         status=JobStatus.RUNNING,
         progress_current=45,
-        message="Analyzing... "
+        message="Analyzing... ",
     )
     db_session.add(job)
     db_session.commit()
@@ -262,9 +286,11 @@ def test_ops_status_active_job(client, db_session):
 
 # --- Failure path tests for /health and /ready endpoints ---
 
+
 def test_health_returns_503_when_stockfish_unavailable(client, monkeypatch):
     """Test that /health returns 503 when Stockfish is not available."""
     from services.api import ops as ops_module
+
     monkeypatch.setattr(ops_module, "is_engine_available", lambda: (False, "Not found"))
 
     response = client.get("/ops/health")
@@ -295,6 +321,7 @@ def test_health_returns_503_when_worker_not_running(client, monkeypatch):
 def test_ready_returns_503_when_stockfish_unavailable(client, monkeypatch):
     """Test that /ready returns 503 when Stockfish is not available."""
     from services.api import ops as ops_module
+
     monkeypatch.setattr(ops_module, "is_engine_available", lambda: (False, "Not found"))
 
     response = client.get("/ops/ready")
@@ -303,6 +330,44 @@ def test_ready_returns_503_when_stockfish_unavailable(client, monkeypatch):
     assert data["ready"] is False
     assert data["stockfish"] == "missing"
     assert data["db"] == "ok"
+
+
+def test_health_and_ready_return_503_when_db_unavailable(test_db_instance, monkeypatch):
+    """Regression guard: /health and /ready must check the DB session injected
+    via get_db, not some module-level engine bound at import time. Breaking the
+    injected session must surface as db=error and HTTP 503. (ops.py once held a
+    stale `from services.api.db import ... engine` name-binding import, removed
+    in #127; this pins the dependency-injected behavior.)"""
+    from services.api import ops as ops_module
+    from services.api.db import get_db
+    from services.api.main import app
+
+    # Stockfish available, so the DB is the only failing component
+    monkeypatch.setattr(ops_module, "is_engine_available", lambda: (True, "OK"))
+
+    class BrokenSession:
+        def execute(self, *args, **kwargs):
+            raise RuntimeError("simulated database outage")
+
+    app.dependency_overrides[get_db] = lambda: BrokenSession()
+    try:
+        with TestClient(app) as c:
+            health = c.get("/ops/health")
+            ready = c.get("/ops/ready")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert health.status_code == 503
+    health_data = health.json()
+    assert health_data["ok"] is False
+    assert health_data["db"] == "error"
+    assert health_data["stockfish"] == "ok"
+
+    assert ready.status_code == 503
+    ready_data = ready.json()
+    assert ready_data["ready"] is False
+    assert ready_data["db"] == "error"
+    assert ready_data["stockfish"] == "ok"
 
 
 def test_health_ok_when_worker_disabled(client, monkeypatch):
