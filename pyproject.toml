@@ -32,12 +32,12 @@ kill-backends = "scripts.kill_backends:main"
 
 [project.optional-dependencies]
 dev = [
-    "black",
+    "black~=26.5",
     "flake8",
     "mypy",
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
-    "ruff",
+    "ruff~=0.15.20",
 ]
 
 [tool.pytest.ini_options]

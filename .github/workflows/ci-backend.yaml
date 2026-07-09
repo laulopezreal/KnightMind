@@ -6,12 +6,18 @@ on:
     paths:
       - 'services/api/**'
       - 'services/ingest/**'
+      - 'scripts/**'
+      - 'conftest.py'
+      - 'pyproject.toml'
       - '.github/workflows/ci-backend.yaml'
   pull_request:
     branches: [ main, dev ]
     paths:
       - 'services/api/**'
       - 'services/ingest/**'
+      - 'scripts/**'
+      - 'conftest.py'
+      - 'pyproject.toml'
       - '.github/workflows/ci-backend.yaml'
 
 jobs:
