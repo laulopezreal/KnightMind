@@ -23,7 +23,9 @@ def test_db_instance(monkeypatch, tmp_path):
 
     # Create engine for this specific test
     # Use NullPool to ensure connections are closed promptly, avoiding file locks
-    engine = create_engine(db_url, connect_args={"check_same_thread": False}, poolclass=NullPool)
+    engine = create_engine(
+        db_url, connect_args={"check_same_thread": False}, poolclass=NullPool
+    )
     TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
     # Disable worker for tests (so health check doesn't fail)
@@ -40,14 +42,17 @@ def test_db_instance(monkeypatch, tmp_path):
 
     try:
         from services.api import main as main_module
+
         monkeypatch.setattr(main_module, "SessionLocal", TestingSessionLocal)
     except (ImportError, AttributeError):
         pass
 
     # Create tables
     from services.api.models import Base
+
     # Ensure models are imported so they are registered in Base
     import services.api.models
+
     Base.metadata.create_all(bind=engine)
 
     yield TestingSessionLocal
@@ -60,6 +65,7 @@ def test_db_instance(monkeypatch, tmp_path):
         except PermissionError:
             pass
 
+
 @pytest.fixture(scope="function")
 def db_session(test_db_instance):
     """Returns a session for the current test's isolated database."""
@@ -68,6 +74,7 @@ def db_session(test_db_instance):
         yield session
     finally:
         session.close()
+
 
 @pytest.fixture(scope="function")
 def client(db_session):
@@ -82,13 +89,16 @@ def client(db_session):
 
     app.dependency_overrides.clear()
 
+
 def test_ping_endpoint(client):
     response = client.get("/ops/ping")
     assert response.status_code == 200
     assert response.json()["status"] == "pong"
 
+
 def test_health_endpoint(client, monkeypatch):
     from services.api import ops as ops_module
+
     # Mock stockfish as available so health check passes
     monkeypatch.setattr(ops_module, "is_engine_available", lambda: (True, "OK"))
 
@@ -98,8 +108,10 @@ def test_health_endpoint(client, monkeypatch):
     assert data["db"] == "ok"
     assert data["stockfish"] == "ok"
 
+
 def test_health_returns_version(client, monkeypatch):
     from services.api import ops as ops_module
+
     # Mock stockfish as available so health check passes
     monkeypatch.setattr(ops_module, "is_engine_available", lambda: (True, "OK"))
 
@@ -107,6 +119,7 @@ def test_health_returns_version(client, monkeypatch):
     data = response.json()
     assert "version" in data
     assert "sha" in data["version"]
+
 
 def test_ready_endpoint(client):
     response = client.get("/ops/ready")
@@ -119,6 +132,7 @@ def test_ready_endpoint(client):
     assert "stockfish" in data
     assert data["db"] == "ok"
 
+
 def test_ops_status_basic(client, db_session):
     from services.api.models import Job, JobStatus
     from datetime import datetime, timezone, timedelta
@@ -130,7 +144,7 @@ def test_ops_status_basic(client, db_session):
         progress_current=100,
         result_json={"generated": 5, "cache_hits": 10, "cache_misses": 2},
         created_at=datetime.now(timezone.utc) - timedelta(minutes=10),
-        updated_at=datetime.now(timezone.utc) - timedelta(minutes=9)
+        updated_at=datetime.now(timezone.utc) - timedelta(minutes=9),
     )
     db_session.add(job1)
     db_session.commit()
@@ -140,6 +154,7 @@ def test_ops_status_basic(client, db_session):
     data = response.json()
     assert len(data["recent_jobs"]) >= 1
     assert data["recent_jobs"][0]["username"] == "testuser"
+
 
 def test_ops_metrics_succeeded_count(client, db_session):
     from services.api.models import Job, JobStatus
@@ -152,7 +167,7 @@ def test_ops_metrics_succeeded_count(client, db_session):
         progress_current=100,
         result_json={"generated": 3},
         created_at=datetime.now(timezone.utc) - timedelta(minutes=30),
-        updated_at=datetime.now(timezone.utc) - timedelta(minutes=29)
+        updated_at=datetime.now(timezone.utc) - timedelta(minutes=29),
     )
     db_session.add(job)
     db_session.commit()
@@ -162,6 +177,7 @@ def test_ops_metrics_succeeded_count(client, db_session):
     data = response.json()
     assert data["metrics"]["last_24h"]["jobs_succeeded"] == 1
     assert data["metrics"]["last_24h"]["jobs_failed"] == 0
+
 
 def test_ops_metrics_failed_count(client, db_session):
     from services.api.models import Job, JobStatus
@@ -173,7 +189,7 @@ def test_ops_metrics_failed_count(client, db_session):
         status=JobStatus.FAILED,
         error_message="Stockfish not found",
         created_at=datetime.now(timezone.utc) - timedelta(minutes=5),
-        updated_at=datetime.now(timezone.utc) - timedelta(minutes=4)
+        updated_at=datetime.now(timezone.utc) - timedelta(minutes=4),
     )
     db_session.add(job)
     db_session.commit()
@@ -182,6 +198,7 @@ def test_ops_metrics_failed_count(client, db_session):
     assert response.status_code == 200
     data = response.json()
     assert data["metrics"]["last_24h"]["jobs_failed"] == 1
+
 
 def test_ops_metrics_excludes_old_jobs(client, db_session):
     from services.api.models import Job, JobStatus
@@ -194,7 +211,7 @@ def test_ops_metrics_excludes_old_jobs(client, db_session):
         progress_current=100,
         result_json={"generated": 5},
         created_at=datetime.now(timezone.utc) - timedelta(hours=25),
-        updated_at=datetime.now(timezone.utc) - timedelta(hours=24, minutes=59)
+        updated_at=datetime.now(timezone.utc) - timedelta(hours=24, minutes=59),
     )
     db_session.add(job)
     db_session.commit()
@@ -204,6 +221,7 @@ def test_ops_metrics_excludes_old_jobs(client, db_session):
     data = response.json()
     assert data["metrics"]["last_24h"]["jobs_succeeded"] == 0
     assert data["metrics"]["last_24h"]["jobs_failed"] == 0
+
 
 def test_job_status_returns_error_field(client, db_session):
     from services.api.models import Job, JobStatus
@@ -224,6 +242,7 @@ def test_job_status_returns_error_field(client, db_session):
     assert data["error"] == "Stockfish binary not found at /usr/bin/stockfish"
     assert data["message"] == "Processing games"
 
+
 def test_cancel_job_returns_error_field(client, db_session):
     from services.api.models import Job, JobStatus
 
@@ -240,6 +259,7 @@ def test_cancel_job_returns_error_field(client, db_session):
     data = response.json()
     assert data["error"] is None
 
+
 def test_ops_status_active_job(client, db_session):
     from services.api.models import Job, JobStatus
 
@@ -248,7 +268,7 @@ def test_ops_status_active_job(client, db_session):
         username="active_user",
         status=JobStatus.RUNNING,
         progress_current=45,
-        message="Analyzing... "
+        message="Analyzing... ",
     )
     db_session.add(job)
     db_session.commit()
@@ -263,9 +283,11 @@ def test_ops_status_active_job(client, db_session):
 
 # --- Failure path tests for /health and /ready endpoints ---
 
+
 def test_health_returns_503_when_stockfish_unavailable(client, monkeypatch):
     """Test that /health returns 503 when Stockfish is not available."""
     from services.api import ops as ops_module
+
     monkeypatch.setattr(ops_module, "is_engine_available", lambda: (False, "Not found"))
 
     response = client.get("/ops/health")
@@ -296,6 +318,7 @@ def test_health_returns_503_when_worker_not_running(client, monkeypatch):
 def test_ready_returns_503_when_stockfish_unavailable(client, monkeypatch):
     """Test that /ready returns 503 when Stockfish is not available."""
     from services.api import ops as ops_module
+
     monkeypatch.setattr(ops_module, "is_engine_available", lambda: (False, "Not found"))
 
     response = client.get("/ops/ready")

@@ -108,7 +108,9 @@ class TestEvaluateFen:
         mock_engine.get_evaluation.return_value = {"type": "cp", "value": 20}
         mock_engine_class.return_value = mock_engine
 
-        result = evaluate_fen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1")
+        result = evaluate_fen(
+            "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+        )
 
         assert isinstance(result, EvalResult)
         assert result.best_move_uci == "e2e4"
@@ -129,6 +131,7 @@ class TestEvaluateFen:
         """Error when stockfish package not installed."""
         # Temporarily set StockfishEngine to None to simulate missing package
         import services.api.engine.stockfish as sf_module
+
         original = sf_module.StockfishEngine
         sf_module.StockfishEngine = None
 

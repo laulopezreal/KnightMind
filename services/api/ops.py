@@ -46,10 +46,16 @@ def get_health(db: Session = Depends(get_db)):
     # 4. Version Info
     version = {
         "sha": os.environ.get("GIT_SHA", "unknown"),
-        "built_at": os.environ.get("BUILD_TIME", datetime.now(timezone.utc).isoformat())
+        "built_at": os.environ.get(
+            "BUILD_TIME", datetime.now(timezone.utc).isoformat()
+        ),
     }
 
-    all_ok = db_status == "ok" and worker_status in ("ok", "disabled") and stockfish_status == "ok"
+    all_ok = (
+        db_status == "ok"
+        and worker_status in ("ok", "disabled")
+        and stockfish_status == "ok"
+    )
     body = {
         "ok": all_ok,
         "db": db_status,
@@ -88,12 +94,18 @@ def get_ready(db: Session = Depends(get_db)):
     status_code = 200 if ready else 503
     return JSONResponse(content=body, status_code=status_code)
 
+
 @router.get("/status")
 def get_ops_status(db: Session = Depends(get_db)):
     now = datetime.now(timezone.utc)
 
     # 1. Active job
-    stmt_active = select(Job).where(Job.status.in_([JobStatus.QUEUED.value, JobStatus.RUNNING.value])).order_by(Job.created_at.desc()).limit(1)
+    stmt_active = (
+        select(Job)
+        .where(Job.status.in_([JobStatus.QUEUED.value, JobStatus.RUNNING.value]))
+        .order_by(Job.created_at.desc())
+        .limit(1)
+    )
     active_job = db.scalars(stmt_active).first()
 
     # 2. Recent jobs (last 20)
@@ -104,10 +116,11 @@ def get_ops_status(db: Session = Depends(get_db)):
     yesterday = now - timedelta(hours=24)
 
     # Basic counts
-    stmt_counts = select(
-        Job.status,
-        func.count(Job.id)
-    ).where(Job.created_at >= yesterday).group_by(Job.status)
+    stmt_counts = (
+        select(Job.status, func.count(Job.id))
+        .where(Job.created_at >= yesterday)
+        .group_by(Job.status)
+    )
     counts = dict(db.execute(stmt_counts).all())
 
     succeeded_count = counts.get(JobStatus.SUCCEEDED.value, 0)
@@ -116,8 +129,7 @@ def get_ops_status(db: Session = Depends(get_db)):
     # Performance metrics from result_json
     # We'll calculate this in Python for simplicity with SQLite/JSON fields
     stmt_metrics = select(Job.result_json, Job.updated_at, Job.created_at).where(
-        Job.status == JobStatus.SUCCEEDED,
-        Job.created_at >= yesterday
+        Job.status == JobStatus.SUCCEEDED, Job.created_at >= yesterday
     )
     metric_rows = db.execute(stmt_metrics).all()
 
@@ -148,7 +160,7 @@ def get_ops_status(db: Session = Depends(get_db)):
                 "jobs_failed": failed_count,
                 "avg_duration_ms": int(avg_duration_ms),
                 "cache_hits": total_cache_hits,
-                "cache_misses": total_cache_misses
+                "cache_misses": total_cache_misses,
             }
-        }
+        },
     }

@@ -4,6 +4,7 @@ from pathlib import Path
 
 # Load .env before any project imports read os.environ
 from dotenv import load_dotenv
+
 load_dotenv(Path(__file__).resolve().parent / ".env")
 
 from contextlib import asynccontextmanager
@@ -44,7 +45,7 @@ from services.api.storage.spaced_repetition import (
     get_due_puzzles,
     get_next_due_date,
     insert_puzzle_review,
-    update_puzzle_stats
+    update_puzzle_stats,
 )
 from services.ingest import (
     ImportError as ChessComImportError,
@@ -60,7 +61,14 @@ from services.ingest import (
     import_all_games,
 )
 
-from services.api.models import Job, JobStatus, PuzzleStats, PuzzleReview, PuzzleResult, RatingSnapshot
+from services.api.models import (
+    Job,
+    JobStatus,
+    PuzzleStats,
+    PuzzleReview,
+    PuzzleResult,
+    RatingSnapshot,
+)
 
 from services.api.puzzles.identity import backfill_puzzle_identity
 from services.api.jobs.cleanup_sessions import cleanup_abandoned_sessions
@@ -78,10 +86,16 @@ SIGNIFICANT_LOSSES_VS_LOWER_THRESHOLD = 2
 OPPONENT_RATING_STD_DEV_THRESHOLD = 150
 
 # Chess.com draw result values
-DRAW_RESULTS = frozenset([
-    "repetition", "agreed", "timevsinsufficient",
-    "stalemate", "insufficient", "50move",
-])
+DRAW_RESULTS = frozenset(
+    [
+        "repetition",
+        "agreed",
+        "timevsinsufficient",
+        "stalemate",
+        "insufficient",
+        "50move",
+    ]
+)
 
 
 async def run_session_cleanup():
@@ -93,7 +107,7 @@ async def run_session_cleanup():
                 await asyncio.to_thread(cleanup_abandoned_sessions, db)
         except Exception as e:
             print(f"Error in session cleanup: {e}")
-            
+
         # Sleep for defined interval
         await asyncio.sleep(CLEANUP_INTERVAL_SECONDS)
 
@@ -103,7 +117,7 @@ async def lifespan(app: FastAPI):
     # Prevent worker startup in tests or if explicitly disabled
     if os.environ.get("KNIGHTMIND_WORKER_DISABLED") != "true":
         worker.start()
-        
+
     # Backfill identity (title/motif) for any existing puzzles missing them.
     # Run in a thread to avoid blocking the async event loop.
     def _run_backfill():
@@ -111,14 +125,14 @@ async def lifespan(app: FastAPI):
             backfill_puzzle_identity(db)
 
     await anyio.to_thread.run_sync(_run_backfill)
-        
+
     # Start session cleanup background task if not disabled
     cleanup_task = None
     if os.environ.get("KNIGHTMIND_WORKER_DISABLED") != "true":
         cleanup_task = asyncio.create_task(run_session_cleanup())
-        
+
     yield
-    
+
     # Cancel cleanup task on shutdown
     if cleanup_task:
         cleanup_task.cancel()
@@ -126,19 +140,24 @@ async def lifespan(app: FastAPI):
             await cleanup_task
         except asyncio.CancelledError:
             pass
-        
+
     await worker.stop()
+
 
 app = FastAPI(title="KnightMind API", version="0.1.0", lifespan=lifespan)
 
 from services.api.ops import router as ops_router
+
 app.include_router(ops_router)
 
 from services.api.sessions import router as sessions_router
+
 app.include_router(sessions_router)
 
 from services.api.dashboard import router as dashboard_router
+
 app.include_router(dashboard_router)
+
 
 def get_allowed_origins() -> list[str]:
     origins = os.environ.get("KNIGHTMIND_CORS_ORIGINS", "")
@@ -196,7 +215,9 @@ async def get_user_status(username: str, db: Session = Depends(get_db)):
     # Use optimized queries instead of fetching all data
     latest_game_time = game_repository.get_latest_game_time(username)
     latest_puzzle_time = (
-        puzzle_repository.get_latest_puzzle_time(username) if puzzles_count > 0 else None
+        puzzle_repository.get_latest_puzzle_time(username)
+        if puzzles_count > 0
+        else None
     )
 
     has_new_games = False
@@ -212,11 +233,14 @@ async def get_user_status(username: str, db: Session = Depends(get_db)):
         next_due_at = get_next_due_date(db, username)
 
         # If no stats exist, all puzzles are due
-        total_stats = db.scalar(
-            select(func.count(PuzzleStats.puzzle_id)).where(
-                PuzzleStats.username == username
+        total_stats = (
+            db.scalar(
+                select(func.count(PuzzleStats.puzzle_id)).where(
+                    PuzzleStats.username == username
+                )
             )
-        ) or 0
+            or 0
+        )
         if total_stats == 0:
             due_count = puzzles_count
 
@@ -230,7 +254,9 @@ async def get_user_status(username: str, db: Session = Depends(get_db)):
     )
 
 
-@app.get("/users/{username}/motifs/performance", response_model=MotifPerformanceResponse)
+@app.get(
+    "/users/{username}/motifs/performance", response_model=MotifPerformanceResponse
+)
 async def get_motif_performance(username: str, db: Session = Depends(get_db)):
     """Get user's performance breakdown across all chess tactical patterns/motifs."""
     return get_user_motif_performance(db, username)
@@ -243,14 +269,16 @@ async def validate_user(username: str):
     Proxies the request to avoid CORS issues and expose internal APIs.
     """
     import httpx
-    
+
     if not username:
         raise HTTPException(status_code=400, detail="Username is required")
-        
+
     try:
         async with httpx.AsyncClient() as client:
-            resp = await client.get(f"https://api.chess.com/pub/player/{username}", follow_redirects=True)
-            
+            resp = await client.get(
+                f"https://api.chess.com/pub/player/{username}", follow_redirects=True
+            )
+
             if resp.status_code == 200:
                 return {"valid": True, "username": username}
             elif resp.status_code == 404:
@@ -275,7 +303,7 @@ async def import_chesscom_games(username: str, db: Session = Depends(get_db)):
 
         # Create generator
         games_generator = import_all_games(username)
-        
+
         async for game in games_generator:
             count += 1
             is_new, _ = game_repository.store_game(
@@ -290,28 +318,28 @@ async def import_chesscom_games(username: str, db: Session = Depends(get_db)):
                 end_time=game.end_time,
                 rated=game.rated,
             )
-            
+
             if is_new:
                 new_games += 1
             else:
                 skipped += 1
-                
+
         game_repository.record_import_summary(username, new_games)
 
         return ImportResponse(
             message=f"Successfully processed {count} games for {username}",
             games_count=count,
             new_games=new_games,
-            skipped_duplicates=skipped
+            skipped_duplicates=skipped,
         )
-        
+
     except UserNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except RateLimitError as e:
         raise HTTPException(
-            status_code=429, 
+            status_code=429,
             detail=str(e),
-            headers={"Retry-After": str(e.retry_after)} if e.retry_after else None
+            headers={"Retry-After": str(e.retry_after)} if e.retry_after else None,
         )
     except NetworkError as e:
         raise HTTPException(status_code=502, detail=str(e))
@@ -424,19 +452,20 @@ async def root():
     return {"message": "KnightMind API", "version": "0.1.0"}
 
 
-
-
-
 @app.get("/openings")
 async def get_openings(
     username: str = Query(..., description="Username to build opening tree for"),
-    color: Literal["white", "black", "both"] = Query("both", description="Filter by player's color"),
-    max_ply: int = Query(12, ge=1, le=40, description="Maximum number of half-moves to include"),
-    db: Session = Depends(get_db)
+    color: Literal["white", "black", "both"] = Query(
+        "both", description="Filter by player's color"
+    ),
+    max_ply: int = Query(
+        12, ge=1, le=40, description="Maximum number of half-moves to include"
+    ),
+    db: Session = Depends(get_db),
 ):
     """
     Get the opening tree for a user's games.
-    
+
     Builds a tree structure from the user's stored PGN games showing:
     - move_san: The move in Standard Algebraic Notation
     - ply: Half-move number (1 = white's first, 2 = black's first, etc.)
@@ -444,12 +473,12 @@ async def get_openings(
     - wins/draws/losses: Results from the player's perspective
     - win_rate: Win percentage (wins + 0.5*draws) / games
     - children: Subsequent moves played from this position
-    
+
     Args:
         username: The username to build the tree for (must have imported games)
         color: Filter games by the player's color ("white", "black", or "both")
         max_ply: Maximum depth in half-moves (default 12 = 6 full moves each side)
-    
+
     Returns:
         Opening tree as nested JSON structure
     """
@@ -460,7 +489,7 @@ async def get_openings(
     if game_count == 0:
         raise HTTPException(
             status_code=404,
-            detail=f"No games found for user '{username}'. Import games first using POST /import/chesscom"
+            detail=f"No games found for user '{username}'. Import games first using POST /import/chesscom",
         )
 
     # Get all PGNs for the user
@@ -474,7 +503,7 @@ async def get_openings(
     if metadata_list and not pgn_texts:
         raise HTTPException(
             status_code=503,
-            detail="Games found but PGN content is missing. Re-import games to populate PGN data."
+            detail="Games found but PGN content is missing. Re-import games to populate PGN data.",
         )
 
     # Build the opening tree
@@ -482,7 +511,7 @@ async def get_openings(
         pgn_texts=pgn_texts,
         player_username=username,
         color_filter=color,
-        max_ply=max_ply
+        max_ply=max_ply,
     )
 
     return tree
@@ -512,7 +541,7 @@ async def generate_puzzles_endpoint(
     username: str = Query(..., description="Username to generate puzzles for"),
     max_games: int = Query(30, description="Maximum number of recent games to analyze"),
     max_puzzles: int = Query(30, description="Maximum number of puzzles to generate"),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     """Start a background job to generate puzzles."""
     try:
@@ -520,46 +549,49 @@ async def generate_puzzles_endpoint(
             username=username,
             status=JobStatus.QUEUED,
             message="Queued for generation",
-            params={"max_games": max_games, "max_puzzles": max_puzzles}
+            params={"max_games": max_games, "max_puzzles": max_puzzles},
         )
         db.add(new_job)
         db.commit()
         db.refresh(new_job)
-        
+
         return JobStatusResponse(
-            job_id=new_job.id,
-            status=new_job.status,
-            message="Job queued",
-            progress=0
+            job_id=new_job.id, status=new_job.status, message="Job queued", progress=0
         )
-        
+
     except IntegrityError:
         db.rollback()
         stmt = select(Job).where(
             Job.username == username,
-            or_(Job.status == JobStatus.QUEUED, Job.status == JobStatus.RUNNING)
+            or_(Job.status == JobStatus.QUEUED, Job.status == JobStatus.RUNNING),
         )
         existing_job = db.scalars(stmt).first()
-        
+
         if existing_job:
             return JobStatusResponse(
                 job_id=existing_job.id,
                 status=existing_job.status,
                 message="Job already in progress",
-                progress=existing_job.progress_current
+                progress=existing_job.progress_current,
             )
         else:
-            stmt = select(Job).where(Job.username == username).order_by(Job.created_at.desc())
+            stmt = (
+                select(Job)
+                .where(Job.username == username)
+                .order_by(Job.created_at.desc())
+            )
             latest_job = db.scalars(stmt).first()
             if latest_job:
-                 return JobStatusResponse(
+                return JobStatusResponse(
                     job_id=latest_job.id,
                     status=latest_job.status,
                     message="Job completed recently",
                     progress=latest_job.progress_current,
-                    result=latest_job.result_json
+                    result=latest_job.result_json,
                 )
-            raise HTTPException(status_code=500, detail="Could not create job or find existing one")
+            raise HTTPException(
+                status_code=500, detail="Could not create job or find existing one"
+            )
 
 
 @app.get("/jobs/{job_id}", response_model=JobStatusResponse)
@@ -568,14 +600,14 @@ async def get_job_status(job_id: str, db: Session = Depends(get_db)):
     job = db.get(Job, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    
+
     return JobStatusResponse(
         job_id=job.id,
         status=job.status,
         message=job.message,
         progress=job.progress_current,
         result=job.result_json,
-        error=job.error_message
+        error=job.error_message,
     )
 
 
@@ -585,34 +617,32 @@ async def cancel_job(job_id: str, db: Session = Depends(get_db)):
     job = db.get(Job, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    
+
     # Only allow cancellation of queued or running jobs
     if job.status not in [JobStatus.QUEUED, JobStatus.RUNNING]:
         raise HTTPException(
-            status_code=400, 
-            detail=f"Cannot cancel job with status '{job.status}'"
+            status_code=400, detail=f"Cannot cancel job with status '{job.status}'"
         )
-    
+
     # Update job status to canceled
     job.status = JobStatus.CANCELED
     job.message = "Canceled by user"
     job.updated_at = datetime.now(timezone.utc)
     db.commit()
-    
+
     return JobStatusResponse(
         job_id=job.id,
         status=job.status,
         message=job.message,
         progress=job.progress_current,
         result=job.result_json,
-        error=job.error_message
+        error=job.error_message,
     )
 
 
 @app.post("/daily-puzzle-sessions", response_model=DailyPuzzlesResponse)
 async def create_daily_puzzle_session(
-    request: DailyPuzzleSessionRequest,
-    db: Session = Depends(get_db)
+    request: DailyPuzzleSessionRequest, db: Session = Depends(get_db)
 ):
     """Create a new daily puzzle session for a user."""
     username = request.username
@@ -621,27 +651,28 @@ async def create_daily_puzzle_session(
     # Validate n parameter
     if n < 1 or n > 20:
         raise HTTPException(
-            status_code=400,
-            detail="Number of puzzles must be between 1 and 20"
+            status_code=400, detail="Number of puzzles must be between 1 and 20"
         )
 
     puzzle_repository = PuzzleRepository(db)
 
     # Get puzzles using the storage's selection logic
     puzzles = puzzle_repository.get_daily_puzzles(username, n)
-    
+
     if not puzzles:
         raise HTTPException(
             status_code=404,
-            detail=f"No puzzles found for user '{username}'. Generate puzzles first using POST /puzzles/generate"
+            detail=f"No puzzles found for user '{username}'. Generate puzzles first using POST /puzzles/generate",
         )
-    
+
     # Mark puzzles as used today
     puzzle_ids = [p.id for p in puzzles]
     puzzle_repository.mark_puzzles_used(username, puzzle_ids, date.today())
-    
+
     # Reload specific puzzles to get updated used_on field
-    updated_puzzles = [puzzle_repository.get_puzzle(username, pid) for pid in puzzle_ids]
+    updated_puzzles = [
+        puzzle_repository.get_puzzle(username, pid) for pid in puzzle_ids
+    ]
     updated_puzzles = [p for p in updated_puzzles if p is not None]
 
     # Get puzzle stats to include primary_motif
@@ -660,20 +691,23 @@ async def create_daily_puzzle_session(
             p_dict["title"] = None
         puzzles_dict.append(p_dict)
 
-    return DailyPuzzlesResponse(
-        puzzles=puzzles_dict,
-        count=len(puzzles_dict)
-    )
+    return DailyPuzzlesResponse(puzzles=puzzles_dict, count=len(puzzles_dict))
 
 
 @app.get("/puzzles/due", response_model=DuePuzzlesResponse)
 async def get_due_puzzles_endpoint(
     username: str = Query(..., description="Username to get puzzles for"),
     n: int = Query(5, ge=1, le=20, description="Number of puzzles to return"),
-    session_type: str = Query("standard", description="Session type for adaptive selection"),
-    target_accuracy: float = Query(None, description="Target accuracy for adaptive selection"),
-    motif: str = Query(None, description="Filter puzzles by specific motif (e.g., 'Fork', 'Pin')"),
-    db: Session = Depends(get_db)
+    session_type: str = Query(
+        "standard", description="Session type for adaptive selection"
+    ),
+    target_accuracy: float = Query(
+        None, description="Target accuracy for adaptive selection"
+    ),
+    motif: str = Query(
+        None, description="Filter puzzles by specific motif (e.g., 'Fork', 'Pin')"
+    ),
+    db: Session = Depends(get_db),
 ):
     """
     Get puzzles due for review, followed by new puzzles.
@@ -689,85 +723,89 @@ async def get_due_puzzles_endpoint(
     if not puzzle_ids:
         raise HTTPException(
             status_code=404,
-            detail=f"No puzzles found for user '{username}'. Generate puzzles first."
+            detail=f"No puzzles found for user '{username}'. Generate puzzles first.",
         )
 
     # 2. Filter by motif if specified
     if motif:
         # Query stats to filter by primary_motif
-        motif_stmt = (
-            select(PuzzleStats.puzzle_id)
-            .where(
-                PuzzleStats.username == username,
-                PuzzleStats.primary_motif == motif,
-                PuzzleStats.puzzle_id.in_(puzzle_ids)
-            )
+        motif_stmt = select(PuzzleStats.puzzle_id).where(
+            PuzzleStats.username == username,
+            PuzzleStats.primary_motif == motif,
+            PuzzleStats.puzzle_id.in_(puzzle_ids),
         )
         filtered_ids = db.scalars(motif_stmt).all()
 
         if not filtered_ids:
             raise HTTPException(
                 status_code=404,
-                detail=f"No puzzles found for motif '{motif}'. Try a different motif."
+                detail=f"No puzzles found for motif '{motif}'. Try a different motif.",
             )
 
         puzzle_ids = list(filtered_ids)
 
     # 3. Get prioritized IDs and their stats using adaptive selection
-    due_ids, all_stats = get_adaptive_puzzles(db, username, puzzle_ids, n, session_type, target_accuracy)
-    
+    due_ids, all_stats = get_adaptive_puzzles(
+        db, username, puzzle_ids, n, session_type, target_accuracy
+    )
+
     # 3. Load content and merge with stats
     result_puzzles = []
     for pid in due_ids:
         puzzle = puzzle_repository.get_puzzle(username, pid)
         if not puzzle:
             continue
-        
+
         p_dict = asdict(puzzle)
         stats = all_stats.get(pid)
         if stats:
-            p_dict.update({
-                "next_due_at": stats.next_due_at,
-                "interval_days": stats.interval_days,
-                "ease_factor": stats.ease_factor,
-                "attempts": stats.attempts,
-                "pass_count": stats.pass_count,
-                "fail_count": stats.fail_count,
-                "last_reviewed_at": stats.last_reviewed_at,
-                "last_result": stats.last_result,
-                "title": stats.title,
-                "primary_motif": stats.primary_motif
-            })
+            p_dict.update(
+                {
+                    "next_due_at": stats.next_due_at,
+                    "interval_days": stats.interval_days,
+                    "ease_factor": stats.ease_factor,
+                    "attempts": stats.attempts,
+                    "pass_count": stats.pass_count,
+                    "fail_count": stats.fail_count,
+                    "last_reviewed_at": stats.last_reviewed_at,
+                    "last_result": stats.last_result,
+                    "title": stats.title,
+                    "primary_motif": stats.primary_motif,
+                }
+            )
         else:
             # Default values for new puzzles
-            p_dict.update({
-                "next_due_at": None,
-                "interval_days": None,
-                "ease_factor": 2.0,
-                "attempts": 0,
-                "pass_count": 0,
-                "fail_count": 0,
-                "last_reviewed_at": None,
-                "last_result": None,
-                "title": None,
-                "primary_motif": None
-            })
+            p_dict.update(
+                {
+                    "next_due_at": None,
+                    "interval_days": None,
+                    "ease_factor": 2.0,
+                    "attempts": 0,
+                    "pass_count": 0,
+                    "fail_count": 0,
+                    "last_reviewed_at": None,
+                    "last_result": None,
+                    "title": None,
+                    "primary_motif": None,
+                }
+            )
         result_puzzles.append(p_dict)
-        
+
     # 4. Total due count for metadata
     # 4. Total due count for metadata
     # We can calculate this from all_stats since it contains all stats for the user's puzzles
     now = datetime.now(timezone.utc)
     due_count = sum(
-        1 for s in all_stats.values() 
+        1
+        for s in all_stats.values()
         if s.next_due_at and s.next_due_at.replace(tzinfo=timezone.utc) <= now
     )
-    
+
     return {
         "due_count": due_count,
         "returned_count": len(result_puzzles),
         "now": now,
-        "puzzles": result_puzzles
+        "puzzles": result_puzzles,
     }
 
 
@@ -784,12 +822,17 @@ async def list_puzzles(
     username: str = Query(..., description="Username to list puzzles for"),
     q: str = Query(None, description="Search by title or puzzle ID"),
     status: str = Query(None, description="Filter: new, due, learning, mastered"),
-    motif: str = Query(None, description="Filter by primary_motif (comma-separated for OR)"),
+    motif: str = Query(
+        None, description="Filter by primary_motif (comma-separated for OR)"
+    ),
     difficulty: str = Query(None, description="Filter: easy, medium, hard"),
-    sort: str = Query("due_soonest", description="Sort: due_soonest, last_attempted, most_failed, difficulty_asc, difficulty_desc, newest"),
+    sort: str = Query(
+        "due_soonest",
+        description="Sort: due_soonest, last_attempted, most_failed, difficulty_asc, difficulty_desc, newest",
+    ),
     limit: int = Query(50, ge=1, le=100, description="Page size"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     """
     List all puzzles for a user with filtering, search, sorting, and pagination.
@@ -800,15 +843,20 @@ async def list_puzzles(
     now = datetime.now(timezone.utc)
     username_lower = username.lower()
 
-    join_cond = (
-        (PuzzleModel.id == PuzzleStats.puzzle_id)
-        & (PuzzleStats.username == username_lower)
+    join_cond = (PuzzleModel.id == PuzzleStats.puzzle_id) & (
+        PuzzleStats.username == username_lower
     )
 
     # --- 1. Corpus stats (unfiltered) ---
     status_case = case(
-        (or_(PuzzleStats.puzzle_id.is_(None), PuzzleStats.attempts == 0), literal("new")),
-        (and_(PuzzleStats.next_due_at.isnot(None), PuzzleStats.next_due_at <= now), literal("due")),
+        (
+            or_(PuzzleStats.puzzle_id.is_(None), PuzzleStats.attempts == 0),
+            literal("new"),
+        ),
+        (
+            and_(PuzzleStats.next_due_at.isnot(None), PuzzleStats.next_due_at <= now),
+            literal("due"),
+        ),
         (
             and_(
                 PuzzleStats.attempts >= 3,
@@ -824,8 +872,12 @@ async def list_puzzles(
             func.count().label("total"),
             func.sum(case((status_case == "new", 1), else_=0)).label("cnt_new"),
             func.sum(case((status_case == "due", 1), else_=0)).label("cnt_due"),
-            func.sum(case((status_case == "learning", 1), else_=0)).label("cnt_learning"),
-            func.sum(case((status_case == "mastered", 1), else_=0)).label("cnt_mastered"),
+            func.sum(case((status_case == "learning", 1), else_=0)).label(
+                "cnt_learning"
+            ),
+            func.sum(case((status_case == "mastered", 1), else_=0)).label(
+                "cnt_mastered"
+            ),
         )
         .select_from(PuzzleModel)
         .outerjoin(PuzzleStats, join_cond)
@@ -885,7 +937,9 @@ async def list_puzzles(
         if d == "easy":
             base_stmt = base_stmt.where(PuzzleModel.swing < 2.0)
         elif d == "medium":
-            base_stmt = base_stmt.where(PuzzleModel.swing >= 2.0, PuzzleModel.swing < 5.0)
+            base_stmt = base_stmt.where(
+                PuzzleModel.swing >= 2.0, PuzzleModel.swing < 5.0
+            )
         elif d == "hard":
             base_stmt = base_stmt.where(PuzzleModel.swing >= 5.0)
 
@@ -898,8 +952,16 @@ async def list_puzzles(
     # --- 5. Sort ---
     if sort == "due_soonest":
         sort_priority = case(
-            (and_(PuzzleStats.next_due_at.isnot(None), PuzzleStats.next_due_at <= now), literal(0)),
-            (or_(PuzzleStats.puzzle_id.is_(None), PuzzleStats.attempts == 0), literal(1)),
+            (
+                and_(
+                    PuzzleStats.next_due_at.isnot(None), PuzzleStats.next_due_at <= now
+                ),
+                literal(0),
+            ),
+            (
+                or_(PuzzleStats.puzzle_id.is_(None), PuzzleStats.attempts == 0),
+                literal(1),
+            ),
             else_=literal(2),
         )
         base_stmt = base_stmt.order_by(
@@ -913,9 +975,7 @@ async def list_puzzles(
             PuzzleStats.last_reviewed_at.desc(),
         )
     elif sort == "most_failed":
-        base_stmt = base_stmt.order_by(
-            func.coalesce(PuzzleStats.fail_count, 0).desc()
-        )
+        base_stmt = base_stmt.order_by(func.coalesce(PuzzleStats.fail_count, 0).desc())
     elif sort == "difficulty_asc":
         base_stmt = base_stmt.order_by(PuzzleModel.swing.asc())
     elif sort == "difficulty_desc":
@@ -930,24 +990,26 @@ async def list_puzzles(
     rows = db.execute(base_stmt).all()
     result_puzzles = []
     for puzzle, stats, row_status in rows:
-        result_puzzles.append(PuzzleListItem(
-            id=puzzle.id,
-            title=stats.title if stats else None,
-            primary_motif=stats.primary_motif if stats else None,
-            difficulty=_swing_to_difficulty(puzzle.swing),
-            swing=puzzle.swing,
-            fen=puzzle.fen,
-            side_to_move=puzzle.side_to_move,
-            best_move_uci=puzzle.best_move_uci,
-            status=row_status,
-            attempts=stats.attempts if stats else 0,
-            pass_count=stats.pass_count if stats else 0,
-            fail_count=stats.fail_count if stats else 0,
-            last_reviewed_at=stats.last_reviewed_at if stats else None,
-            last_result=stats.last_result if stats else None,
-            next_due_at=stats.next_due_at if stats else None,
-            created_at=puzzle.created_at,
-        ))
+        result_puzzles.append(
+            PuzzleListItem(
+                id=puzzle.id,
+                title=stats.title if stats else None,
+                primary_motif=stats.primary_motif if stats else None,
+                difficulty=_swing_to_difficulty(puzzle.swing),
+                swing=puzzle.swing,
+                fen=puzzle.fen,
+                side_to_move=puzzle.side_to_move,
+                best_move_uci=puzzle.best_move_uci,
+                status=row_status,
+                attempts=stats.attempts if stats else 0,
+                pass_count=stats.pass_count if stats else 0,
+                fail_count=stats.fail_count if stats else 0,
+                last_reviewed_at=stats.last_reviewed_at if stats else None,
+                last_result=stats.last_result if stats else None,
+                next_due_at=stats.next_due_at if stats else None,
+                created_at=puzzle.created_at,
+            )
+        )
 
     return PuzzleListResponse(
         puzzles=result_puzzles,
@@ -977,10 +1039,15 @@ async def get_puzzle_detail(
     username_lower = username.lower()
     now = datetime.now(timezone.utc)
 
-
     detail_status_case = case(
-        (or_(PuzzleStats.puzzle_id.is_(None), PuzzleStats.attempts == 0), literal("new")),
-        (and_(PuzzleStats.next_due_at.isnot(None), PuzzleStats.next_due_at <= now), literal("due")),
+        (
+            or_(PuzzleStats.puzzle_id.is_(None), PuzzleStats.attempts == 0),
+            literal("new"),
+        ),
+        (
+            and_(PuzzleStats.next_due_at.isnot(None), PuzzleStats.next_due_at <= now),
+            literal("due"),
+        ),
         (
             and_(
                 PuzzleStats.attempts >= 3,
@@ -1027,13 +1094,11 @@ async def get_puzzle_detail(
 
 @app.post("/puzzles/{puzzle_id}/review")
 async def review_puzzle(
-    puzzle_id: str,
-    request: ReviewRequest,
-    db: Session = Depends(get_db)
+    puzzle_id: str, request: ReviewRequest, db: Session = Depends(get_db)
 ):
     """
     Record a puzzle review and update scheduling.
-    
+
     Optionally tracks the review in a training session.
     Provides enhanced feedback including puzzle statistics.
     """
@@ -1041,23 +1106,25 @@ async def review_puzzle(
     puzzle = puzzle_repository.get_puzzle(request.username, puzzle_id)
     if not puzzle:
         raise HTTPException(status_code=404, detail="Puzzle not found")
-    
+
     # If session_id provided, validate session and update counters
     if request.session_id:
         from services.api.models import TrainingSession, PuzzleResult as PR
-        
+
         stmt = select(TrainingSession).where(TrainingSession.id == request.session_id)
         session = db.scalars(stmt).first()
-        
+
         if not session:
             raise HTTPException(status_code=404, detail="Session not found")
-        
+
         if session.username != request.username:
-            raise HTTPException(status_code=403, detail="Session belongs to different user")
-        
+            raise HTTPException(
+                status_code=403, detail="Session belongs to different user"
+            )
+
         if session.completed_at is not None:
             raise HTTPException(status_code=400, detail="Session already completed")
-        
+
         # Increment session counters (will be committed with review)
         if request.result == PR.PASS:
             session.pass_count += 1
@@ -1069,30 +1136,30 @@ async def review_puzzle(
             session.fail_count += 1
             # Reset streak on fail
             session.current_streak = 0
-        
+
         # Add time if provided
         if request.time_spent_ms:
             session.total_time_ms += request.time_spent_ms
-        
+
     # 1. Record individual review (with optional session_id)
     insert_puzzle_review(
-        db, 
-        puzzle_id, 
-        request.username, 
-        request.result, 
+        db,
+        puzzle_id,
+        request.username,
+        request.result,
         request.time_spent_ms,
-        session_id=request.session_id
+        session_id=request.session_id,
     )
-    
+
     # 2. Update aggregate stats (triggers scheduling logic)
     stats = update_puzzle_stats(db, puzzle_id, request.username, request.result)
-    
+
     # 3. Get puzzle details for feedback
     puzzle_stats = puzzle_repository.get_puzzle_stats(request.username, puzzle_id)
-    
+
     # 4. Commit all changes atomically
     db.commit()
-    
+
     # 5. Generate feedback message
     feedback_message = ""
     if request.result == "pass":
@@ -1107,7 +1174,7 @@ async def review_puzzle(
             feedback_message = "Keep practicing this pattern."
         else:
             feedback_message = "Almost! Review the solution carefully."
-    
+
     return {
         "next_due_at": stats.next_due_at,
         "interval_days": stats.interval_days,
@@ -1119,12 +1186,13 @@ async def review_puzzle(
             "pass_count": stats.pass_count,
             "fail_count": stats.fail_count,
             "last_reviewed_at": stats.last_reviewed_at,
-            "last_result": stats.last_result
-        }
+            "last_result": stats.last_result,
+        },
     }
 
 
 # --- Rating Drivers Explainer Support ---
+
 
 def get_opponent_rating_from_pgn(pgn: str, user_is_white: bool) -> int | None:
     """Extract opponent rating from PGN headers."""
@@ -1154,33 +1222,41 @@ class SnapshotResponse(BaseModel):
 
 
 @app.post("/ratings/snapshot", response_model=SnapshotResponse)
-async def create_rating_snapshot(request: SnapshotRequest, db: Session = Depends(get_db)):
+async def create_rating_snapshot(
+    request: SnapshotRequest, db: Session = Depends(get_db)
+):
     """Fetch current rating from Chess.com and store a snapshot."""
     try:
         stats = await get_player_stats(request.username)
-        
+
         # Parse rating: { "chess_rapid": { "last": { "rating": ... } } }
         tc_key = f"chess_{request.time_control}"
         if not (rating := stats.get(tc_key, {}).get("last", {}).get("rating")):
-             raise HTTPException(status_code=502, detail=f"Could not find rating for {request.time_control} in Chess.com response")
-        
+            raise HTTPException(
+                status_code=502,
+                detail=f"Could not find rating for {request.time_control} in Chess.com response",
+            )
+
         snapshot = RatingSnapshot(
             username=request.username,
             source="chesscom",
             time_control=request.time_control,
             rating=rating,
-            recorded_at=datetime.now(timezone.utc)
+            recorded_at=datetime.now(timezone.utc),
         )
         db.add(snapshot)
         db.commit()
         db.refresh(snapshot)
-        
-        return SnapshotResponse(rating=snapshot.rating, recorded_at=snapshot.recorded_at)
-        
+
+        return SnapshotResponse(
+            rating=snapshot.rating, recorded_at=snapshot.recorded_at
+        )
+
     except (UserNotFoundError, NetworkError) as e:
         raise HTTPException(status_code=502, detail=str(e))
     except Exception as e:
-        if isinstance(e, HTTPException): raise e
+        if isinstance(e, HTTPException):
+            raise e
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1194,7 +1270,7 @@ async def get_rating_history(
     username: str,
     time_control: str = "rapid",
     limit: int = Query(50, ge=1, le=200),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     """Return chronological rating snapshot history for charting.
 
@@ -1280,16 +1356,16 @@ async def explain_rating_changes(
     since_session_id: str | None = None,
     since: datetime | None = None,
     limit_games: int = 200,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     """Explain rating drivers based on recent games."""
     from services.api.models import TrainingSession
-    
+
     # 1. Determine Window
     now = datetime.now(timezone.utc)
     window_start: datetime
     source_type: str
-    
+
     if since_session_id:
         session = db.get(TrainingSession, since_session_id)
         if not session:
@@ -1301,7 +1377,11 @@ async def explain_rating_changes(
         source_type = "since"
     else:
         # Fallback: Last session or 7 days
-        stmt = select(TrainingSession).where(TrainingSession.username == username).order_by(TrainingSession.created_at.desc())
+        stmt = (
+            select(TrainingSession)
+            .where(TrainingSession.username == username)
+            .order_by(TrainingSession.created_at.desc())
+        )
         last_session = db.scalars(stmt).first()
         if last_session:
             window_start = last_session.created_at.replace(tzinfo=timezone.utc)
@@ -1316,10 +1396,10 @@ async def explain_rating_changes(
     # 2. Load Games
     game_repository = GameRepository(db)
     all_metadata = game_repository.get_all_metadata(username)
-    
+
     start_ts = int(window_start.timestamp())
     relevant_games = []
-    
+
     count = 0
     for meta in all_metadata:
         if count >= limit_games:
@@ -1328,12 +1408,12 @@ async def explain_rating_changes(
             continue
         if meta.end_time < start_ts:
             break
-            
+
         relevant_games.append(meta)
         count += 1
-        
+
     relevant_games.reverse()
-    
+
     # 3. Process Games
     wins = 0
     draws = 0
@@ -1341,24 +1421,32 @@ async def explain_rating_changes(
     total_opp_rating = 0
     opp_rating_count = 0
     missing_ratings = 0
-    
-    game_details = [] 
+
+    game_details = []
     opp_ratings = []
-    
+
     # Snapshot closest to (but before or at) window start — best reference anchor
-    stmt = select(RatingSnapshot).where(
-        RatingSnapshot.username == username,
-        RatingSnapshot.time_control == time_control,
-        RatingSnapshot.recorded_at <= window_start
-    ).order_by(RatingSnapshot.recorded_at.desc())
+    stmt = (
+        select(RatingSnapshot)
+        .where(
+            RatingSnapshot.username == username,
+            RatingSnapshot.time_control == time_control,
+            RatingSnapshot.recorded_at <= window_start,
+        )
+        .order_by(RatingSnapshot.recorded_at.desc())
+    )
     pre_window_snapshot = db.scalars(stmt).first()
 
     # Earliest snapshot inside the window
-    stmt = select(RatingSnapshot).where(
-        RatingSnapshot.username == username,
-        RatingSnapshot.time_control == time_control,
-        RatingSnapshot.recorded_at >= window_start
-    ).order_by(RatingSnapshot.recorded_at.asc())
+    stmt = (
+        select(RatingSnapshot)
+        .where(
+            RatingSnapshot.username == username,
+            RatingSnapshot.time_control == time_control,
+            RatingSnapshot.recorded_at >= window_start,
+        )
+        .order_by(RatingSnapshot.recorded_at.asc())
+    )
     earliest_snapshot = db.scalars(stmt).first()
 
     reference_rating = 0
@@ -1368,46 +1456,57 @@ async def explain_rating_changes(
         reference_rating = pre_window_snapshot.rating
     elif earliest_snapshot:
         reference_rating = earliest_snapshot.rating
-    
+
     for meta in relevant_games:
         pgn = game_repository.get_pgn(username, meta.game_id)
         if not pgn:
-             continue
-             
-        user_is_white = (meta.white_username.lower() == username.lower())
-        
+            continue
+
+        user_is_white = meta.white_username.lower() == username.lower()
+
         result_score = 0.0
         if user_is_white:
-             if meta.white_result == "win": result_score = 1.0
-             elif meta.white_result in DRAW_RESULTS: result_score = 0.5
+            if meta.white_result == "win":
+                result_score = 1.0
+            elif meta.white_result in DRAW_RESULTS:
+                result_score = 0.5
         else:
-             if meta.black_result == "win": result_score = 1.0
-             elif meta.black_result in DRAW_RESULTS: result_score = 0.5
+            if meta.black_result == "win":
+                result_score = 1.0
+            elif meta.black_result in DRAW_RESULTS:
+                result_score = 0.5
 
-        if result_score == 1.0: wins += 1
-        elif result_score == 0.5: draws += 1
-        else: losses += 1
-        
+        if result_score == 1.0:
+            wins += 1
+        elif result_score == 0.5:
+            draws += 1
+        else:
+            losses += 1
+
         opp_rating = get_opponent_rating_from_pgn(pgn, user_is_white)
-        
+
         if opp_rating is None:
             missing_ratings += 1
-            game_details.append({
-                "meta": meta,
-                "opp_rating": None,
-                "actual": result_score,
-                "expected": None
-            })
+            game_details.append(
+                {
+                    "meta": meta,
+                    "opp_rating": None,
+                    "actual": result_score,
+                    "expected": None,
+                }
+            )
         else:
             total_opp_rating += opp_rating
             opp_rating_count += 1
             opp_ratings.append(opp_rating)
-            game_details.append({
-                "meta": meta,
-                "opp_rating": opp_rating,
-                "actual": result_score,
-                "expected": None 
-            })
+            game_details.append(
+                {
+                    "meta": meta,
+                    "opp_rating": opp_rating,
+                    "actual": result_score,
+                    "expected": None,
+                }
+            )
 
     if reference_rating == 0:
         if opp_rating_count > 0:
@@ -1415,70 +1514,109 @@ async def explain_rating_changes(
         else:
             reference_rating = 1200
         reference_is_approx = True
-            
+
     expected_total = 0.0
     actual_total_rated = 0.0
     surprises = []
-    
+
     for item in game_details:
         if item["opp_rating"] is not None:
             r_opp = item["opp_rating"]
             expected = calculate_expected_score(reference_rating, r_opp)
             item["expected"] = expected
-            
+
             expected_total += expected
             actual_total_rated += item["actual"]
-            
-            surprises.append(HighlightGame(
-                opponent_rating=r_opp,
-                result="Win" if item["actual"]==1.0 else "Draw" if item["actual"]==0.5 else "Loss",
-                expected_score=round(expected, 2),
-                rating_diff=r_opp - reference_rating,
-                game_id=item["meta"].game_id,
-                played_at=datetime.fromtimestamp(item["meta"].end_time, tz=timezone.utc),
-                url=item["meta"].url
-            ))
-            
+
+            surprises.append(
+                HighlightGame(
+                    opponent_rating=r_opp,
+                    result=(
+                        "Win"
+                        if item["actual"] == 1.0
+                        else "Draw" if item["actual"] == 0.5 else "Loss"
+                    ),
+                    expected_score=round(expected, 2),
+                    rating_diff=r_opp - reference_rating,
+                    game_id=item["meta"].game_id,
+                    played_at=datetime.fromtimestamp(
+                        item["meta"].end_time, tz=timezone.utc
+                    ),
+                    url=item["meta"].url,
+                )
+            )
+
     avg_opp = int(total_opp_rating / opp_rating_count) if opp_rating_count > 0 else None
-    
+
     drivers: list[Driver] = []
     diff = actual_total_rated - expected_total
 
     if diff > PERFORMANCE_DIFF_THRESHOLD:
-        severity = "major" if abs(diff) > 2.0 else "moderate" if abs(diff) > 1.0 else "minor"
-        drivers.append(Driver(
-            text=f"You outperformed expectations by {diff:+.1f} points (upward pressure).",
-            severity=severity, direction="up"
-        ))
+        severity = (
+            "major" if abs(diff) > 2.0 else "moderate" if abs(diff) > 1.0 else "minor"
+        )
+        drivers.append(
+            Driver(
+                text=f"You outperformed expectations by {diff:+.1f} points (upward pressure).",
+                severity=severity,
+                direction="up",
+            )
+        )
     elif diff < -PERFORMANCE_DIFF_THRESHOLD:
-        severity = "major" if abs(diff) > 2.0 else "moderate" if abs(diff) > 1.0 else "minor"
-        drivers.append(Driver(
-            text=f"You underperformed expectations by {diff:+.1f} points (downward pressure).",
-            severity=severity, direction="down"
-        ))
+        severity = (
+            "major" if abs(diff) > 2.0 else "moderate" if abs(diff) > 1.0 else "minor"
+        )
+        drivers.append(
+            Driver(
+                text=f"You underperformed expectations by {diff:+.1f} points (downward pressure).",
+                severity=severity,
+                direction="down",
+            )
+        )
 
-    wins_vs_higher = sum(1 for g in game_details if g["opp_rating"] and g["opp_rating"] >= reference_rating + RATING_DIFFERENCE_THRESHOLD and g["actual"] == 1.0)
+    wins_vs_higher = sum(
+        1
+        for g in game_details
+        if g["opp_rating"]
+        and g["opp_rating"] >= reference_rating + RATING_DIFFERENCE_THRESHOLD
+        and g["actual"] == 1.0
+    )
     if wins_vs_higher >= SIGNIFICANT_WINS_VS_HIGHER_THRESHOLD:
-        drivers.append(Driver(
-            text=f"{wins_vs_higher} wins against higher-rated opponents likely offset losses.",
-            severity="moderate" if wins_vs_higher >= 4 else "minor", direction="up"
-        ))
+        drivers.append(
+            Driver(
+                text=f"{wins_vs_higher} wins against higher-rated opponents likely offset losses.",
+                severity="moderate" if wins_vs_higher >= 4 else "minor",
+                direction="up",
+            )
+        )
 
-    losses_vs_lower = sum(1 for g in game_details if g["opp_rating"] and g["opp_rating"] <= reference_rating - RATING_DIFFERENCE_THRESHOLD and g["actual"] == 0.0)
+    losses_vs_lower = sum(
+        1
+        for g in game_details
+        if g["opp_rating"]
+        and g["opp_rating"] <= reference_rating - RATING_DIFFERENCE_THRESHOLD
+        and g["actual"] == 0.0
+    )
     if losses_vs_lower >= SIGNIFICANT_LOSSES_VS_LOWER_THRESHOLD:
-        drivers.append(Driver(
-            text=f"{losses_vs_lower} losses against lower-rated opponents likely drove most of the drop.",
-            severity="moderate" if losses_vs_lower >= 4 else "minor", direction="down"
-        ))
+        drivers.append(
+            Driver(
+                text=f"{losses_vs_lower} losses against lower-rated opponents likely drove most of the drop.",
+                severity="moderate" if losses_vs_lower >= 4 else "minor",
+                direction="down",
+            )
+        )
 
     if len(opp_ratings) >= 5:
         variance = sum((x - avg_opp) ** 2 for x in opp_ratings) / len(opp_ratings)
-        std_dev = variance ** 0.5
+        std_dev = variance**0.5
         if std_dev > OPPONENT_RATING_STD_DEV_THRESHOLD:
-            drivers.append(Driver(
-                text="Wide opponent rating range increased volatility.",
-                severity="minor", direction="neutral"
-            ))
+            drivers.append(
+                Driver(
+                    text="Wide opponent rating range increased volatility.",
+                    severity="minor",
+                    direction="neutral",
+                )
+            )
 
     # Sort drivers by severity (major first)
     severity_order = {"major": 0, "moderate": 1, "minor": 2}
@@ -1495,17 +1633,21 @@ async def explain_rating_changes(
 
     # Start: prefer pre-window snapshot, fall back to earliest in-window
     start_rating_val = (
-        pre_window_snapshot.rating if pre_window_snapshot
-        else earliest_snapshot.rating if earliest_snapshot
-        else None
+        pre_window_snapshot.rating
+        if pre_window_snapshot
+        else earliest_snapshot.rating if earliest_snapshot else None
     )
 
     # End: latest snapshot within the window period
-    stmt = select(RatingSnapshot).where(
-        RatingSnapshot.username == username,
-        RatingSnapshot.time_control == time_control,
-        RatingSnapshot.recorded_at >= window_start
-    ).order_by(RatingSnapshot.recorded_at.desc())
+    stmt = (
+        select(RatingSnapshot)
+        .where(
+            RatingSnapshot.username == username,
+            RatingSnapshot.time_control == time_control,
+            RatingSnapshot.recorded_at >= window_start,
+        )
+        .order_by(RatingSnapshot.recorded_at.desc())
+    )
     latest_in_window = db.scalars(stmt).first()
     end_rating_val = latest_in_window.rating if latest_in_window else None
 
@@ -1521,7 +1663,7 @@ async def explain_rating_changes(
             end=end_rating_val,
             net_change=net_change,
             reference_rating=reference_rating,
-            reference_is_approx=reference_is_approx
+            reference_is_approx=reference_is_approx,
         ),
         stats=DriverStats(
             games=len(relevant_games),
@@ -1532,8 +1674,10 @@ async def explain_rating_changes(
             expected_total=expected_total if opp_rating_count > 0 else None,
             actual_total=actual_total_rated if opp_rating_count > 0 else None,
             actual_minus_expected=diff if opp_rating_count > 0 else None,
-            missing_opponent_rating_games=missing_ratings
+            missing_opponent_rating_games=missing_ratings,
         ),
         drivers=drivers,
-        highlights=Highlights(best_surprises=best_surprises, worst_surprises=worst_surprises)
+        highlights=Highlights(
+            best_surprises=best_surprises, worst_surprises=worst_surprises
+        ),
     )

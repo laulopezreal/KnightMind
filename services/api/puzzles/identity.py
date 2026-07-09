@@ -3,6 +3,7 @@ Puzzle identity logic.
 
 Handles motif assignment, title generation, and backfilling identity data.
 """
+
 import logging
 from sqlalchemy import select
 from sqlalchemy.exc import OperationalError
@@ -24,13 +25,14 @@ MOTIF_TITLES = {
     "blunder": "The Missed Win",
 }
 
+
 def assign_primary_motif(puzzle_data) -> str:
     """
     Assign a primary motif to a puzzle based on its metadata.
-    
+
     Args:
         puzzle_data: Puzzle object or dict with puzzle metadata.
-        
+
     Returns:
         The primary motif string.
         Defaults to "blunder" if no specific motif is detected.
@@ -40,17 +42,19 @@ def assign_primary_motif(puzzle_data) -> str:
     # So we strictly default to "blunder" as per requirements.
     return "blunder"
 
+
 def generate_puzzle_title(primary_motif: str) -> str:
     """
     Generate a human-readable title from a primary motif.
-    
+
     Args:
         primary_motif: The primary motif string.
-        
+
     Returns:
         The generated title string.
     """
     return MOTIF_TITLES.get(primary_motif, "Puzzle")
+
 
 def backfill_puzzle_identity(db: Session):
     """

@@ -3,7 +3,7 @@
 from .tree_builder import OpeningStats, OpeningTreeBuilder, build_opening_tree
 
 # Fixture PGNs for testing
-PGN_SICILIAN_WIN = '''[Event "Test Game 1"]
+PGN_SICILIAN_WIN = """[Event "Test Game 1"]
 [Site "Chess.com"]
 [Date "2024.01.01"]
 [White "testplayer"]
@@ -11,9 +11,9 @@ PGN_SICILIAN_WIN = '''[Event "Test Game 1"]
 [Result "1-0"]
 
 1. e4 c5 2. Nf3 d6 3. d4 cxd4 4. Nxd4 Nf6 5. Nc3 a6 6. Be3 e5 1-0
-'''
+"""
 
-PGN_SICILIAN_LOSS = '''[Event "Test Game 2"]
+PGN_SICILIAN_LOSS = """[Event "Test Game 2"]
 [Site "Chess.com"]
 [Date "2024.01.02"]
 [White "testplayer"]
@@ -21,9 +21,9 @@ PGN_SICILIAN_LOSS = '''[Event "Test Game 2"]
 [Result "0-1"]
 
 1. e4 c5 2. Nf3 d6 3. d4 cxd4 4. Nxd4 Nf6 5. Nc3 g6 6. Be3 Bg7 0-1
-'''
+"""
 
-PGN_FRENCH_DRAW = '''[Event "Test Game 3"]
+PGN_FRENCH_DRAW = """[Event "Test Game 3"]
 [Site "Chess.com"]
 [Date "2024.01.03"]
 [White "testplayer"]
@@ -31,9 +31,9 @@ PGN_FRENCH_DRAW = '''[Event "Test Game 3"]
 [Result "1/2-1/2"]
 
 1. e4 e6 2. d4 d5 3. Nc3 Bb4 4. e5 c5 5. a3 Bxc3+ 6. bxc3 Ne7 1/2-1/2
-'''
+"""
 
-PGN_AS_BLACK_WIN = '''[Event "Test Game 4"]
+PGN_AS_BLACK_WIN = """[Event "Test Game 4"]
 [Site "Chess.com"]
 [Date "2024.01.04"]
 [White "opponent4"]
@@ -41,9 +41,9 @@ PGN_AS_BLACK_WIN = '''[Event "Test Game 4"]
 [Result "0-1"]
 
 1. d4 Nf6 2. c4 e6 3. Nc3 Bb4 4. Qc2 O-O 5. a3 Bxc3+ 6. Qxc3 b6 0-1
-'''
+"""
 
-PGN_AS_BLACK_LOSS = '''[Event "Test Game 5"]
+PGN_AS_BLACK_LOSS = """[Event "Test Game 5"]
 [Site "Chess.com"]
 [Date "2024.01.05"]
 [White "opponent5"]
@@ -51,7 +51,7 @@ PGN_AS_BLACK_LOSS = '''[Event "Test Game 5"]
 [Result "1-0"]
 
 1. d4 Nf6 2. c4 g6 3. Nc3 Bg7 4. e4 d6 5. Nf3 O-O 6. Be2 e5 1-0
-'''
+"""
 
 
 class TestOpeningStats:
@@ -183,7 +183,7 @@ class TestOpeningTreeBuilder:
         builder = OpeningTreeBuilder(max_ply=6)
 
         builder.add_game(PGN_SICILIAN_WIN, "testplayer")  # 1.e4 c5
-        builder.add_game(PGN_FRENCH_DRAW, "testplayer")   # 1.e4 e6
+        builder.add_game(PGN_FRENCH_DRAW, "testplayer")  # 1.e4 e6
 
         tree = builder.build_tree()
 

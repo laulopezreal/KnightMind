@@ -12,6 +12,7 @@ from services.api.models import Game
 @dataclass
 class GameMetadata:
     """Metadata for a stored chess game."""
+
     game_id: str  # Hash of the game URL (unique identifier)
     url: str
     username: str  # The user who imported this game
@@ -97,7 +98,11 @@ class GameRepository:
 
     def get_game_count(self, username: str) -> int:
         username_lower = username.lower()
-        stmt = select(func.count()).select_from(Game).where(Game.username == username_lower)
+        stmt = (
+            select(func.count())
+            .select_from(Game)
+            .where(Game.username == username_lower)
+        )
         return self.db.scalar(stmt) or 0
 
     def get_all_metadata(self, username: str) -> list[GameMetadata]:
@@ -123,7 +128,9 @@ class GameRepository:
             return game.pgn_blob
         return None
 
-    def record_import_summary(self, username: str, new_games: int, imported_at: str | None = None) -> None:
+    def record_import_summary(
+        self, username: str, new_games: int, imported_at: str | None = None
+    ) -> None:
         """Store the last import summary for a user in the database."""
         from services.api.models import ImportSummary
 
@@ -138,11 +145,13 @@ class GameRepository:
             existing.last_imported_at = ts
             existing.last_new_games = new_games
         else:
-            self.db.add(ImportSummary(
-                username=username_lower,
-                last_imported_at=ts,
-                last_new_games=new_games,
-            ))
+            self.db.add(
+                ImportSummary(
+                    username=username_lower,
+                    last_imported_at=ts,
+                    last_new_games=new_games,
+                )
+            )
         self.db.commit()
 
     def get_last_import_summary(self, username: str) -> dict[str, str | int] | None:
@@ -153,6 +162,8 @@ class GameRepository:
         if not summary:
             return None
         return {
-            "last_imported_at": summary.last_imported_at.replace(tzinfo=timezone.utc).isoformat(),
+            "last_imported_at": summary.last_imported_at.replace(
+                tzinfo=timezone.utc
+            ).isoformat(),
             "last_new_games": summary.last_new_games,
         }

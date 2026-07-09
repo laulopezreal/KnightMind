@@ -77,18 +77,28 @@ def test_game_repository_get_users(repository):
 def test_game_repository_deduplication(repository):
     url = "https://chess.com/game/12345"
     is_new1, game_id1 = repository.store_game(
-        username="testuser", url=url,
+        username="testuser",
+        url=url,
         pgn='[Event "Test"]\n1. e4 e5 *',
-        white_username="testuser", black_username="opponent",
-        white_result="win", black_result="lose",
-        time_control="600", end_time=1704067200, rated=True,
+        white_username="testuser",
+        black_username="opponent",
+        white_result="win",
+        black_result="lose",
+        time_control="600",
+        end_time=1704067200,
+        rated=True,
     )
     is_new2, game_id2 = repository.store_game(
-        username="testuser", url=url,
+        username="testuser",
+        url=url,
         pgn='[Event "Test"]\n1. e4 e5 *',
-        white_username="testuser", black_username="opponent",
-        white_result="win", black_result="lose",
-        time_control="600", end_time=1704067200, rated=True,
+        white_username="testuser",
+        black_username="opponent",
+        white_result="win",
+        black_result="lose",
+        time_control="600",
+        end_time=1704067200,
+        rated=True,
     )
 
     assert is_new1 is True

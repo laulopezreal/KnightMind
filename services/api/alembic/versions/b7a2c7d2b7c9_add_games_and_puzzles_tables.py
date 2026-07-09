@@ -5,11 +5,11 @@ Revises: 794d3af3a02c
 Create Date: 2026-02-01 17:42:10.000000
 
 """
+
 from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
-
 
 # revision identifiers, used by Alembic.
 revision: str = "b7a2c7d2b7c9"
@@ -36,7 +36,12 @@ def upgrade() -> None:
             sa.Column("time_control", sa.String(), nullable=False),
             sa.Column("end_time", sa.Integer(), nullable=False),
             sa.Column("rated", sa.Boolean(), server_default=sa.false(), nullable=False),
-            sa.Column("imported_at", sa.DateTime(), server_default=sa.func.now(), nullable=False),
+            sa.Column(
+                "imported_at",
+                sa.DateTime(),
+                server_default=sa.func.now(),
+                nullable=False,
+            ),
             sa.Column("source_path", sa.Text(), nullable=True),
             sa.Column("pgn_blob", sa.Text(), nullable=True),
         )
@@ -65,12 +70,27 @@ def upgrade() -> None:
             sa.Column("eval_before", sa.Float(), nullable=False),
             sa.Column("eval_after", sa.Float(), nullable=False),
             sa.Column("swing", sa.Float(), nullable=False),
-            sa.Column("created_at", sa.DateTime(), server_default=sa.func.now(), nullable=False),
+            sa.Column(
+                "created_at",
+                sa.DateTime(),
+                server_default=sa.func.now(),
+                nullable=False,
+            ),
             sa.Column("used_on", sa.Date(), nullable=True),
-            sa.Column("imported_at", sa.DateTime(), server_default=sa.func.now(), nullable=False),
+            sa.Column(
+                "imported_at",
+                sa.DateTime(),
+                server_default=sa.func.now(),
+                nullable=False,
+            ),
             sa.Column("source_path", sa.Text(), nullable=True),
             sa.ForeignKeyConstraint(["source_game_id"], ["games.game_id"]),
-            sa.UniqueConstraint("username", "source_game_id", "ply", name="uq_puzzles_username_source_game_id_ply"),
+            sa.UniqueConstraint(
+                "username",
+                "source_game_id",
+                "ply",
+                name="uq_puzzles_username_source_game_id_ply",
+            ),
         )
 
     puzzles_indexes = {index["name"] for index in inspector.get_indexes("puzzles")}
@@ -83,7 +103,9 @@ def upgrade() -> None:
             op.create_index(name, "puzzles", columns)
 
     if inspector.has_table("puzzle_stats"):
-        puzzle_stats_fks = {fk["name"] for fk in inspector.get_foreign_keys("puzzle_stats")}
+        puzzle_stats_fks = {
+            fk["name"] for fk in inspector.get_foreign_keys("puzzle_stats")
+        }
         if "fk_puzzle_stats_puzzle_id" not in puzzle_stats_fks:
             with op.batch_alter_table("puzzle_stats") as batch_op:
                 batch_op.create_foreign_key(
@@ -94,7 +116,9 @@ def upgrade() -> None:
                 )
 
     if inspector.has_table("puzzle_reviews"):
-        puzzle_reviews_fks = {fk["name"] for fk in inspector.get_foreign_keys("puzzle_reviews")}
+        puzzle_reviews_fks = {
+            fk["name"] for fk in inspector.get_foreign_keys("puzzle_reviews")
+        }
         if "fk_puzzle_reviews_puzzle_id" not in puzzle_reviews_fks:
             with op.batch_alter_table("puzzle_reviews") as batch_op:
                 batch_op.create_foreign_key(
@@ -112,17 +136,25 @@ def downgrade() -> None:
 
     # Drop foreign keys from puzzle_reviews if they exist
     if inspector.has_table("puzzle_reviews"):
-        puzzle_reviews_fks = {fk["name"] for fk in inspector.get_foreign_keys("puzzle_reviews")}
+        puzzle_reviews_fks = {
+            fk["name"] for fk in inspector.get_foreign_keys("puzzle_reviews")
+        }
         if "fk_puzzle_reviews_puzzle_id" in puzzle_reviews_fks:
             with op.batch_alter_table("puzzle_reviews") as batch_op:
-                batch_op.drop_constraint("fk_puzzle_reviews_puzzle_id", type_="foreignkey")
+                batch_op.drop_constraint(
+                    "fk_puzzle_reviews_puzzle_id", type_="foreignkey"
+                )
 
     # Drop foreign keys from puzzle_stats if they exist
     if inspector.has_table("puzzle_stats"):
-        puzzle_stats_fks = {fk["name"] for fk in inspector.get_foreign_keys("puzzle_stats")}
+        puzzle_stats_fks = {
+            fk["name"] for fk in inspector.get_foreign_keys("puzzle_stats")
+        }
         if "fk_puzzle_stats_puzzle_id" in puzzle_stats_fks:
             with op.batch_alter_table("puzzle_stats") as batch_op:
-                batch_op.drop_constraint("fk_puzzle_stats_puzzle_id", type_="foreignkey")
+                batch_op.drop_constraint(
+                    "fk_puzzle_stats_puzzle_id", type_="foreignkey"
+                )
 
     # Drop puzzles table and its indexes if they exist
     if inspector.has_table("puzzles"):

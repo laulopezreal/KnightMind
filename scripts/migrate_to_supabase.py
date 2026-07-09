@@ -28,9 +28,9 @@ TABLE_ORDER = [
     "jobs",
     "fen_eval_cache",
     "games",
-    "puzzles",           # FK → games
-    "puzzle_stats",      # FK → puzzles
-    "puzzle_reviews",    # FK → puzzles
+    "puzzles",  # FK → games
+    "puzzle_stats",  # FK → puzzles
+    "puzzle_reviews",  # FK → puzzles
     "training_sessions",
     "rating_snapshots",
 ]
@@ -38,6 +38,7 @@ TABLE_ORDER = [
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -50,10 +51,12 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _url_with_timeouts(url: str, connect_timeout: int = 10,
-                        lock_timeout_ms: int = 15000) -> str:
+def _url_with_timeouts(
+    url: str, connect_timeout: int = 10, lock_timeout_ms: int = 15000
+) -> str:
     """Append connect_timeout and lock_timeout options to a Postgres URL."""
     from urllib.parse import quote
+
     opts = quote(f"-c lock_timeout={lock_timeout_ms}", safe="")
     sep = "&" if "?" in url else "?"
     # Double any '%' so configparser doesn't treat them as interpolation
@@ -191,7 +194,7 @@ def copy_data(pg_url: str) -> None:
         # Upsert: skip rows that already exist (idempotent re-runs)
         pk_col = columns[0]  # All our tables use the first column as PK
         insert_sql = (
-            f'INSERT INTO {table} ({col_list}) VALUES ({placeholders}) '
+            f"INSERT INTO {table} ({col_list}) VALUES ({placeholders}) "
             f'ON CONFLICT ("{pk_col}") DO NOTHING'
         )
 
@@ -222,8 +225,7 @@ def copy_data(pg_url: str) -> None:
                     pg_cur.executemany(insert_sql, params_list)
                     pg_conn.commit()
                     inserted += len(batch)
-                    print(f"    {table}: {inserted}/{len(rows)} rows...",
-                          flush=True)
+                    print(f"    {table}: {inserted}/{len(rows)} rows...", flush=True)
         except Exception as exc:
             pg_conn.rollback()
             msg = str(exc).lower()
@@ -262,6 +264,7 @@ def copy_data(pg_url: str) -> None:
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+
 
 def main() -> None:
     print("=" * 60)

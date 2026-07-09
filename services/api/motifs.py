@@ -9,12 +9,12 @@ from sqlalchemy import select, func
 from pydantic import BaseModel
 from services.api.models import PuzzleStats
 
-
 MotifRank = Literal["needs_work", "learning", "mastered"]
 
 
 class MotifPerformance(BaseModel):
     """Performance statistics for a single chess motif/pattern."""
+
     name: str
     total_puzzles: int
     passed: int
@@ -24,6 +24,7 @@ class MotifPerformance(BaseModel):
 
 class MotifPerformanceResponse(BaseModel):
     """Complete motif performance breakdown for a user."""
+
     motifs: list[MotifPerformance]
     weakest_motifs: list[str]
     total_motifs_practiced: int
@@ -64,12 +65,12 @@ def get_user_motif_performance(db: Session, username: str) -> MotifPerformanceRe
             PuzzleStats.primary_motif,
             func.count(PuzzleStats.puzzle_id).label("total_puzzles"),
             func.sum(PuzzleStats.pass_count).label("passed"),
-            func.sum(PuzzleStats.attempts).label("attempts")
+            func.sum(PuzzleStats.attempts).label("attempts"),
         )
         .where(
             PuzzleStats.username == username,
             PuzzleStats.primary_motif.isnot(None),
-            PuzzleStats.attempts > 0
+            PuzzleStats.attempts > 0,
         )
         .group_by(PuzzleStats.primary_motif)
         .order_by(func.sum(PuzzleStats.pass_count) / func.sum(PuzzleStats.attempts))
@@ -88,22 +89,19 @@ def get_user_motif_performance(db: Session, username: str) -> MotifPerformanceRe
         accuracy = passed / attempts if attempts > 0 else 0.0
         rank = calculate_motif_rank(accuracy)
 
-        motifs.append(MotifPerformance(
-            name=motif_name,
-            total_puzzles=total,
-            passed=passed,
-            accuracy=accuracy,
-            rank=rank
-        ))
+        motifs.append(
+            MotifPerformance(
+                name=motif_name,
+                total_puzzles=total,
+                passed=passed,
+                accuracy=accuracy,
+                rank=rank,
+            )
+        )
 
     # Identify weakest motifs (bottom 2, needs_work rank only)
-    weakest = [
-        m.name for m in motifs
-        if m.rank == "needs_work"
-    ][:2]
+    weakest = [m.name for m in motifs if m.rank == "needs_work"][:2]
 
     return MotifPerformanceResponse(
-        motifs=motifs,
-        weakest_motifs=weakest,
-        total_motifs_practiced=len(motifs)
+        motifs=motifs, weakest_motifs=weakest, total_motifs_practiced=len(motifs)
     )

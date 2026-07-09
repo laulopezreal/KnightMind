@@ -48,25 +48,35 @@ def temp_storage(db_session):
         yield db_session
 
 
-def _store_game(db, pgn: str, username: str = "testuser", url: str = "https://chess.com/game/test",
-                white_username: str = "testuser", black_username: str = "opponent",
-                white_result: str = "win", black_result: str = "loss"):
+def _store_game(
+    db,
+    pgn: str,
+    username: str = "testuser",
+    url: str = "https://chess.com/game/test",
+    white_username: str = "testuser",
+    black_username: str = "opponent",
+    white_result: str = "win",
+    black_result: str = "loss",
+):
     """Helper to store a game in the DB."""
     import hashlib
+
     game_id = hashlib.sha256(url.encode()).hexdigest()[:16]
-    db.add(Game(
-        game_id=game_id,
-        url=url,
-        username=username.lower(),
-        white_username=white_username,
-        black_username=black_username,
-        white_result=white_result,
-        black_result=black_result,
-        time_control="600",
-        end_time=1234567890,
-        rated=True,
-        pgn_blob=pgn,
-    ))
+    db.add(
+        Game(
+            game_id=game_id,
+            url=url,
+            username=username.lower(),
+            white_username=white_username,
+            black_username=black_username,
+            white_result=white_result,
+            black_result=black_result,
+            time_control="600",
+            end_time=1234567890,
+            rated=True,
+            pgn_blob=pgn,
+        )
+    )
     db.commit()
 
 
@@ -103,7 +113,9 @@ def test_generate_puzzles_no_games(temp_storage):
 
 @patch("services.api.puzzles.generator.create_engine")
 @patch("services.api.puzzles.generator.get_ply_range")
-def test_generate_puzzles_swing_calculation(mock_get_ply_range, mock_create_engine, temp_storage):
+def test_generate_puzzles_swing_calculation(
+    mock_get_ply_range, mock_create_engine, temp_storage
+):
     """Test that swing is calculated correctly with proper sign."""
     db = temp_storage
     mock_create_engine.return_value = Mock()
@@ -119,10 +131,12 @@ def test_generate_puzzles_swing_calculation(mock_get_ply_range, mock_create_engi
 
     with patch("services.api.puzzles.generator.get_or_compute_eval") as mock_eval:
         mock_eval.side_effect = [
-            EvalResult(best_move_uci="d2d4", eval=0.5),    # Before white's move
-            EvalResult(best_move_uci="e7e5", eval=1.5),    # After (from black's perspective)
-            EvalResult(best_move_uci="e2e4", eval=0.3),    # Before next move
-            EvalResult(best_move_uci="e7e6", eval=0.3),    # After
+            EvalResult(best_move_uci="d2d4", eval=0.5),  # Before white's move
+            EvalResult(
+                best_move_uci="e7e5", eval=1.5
+            ),  # After (from black's perspective)
+            EvalResult(best_move_uci="e2e4", eval=0.3),  # Before next move
+            EvalResult(best_move_uci="e7e6", eval=0.3),  # After
         ]
 
         result = generate_puzzles("testuser", max_games=1, max_puzzles=10)
@@ -171,8 +185,14 @@ def test_generate_puzzles_only_user_moves(mock_create_engine, temp_storage):
 
 1. e4 e5 2. Nf3 Nc6"""
 
-    _store_game(db, pgn, white_username="opponent", black_username="testuser",
-                white_result="loss", black_result="win")
+    _store_game(
+        db,
+        pgn,
+        white_username="opponent",
+        black_username="testuser",
+        white_result="loss",
+        black_result="win",
+    )
 
     with patch("services.api.puzzles.generator.get_or_compute_eval") as mock_eval:
         mock_eval.return_value = EvalResult(best_move_uci="e2e4", eval=0.3)

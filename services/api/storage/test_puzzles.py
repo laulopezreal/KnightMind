@@ -29,18 +29,20 @@ def db_session(tmp_path):
 @pytest.fixture
 def repository(db_session):
     # Insert a parent game for FK constraint
-    db_session.add(Game(
-        game_id="game123",
-        url="https://chess.com/game/123",
-        username="testuser",
-        white_username="testuser",
-        black_username="opponent",
-        white_result="win",
-        black_result="lose",
-        time_control="600",
-        end_time=1704067200,
-        rated=True,
-    ))
+    db_session.add(
+        Game(
+            game_id="game123",
+            url="https://chess.com/game/123",
+            username="testuser",
+            white_username="testuser",
+            black_username="opponent",
+            white_result="win",
+            black_result="lose",
+            time_control="600",
+            end_time=1704067200,
+            rated=True,
+        )
+    )
     db_session.commit()
     return PuzzleRepository(db_session)
 
@@ -48,18 +50,20 @@ def repository(db_session):
 def _add_game(db_session, game_id: str, username: str = "testuser"):
     existing = db_session.get(Game, game_id)
     if not existing:
-        db_session.add(Game(
-            game_id=game_id,
-            url=f"https://chess.com/game/{game_id}",
-            username=username,
-            white_username=username,
-            black_username="opponent",
-            white_result="win",
-            black_result="lose",
-            time_control="600",
-            end_time=1704067200,
-            rated=True,
-        ))
+        db_session.add(
+            Game(
+                game_id=game_id,
+                url=f"https://chess.com/game/{game_id}",
+                username=username,
+                white_username=username,
+                black_username="opponent",
+                white_result="win",
+                black_result="lose",
+                time_control="600",
+                end_time=1704067200,
+                rated=True,
+            )
+        )
         db_session.flush()
 
 
@@ -89,16 +93,28 @@ def test_puzzle_repository_database_mode_stores_and_updates(repository):
 
 def test_puzzle_repository_deduplication(repository):
     is_new1, pid1 = repository.save_puzzle(
-        username="testuser", source_game_id="game123", ply=15,
-        fen="fen1", side_to_move="white",
-        played_move_uci="e2e4", best_move_uci="d2d4",
-        eval_before=0.5, eval_after=-1.5, swing=2.0,
+        username="testuser",
+        source_game_id="game123",
+        ply=15,
+        fen="fen1",
+        side_to_move="white",
+        played_move_uci="e2e4",
+        best_move_uci="d2d4",
+        eval_before=0.5,
+        eval_after=-1.5,
+        swing=2.0,
     )
     is_new2, pid2 = repository.save_puzzle(
-        username="testuser", source_game_id="game123", ply=15,
-        fen="fen2", side_to_move="white",
-        played_move_uci="e2e3", best_move_uci="d2d3",
-        eval_before=1.0, eval_after=-2.0, swing=3.0,
+        username="testuser",
+        source_game_id="game123",
+        ply=15,
+        fen="fen2",
+        side_to_move="white",
+        played_move_uci="e2e3",
+        best_move_uci="d2d3",
+        eval_before=1.0,
+        eval_after=-2.0,
+        swing=3.0,
     )
 
     assert is_new1 is True
@@ -109,16 +125,28 @@ def test_puzzle_repository_deduplication(repository):
 
 def test_puzzle_repository_different_ply_not_duplicate(repository):
     is_new1, pid1 = repository.save_puzzle(
-        username="testuser", source_game_id="game123", ply=15,
-        fen="fen1", side_to_move="white",
-        played_move_uci="e2e4", best_move_uci="d2d4",
-        eval_before=0.5, eval_after=-1.5, swing=2.0,
+        username="testuser",
+        source_game_id="game123",
+        ply=15,
+        fen="fen1",
+        side_to_move="white",
+        played_move_uci="e2e4",
+        best_move_uci="d2d4",
+        eval_before=0.5,
+        eval_after=-1.5,
+        swing=2.0,
     )
     is_new2, pid2 = repository.save_puzzle(
-        username="testuser", source_game_id="game123", ply=17,
-        fen="fen2", side_to_move="white",
-        played_move_uci="e2e5", best_move_uci="d2d5",
-        eval_before=0.5, eval_after=-1.5, swing=2.0,
+        username="testuser",
+        source_game_id="game123",
+        ply=17,
+        fen="fen2",
+        side_to_move="white",
+        played_move_uci="e2e5",
+        best_move_uci="d2d5",
+        eval_before=0.5,
+        eval_after=-1.5,
+        swing=2.0,
     )
 
     assert is_new1 is True
@@ -132,10 +160,16 @@ def test_puzzle_repository_daily_puzzles(repository, db_session):
     for i in range(5):
         _add_game(db_session, f"game-daily-{i}")
         repository.save_puzzle(
-            username="testuser", source_game_id=f"game-daily-{i}", ply=10 + i,
-            fen=f"fen{i}", side_to_move="white",
-            played_move_uci="e2e4", best_move_uci="d2d4",
-            eval_before=0.5, eval_after=-1.5, swing=2.0,
+            username="testuser",
+            source_game_id=f"game-daily-{i}",
+            ply=10 + i,
+            fen=f"fen{i}",
+            side_to_move="white",
+            played_move_uci="e2e4",
+            best_move_uci="d2d4",
+            eval_before=0.5,
+            eval_after=-1.5,
+            swing=2.0,
         )
 
     daily = repository.get_daily_puzzles("testuser", n=3)
@@ -144,10 +178,16 @@ def test_puzzle_repository_daily_puzzles(repository, db_session):
 
 def test_puzzle_repository_mark_with_specific_date(repository):
     _, puzzle_id = repository.save_puzzle(
-        username="testuser", source_game_id="game123", ply=10,
-        fen="fen1", side_to_move="white",
-        played_move_uci="e2e4", best_move_uci="d2d4",
-        eval_before=0.5, eval_after=-1.5, swing=2.0,
+        username="testuser",
+        source_game_id="game123",
+        ply=10,
+        fen="fen1",
+        side_to_move="white",
+        played_move_uci="e2e4",
+        best_move_uci="d2d4",
+        eval_before=0.5,
+        eval_after=-1.5,
+        swing=2.0,
     )
 
     specific_date = date(2024, 1, 15)
@@ -159,10 +199,16 @@ def test_puzzle_repository_mark_with_specific_date(repository):
 
 def test_puzzle_repository_username_case_insensitive(repository):
     is_new, pid = repository.save_puzzle(
-        username="TestUser", source_game_id="game123", ply=10,
-        fen="fen1", side_to_move="white",
-        played_move_uci="e2e4", best_move_uci="d2d4",
-        eval_before=0.5, eval_after=-1.5, swing=2.0,
+        username="TestUser",
+        source_game_id="game123",
+        ply=10,
+        fen="fen1",
+        side_to_move="white",
+        played_move_uci="e2e4",
+        best_move_uci="d2d4",
+        eval_before=0.5,
+        eval_after=-1.5,
+        swing=2.0,
     )
     assert is_new is True
 
