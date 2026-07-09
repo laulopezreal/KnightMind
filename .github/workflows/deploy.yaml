@@ -54,12 +54,16 @@ jobs:
             git fetch origin main
             git reset --hard origin/main
 
-            echo "--- Building and restarting ---"
+            echo "--- Building new image ---"
             docker compose build api
-            docker compose up -d
 
-            echo "--- Running migrations ---"
-            docker compose exec -T api alembic -c services/api/alembic.ini upgrade head
+            echo "--- Running migrations (new image, before switching traffic) ---"
+            # One-off container on the freshly built image; set -e aborts the
+            # deploy on failure, leaving the old containers serving traffic.
+            docker compose run --rm --no-deps api alembic -c services/api/alembic.ini upgrade head
+
+            echo "--- Restarting with new code ---"
+            docker compose up -d
 
             echo "--- Health check ---"
             sleep 5
