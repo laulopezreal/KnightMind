@@ -28,15 +28,19 @@ jobs:
       with:
         node-version: ${{ matrix.node-version }}
         cache: 'npm'
-        cache-dependency-path: apps/web/package.json
+        cache-dependency-path: apps/web/package-lock.json
 
     - name: Install dependencies
       working-directory: ./apps/web
-      run: npm install
+      run: npm ci
 
     - name: Lint
       working-directory: ./apps/web
       run: npm run lint
+
+    - name: Test
+      working-directory: ./apps/web
+      run: npm run test -- --run
 
     - name: Build
       working-directory: ./apps/web
