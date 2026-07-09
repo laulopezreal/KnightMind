@@ -114,11 +114,19 @@ def db_session():
 
 
 @pytest.fixture
-def client_with_db(db_session):
+def client_with_db(db_session, monkeypatch):
     def override_get_db():
         yield db_session
 
     app.dependency_overrides[get_db] = override_get_db
+    # `with TestClient(app)` runs the app lifespan, whose puzzle-identity
+    # backfill uses the module-level SessionLocal directly (dependency
+    # overrides don't apply there). Point it at the test engine so startup
+    # never touches the real dev-SQLite database (./knightmind.db) — same
+    # pattern as test_ops.py's test_db_instance fixture.
+    monkeypatch.setattr(
+        "services.api.main.SessionLocal", sessionmaker(bind=db_session.get_bind())
+    )
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.clear()
