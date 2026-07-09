@@ -133,6 +133,9 @@ source venv/bin/activate
 uvicorn main:app --reload --port 8000
 ```
 
+The API requires a database: set `DATABASE_URL` (e.g. in `services/api/.env`), or for a
+quick local start without Postgres set `KNIGHTMIND_DEV_SQLITE=1` to use a local SQLite file.
+
 API will be available at http://localhost:8000
 
 ### CORS configuration
@@ -286,14 +289,17 @@ The system uses a simple deterministic scheduling algorithm:
 
 ## Database Configuration
 
-KnightMind supports SQLite for local development and Postgres for production. Configure the
-database connection via `DATABASE_URL`.
+KnightMind uses Postgres in production and supports SQLite for local development. The
+database connection is configured via `DATABASE_URL`, which is **required** — the API
+fails fast at startup if it is unset, rather than silently writing to an ephemeral
+SQLite file.
 
-- **Default (local):** `sqlite:///./knightmind.db`
 - **Postgres example:** `postgresql+psycopg://user:password@host:5432/knightmind`
+- **Local-dev escape hatch:** set `KNIGHTMIND_DEV_SQLITE=1` to opt into
+  `sqlite:///./knightmind.db` without setting `DATABASE_URL`. Never use this in production.
 
-Alembic migrations read the same `DATABASE_URL` value, so ensure it is set before running
-`alembic upgrade head`.
+Alembic migrations load `services/api/.env` (the same file the API reads) and use the same
+`DATABASE_URL` value, so `alembic upgrade head` runs against the database the app uses.
 
 ## Operations & Deployment
  
@@ -343,7 +349,7 @@ Alembic migrations read the same `DATABASE_URL` value, so ensure it is set befor
 
 - **Frontend**: React, Vite, TypeScript, Tailwind CSS, D3.js
 - **Backend**: FastAPI, Pydantic, python-chess
-- **Database**: Postgres (recommended via `DATABASE_URL`), SQLite (default for local)
+- **Database**: Postgres (via `DATABASE_URL`), SQLite (local-dev opt-in via `KNIGHTMIND_DEV_SQLITE=1`)
 - **Engine**: Stockfish (via `stockfish` PyPI package)
 - **Future**: Neo4j
 

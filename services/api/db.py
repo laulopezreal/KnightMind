@@ -7,7 +7,7 @@ DEFAULT_SQLITE_URL = "sqlite:///./knightmind.db"
 
 
 def _resolve_database_url() -> str:
-    url = os.getenv("DATABASE_URL")
+    url = (os.getenv("DATABASE_URL") or "").strip()
     if url:
         return url
     # Local-dev escape hatch: opt in explicitly instead of silently falling
