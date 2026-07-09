@@ -41,6 +41,8 @@ WARP.md
 *.db
 *.sqlite3
 services/api/knightmind.dba/
+# Extensionless SQLite artifacts accidentally written by tests
+file:test_ops*
 
 # Data storage
 data/
