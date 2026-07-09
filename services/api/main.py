@@ -507,27 +507,31 @@ async def get_openings(
             detail=f"No games found for user '{username}'. Import games first using POST /import/chesscom",
         )
 
-    # Get all PGNs for the user
-    pgn_texts = []
+    # Stream all PGNs for the user in bulk batches (one query per batch)
+    # instead of one query per game, without holding every blob in memory.
     metadata_list = game_repository.get_all_metadata(username)
-    for meta in metadata_list:
-        pgn = game_repository.get_pgn(username, meta.game_id)
-        if pgn:
-            pgn_texts.append(pgn)
+    game_ids = [meta.game_id for meta in metadata_list]
+    pgn_count = 0
 
-    if metadata_list and not pgn_texts:
-        raise HTTPException(
-            status_code=503,
-            detail="Games found but PGN content is missing. Re-import games to populate PGN data.",
-        )
+    def _iter_pgn_texts():
+        nonlocal pgn_count
+        for pgn in game_repository.iter_pgns(username, game_ids):
+            pgn_count += 1
+            yield pgn
 
     # Build the opening tree
     tree = build_opening_tree(
-        pgn_texts=pgn_texts,
+        pgn_texts=_iter_pgn_texts(),
         player_username=username,
         color_filter=color,
         max_ply=max_ply,
     )
+
+    if metadata_list and pgn_count == 0:
+        raise HTTPException(
+            status_code=503,
+            detail="Games found but PGN content is missing. Re-import games to populate PGN data.",
+        )
 
     return tree
 
@@ -1372,7 +1376,7 @@ async def explain_rating_changes(
     time_control: str = "rapid",
     since_session_id: str | None = None,
     since: datetime | None = None,
-    limit_games: int = 200,
+    limit_games: int = Query(200, ge=1, le=2000),
     db: Session = Depends(get_db),
 ):
     """Explain rating drivers based on recent games."""
@@ -1474,8 +1478,14 @@ async def explain_rating_changes(
     elif earliest_snapshot:
         reference_rating = earliest_snapshot.rating
 
+    # Bulk-load PGNs for the selected window in one query (the window is
+    # bounded by limit_games) instead of one query per game.
+    pgns_by_game_id = game_repository.get_pgns(
+        username, [meta.game_id for meta in relevant_games]
+    )
+
     for meta in relevant_games:
-        pgn = game_repository.get_pgn(username, meta.game_id)
+        pgn = pgns_by_game_id.get(meta.game_id)
         if not pgn:
             continue
 

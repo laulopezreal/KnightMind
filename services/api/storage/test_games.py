@@ -287,6 +287,66 @@ def test_game_repository_import_summary(repository):
     assert summary["last_new_games"] == 3
 
 
+def _store_game(repository, username, index):
+    _, game_id = repository.store_game(
+        username=username,
+        url=f"https://chess.com/game/{username}/{index}",
+        pgn=f'[Event "{username} {index}"]\n1. e4 e5 *',
+        white_username=username,
+        black_username=f"opponent{index}",
+        white_result="win",
+        black_result="lose",
+        time_control="600",
+        end_time=1704067200 + index * 1000,
+        rated=True,
+    )
+    return game_id
+
+
+def test_game_repository_get_pgns_bulk(repository):
+    game_ids = [_store_game(repository, "testuser", i) for i in range(3)]
+
+    pgns = repository.get_pgns("testuser", game_ids)
+
+    assert set(pgns) == set(game_ids)
+    for i, game_id in enumerate(game_ids):
+        assert pgns[game_id] == f'[Event "testuser {i}"]\n1. e4 e5 *'
+
+    # Unknown ids are silently omitted
+    assert repository.get_pgns("testuser", ["missing-id"]) == {}
+    # Empty input returns an empty mapping without querying
+    assert repository.get_pgns("testuser", []) == {}
+
+
+def test_game_repository_get_pgns_scoped_to_username(repository):
+    own_id = _store_game(repository, "testuser", 0)
+    other_id = _store_game(repository, "otheruser", 1)
+
+    # Requesting another user's game id must not leak their PGN
+    pgns = repository.get_pgns("testuser", [own_id, other_id])
+    assert set(pgns) == {own_id}
+
+    # Case-insensitive username matching, consistent with get_pgn
+    assert set(repository.get_pgns("TESTUSER", [own_id])) == {own_id}
+
+
+def test_game_repository_iter_pgns_preserves_order_and_batches(repository, monkeypatch):
+    monkeypatch.setattr("services.api.storage.game_repository.PGN_BATCH_SIZE", 2)
+    game_ids = [_store_game(repository, "testuser", i) for i in range(5)]
+
+    pgns = list(repository.iter_pgns("testuser", game_ids))
+
+    assert pgns == [f'[Event "testuser {i}"]\n1. e4 e5 *' for i in range(5)]
+
+    # Ids owned by other users are skipped while order is preserved
+    other_id = _store_game(repository, "otheruser", 9)
+    pgns = list(repository.iter_pgns("testuser", [game_ids[2], other_id, game_ids[0]]))
+    assert pgns == [
+        '[Event "testuser 2"]\n1. e4 e5 *',
+        '[Event "testuser 0"]\n1. e4 e5 *',
+    ]
+
+
 def test_validate_game_metadata_missing_fields():
     errors = validate_game_metadata({"game_id": "g1"})
     assert any(error.startswith("missing_fields") for error in errors)
