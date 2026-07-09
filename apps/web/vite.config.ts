@@ -18,6 +18,19 @@ export default defineConfig(({ mode }) => {
       '__API_TARGET__': JSON.stringify(apiTarget),
     },
     plugins: [react(), tailwindcss()],
+    build: {
+      rollupOptions: {
+        output: {
+          // Split the heaviest vendor libraries into their own cacheable
+          // chunks so route chunks that need them stay small and the entry
+          // bundle excludes them entirely.
+          manualChunks: {
+            charts: ['d3', 'recharts'],
+            chess: ['chess.js', 'react-chessboard'],
+          },
+        },
+      },
+    },
     server: {
       proxy: {
         '/api': useLocalApi
