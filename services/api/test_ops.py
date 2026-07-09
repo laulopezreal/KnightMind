@@ -12,13 +12,14 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")
 
 
 @pytest.fixture(scope="function")
-def test_db_instance(monkeypatch):
+def test_db_instance(monkeypatch, tmp_path):
     """
     Creates a completely isolated file-based database for each test function.
     This avoids all issues with SQLite in-memory sharing, threading, and state leakage.
+    The DB file lives in pytest's tmp_path so no artifacts land in the repo.
     """
-    db_filename = f"test_ops_{uuid.uuid4()}.db"
-    db_url = f"sqlite:///./{db_filename}"
+    db_path = tmp_path / f"test_ops_{uuid.uuid4()}.db"
+    db_url = f"sqlite:///{db_path}"
 
     # Create engine for this specific test
     # Use NullPool to ensure connections are closed promptly, avoiding file locks
@@ -51,11 +52,11 @@ def test_db_instance(monkeypatch):
 
     yield TestingSessionLocal
 
-    # Teardown
+    # Teardown (tmp_path itself is cleaned up by pytest)
     engine.dispose()
-    if os.path.exists(db_filename):
+    if db_path.exists():
         try:
-            os.remove(db_filename)
+            db_path.unlink()
         except PermissionError:
             pass
 

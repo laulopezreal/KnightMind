@@ -120,37 +120,7 @@ class JobWorker:
         """Execute the actual job logic."""
         # Re-fetch job to update status
         
-        try: 
-            # We need to read job parameters.
-            # For puzzle generation, we need inputs.
-            # Currently Job model doesn't strictly store inputs in separate columns, 
-            # but we can assume 'username' is there.
-            # If we needed arguments like 'max_games', we should have stored them in JSON parameters or separate columns.
-            # The prompt said: POST /puzzles/generate?username=...&max_games=...
-            # The Job model has `username`.
-            # I should probably default max_games if not stored, or better, add 'params' JSON column?
-            # The user provided valid Job model spec: type(text), username(text).
-            # It didn't specify extra params. I'll stick to username and defaults, 
-            # OR I'll assume we can use defaults for now since the prompt didn't strictly require parameter persistence 
-            # other than what's needed for the job type. 
-            # But wait, `max_games` is variable. 
-            # I should hack it: maybe `type` can parse it? "puzzle_generation_30_30"? 
-            # Or just update `Job` model to store `params`?
-            # The prompt definition for Job model was:
-            # - type, username, status, progress..., message, result_json, error_message.
-            # It didn't list `params`. 
-            # I will check `generate_puzzles` signature. It takes `max_games`.
-            # Usage: `POST /puzzles/generate?username=...&max_games=...`
-            # If I don't persist `max_games`, I can't restart the job with same params.
-            # I'll stick to default 30 if not present, OR I'll add `params` column in a migration?
-            # User said "But must be operationally reliable".
-            # I'll decide to hardcode defaults or extract from somewhere. 
-            # "convert it to async and persisted" -> usually implies persisting arguments.
-            # I didn't add `params` column in the model I just created (followed prompt spec).
-            # Prompt spec: "type (text), username (text)..."
-            # It didn't explicitly say params.
-            # I will use the default values used in `main.py` -> max_games=30, max_puzzles=30.
-            
+        try:
             with SessionLocal() as db:
                 stmt = select(Job).where(Job.id == job_id)
                 job = db.scalars(stmt).first()
