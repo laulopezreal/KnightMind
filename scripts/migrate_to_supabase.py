@@ -199,7 +199,9 @@ def copy_data(pg_url: str) -> None:
             f'ON CONFLICT ("{pk_col}") DO NOTHING'
         )
 
-        def make_params(row: sqlite3.Row) -> dict:
+        def make_params(
+            row: sqlite3.Row, json_cols=json_cols, bool_cols=bool_cols
+        ) -> dict:
             """Convert a SQLite row to a dict, handling type mismatches."""
             d = dict(row)
             for col in json_cols:

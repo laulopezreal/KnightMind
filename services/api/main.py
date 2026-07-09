@@ -276,7 +276,7 @@ async def validate_user(username: str):
             else:
                 raise HTTPException(status_code=502, detail="Chess.com API error")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @app.post("/import/chesscom", response_model=ImportResponse)
@@ -324,19 +324,21 @@ async def import_chesscom_games(username: str, db: Session = Depends(get_db)):
         )
 
     except UserNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except RateLimitError as e:
         raise HTTPException(
             status_code=429,
             detail=str(e),
             headers={"Retry-After": str(e.retry_after)} if e.retry_after else None,
-        )
+        ) from e
     except NetworkError as e:
-        raise HTTPException(status_code=502, detail=str(e))
+        raise HTTPException(status_code=502, detail=str(e)) from e
     except ChessComImportError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Internal server error: {str(e)}"
+        ) from e
 
 
 @app.get("/import/status", response_model=ImportStatusResponse)
@@ -521,9 +523,9 @@ async def evaluate_fen(request: EvalRequest):
         result = await asyncio.to_thread(get_or_compute_eval, request.fen)
         return EvalResponse(best_move_uci=result.best_move_uci, eval=result.eval)
     except EngineNotAvailableError as e:
-        raise HTTPException(status_code=503, detail=str(e))
+        raise HTTPException(status_code=503, detail=str(e)) from e
     except InvalidFenError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @app.post("/puzzles/generate", response_model=JobStatusResponse)
@@ -549,7 +551,7 @@ async def generate_puzzles_endpoint(
             job_id=new_job.id, status=new_job.status, message="Job queued", progress=0
         )
 
-    except IntegrityError:
+    except IntegrityError as e:
         db.rollback()
         stmt = select(Job).where(
             Job.username == username,
@@ -581,7 +583,7 @@ async def generate_puzzles_endpoint(
                 )
             raise HTTPException(
                 status_code=500, detail="Could not create job or find existing one"
-            )
+            ) from e
 
 
 @app.get("/jobs/{job_id}", response_model=JobStatusResponse)
@@ -1244,11 +1246,11 @@ async def create_rating_snapshot(
         )
 
     except (UserNotFoundError, NetworkError) as e:
-        raise HTTPException(status_code=502, detail=str(e))
+        raise HTTPException(status_code=502, detail=str(e)) from e
     except Exception as e:
         if isinstance(e, HTTPException):
             raise e
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 class SnapshotHistoryItem(BaseModel):

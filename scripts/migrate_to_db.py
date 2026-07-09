@@ -379,11 +379,11 @@ def main():
 
     # Games first (puzzles have FK to games)
     print("1. Migrating games...")
-    game_results = migrate_games(data_dir, args.batch_size, args.dry_run)
+    migrate_games(data_dir, args.batch_size, args.dry_run)
     print()
 
     print("2. Migrating puzzles...")
-    puzzle_results = migrate_puzzles(data_dir, args.batch_size, args.dry_run)
+    migrate_puzzles(data_dir, args.batch_size, args.dry_run)
     print()
 
     print("3. Migrating import summaries...")

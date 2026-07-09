@@ -90,8 +90,8 @@ def create_engine() -> "StockfishEngine":
                 "or set STOCKFISH_PATH environment variable. "
                 "On macOS: brew install stockfish. "
                 "On Ubuntu: apt install stockfish."
-            )
-        raise StockfishError(f"Failed to initialize Stockfish: {e}")
+            ) from e
+        raise StockfishError(f"Failed to initialize Stockfish: {e}") from e
 
     return engine
 
@@ -111,10 +111,8 @@ def evaluate_fen(fen: str, engine: Optional["StockfishEngine"] = None) -> EvalRe
         StockfishNotFoundError: If Stockfish is not available
         StockfishError: If evaluation fails
     """
-    should_close_engine = False
     if engine is None:
         engine = create_engine()
-        should_close_engine = True
 
     try:
         # Set position
@@ -148,7 +146,7 @@ def evaluate_fen(fen: str, engine: Optional["StockfishEngine"] = None) -> EvalRe
     except (StockfishNotFoundError, StockfishError):
         raise
     except Exception as e:
-        raise StockfishError(f"Evaluation failed: {e}")
+        raise StockfishError(f"Evaluation failed: {e}") from e
     finally:
         # Only close if we created it locally.
         # Note: The stockfish library wrapper might not have a close/quit method exposed simply,

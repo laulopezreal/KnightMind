@@ -69,7 +69,6 @@ def downgrade() -> None:
     if "fen_eval_cache" in inspector.get_table_names():
         # If the table was created fresh by upgrade(), just drop it.
         # Otherwise restore the old indexes/types.
-        columns = [c["name"] for c in inspector.get_columns("fen_eval_cache")]
         indexes = [i["name"] for i in inspector.get_indexes("fen_eval_cache")]
 
         if "idx_fen_eval_cache_fen" not in indexes:

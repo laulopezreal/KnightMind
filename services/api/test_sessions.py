@@ -188,7 +188,7 @@ async def test_get_recent_sessions(db_session):
 async def test_get_recent_sessions_max_limit(db_session):
     """Test that limit is capped at 50."""
     # Create 60 sessions
-    for i in range(60):
+    for _ in range(60):
         session = TrainingSession(
             id=str(uuid.uuid4()), username="testuser", requested_n=5
         )

@@ -81,11 +81,20 @@ line-length = 88
 [tool.ruff.lint]
 # Enable Pyflakes (`F`) and a subset of the pycodestyle (`E`)  codes by default.
 select = ["E", "W", "F", "I", "B"]
-ignore = []
+ignore = [
+    "E501", # line length is owned by black; long strings/URLs may exceed 88 chars
+    "B008", # FastAPI's `Depends(...)` in argument defaults is idiomatic
+]
 
 # Allow fix for all enabled rules (when `--fix` is provided).
 fixable = ["ALL"]
 unfixable = []
+
+[tool.ruff.lint.per-file-ignores]
+# main.py must call load_dotenv() and patch sys.path before project imports
+"services/api/main.py" = ["E402"]
+# standard alembic pattern: config/path setup precedes imports
+"services/api/alembic/env.py" = ["E402"]
 
 [tool.ruff.lint.mccabe]
 # Unlike Flake8, default to a complexity level of 10.
