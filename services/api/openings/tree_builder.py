@@ -6,6 +6,7 @@ with statistics for each position (games count, win/draw/loss).
 """
 
 import io
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -197,16 +198,16 @@ class OpeningTreeBuilder:
 
 
 def build_opening_tree(
-    pgn_texts: list[str],
+    pgn_texts: Iterable[str],
     player_username: str,
     color_filter: Literal["white", "black", "both"] = "both",
     max_ply: int = 12,
 ) -> dict:
     """
-    Convenience function to build an opening tree from a list of PGN texts.
+    Convenience function to build an opening tree from PGN texts.
 
     Args:
-        pgn_texts: List of PGN game strings
+        pgn_texts: Iterable of PGN game strings
         player_username: Username to build the tree for
         color_filter: Filter by player's color ("white", "black", or "both")
         max_ply: Maximum number of half-moves to include
