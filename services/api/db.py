@@ -24,12 +24,14 @@ def _resolve_database_url() -> str:
 
 SQLALCHEMY_DATABASE_URL = _resolve_database_url()
 
-connect_args = {}
-if SQLALCHEMY_DATABASE_URL.startswith("sqlite"):
-    connect_args = {"check_same_thread": False}
+_is_sqlite = SQLALCHEMY_DATABASE_URL.startswith("sqlite")
 
+connect_args = {"check_same_thread": False} if _is_sqlite else {}
+
+# pre-ping guards against stale pooled Postgres connections (e.g. Supabase /
+# pgbouncer); local SQLite connections can't go stale, so skip the overhead.
 engine = create_engine(
-    SQLALCHEMY_DATABASE_URL, connect_args=connect_args, pool_pre_ping=True
+    SQLALCHEMY_DATABASE_URL, connect_args=connect_args, pool_pre_ping=not _is_sqlite
 )
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
