@@ -1352,7 +1352,7 @@ async def explain_rating_changes(
     time_control: str = "rapid",
     since_session_id: str | None = None,
     since: datetime | None = None,
-    limit_games: int = 200,
+    limit_games: int = Query(200, ge=1, le=2000),
     db: Session = Depends(get_db),
 ):
     """Explain rating drivers based on recent games."""
