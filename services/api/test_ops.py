@@ -332,6 +332,44 @@ def test_ready_returns_503_when_stockfish_unavailable(client, monkeypatch):
     assert data["db"] == "ok"
 
 
+def test_health_and_ready_return_503_when_db_unavailable(test_db_instance, monkeypatch):
+    """Regression guard: /health and /ready must check the DB session injected
+    via get_db, not some module-level engine bound at import time. Breaking the
+    injected session must surface as db=error and HTTP 503. (ops.py once held a
+    stale `from services.api.db import ... engine` name-binding import, removed
+    in #127; this pins the dependency-injected behavior.)"""
+    from services.api import ops as ops_module
+    from services.api.db import get_db
+    from services.api.main import app
+
+    # Stockfish available, so the DB is the only failing component
+    monkeypatch.setattr(ops_module, "is_engine_available", lambda: (True, "OK"))
+
+    class BrokenSession:
+        def execute(self, *args, **kwargs):
+            raise RuntimeError("simulated database outage")
+
+    app.dependency_overrides[get_db] = lambda: BrokenSession()
+    try:
+        with TestClient(app) as c:
+            health = c.get("/ops/health")
+            ready = c.get("/ops/ready")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert health.status_code == 503
+    health_data = health.json()
+    assert health_data["ok"] is False
+    assert health_data["db"] == "error"
+    assert health_data["stockfish"] == "ok"
+
+    assert ready.status_code == 503
+    ready_data = ready.json()
+    assert ready_data["ready"] is False
+    assert ready_data["db"] == "error"
+    assert ready_data["stockfish"] == "ok"
+
+
 def test_health_ok_when_worker_disabled(client, monkeypatch):
     """Test that /health returns 200 when worker is disabled (not an error state)."""
     from services.api import ops as ops_module
