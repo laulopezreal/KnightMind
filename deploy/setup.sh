@@ -118,7 +118,9 @@ if crontab -l 2>/dev/null | grep -q "postgres-backup.sh"; then
     info "Backup cron already exists."
 else
     info "Adding daily backup cron (03:00)..."
-    (crontab -l 2>/dev/null; echo "${CRON_LINE}") | crontab -
+    # `|| true`: on a fresh server `crontab -l` exits 1 (no crontab yet),
+    # which would kill the script under `set -euo pipefail`.
+    (crontab -l 2>/dev/null || true; echo "${CRON_LINE}") | crontab -
 fi
 
 # ============================================================================
@@ -136,6 +138,7 @@ info "  3. Edit secrets:            nano ${APP_DIR}/.env.docker"
 info "  4. Deploy Caddy config:     cp ${APP_DIR}/deploy/Caddyfile /etc/caddy/Caddyfile"
 info "  5. Install systemd service: cp ${APP_DIR}/deploy/knightmind-api.service /etc/systemd/system/"
 info "  6. Start the app:           systemctl enable --now knightmind-api"
-info "  7. Run migrations:          cd ${APP_DIR} && docker compose exec api alembic -c services/api/alembic.ini upgrade head"
+info "  7. Run migrations:          cd ${APP_DIR} && docker compose --env-file .env.docker exec api alembic -c services/api/alembic.ini upgrade head"
+info "     (always pass --env-file .env.docker: compose only auto-loads a file named .env)"
 info "  8. Reload Caddy:            systemctl reload caddy"
 echo ""
