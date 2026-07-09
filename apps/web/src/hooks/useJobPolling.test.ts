@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { renderHook, waitFor } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { renderHook, waitFor, act } from '@testing-library/react';
 import { useJobPolling } from './useJobPolling';
 
 const mockGetJobStatus = vi.fn();
@@ -250,5 +250,125 @@ describe('useJobPolling', () => {
     // Polling should have stopped
     await new Promise(r => setTimeout(r, 100));
     expect(mockGetJobStatus).toHaveBeenCalledTimes(1);
+  });
+
+  describe('wall-clock timeout', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('should stop polling and call onError when job stays running past timeoutMs', async () => {
+      const onError = vi.fn();
+      mockGetJobStatus.mockResolvedValue({ status: 'running', message: 'In progress' });
+
+      const { result } = renderHook(() => useJobPolling('job-123', {
+        pollInterval: 1000,
+        timeoutMs: 5000,
+        onError,
+      }));
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5000);
+      });
+
+      expect(onError).toHaveBeenCalledTimes(1);
+      expect(onError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.stringContaining('timed out after 5 seconds'),
+        })
+      );
+      expect(onError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.stringContaining('may still be running on the server'),
+        })
+      );
+
+      // Job state is cleared so consumers stop showing a "generating" spinner
+      expect(result.current.job).toBeNull();
+      expect(result.current.isPolling).toBe(false);
+
+      // Polling has stopped: no further requests after the timeout fired
+      const callsAtTimeout = mockGetJobStatus.mock.calls.length;
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10000);
+      });
+      expect(mockGetJobStatus).toHaveBeenCalledTimes(callsAtTimeout);
+    });
+
+    it('should not fire timeout error when job succeeds before the cap', async () => {
+      const onError = vi.fn();
+      const onSuccess = vi.fn();
+      mockGetJobStatus
+        .mockResolvedValueOnce({ status: 'running', message: 'In progress' })
+        .mockResolvedValue({ status: 'succeeded', message: 'Done' });
+
+      renderHook(() => useJobPolling('job-123', {
+        pollInterval: 1000,
+        timeoutMs: 5000,
+        onError,
+        onSuccess,
+      }));
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2000);
+      });
+      expect(onSuccess).toHaveBeenCalledTimes(1);
+
+      // Advance well past the cap: the timeout timer was cleared on completion
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(20000);
+      });
+      expect(onError).not.toHaveBeenCalled();
+      expect(onSuccess).toHaveBeenCalledTimes(1);
+    });
+
+    it('should not fire timeout error after unmount', async () => {
+      const onError = vi.fn();
+      mockGetJobStatus.mockResolvedValue({ status: 'running', message: 'In progress' });
+
+      const { unmount } = renderHook(() => useJobPolling('job-123', {
+        pollInterval: 1000,
+        timeoutMs: 5000,
+        onError,
+      }));
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+      unmount();
+
+      const callsAtUnmount = mockGetJobStatus.mock.calls.length;
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(20000);
+      });
+      expect(onError).not.toHaveBeenCalled();
+      expect(mockGetJobStatus).toHaveBeenCalledTimes(callsAtUnmount);
+    });
+
+    it('should use a default timeout of 120 seconds', async () => {
+      const onError = vi.fn();
+      mockGetJobStatus.mockResolvedValue({ status: 'running', message: 'In progress' });
+
+      renderHook(() => useJobPolling('job-123', { pollInterval: 1000, onError }));
+
+      // Just before the default cap: still polling, no error
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(119_000);
+      });
+      expect(onError).not.toHaveBeenCalled();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+      expect(onError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.stringContaining('timed out after 120 seconds'),
+        })
+      );
+    });
   });
 });
