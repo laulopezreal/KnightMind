@@ -44,7 +44,7 @@ jobs:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
-          script_stop: true
+          # (script_stop was removed in ssh-action v1; set -e below does the job)
           script: |
             set -euo pipefail
             APP_DIR="${{ secrets.DEPLOY_APP_DIR }}"
@@ -54,12 +54,19 @@ jobs:
             git fetch origin main
             git reset --hard origin/main
 
-            echo "--- Building and restarting ---"
+            echo "--- Building new image ---"
             docker compose build api
-            docker compose up -d
 
-            echo "--- Running migrations ---"
-            docker compose exec -T api alembic -c services/api/alembic.ini upgrade head
+            echo "--- Running migrations (new image, before switching traffic) ---"
+            # One-off container on the freshly built image; set -e aborts the
+            # deploy on failure, leaving the old containers serving traffic.
+            # No --no-deps: compose run must start db (and wait for its
+            # healthcheck via depends_on) so deploys self-heal from a stopped
+            # stack (fresh server, or after systemctl stop knightmind-api).
+            docker compose run --rm api alembic -c services/api/alembic.ini upgrade head
+
+            echo "--- Restarting with new code ---"
+            docker compose up -d
 
             echo "--- Health check ---"
             sleep 5
