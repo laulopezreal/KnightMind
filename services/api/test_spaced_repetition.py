@@ -40,6 +40,7 @@ def test_record_pass_review(db_session):
         db_session, puzzle_id, username, "pass", time_spent_ms=5000
     )
     stats = update_puzzle_stats(db_session, puzzle_id, username, "pass")
+    db_session.commit()
 
     assert review.puzzle_id == puzzle_id
     assert review.username == username
@@ -60,6 +61,7 @@ def test_record_fail_review(db_session):
 
     # Record a fail review
     update_puzzle_stats(db_session, puzzle_id, username, "fail")
+    db_session.commit()
     stats = get_puzzle_stats(db_session, puzzle_id, username)
 
     assert stats.attempts == 1
@@ -74,9 +76,11 @@ def test_sequential_reviews(db_session):
 
     # 1. First review: Fail
     update_puzzle_stats(db_session, puzzle_id, username, "fail")
+    db_session.commit()
 
     # 2. Second review: Pass
     stats = update_puzzle_stats(db_session, puzzle_id, username, "pass")
+    db_session.commit()
 
     assert stats.attempts == 2
     assert stats.pass_count == 1

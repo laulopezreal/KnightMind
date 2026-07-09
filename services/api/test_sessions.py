@@ -225,6 +225,7 @@ def test_review_with_session_increments_counters(db_session):
         time_spent_ms=5000,
         session_id=session_id,
     )
+    db_session.commit()
 
     assert review.session_id == session_id
 
@@ -241,6 +242,7 @@ def test_review_without_session_backward_compatible(db_session):
         result=PuzzleResult.PASS,
         time_spent_ms=5000,
     )
+    db_session.commit()
 
     assert review.session_id is None
     assert review.puzzle_id == "puzzle1"
