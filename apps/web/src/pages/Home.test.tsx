@@ -82,6 +82,19 @@ describe('Home', () => {
   });
 
   describe('touch targets', () => {
+    it('inline connect input and Save button meet 44px minimum hit target', async () => {
+      mockUsername = '';
+      render(<Home />);
+
+      const connectBtn = await screen.findByRole('button', { name: /Connect Chess\.com Account/i });
+      fireEvent.click(connectBtn);
+
+      const input = screen.getByRole('textbox', { name: /Chess\.com Username/i });
+      const saveBtn = screen.getByRole('button', { name: 'Save' });
+      expect(input).toHaveClass('min-h-11');
+      expect(saveBtn).toHaveClass('min-h-11');
+    });
+
     it('should render "Sync new games" as a bordered button (not an underline text link)', async () => {
       mockUsername = 'testplayer';
       const api = await import('../api');

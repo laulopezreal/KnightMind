@@ -329,13 +329,13 @@ export default function Home() {
                     disabled={connectValidating}
                     placeholder="username"
                     aria-label="Chess.com Username"
-                    className="flex-1 bg-primary/5 border border-primary/10 px-3 py-2 text-primary focus:outline-none focus:border-primary/40 rounded-sm transition-colors font-sans"
+                    className="flex-1 min-h-11 bg-primary/5 border border-primary/10 px-3 py-2 text-primary focus:outline-none focus:border-primary/40 rounded-sm transition-colors font-sans"
                   />
                   <button
                     type="button"
                     onClick={handleConnectSave}
                     disabled={connectValidating}
-                    className={`px-4 py-2 bg-primary text-bg-primary font-medium rounded-sm transition-opacity km-focus-visible ${connectValidating ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'}`}
+                    className={`min-h-11 px-4 py-2 bg-primary text-bg-primary font-medium rounded-sm transition-opacity km-focus-visible ${connectValidating ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'}`}
                   >
                     {connectValidating ? '...' : 'Save'}
                   </button>
