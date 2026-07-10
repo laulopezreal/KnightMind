@@ -48,7 +48,7 @@ services:
       db:
         condition: service_healthy
     ports:
-      - "${API_PORT:-8000}:8000"
+      - "127.0.0.1:${API_PORT:-8000}:8000"
     env_file:
       - .env.docker
     environment:
@@ -58,3 +58,8 @@ services:
 
 volumes:
   pgdata:
+
+networks:
+  default:
+    driver_opts:
+      com.docker.network.bridge.name: km-bridge

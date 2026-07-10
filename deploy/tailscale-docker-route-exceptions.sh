@@ -19,17 +19,42 @@ done
 # Public Docker services must reply through the normal public interface, not the
 # Tailscale exit-node default in table 52. Route packets entering from Docker
 # bridges through the main table before Tailscale's catch-all rule.
-declare -A BRIDGES=(
+bridge_for_network() {
+  local network="$1"
+  local explicit id
+
+  explicit="$(docker network inspect -f '{{ index .Options "com.docker.network.bridge.name" }}' "$network" 2>/dev/null || true)"
+  if [ -n "$explicit" ] && [ "$explicit" != "<no value>" ]; then
+    printf '%s\n' "$explicit"
+    return 0
+  fi
+
+  id="$(docker network inspect -f '{{ .Id }}' "$network" 2>/dev/null || true)"
+  if [ -n "$id" ]; then
+    printf 'br-%s\n' "${id:0:12}"
+  fi
+}
+
+declare -A BRIDGE_PREFS=(
   [docker0]=90
-  [br-46f5c9c9df08]=91  # knightmind_default
-  [br-3e840af1085f]=92  # opik-opik_default
-  [br-85c629823612]=93  # open-wearables_default
-  [br-87d9ccbd3b58]=94  # knightmind public-caddy_default
 )
 
-for bridge in "${!BRIDGES[@]}"; do
+declare -A NETWORK_PREFS=(
+  [knightmind_default]=91
+  [opik-opik_default]=92
+  [open-wearables_default]=93
+)
+
+for network in "${!NETWORK_PREFS[@]}"; do
+  bridge="$(bridge_for_network "$network")"
+  if [ -n "$bridge" ]; then
+    BRIDGE_PREFS[$bridge]="${NETWORK_PREFS[$network]}"
+  fi
+done
+
+for bridge in "${!BRIDGE_PREFS[@]}"; do
   if ip link show "$bridge" >/dev/null 2>&1; then
-    pref="${BRIDGES[$bridge]}"
+    pref="${BRIDGE_PREFS[$bridge]}"
     while ip rule del pref "$pref" 2>/dev/null; do :; done
     ip rule add pref "$pref" iif "$bridge" lookup main
   fi
@@ -42,9 +67,11 @@ ip route show table 52 | grep -E 'throw 172\.(17|18|19|20)\.0\.0/16' || true
 
 echo
 echo "Docker bridge policy rules:"
-ip rule show | grep -E 'iif (docker0|br-46f5c9c9df08|br-3e840af1085f|br-85c629823612|br-87d9ccbd3b58).*lookup main' || true
+for bridge in "${!BRIDGE_PREFS[@]}"; do
+  ip rule show | grep -F "iif $bridge lookup main" || true
+done
 
 echo
-for target in 172.17.0.2 172.18.0.2 172.19.0.2 172.20.0.2 172.21.0.2; do
-  echo "$target -> $(ip route get "$target" 2>&1 | head -1)"
+for target in 172.17.0.2 172.18.0.2 172.19.0.2 172.20.0.2; do
+  echo "$target -> $(ip route get "$target" 2>&1 | head -1 || true)"
 done

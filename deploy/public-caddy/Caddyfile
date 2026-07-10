@@ -4,7 +4,7 @@
 }
 
 api.guessme.world {
-	bind 65.108.67.53
+	bind {$PUBLIC_IP}
 	reverse_proxy 127.0.0.1:8000
 
 	log {

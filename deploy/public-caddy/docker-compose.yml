@@ -4,6 +4,8 @@ services:
     container_name: knightmind-public-caddy
     restart: unless-stopped
     network_mode: host
+    environment:
+      PUBLIC_IP: ${PUBLIC_IP:-65.108.67.53}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data

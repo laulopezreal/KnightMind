@@ -93,6 +93,7 @@ fi
 info "Creating directories..."
 mkdir -p /var/log/caddy
 mkdir -p /home/lauureal/backups/knightmind
+chown -R lauureal:lauureal /home/lauureal/backups/knightmind
 
 # ============================================================================
 # 7. Backup cron

@@ -1,5 +1,5 @@
 ---
-last_edited_at: 2026-07-10T13:35:08+02:00
+last_edited_at: 2026-07-10T14:45:00+02:00
 ---
 # KnightMind Operations
 
@@ -23,12 +23,12 @@ There is exactly one intended KnightMind app/deploy instance on claw-home.
 - **Runtime:** Docker Compose project `knightmind`
   - Services: `api`, `db`
   - Containers: `knightmind-api-1`, `knightmind-db-1`
-  - Network: `knightmind_default`
+  - Network: `knightmind_default` with static Linux bridge name `km-bridge`
   - DB volume: `knightmind_pgdata`
 - **Backups:** `/home/lauureal/backups/knightmind/`
   - Take a fresh backup before any Compose, migration, rebuild, or ingress change.
 - **Public frontend:** Cloudflare Pages currently serving `https://guessme.world` and `https://knightmind.pages.dev`.
-- **Public API:** Caddy container `knightmind-public-caddy` is deployed from `/home/lauureal/apps/knightmind/deploy/public-caddy/`, runs with `network_mode: host`, binds only `65.108.67.53`, and reverse-proxies `api.guessme.world` to `127.0.0.1:8000`. `https://api.guessme.world/ops/ping` returns JSON and Caddy obtained a Let's Encrypt certificate on 2026-07-10.
+- **Public API:** Caddy container `knightmind-public-caddy` is deployed from `/home/lauureal/apps/knightmind/deploy/public-caddy/`, runs with `network_mode: host`, binds only `${PUBLIC_IP:-65.108.67.53}`, and reverse-proxies `api.guessme.world` to `127.0.0.1:8000`. `https://api.guessme.world/ops/ping` returns JSON and Caddy obtained a Let's Encrypt certificate on 2026-07-10.
 
 Do not create `/opt/knightmind`, `/home/lauureal/git/knightmind`, another Compose project, another Postgres volume, or another API container unless Lau explicitly approves a migration plan.
 
@@ -71,7 +71,7 @@ Live containers:
 - `knightmind-api-1`
   - image: `knightmind-api`
   - command: `uvicorn services.api.main:app --host 0.0.0.0 --port 8000 --workers 1`
-  - host mapping: `0.0.0.0:8000 -> 8000/tcp`
+  - host mapping: `127.0.0.1:8000 -> 8000/tcp`
   - Docker healthcheck: `curl -f http://localhost:8000/ops/health || exit 1`
 - `knightmind-db-1`
   - image: `postgres:16-alpine`
@@ -145,7 +145,7 @@ Root-cause evidence gathered during the repair:
 - From the DB container, `http://api:8000/ops/ping` and `http://172.18.0.2:8000/ops/ping` returned JSON.
 - From the host before repair, `ip route get 172.18.0.2` selected `dev tailscale0 table 52`, not the Docker bridge.
 - Tailscale table 52 had a broad default route via `tailscale0` and only a `throw 172.20.0.0/16` Docker/LAN exception. It did not exempt KnightMind's `172.18.0.0/16` Docker network.
-- Docker port publishing to `65.108.67.53:80/443` also timed out even though docker-proxy listeners and DNAT rules existed. Host-network Caddy with an explicit `bind 65.108.67.53` is the working public-ingress pattern.
+- Docker port publishing to `65.108.67.53:80/443` also timed out even though docker-proxy listeners and DNAT rules existed. Host-network Caddy with an explicit `bind {$PUBLIC_IP}` value is the working public-ingress pattern.
 
 Root-level route repair keeps Docker bridge traffic out of the Tailscale exit-node catch-all:
 
@@ -154,9 +154,7 @@ sudo ip route replace throw 172.17.0.0/16 table 52
 sudo ip route replace throw 172.18.0.0/16 table 52
 sudo ip route replace throw 172.19.0.0/16 table 52
 sudo ip route replace throw 172.20.0.0/16 table 52
-sudo ip route replace throw 172.21.0.0/16 table 52
-sudo ip rule add pref 91 iif br-46f5c9c9df08 lookup main
-sudo ip rule add pref 94 iif br-87d9ccbd3b58 lookup main
+sudo ip rule add pref 91 iif km-bridge lookup main
 sudo ip route flush cache
 ```
 
@@ -168,19 +166,17 @@ Running it without root fails with `RTNETLINK answers: Operation not permitted`;
 
 ```bash
 ip route get 172.18.0.2
-ip route get 1.1.1.1 from 172.21.0.2 iif br-87d9ccbd3b58
 curl --noproxy '*' http://127.0.0.1:8000/ops/ping
 curl --noproxy '*' https://api.guessme.world/ops/ping
 ```
 
-Expected route for `172.18.0.2` should mention `br-46f5c9c9df08`, not `tailscale0 table 52`. Expected route from the Caddy bridge source should leave through `enp0s4` via `65.108.67.1`. Both curl checks should return `{"status":"pong"}`.
+Expected route for `172.18.0.2` should mention `km-bridge`, not `tailscale0 table 52`. Both curl checks should return `{"status":"pong"}`.
 
 Verification after Lau ran the root helper on 2026-07-10:
 
-- Tailscale table 52 now contains `throw` routes for `172.17.0.0/16`, `172.18.0.0/16`, `172.19.0.0/16`, `172.20.0.0/16`, and the Caddy ingress subnet `172.21.0.0/16`.
-- `ip rule show` contains bridge-to-main-table rules for active Docker bridges, including `br-46f5c9c9df08` and `br-87d9ccbd3b58`.
-- `ip route get 172.18.0.2` now selects `dev br-46f5c9c9df08 src 172.18.0.1`, not `tailscale0`.
-- `ip route get 1.1.1.1 from 172.21.0.2 iif br-87d9ccbd3b58` selects `via 65.108.67.1 dev enp0s4`, not `tailscale0`.
+- Tailscale table 52 now contains `throw` routes for `172.17.0.0/16`, `172.18.0.0/16`, `172.19.0.0/16`, and `172.20.0.0/16`.
+- `ip rule show` contains bridge-to-main-table rules for active Docker bridges. KnightMind uses static bridge name `km-bridge`.
+- `ip route get 172.18.0.2` should select the Docker bridge, not `tailscale0`.
 - `curl --noproxy '*' http://127.0.0.1:8000/ops/ping` returns `200 {"status":"pong"}`.
 - `curl --noproxy '*' http://127.0.0.1:8000/ops/health` returns `200` JSON with `db`, `worker`, and `stockfish` all `ok`.
 - `curl --noproxy '*' http://172.18.0.2:8000/ops/health` also returns `200` JSON.
@@ -201,14 +197,14 @@ Frontend:
 API:
 
 - `api.guessme.world` DNS was moved off the old `openclaw` Cloudflare Tunnel and now resolves to `65.108.67.53`.
-- Caddy runs as `knightmind-public-caddy` from `/home/lauureal/apps/knightmind/deploy/public-caddy/` with `network_mode: host`, `bind 65.108.67.53`, and `reverse_proxy 127.0.0.1:8000`.
+- Caddy runs as `knightmind-public-caddy` from `/home/lauureal/apps/knightmind/deploy/public-caddy/` with `network_mode: host`, `bind {$PUBLIC_IP}` defaulting to `65.108.67.53`, and `reverse_proxy 127.0.0.1:8000`.
 - Verified on 2026-07-10: `http://api.guessme.world/ops/ping` redirects/reaches API and `https://api.guessme.world/ops/ping` returns `{"status":"pong"}`.
 - Verified on 2026-07-10: `https://api.guessme.world/ops/health` returns `{"ok":true,"db":"ok","worker":"ok","stockfish":"ok",...}`.
 - Caddy obtained a Let's Encrypt certificate for `api.guessme.world` after the DNS change and host-network redeploy.
 
 Notes:
 
-- Docker port publishing to `65.108.67.53:80/443` via docker-proxy timed out even though DNAT/listeners existed. Host-network Caddy with an explicit public-IP bind is the working pattern on this host.
+- Docker port publishing to `65.108.67.53:80/443` via docker-proxy timed out even though DNAT/listeners existed. Host-network Caddy with a configurable public-IP bind is the working pattern on this host.
 - The `*.guessme.world -> pixie.porkbun.com` wildcard remains in Cloudflare. It does not affect `api.guessme.world` because the explicit `api` record wins. Do not delete it until there is a separate wildcard cleanup decision.
 
 Public app health is considered restored when both frontend loading and API JSON checks pass. API JSON checks passed on 2026-07-10; browser-level frontend flow should still be checked separately after any frontend rebuild.
