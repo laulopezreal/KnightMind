@@ -136,7 +136,14 @@ curl --noproxy '*' http://127.0.0.1:8000/ops/health
 curl --noproxy '*' http://172.18.0.2:8000/ops/health
 ```
 
-Both timed out from the host while the same endpoint worked inside the API container. Treat this as a host-to-Docker-bridge or firewall/NAT issue until root-level packet/filter inspection proves otherwise.
+Root-cause evidence gathered later the same session:
+
+- Inside the API container, all worked: `localhost:8000`, `127.0.0.1:8000`, and `172.18.0.2:8000` returned JSON.
+- From the DB container, `http://api:8000/ops/ping` and `http://172.18.0.2:8000/ops/ping` returned JSON.
+- From the host, `ip route get 172.18.0.2` selected `dev tailscale0 table 52`, not the Docker bridge.
+- Tailscale table 52 had a broad default route via `tailscale0` and only a `throw 172.20.0.0/16` Docker/LAN exception. It did not exempt KnightMind's `172.18.0.0/16` Docker network.
+
+Current hypothesis: host-to-KnightMind-container access is broken because the Tailscale exit-node routing table hijacks `172.18.0.0/16`, so Docker's host-side proxy cannot reach the API container. Fix requires root-level routing/Tailscale/Docker network change, not application code.
 
 ## Public surface status at restoration time
 
@@ -151,6 +158,7 @@ API:
 - `https://api.guessme.world/ops/health` returned Cloudflare error `1033` during investigation.
 - `https://guessme.world/ops/health` and `https://guessme.world/api/ops/health` returned frontend HTML, not API JSON.
 - `https://knightmind-api.onrender.com/ops/health` timed out from this host.
+- Public API repair should happen after host-side Docker access is repaired, then a single canonical API hostname should be wired to the claw-home API.
 
 Do not call the public app fully healthy until browser API calls are verified against JSON endpoints.
 
