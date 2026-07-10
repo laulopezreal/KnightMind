@@ -23,7 +23,7 @@ export default function Layout({ children }: LayoutProps) {
                     type="button"
                     onClick={() => setMobileNavOpen(true)}
                     aria-label="Open navigation menu"
-                    className="h-10 w-10 flex items-center justify-center rounded-sm border border-primary/20 km-interactive km-focus-visible"
+                    className="h-11 w-11 flex items-center justify-center rounded-sm border border-primary/20 km-interactive km-focus-visible"
                 >
                     <span className="text-xl leading-none" aria-hidden="true">☰</span>
                 </button>

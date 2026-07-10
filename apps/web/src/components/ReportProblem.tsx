@@ -6,7 +6,7 @@ export function ReportProblem() {
             href={ISSUES_URL}
             target="_blank"
             rel="noopener noreferrer"
-            className="fixed bottom-6 right-6 z-40 p-2 rounded-full transition-opacity duration-500 opacity-40 hover:opacity-100 km-focus-visible"
+            className="fixed bottom-6 right-6 z-40 h-11 w-11 flex items-center justify-center rounded-full transition-opacity duration-500 opacity-40 hover:opacity-100 km-focus-visible"
             aria-label="Report a problem"
             title="Report a problem"
         >

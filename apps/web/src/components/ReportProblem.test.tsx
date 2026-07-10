@@ -25,4 +25,12 @@ describe('ReportProblem', () => {
     const link = screen.getByLabelText('Report a problem');
     expect(link).toBeInTheDocument();
   });
+
+  it('should have a 44px touch target', () => {
+    render(<ReportProblem />);
+
+    const link = screen.getByRole('link', { name: /report a problem/i });
+    expect(link).toHaveClass('h-11');
+    expect(link).toHaveClass('w-11');
+  });
 });

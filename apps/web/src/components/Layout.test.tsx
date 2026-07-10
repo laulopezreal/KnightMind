@@ -100,4 +100,16 @@ describe('Layout', () => {
     const main = screen.getByRole('main');
     expect(main).toBeInTheDocument();
   });
+
+  it('should give mobile hamburger a 44px touch target', () => {
+    render(
+      <Layout>
+        <div>Content</div>
+      </Layout>
+    );
+
+    const hamburger = screen.getByRole('button', { name: /open navigation menu/i });
+    expect(hamburger).toHaveClass('h-11');
+    expect(hamburger).toHaveClass('w-11');
+  });
 });

@@ -32,7 +32,7 @@ const SubNavItem = ({
     <button
         onClick={onClick}
         title={tooltip}
-        className={`block py-1 text-sm transition-all duration-300 km-focus-visible rounded-sm px-2 -mx-1 text-left outline-none ${
+        className={`flex items-center min-h-11 text-sm transition-all duration-300 km-focus-visible rounded-sm px-2 -mx-1 text-left outline-none ${
             isActive
                 ? 'opacity-100 font-medium km-interactive'
                 : 'opacity-50 font-light km-interactive hover:opacity-80'
