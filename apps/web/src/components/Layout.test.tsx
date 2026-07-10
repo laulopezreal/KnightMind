@@ -1,6 +1,8 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import Layout from './Layout';
+
+let mockUsername = '';
 
 vi.mock('./Sidebar', () => ({
   default: () => <aside data-testid="sidebar">Sidebar</aside>,
@@ -18,7 +20,14 @@ vi.mock('./ReportProblem', () => ({
   ReportProblem: () => <div data-testid="report-problem">ReportProblem</div>,
 }));
 
+vi.mock('../context/ChessUsernameContext', () => ({
+  useChessUsername: () => ({ username: mockUsername }),
+}));
+
 describe('Layout', () => {
+  beforeEach(() => {
+    mockUsername = '';
+  });
   it('should render children', () => {
     render(
       <Layout>
@@ -39,7 +48,19 @@ describe('Layout', () => {
     expect(screen.getByTestId('sidebar')).toBeInTheDocument();
   });
 
-  it('should render username display', () => {
+  it('should not render username display before a username is set', () => {
+    mockUsername = '';
+    render(
+      <Layout>
+        <div>Content</div>
+      </Layout>
+    );
+
+    expect(screen.queryByTestId('username-display')).not.toBeInTheDocument();
+  });
+
+  it('should render username display after a username is set', () => {
+    mockUsername = 'testplayer';
     render(
       <Layout>
         <div>Content</div>

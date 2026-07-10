@@ -3,6 +3,7 @@ import Sidebar from './Sidebar';
 import UsernameDisplay from './UsernameDisplay';
 import ThemeToggle from './ThemeToggle';
 import { ReportProblem } from './ReportProblem';
+import { useChessUsername } from '../context/ChessUsernameContext';
 
 interface LayoutProps {
     children: ReactNode;
@@ -10,6 +11,8 @@ interface LayoutProps {
 
 export default function Layout({ children }: LayoutProps) {
     const [mobileNavOpen, setMobileNavOpen] = useState(false);
+    const { username } = useChessUsername();
+    const showUsernameDisplay = Boolean(username);
 
     return (
         <div className="min-h-screen font-serif selection:bg-chess-brown-700 selection:text-chess-cream-100">
@@ -29,7 +32,7 @@ export default function Layout({ children }: LayoutProps) {
             </header>
 
             <div className="absolute top-8 right-8 z-50 hidden md:flex items-center gap-4">
-                <UsernameDisplay />
+                {showUsernameDisplay && <UsernameDisplay />}
                 <ThemeToggle />
             </div>
 
