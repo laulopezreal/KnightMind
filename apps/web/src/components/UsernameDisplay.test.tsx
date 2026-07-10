@@ -131,4 +131,11 @@ describe('UsernameDisplay', () => {
     expect(mockValidateChessComUser).not.toHaveBeenCalled();
     expect(mockSetEditorOpen).toHaveBeenCalledWith(false);
   });
+
+  it('should meet minimum 44px touch target on trigger button', () => {
+    render(<UsernameDisplay />);
+
+    const button = screen.getByRole('button');
+    expect(button).toHaveClass('min-h-11');
+  });
 });

@@ -81,7 +81,7 @@ export default function UsernameDisplay() {
                 type="button"
                 onClick={() => setEditorOpen(!isEditorOpen)}
                 className={`
-                    km-interactive km-focus-visible flex items-center gap-2 px-3 py-1.5 rounded-sm transition-all duration-300
+                    km-interactive km-focus-visible flex items-center gap-2 px-3 py-1.5 min-h-11 rounded-sm transition-all duration-300
                     ${username
                         ? 'text-primary/60'
                         : 'text-accent border border-accent/20 bg-accent/5'

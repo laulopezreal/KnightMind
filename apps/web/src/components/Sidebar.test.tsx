@@ -96,4 +96,12 @@ describe('Sidebar', () => {
     const homeLink = screen.getByLabelText('KnightMind home');
     expect(homeLink).toBeInTheDocument();
   });
+
+  it('should give training mode sub-items a 44px touch target', () => {
+    mockPathname = '/puzzles';
+    render(<Sidebar />);
+
+    const standardBtn = screen.getByRole('button', { name: /standard/i });
+    expect(standardBtn).toHaveClass('min-h-11');
+  });
 });

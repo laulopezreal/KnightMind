@@ -372,8 +372,8 @@ export default function Home() {
                     type="button"
                     onClick={handleImport}
                     disabled={loading}
-                    className={`text-sm font-sans text-primary/50 underline km-focus-visible ${
-                      loading ? 'km-interactive-disabled' : 'km-interactive hover:text-primary'
+                    className={`min-h-11 flex items-center px-4 py-2 border border-primary/20 text-primary/60 rounded-sm font-sans text-sm transition-all km-focus-visible ${
+                      loading ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive hover:text-primary hover:border-primary/40'
                     }`}
                   >
                     {loading ? 'Syncing...' : 'Sync new games'}
