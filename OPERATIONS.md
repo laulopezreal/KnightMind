@@ -1,5 +1,5 @@
 ---
-last_edited_at: 2026-07-10T11:34:33+02:00
+last_edited_at: 2026-07-10T11:40:25+02:00
 ---
 # KnightMind Operations
 
@@ -9,6 +9,58 @@ last_edited_at: 2026-07-10T11:34:33+02:00
 - Project docs/status capsule: `/home/lauureal/projects/knightmind/`
 - Upstream repo: `https://github.com/laulopezreal/KnightMind`
 - Live DB backup folder: `/home/lauureal/backups/knightmind/`
+
+## Infra organization from now on
+
+There is exactly one intended KnightMind app/deploy instance on claw-home.
+
+- **Source and deploy root:** `/home/lauureal/apps/knightmind/`
+  - This is the only place to run KnightMind `docker compose` commands.
+  - This repo may be ahead of GitHub with local operations-only commits.
+  - `.env.docker` lives here, is ignored, must stay mode `0600`, and must never be printed or committed.
+- **Project docs:** `/home/lauureal/projects/knightmind/`
+  - Planning/status only. Do not run app commands from here.
+- **Runtime:** Docker Compose project `knightmind`
+  - Services: `api`, `db`
+  - Containers: `knightmind-api-1`, `knightmind-db-1`
+  - Network: `knightmind_default`
+  - DB volume: `knightmind_pgdata`
+- **Backups:** `/home/lauureal/backups/knightmind/`
+  - Take a fresh backup before any Compose, migration, rebuild, or ingress change.
+- **Public frontend:** Cloudflare Pages currently serving `https://guessme.world` and `https://knightmind.pages.dev`.
+- **Public API:** not considered repaired until a chosen API hostname returns JSON from `/ops/health` and browser API calls work.
+
+Do not create `/opt/knightmind`, `/home/lauureal/git/knightmind`, another Compose project, another Postgres volume, or another API container unless Lau explicitly approves a migration plan.
+
+## Instance audit on 2026-07-10
+
+Read-only scan found no second KnightMind runtime on claw-home.
+
+Found live runtime:
+
+- Docker containers: `knightmind-api-1`, `knightmind-db-1`
+- Docker image: `knightmind-api:latest`
+- Docker volume: `knightmind_pgdata`
+- Docker network: `knightmind_default`
+- Compose project: `knightmind`, config `/home/lauureal/apps/knightmind/docker-compose.yml`
+- API process: one Uvicorn process for `services.api.main:app` on port 8000 inside the container
+- DB processes: Postgres sessions for the KnightMind DB
+
+No duplicate found in:
+
+- `/home/lauureal/git/`
+- `/opt/`
+- `/var/www/`
+- `/srv/`
+- systemd services or unit files
+- Docker containers/images/volumes/networks beyond the expected `knightmind` set
+- user/system timers
+
+Related but not a KnightMind app instance:
+
+- `/home/lauureal/.openclaw/workspace/scripts/chess_daily_backup.sh` is a personal Chess.com daily rating/journal cron, not KnightMind infrastructure.
+- `/home/lauureal/Lauland/Work/Pet Projects/Knightmind/` is an Obsidian/project idea note, not runtime infrastructure.
+- Historical OpenClaw dream/memory/TODO references mention the old migration, but they are not live app instances.
 
 ## Current live stack
 
