@@ -11,9 +11,14 @@ from typing import AsyncIterator
 import httpx
 import truststore
 
-# Configure truststore to use system certificates
+# Configure truststore to use system certificates.
+# Chess.com currently resets TLS 1.3 handshakes from the live API container's
+# OpenSSL stack, while the same endpoint succeeds with TLS 1.2. Keep all
+# Chess.com API clients capped at TLS 1.2 so validation and imports use the
+# same working transport behavior.
 truststore.inject_into_ssl()
 SSL_CONTEXT = truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+SSL_CONTEXT.maximum_version = ssl.TLSVersion.TLSv1_2
 
 
 class ImportError(Exception):
@@ -72,6 +77,16 @@ DEFAULT_HEADERS = {
 }
 
 
+def _chesscom_client(timeout: float) -> httpx.AsyncClient:
+    """Create a Chess.com API client with the live-compatible TLS settings."""
+    return httpx.AsyncClient(
+        headers=DEFAULT_HEADERS,
+        timeout=timeout,
+        verify=SSL_CONTEXT,
+        follow_redirects=True,
+    )
+
+
 def _handle_response_error(
     response: httpx.Response, username: str | None = None
 ) -> None:
@@ -107,9 +122,7 @@ async def get_player_archives(username: str) -> list[str]:
         NetworkError: If a network error occurs
     """
     try:
-        async with httpx.AsyncClient(
-            headers=DEFAULT_HEADERS, timeout=30.0, verify=SSL_CONTEXT
-        ) as client:
+        async with _chesscom_client(timeout=30.0) as client:
             response = await client.get(
                 f"{CHESSCOM_API_BASE}/player/{username}/games/archives"
             )
@@ -139,9 +152,7 @@ async def fetch_games_from_archive(archive_url: str) -> list[dict]:
         NetworkError: If a network error occurs
     """
     try:
-        async with httpx.AsyncClient(
-            headers=DEFAULT_HEADERS, timeout=60.0, verify=SSL_CONTEXT
-        ) as client:
+        async with _chesscom_client(timeout=60.0) as client:
             response = await client.get(archive_url)
             if not response.is_success:
                 _handle_response_error(response)
@@ -215,10 +226,24 @@ async def get_player_stats(username: str) -> dict:
         NetworkError: If a network error occurs
     """
     try:
-        async with httpx.AsyncClient(
-            headers=DEFAULT_HEADERS, timeout=30.0, verify=SSL_CONTEXT
-        ) as client:
+        async with _chesscom_client(timeout=30.0) as client:
             response = await client.get(f"{CHESSCOM_API_BASE}/player/{username}/stats")
+            if not response.is_success:
+                _handle_response_error(response, username)
+            return response.json()
+    except httpx.TimeoutException as e:
+        raise NetworkError("Request timed out", e) from e
+    except httpx.ConnectError as e:
+        raise NetworkError("Failed to connect to Chess.com", e) from e
+    except httpx.HTTPError as e:
+        raise NetworkError(str(e), e) from e
+
+
+async def get_player_profile(username: str) -> dict:
+    """Fetch a Chess.com player profile for username validation."""
+    try:
+        async with _chesscom_client(timeout=30.0) as client:
+            response = await client.get(f"{CHESSCOM_API_BASE}/player/{username}")
             if not response.is_success:
                 _handle_response_error(response, username)
             return response.json()

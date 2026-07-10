@@ -2,7 +2,7 @@ import os
 
 os.environ["KNIGHTMIND_WORKER_DISABLED"] = "true"
 from datetime import date, datetime, timedelta, timezone
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -298,6 +298,52 @@ def test_user_status_with_due_puzzles(client_with_db, db_session):
     assert data["due_count"] == 1
     assert data["has_new_games"] is False
     assert data["next_due_at"].startswith(future_due.date().isoformat())
+
+
+# --- Chess.com username validation tests ---
+
+
+def test_chesscom_api_client_caps_tls_at_1_2():
+    import ssl
+
+    from services.ingest.chesscom import SSL_CONTEXT
+
+    assert SSL_CONTEXT.maximum_version == ssl.TLSVersion.TLSv1_2
+
+
+@patch("services.api.main.get_player_profile", new_callable=AsyncMock)
+def test_validate_user_success(mock_get_player_profile):
+    mock_get_player_profile.return_value = {"username": "lauureal"}
+
+    response = client.get("/users/validate?username= lauureal ")
+
+    assert response.status_code == 200
+    assert response.json() == {"valid": True, "username": "lauureal"}
+    mock_get_player_profile.assert_awaited_once_with("lauureal")
+
+
+@patch("services.api.main.get_player_profile", new_callable=AsyncMock)
+def test_validate_user_not_found(mock_get_player_profile):
+    from services.ingest import UserNotFoundError
+
+    mock_get_player_profile.side_effect = UserNotFoundError("missing-user")
+
+    response = client.get("/users/validate?username=missing-user")
+
+    assert response.status_code == 200
+    assert response.json() == {"valid": False, "error": "User not found"}
+
+
+@patch("services.api.main.get_player_profile", new_callable=AsyncMock)
+def test_validate_user_network_error_returns_bad_gateway(mock_get_player_profile):
+    from services.ingest import NetworkError
+
+    mock_get_player_profile.side_effect = NetworkError("Failed to connect to Chess.com")
+
+    response = client.get("/users/validate?username=lauureal")
+
+    assert response.status_code == 502
+    assert "Failed to connect to Chess.com" in response.json()["detail"]
 
 
 # --- Import tests ---
