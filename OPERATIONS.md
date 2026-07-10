@@ -1,5 +1,5 @@
 ---
-last_edited_at: 2026-07-10T11:40:25+02:00
+last_edited_at: 2026-07-10T12:01:55+02:00
 ---
 # KnightMind Operations
 
@@ -167,6 +167,17 @@ curl --noproxy '*' http://127.0.0.1:8000/ops/ping
 ```
 
 Expected route should mention `br-46f5c9c9df08`, not `tailscale0 table 52`, and curl should return `{"status":"pong"}`.
+
+Verification after Lau ran the root helper on 2026-07-10:
+
+- Tailscale table 52 now contains `throw` routes for `172.17.0.0/16`, `172.18.0.0/16`, `172.19.0.0/16`, and `172.20.0.0/16`.
+- `ip route get 172.18.0.2` now selects `dev br-46f5c9c9df08 src 172.18.0.1`, not `tailscale0`.
+- `curl --noproxy '*' http://127.0.0.1:8000/ops/ping` returns `200 {"status":"pong"}`.
+- `curl --noproxy '*' http://127.0.0.1:8000/ops/health` returns `200` JSON with `db`, `worker`, and `stockfish` all `ok`.
+- `curl --noproxy '*' http://172.18.0.2:8000/ops/health` also returns `200` JSON.
+- Compose remains healthy: `knightmind-api-1 api running healthy`, `knightmind-db-1 db running healthy`.
+
+Host-local API is repaired. Public API ingress is still separate and remains unrepaired until the chosen hostname returns JSON.
 
 ## Public surface status at restoration time
 
