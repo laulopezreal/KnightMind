@@ -1,7 +1,13 @@
 # ============================================================================
-# KnightMind API – systemd service (Docker Compose)
+# KnightMind API - systemd service template (Docker Compose)
 # ============================================================================
-# Install:
+# Current claw-home live stack is managed directly from:
+#   /home/lauureal/apps/knightmind
+#
+# This file is a template only. Do not install or enable it on claw-home without
+# first reading OPERATIONS.md and taking a fresh DB backup.
+#
+# If deliberately installing:
 #   cp deploy/knightmind-api.service /etc/systemd/system/
 #   systemctl daemon-reload
 #   systemctl enable --now knightmind-api
@@ -19,12 +25,12 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-WorkingDirectory=/opt/knightmind
+WorkingDirectory=/home/lauureal/apps/knightmind
 # --env-file is required: compose only auto-loads a file literally named
 # ".env" for ${POSTGRES_*} interpolation, and this project uses .env.docker.
-ExecStart=/usr/bin/docker compose --env-file /opt/knightmind/.env.docker up -d
-ExecStop=/usr/bin/docker compose --env-file /opt/knightmind/.env.docker down
-ExecReload=/usr/bin/docker compose --env-file /opt/knightmind/.env.docker up -d --build api
+ExecStart=/usr/bin/docker compose --env-file /home/lauureal/apps/knightmind/.env.docker up -d
+ExecStop=/usr/bin/docker compose --env-file /home/lauureal/apps/knightmind/.env.docker down
+ExecReload=/usr/bin/docker compose --env-file /home/lauureal/apps/knightmind/.env.docker up -d --build api
 TimeoutStartSec=120
 
 # Restart policy handled by docker compose (restart: unless-stopped),

@@ -8,11 +8,11 @@
 #   ./deploy/postgres-backup.sh
 #
 # Cron (daily at 03:00):
-#   0 3 * * * /opt/knightmind/deploy/postgres-backup.sh >> /var/log/knightmind-backup.log 2>&1
+#   0 3 * * * /home/lauureal/apps/knightmind/deploy/postgres-backup.sh >> /home/lauureal/backups/knightmind/knightmind-backup.log 2>&1
 #
 # Environment variables (or defaults):
-#   ENV_FILE          – env file sourced for DB config (default: /opt/knightmind/.env.docker)
-#   BACKUP_DIR        – where to store dumps (default: /var/backups/knightmind)
+#   ENV_FILE          – env file sourced for DB config (default: /home/lauureal/apps/knightmind/.env.docker)
+#   BACKUP_DIR        – where to store dumps (default: /home/lauureal/backups/knightmind)
 #   RETENTION_DAYS    – delete backups older than N days (default: 14)
 #   POSTGRES_DB       – database name (default: knightmind)
 #   POSTGRES_USER     – database user (default: knightmind)
@@ -28,7 +28,7 @@
 
 set -euo pipefail
 
-ENV_FILE="${ENV_FILE:-/opt/knightmind/.env.docker}"
+ENV_FILE="${ENV_FILE:-/home/lauureal/apps/knightmind/.env.docker}"
 
 if [ ! -f "${ENV_FILE}" ]; then
     echo "[$(date -Iseconds)] ERROR: env file not found: ${ENV_FILE}" >&2
@@ -43,7 +43,7 @@ set -a
 . "${ENV_FILE}"
 set +a
 
-BACKUP_DIR="${BACKUP_DIR:-/var/backups/knightmind}"
+BACKUP_DIR="${BACKUP_DIR:-/home/lauureal/backups/knightmind}"
 RETENTION_DAYS="${RETENTION_DAYS:-14}"
 POSTGRES_DB="${POSTGRES_DB:-knightmind}"
 POSTGRES_USER="${POSTGRES_USER:-knightmind}"
@@ -64,7 +64,7 @@ TMP_DUMP_FILE="${DUMP_FILE}.tmp.$$"
 trap 'rm -f "${TMP_DUMP_FILE}"' EXIT
 # --env-file: compose only auto-loads a file literally named ".env" for
 # ${POSTGRES_*} interpolation; this project uses .env.docker.
-docker compose -f /opt/knightmind/docker-compose.yml \
+docker compose -f /home/lauureal/apps/knightmind/docker-compose.yml \
     --env-file "${ENV_FILE}" exec -T db \
     pg_dump -U "${POSTGRES_USER}" "${POSTGRES_DB}" \
     | gzip > "${TMP_DUMP_FILE}"
