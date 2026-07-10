@@ -20,7 +20,7 @@ type ImportStatus = {
 type OnboardingPhase = 'idle' | 'importing' | 'generating' | 'complete';
 
 export default function Home() {
-  const { username, setEditorOpen } = useChessUsername();
+  const { username, setUsername } = useChessUsername();
   const navigate = useNavigate();
 
   // Page data
@@ -33,6 +33,12 @@ export default function Home() {
     lastImportedAt: null,
     lastNewGames: null,
   });
+
+  // Inline connect form (new-user CTA — works on all viewports)
+  const [showConnect, setShowConnect] = useState(false);
+  const [connectInput, setConnectInput] = useState('');
+  const [connectValidating, setConnectValidating] = useState(false);
+  const [connectError, setConnectError] = useState<string | null>(null);
   const [actionStatus, setActionStatus] = useState<string | null>(null);
   const [isError, setIsError] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -110,6 +116,32 @@ export default function Home() {
     window.addEventListener('focus', onFocus);
     return () => window.removeEventListener('focus', onFocus);
   }, [username, onboardingPhase, loadPageData]);
+
+  const handleConnectSave = async () => {
+    const trimmed = connectInput.trim();
+    if (!trimmed) return;
+
+    setConnectValidating(true);
+    setConnectError(null);
+
+    try {
+      const data = await validateChessComUser(trimmed);
+      if (!data.valid) {
+        setConnectError(data.error || 'User not found on Chess.com');
+        return;
+      }
+      setUsername(data.username || trimmed);
+      setShowConnect(false);
+    } catch (err) {
+      if (err instanceof ApiError) {
+        setConnectError(err.detail || 'Could not validate username');
+      } else {
+        setConnectError('Could not validate username');
+      }
+    } finally {
+      setConnectValidating(false);
+    }
+  };
 
   const handleImport = async () => {
     if (!username.trim()) {
@@ -266,16 +298,60 @@ export default function Home() {
         {/* No username → connect account */}
         {isNewUser && (
           <div className="space-y-4 max-w-lg">
-            <button
-              type="button"
-              onClick={() => setEditorOpen(true)}
-              className="px-8 py-4 bg-primary text-bg-primary rounded-sm text-lg font-serif km-interactive km-focus-visible transition-colors"
-            >
-              Connect Chess.com Account
-            </button>
-            <p className="text-sm font-sans text-primary/40">
-              Import your games and generate puzzles from your real positions.
-            </p>
+            {!showConnect ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => setShowConnect(true)}
+                  className="px-8 py-4 bg-primary text-bg-primary rounded-sm text-lg font-serif km-interactive km-focus-visible transition-colors"
+                >
+                  Connect Chess.com Account
+                </button>
+                <p className="text-sm font-sans text-primary/40">
+                  Import your games and generate puzzles from your real positions.
+                </p>
+              </>
+            ) : (
+              <div className="space-y-3">
+                <label className="block text-xs font-sans uppercase tracking-widest text-primary/40">
+                  Chess.com Username
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    autoFocus
+                    type="text"
+                    value={connectInput}
+                    onChange={(e) => setConnectInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') handleConnectSave();
+                      if (e.key === 'Escape') setShowConnect(false);
+                    }}
+                    disabled={connectValidating}
+                    placeholder="username"
+                    aria-label="Chess.com Username"
+                    className="flex-1 bg-primary/5 border border-primary/10 px-3 py-2 text-primary focus:outline-none focus:border-primary/40 rounded-sm transition-colors font-sans"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleConnectSave}
+                    disabled={connectValidating}
+                    className={`px-4 py-2 bg-primary text-bg-primary font-medium rounded-sm transition-opacity km-focus-visible ${connectValidating ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'}`}
+                  >
+                    {connectValidating ? '...' : 'Save'}
+                  </button>
+                </div>
+                {connectError && (
+                  <p className="text-xs font-sans text-red-500" role="alert">{connectError}</p>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setShowConnect(false)}
+                  className="text-sm font-sans text-primary/40 km-interactive km-focus-visible"
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
           </div>
         )}
 
