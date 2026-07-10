@@ -1,5 +1,5 @@
 ---
-last_edited_at: 2026-07-10T12:01:55+02:00
+last_edited_at: 2026-07-10T12:15:20+02:00
 ---
 # KnightMind Operations
 
@@ -28,7 +28,7 @@ There is exactly one intended KnightMind app/deploy instance on claw-home.
 - **Backups:** `/home/lauureal/backups/knightmind/`
   - Take a fresh backup before any Compose, migration, rebuild, or ingress change.
 - **Public frontend:** Cloudflare Pages currently serving `https://guessme.world` and `https://knightmind.pages.dev`.
-- **Public API:** not considered repaired until a chosen API hostname returns JSON from `/ops/health` and browser API calls work.
+- **Public API:** Caddy container `knightmind-public-caddy` is deployed from `/home/lauureal/apps/knightmind/deploy/public-caddy/` and reverse-proxies `api.guessme.world` to `host.docker.internal:8000`. Public DNS still needs to be changed from the broken Cloudflare route to claw-home before the hostname is healthy.
 
 Do not create `/opt/knightmind`, `/home/lauureal/git/knightmind`, another Compose project, another Postgres volume, or another API container unless Lau explicitly approves a migration plan.
 
@@ -179,20 +179,38 @@ Verification after Lau ran the root helper on 2026-07-10:
 
 Host-local API is repaired. Public API ingress is still separate and remains unrepaired until the chosen hostname returns JSON.
 
-## Public surface status at restoration time
+## Public surface status after Caddy deploy
 
 Frontend:
 
 - `https://guessme.world` returns the KnightMind frontend.
-- `https://knightmind.pages.dev` returns the same frontend.
-
-API:
-
+- `https://knightmind.pages.dev` also returns the frontend.
 - The frontend bundle calls `https://api.guessme.world`.
-- `https://api.guessme.world/ops/health` returned Cloudflare error `1033` during investigation.
-- `https://guessme.world/ops/health` and `https://guessme.world/api/ops/health` returned frontend HTML, not API JSON.
-- `https://knightmind-api.onrender.com/ops/health` timed out from this host.
-- Public API repair should happen after host-side Docker access is repaired, then a single canonical API hostname should be wired to the claw-home API.
+
+Host-local API:
+
+- `http://127.0.0.1:8000/ops/ping` returns JSON.
+- `http://127.0.0.1:8000/ops/health` returns JSON.
+
+Caddy ingress prepared on claw-home:
+
+- Compose path: `/home/lauureal/apps/knightmind/deploy/public-caddy/`
+- Container: `knightmind-public-caddy`
+- Image: `caddy:2-alpine`
+- Public bindings: `65.108.67.53:80` and `65.108.67.53:443`
+- Upstream: `host.docker.internal:8000`
+- Caddy container can reach the API upstream: `http://host.docker.internal:8000/ops/ping` returns `{"status":"pong"}`.
+
+Remaining public DNS blocker:
+
+- `https://api.guessme.world/ops/health` still returns Cloudflare error `1033` because Cloudflare DNS is still routed to the old/broken Cloudflare origin/tunnel, not to claw-home's Caddy ingress.
+- Caddy ACME also cannot issue the certificate until `api.guessme.world` reaches claw-home. Current ACME challenge fails with Cloudflare `530/1033`.
+
+Required DNS change:
+
+- In Cloudflare DNS, replace the current `api.guessme.world` record with `A api 65.108.67.53`.
+- Prefer grey-cloud/DNS-only first until Caddy obtains a valid certificate and `https://api.guessme.world/ops/ping` returns JSON.
+- After successful verification, orange-cloud/proxy can be re-enabled if desired.
 
 Do not call the public app fully healthy until browser API calls are verified against JSON endpoints.
 

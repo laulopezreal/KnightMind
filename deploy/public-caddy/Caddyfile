@@ -1,0 +1,20 @@
+{
+	# KnightMind API public ingress. Logs go to stdout through Docker.
+	email laura.lopezr94@gmail.com
+}
+
+api.guessme.world {
+	reverse_proxy host.docker.internal:8000
+
+	log {
+		output stdout
+		format console
+	}
+
+	header {
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+}
