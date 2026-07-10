@@ -273,7 +273,11 @@ async def validate_user(username: str):
     except UserNotFoundError:
         return {"valid": False, "error": "User not found"}
     except RateLimitError as e:
-        raise HTTPException(status_code=429, detail=str(e)) from e
+        raise HTTPException(
+            status_code=429,
+            detail=str(e),
+            headers={"Retry-After": str(e.retry_after)} if e.retry_after else None,
+        ) from e
     except NetworkError as e:
         raise HTTPException(status_code=502, detail=str(e)) from e
     except ChessComImportError as e:

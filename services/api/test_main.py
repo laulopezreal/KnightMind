@@ -1,3 +1,4 @@
+import asyncio
 import os
 
 os.environ["KNIGHTMIND_WORKER_DISABLED"] = "true"
@@ -344,6 +345,44 @@ def test_validate_user_network_error_returns_bad_gateway(mock_get_player_profile
 
     assert response.status_code == 502
     assert "Failed to connect to Chess.com" in response.json()["detail"]
+
+
+@patch("services.api.main.get_player_profile", new_callable=AsyncMock)
+def test_validate_user_rate_limit_sets_retry_after(mock_get_player_profile):
+    from services.ingest import RateLimitError
+
+    mock_get_player_profile.side_effect = RateLimitError(retry_after=60)
+
+    response = client.get("/users/validate?username=lauureal")
+
+    assert response.status_code == 429
+    assert response.headers["Retry-After"] == "60"
+    assert "rate limit" in response.json()["detail"].lower()
+
+
+def test_get_player_profile_invalid_json_returns_network_error(monkeypatch):
+    from services.ingest.chesscom import NetworkError, get_player_profile
+
+    class FakeResponse:
+        is_success = True
+
+        def json(self):
+            raise ValueError("not json")
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url):
+            return FakeResponse()
+
+    monkeypatch.setattr("services.ingest.chesscom._chesscom_client", lambda timeout: FakeClient())
+
+    with pytest.raises(NetworkError, match="invalid profile response"):
+        asyncio.run(get_player_profile("lauureal"))
 
 
 # --- Import tests ---

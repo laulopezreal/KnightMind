@@ -251,6 +251,8 @@ async def get_player_profile(username: str) -> dict:
         raise NetworkError("Request timed out", e) from e
     except httpx.ConnectError as e:
         raise NetworkError("Failed to connect to Chess.com", e) from e
+    except ValueError as e:
+        raise NetworkError("Chess.com returned an invalid profile response", e) from e
     except httpx.HTTPError as e:
         raise NetworkError(str(e), e) from e
 
