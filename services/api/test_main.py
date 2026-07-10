@@ -1,8 +1,9 @@
+import asyncio
 import os
 
 os.environ["KNIGHTMIND_WORKER_DISABLED"] = "true"
 from datetime import date, datetime, timedelta, timezone
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -298,6 +299,92 @@ def test_user_status_with_due_puzzles(client_with_db, db_session):
     assert data["due_count"] == 1
     assert data["has_new_games"] is False
     assert data["next_due_at"].startswith(future_due.date().isoformat())
+
+
+# --- Chess.com username validation tests ---
+
+
+def test_chesscom_api_client_caps_tls_at_1_2():
+    import ssl
+
+    from services.ingest.chesscom import SSL_CONTEXT
+
+    assert SSL_CONTEXT.maximum_version == ssl.TLSVersion.TLSv1_2
+
+
+@patch("services.api.main.get_player_profile", new_callable=AsyncMock)
+def test_validate_user_success(mock_get_player_profile):
+    mock_get_player_profile.return_value = {"username": "lauureal"}
+
+    response = client.get("/users/validate?username= lauureal ")
+
+    assert response.status_code == 200
+    assert response.json() == {"valid": True, "username": "lauureal"}
+    mock_get_player_profile.assert_awaited_once_with("lauureal")
+
+
+@patch("services.api.main.get_player_profile", new_callable=AsyncMock)
+def test_validate_user_not_found(mock_get_player_profile):
+    from services.ingest import UserNotFoundError
+
+    mock_get_player_profile.side_effect = UserNotFoundError("missing-user")
+
+    response = client.get("/users/validate?username=missing-user")
+
+    assert response.status_code == 200
+    assert response.json() == {"valid": False, "error": "User not found"}
+
+
+@patch("services.api.main.get_player_profile", new_callable=AsyncMock)
+def test_validate_user_network_error_returns_bad_gateway(mock_get_player_profile):
+    from services.ingest import NetworkError
+
+    mock_get_player_profile.side_effect = NetworkError("Failed to connect to Chess.com")
+
+    response = client.get("/users/validate?username=lauureal")
+
+    assert response.status_code == 502
+    assert "Failed to connect to Chess.com" in response.json()["detail"]
+
+
+@patch("services.api.main.get_player_profile", new_callable=AsyncMock)
+def test_validate_user_rate_limit_sets_retry_after(mock_get_player_profile):
+    from services.ingest import RateLimitError
+
+    mock_get_player_profile.side_effect = RateLimitError(retry_after=60)
+
+    response = client.get("/users/validate?username=lauureal")
+
+    assert response.status_code == 429
+    assert response.headers["Retry-After"] == "60"
+    assert "rate limit" in response.json()["detail"].lower()
+
+
+def test_get_player_profile_invalid_json_returns_network_error(monkeypatch):
+    from services.ingest.chesscom import NetworkError, get_player_profile
+
+    class FakeResponse:
+        is_success = True
+
+        def json(self):
+            raise ValueError("not json")
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url):
+            return FakeResponse()
+
+    monkeypatch.setattr(
+        "services.ingest.chesscom._chesscom_client", lambda timeout: FakeClient()
+    )
+
+    with pytest.raises(NetworkError, match="invalid profile response"):
+        asyncio.run(get_player_profile("lauureal"))
 
 
 # --- Import tests ---

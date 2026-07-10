@@ -6,6 +6,7 @@ from .chesscom import (
     UserNotFoundError,
     fetch_games_from_archive,
     get_player_archives,
+    get_player_profile,
     get_player_stats,
     import_all_games,
     parse_game,
@@ -14,6 +15,7 @@ from .chesscom import (
 __all__ = [
     "ChessGame",
     "get_player_archives",
+    "get_player_profile",
     "get_player_stats",
     "fetch_games_from_archive",
     "parse_game",

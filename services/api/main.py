@@ -60,6 +60,7 @@ from services.ingest import (
     NetworkError,
     RateLimitError,
     UserNotFoundError,
+    get_player_profile,
     get_player_stats,
     import_all_games,
 )
@@ -263,25 +264,26 @@ async def validate_user(username: str):
     Validate if a user exists on Chess.com.
     Proxies the request to avoid CORS issues and expose internal APIs.
     """
-    import httpx
-
+    username = username.strip()
     if not username:
         raise HTTPException(status_code=400, detail="Username is required")
 
     try:
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(
-                f"https://api.chess.com/pub/player/{username}", follow_redirects=True
-            )
+        profile = await get_player_profile(username)
+    except UserNotFoundError:
+        return {"valid": False, "error": "User not found"}
+    except RateLimitError as e:
+        raise HTTPException(
+            status_code=429,
+            detail=str(e),
+            headers={"Retry-After": str(e.retry_after)} if e.retry_after else None,
+        ) from e
+    except NetworkError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+    except ChessComImportError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
 
-            if resp.status_code == 200:
-                return {"valid": True, "username": username}
-            elif resp.status_code == 404:
-                return {"valid": False, "error": "User not found"}
-            else:
-                raise HTTPException(status_code=502, detail="Chess.com API error")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e)) from e
+    return {"valid": True, "username": profile.get("username", username)}
 
 
 @app.post("/import/chesscom", response_model=ImportResponse)
