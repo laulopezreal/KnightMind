@@ -4,7 +4,8 @@
 }
 
 api.guessme.world {
-	reverse_proxy host.docker.internal:8000
+	bind 65.108.67.53
+	reverse_proxy 127.0.0.1:8000
 
 	log {
 		output stdout

@@ -3,16 +3,12 @@ services:
     image: caddy:2-alpine
     container_name: knightmind-public-caddy
     restart: unless-stopped
-    ports:
-      - "65.108.67.53:80:80"
-      - "65.108.67.53:443:443"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    network_mode: host
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
+      - caddy-data:/data
+      - caddy-config:/config
 
 volumes:
-  caddy_data:
-  caddy_config:
+  caddy-data:
+  caddy-config:

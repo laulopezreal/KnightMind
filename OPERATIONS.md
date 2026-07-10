@@ -1,5 +1,5 @@
 ---
-last_edited_at: 2026-07-10T12:15:20+02:00
+last_edited_at: 2026-07-10T13:32:32+02:00
 ---
 # KnightMind Operations
 
@@ -28,7 +28,7 @@ There is exactly one intended KnightMind app/deploy instance on claw-home.
 - **Backups:** `/home/lauureal/backups/knightmind/`
   - Take a fresh backup before any Compose, migration, rebuild, or ingress change.
 - **Public frontend:** Cloudflare Pages currently serving `https://guessme.world` and `https://knightmind.pages.dev`.
-- **Public API:** Caddy container `knightmind-public-caddy` is deployed from `/home/lauureal/apps/knightmind/deploy/public-caddy/` and reverse-proxies `api.guessme.world` to `host.docker.internal:8000`. Public DNS still needs to be changed from the broken Cloudflare route to claw-home before the hostname is healthy.
+- **Public API:** Caddy container `knightmind-public-caddy` is deployed from `/home/lauureal/apps/knightmind/deploy/public-caddy/`, runs with `network_mode: host`, binds only `65.108.67.53`, and reverse-proxies `api.guessme.world` to `127.0.0.1:8000`. `https://api.guessme.world/ops/ping` returns JSON and Caddy obtained a Let's Encrypt certificate on 2026-07-10.
 
 Do not create `/opt/knightmind`, `/home/lauureal/git/knightmind`, another Compose project, another Postgres volume, or another API container unless Lau explicitly approves a migration plan.
 
@@ -177,7 +177,7 @@ Verification after Lau ran the root helper on 2026-07-10:
 - `curl --noproxy '*' http://172.18.0.2:8000/ops/health` also returns `200` JSON.
 - Compose remains healthy: `knightmind-api-1 api running healthy`, `knightmind-db-1 db running healthy`.
 
-Host-local API is repaired. Public API ingress is still separate and remains unrepaired until the chosen hostname returns JSON.
+Host-local API is repaired. Public API ingress is repaired as of 2026-07-10: `https://api.guessme.world/ops/ping` returns JSON.
 
 ## Public surface status after Caddy deploy
 
@@ -187,30 +187,18 @@ Frontend:
 - `https://knightmind.pages.dev` also returns the frontend.
 - The frontend bundle calls `https://api.guessme.world`.
 
-Host-local API:
+API:
 
-- `http://127.0.0.1:8000/ops/ping` returns JSON.
-- `http://127.0.0.1:8000/ops/health` returns JSON.
+- `api.guessme.world` DNS was moved off the old `openclaw` Cloudflare Tunnel and now resolves to `65.108.67.53`.
+- Caddy runs as `knightmind-public-caddy` from `/home/lauureal/apps/knightmind/deploy/public-caddy/` with `network_mode: host`, `bind 65.108.67.53`, and `reverse_proxy 127.0.0.1:8000`.
+- Verified on 2026-07-10: `http://api.guessme.world/ops/ping` redirects/reaches API and `https://api.guessme.world/ops/ping` returns `{"status":"pong"}`.
+- Verified on 2026-07-10: `https://api.guessme.world/ops/health` returns `{"ok":true,"db":"ok","worker":"ok","stockfish":"ok",...}`.
+- Caddy obtained a Let's Encrypt certificate for `api.guessme.world` after the DNS change and host-network redeploy.
 
-Caddy ingress prepared on claw-home:
+Notes:
 
-- Compose path: `/home/lauureal/apps/knightmind/deploy/public-caddy/`
-- Container: `knightmind-public-caddy`
-- Image: `caddy:2-alpine`
-- Public bindings: `65.108.67.53:80` and `65.108.67.53:443`
-- Upstream: `host.docker.internal:8000`
-- Caddy container can reach the API upstream: `http://host.docker.internal:8000/ops/ping` returns `{"status":"pong"}`.
-
-Remaining public DNS blocker:
-
-- `https://api.guessme.world/ops/health` still returns Cloudflare error `1033` because Cloudflare DNS is still routed to the old/broken Cloudflare origin/tunnel, not to claw-home's Caddy ingress.
-- Caddy ACME also cannot issue the certificate until `api.guessme.world` reaches claw-home. Current ACME challenge fails with Cloudflare `530/1033`.
-
-Required DNS change:
-
-- In Cloudflare DNS, replace the current `api.guessme.world` record with `A api 65.108.67.53`.
-- Prefer grey-cloud/DNS-only first until Caddy obtains a valid certificate and `https://api.guessme.world/ops/ping` returns JSON.
-- After successful verification, orange-cloud/proxy can be re-enabled if desired.
+- Docker port publishing to `65.108.67.53:80/443` via docker-proxy timed out even though DNAT/listeners existed. Host-network Caddy with an explicit public-IP bind is the working pattern on this host.
+- The `*.guessme.world -> pixie.porkbun.com` wildcard remains in Cloudflare. It does not affect `api.guessme.world` because the explicit `api` record wins. Do not delete it until there is a separate wildcard cleanup decision.
 
 Do not call the public app fully healthy until browser API calls are verified against JSON endpoints.
 
