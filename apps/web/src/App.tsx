@@ -1,5 +1,5 @@
 import { lazy, Suspense, type ComponentType } from 'react';
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { BrowserRouter, Navigate, Routes, Route } from 'react-router-dom';
 import Layout from './components/Layout';
 import { DataStateLoading } from './components/DataState';
 import { ChessUsernameProvider } from './context/ChessUsernameContext';
@@ -43,7 +43,6 @@ const Library = lazyPage(() => import('./pages/Library'));
 const LibraryPuzzle = lazyPage(() => import('./pages/LibraryPuzzle'));
 const Insights = lazyPage(() => import('./pages/Insights'));
 const RatingInsights = lazyPage(() => import('./pages/RatingInsights'));
-const Ops = lazyPage(() => import('./pages/Ops'));
 const HowItWorks = lazyPage(() => import('./pages/HowItWorks'));
 
 function App() {
@@ -65,7 +64,7 @@ function App() {
                     <Route path="/puzzles" element={<Puzzles />} />
                     <Route path="/insights" element={<Insights />} />
                     <Route path="/rating-insights" element={<RatingInsights />} />
-                    <Route path="/ops" element={<Ops />} />
+                    <Route path="/ops" element={<Navigate to="/" replace />} />
                     <Route path="/how-it-works" element={<HowItWorks />} />
                   </Routes>
                 </Suspense>
