@@ -8,11 +8,11 @@
 # What it does:
 #   1. System updates
 #   2. Installs Docker + Docker Compose plugin
-#   3. Installs Caddy (reverse proxy with auto-HTTPS)
-#   4. Configures UFW firewall (22, 80, 443 only)
-#   5. Clones the repo to /opt/knightmind
+#   3. Uses project-local Docker Caddy for public API ingress
+#   4. Leaves firewall/DNS changes to the operator unless explicitly enabled
+#   5. Uses the existing app/deploy SSOT at /home/lauureal/apps/knightmind
 #   6. Sets up backup cron
-#   7. Creates log directories
+#   7. Creates backup/log directories
 #
 # What it does NOT do:
 #   - Start the app (you need to create .env.docker and run docker compose)
@@ -65,35 +65,19 @@ fi
 # ============================================================================
 # 3. Caddy
 # ============================================================================
-if command -v caddy &> /dev/null; then
-    info "Caddy already installed: $(caddy version)"
-else
-    info "Installing Caddy..."
-    apt-get install -y -qq debian-keyring debian-archive-keyring apt-transport-https
-    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
-    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' > /etc/apt/sources.list.d/caddy-stable.list
-    apt-get update -qq
-    apt-get install -y -qq caddy
-    info "Caddy installed: $(caddy version)"
-fi
+warn "Current live ingress uses Docker Caddy at ${APP_DIR:-/home/lauureal/apps/knightmind}/deploy/public-caddy, not system Caddy."
+warn "Do not overwrite the live ingress without checking OPERATIONS.md."
 
 # ============================================================================
 # 4. Firewall (UFW)
 # ============================================================================
-info "Configuring firewall..."
-apt-get install -y -qq ufw
-ufw default deny incoming
-ufw default allow outgoing
-ufw allow 22/tcp   comment 'SSH'
-ufw allow 80/tcp   comment 'HTTP (Caddy redirect)'
-ufw allow 443/tcp  comment 'HTTPS (Caddy)'
-ufw --force enable
-info "Firewall configured: $(ufw status | head -1)"
+warn "Skipping UFW changes. Current claw-home UFW is inactive; Docker/Caddy ingress is documented in OPERATIONS.md."
+warn "If this is a fresh server, configure firewall manually after confirming the public ingress plan."
 
 # ============================================================================
 # 5. App directory
 # ============================================================================
-APP_DIR="/opt/knightmind"
+APP_DIR="/home/lauureal/apps/knightmind"
 if [ -d "${APP_DIR}/.git" ]; then
     info "Repo already cloned at ${APP_DIR}"
 else
@@ -108,12 +92,12 @@ fi
 # ============================================================================
 info "Creating directories..."
 mkdir -p /var/log/caddy
-mkdir -p /var/backups/knightmind
+mkdir -p /home/lauureal/backups/knightmind
 
 # ============================================================================
 # 7. Backup cron
 # ============================================================================
-CRON_LINE="0 3 * * * ${APP_DIR}/deploy/postgres-backup.sh >> /var/log/knightmind-backup.log 2>&1"
+CRON_LINE="0 3 * * * ${APP_DIR}/deploy/postgres-backup.sh >> /home/lauureal/backups/knightmind/knightmind-backup.log 2>&1"
 if crontab -l 2>/dev/null | grep -q "postgres-backup.sh"; then
     info "Backup cron already exists."
 else
@@ -135,10 +119,10 @@ info "Next steps:"
 info "  1. Clone the repo:          git clone <url> ${APP_DIR}"
 info "  2. Create env file:         cp ${APP_DIR}/.env.example ${APP_DIR}/.env.docker"
 info "  3. Edit secrets:            nano ${APP_DIR}/.env.docker"
-info "  4. Deploy Caddy config:     cp ${APP_DIR}/deploy/Caddyfile /etc/caddy/Caddyfile"
-info "  5. Install systemd service: cp ${APP_DIR}/deploy/knightmind-api.service /etc/systemd/system/"
-info "  6. Start the app:           systemctl enable --now knightmind-api"
+info "  4. Start API/db stack:       cd ${APP_DIR} && docker compose --env-file .env.docker up -d"
+info "  5. Start public Caddy:       cd ${APP_DIR}/deploy/public-caddy && docker compose up -d"
+info "  6. Verify API:               curl https://api.guessme.world/ops/ping"
 info "  7. Run migrations:          cd ${APP_DIR} && docker compose --env-file .env.docker exec api alembic -c services/api/alembic.ini upgrade head"
 info "     (always pass --env-file .env.docker: compose only auto-loads a file named .env)"
-info "  8. Reload Caddy:            systemctl reload caddy"
+info "  8. See ops doc:             ${APP_DIR}/OPERATIONS.md"
 echo ""

@@ -1,15 +1,19 @@
+---
+last_edited_at: 2026-07-10T13:35:08+02:00
+---
 # Discoverability Audit
 
 This document reviews KnightMind from the perspective of discoverability and first-time user comprehension.
 
 ## Assumptions
 
-- Canonical public web URL is `https://knightmind.dev`.
+- Canonical public web URL is `https://guessme.world`.
+- Canonical public API URL is `https://api.guessme.world`.
 - Main repo URL is `https://github.com/laulopezreal/KnightMind`.
 
-If your production URLs differ, update `apps/web/index.html`, `apps/web/public/sitemap.xml`, and this document.
+If production URLs differ, update `apps/web/index.html`, `apps/web/public/sitemap.xml`, `apps/web/public/robots.txt`, and this document.
 
-Canonical URL source: `.env.example` production domain guidance (`https://knightmind.dev`).
+Canonical URL source: live Cloudflare Pages deployment for `guessme.world` and claw-home Caddy ingress for `api.guessme.world`, verified on 2026-07-10.
 
 ## 1) README improvements
 

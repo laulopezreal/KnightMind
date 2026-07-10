@@ -1,5 +1,5 @@
 ---
-last_edited_at: 2026-07-10T13:32:32+02:00
+last_edited_at: 2026-07-10T13:35:08+02:00
 ---
 # KnightMind Operations
 
@@ -129,29 +129,34 @@ Internal container health currently passes:
 docker exec knightmind-api-1 curl -sS http://localhost:8000/ops/health
 ```
 
-Host-side access was broken during the 2026-07-10 investigation:
+Host-side and public API access are repaired as of 2026-07-10:
 
 ```bash
 curl --noproxy '*' http://127.0.0.1:8000/ops/health
 curl --noproxy '*' http://172.18.0.2:8000/ops/health
+curl --noproxy '*' http://api.guessme.world/ops/ping
+curl --noproxy '*' https://api.guessme.world/ops/ping
+curl --noproxy '*' https://api.guessme.world/ops/health
 ```
 
-Root-cause evidence gathered later the same session:
+Root-cause evidence gathered during the repair:
 
 - Inside the API container, all worked: `localhost:8000`, `127.0.0.1:8000`, and `172.18.0.2:8000` returned JSON.
 - From the DB container, `http://api:8000/ops/ping` and `http://172.18.0.2:8000/ops/ping` returned JSON.
-- From the host, `ip route get 172.18.0.2` selected `dev tailscale0 table 52`, not the Docker bridge.
+- From the host before repair, `ip route get 172.18.0.2` selected `dev tailscale0 table 52`, not the Docker bridge.
 - Tailscale table 52 had a broad default route via `tailscale0` and only a `throw 172.20.0.0/16` Docker/LAN exception. It did not exempt KnightMind's `172.18.0.0/16` Docker network.
+- Docker port publishing to `65.108.67.53:80/443` also timed out even though docker-proxy listeners and DNAT rules existed. Host-network Caddy with an explicit `bind 65.108.67.53` is the working public-ingress pattern.
 
-Current hypothesis: host-to-KnightMind-container access is broken because the Tailscale exit-node routing table hijacks `172.18.0.0/16`, so Docker's host-side proxy cannot reach the API container. Fix requires root-level routing/Tailscale/Docker network change, not application code.
-
-Approved repair path A, matching the working Open Wearables pattern, is to add `throw` exceptions in Tailscale table 52 for Docker bridge subnets so host traffic falls back to the Docker bridge routes:
+Root-level route repair keeps Docker bridge traffic out of the Tailscale exit-node catch-all:
 
 ```bash
 sudo ip route replace throw 172.17.0.0/16 table 52
 sudo ip route replace throw 172.18.0.0/16 table 52
 sudo ip route replace throw 172.19.0.0/16 table 52
 sudo ip route replace throw 172.20.0.0/16 table 52
+sudo ip route replace throw 172.21.0.0/16 table 52
+sudo ip rule add pref 91 iif br-46f5c9c9df08 lookup main
+sudo ip rule add pref 94 iif br-87d9ccbd3b58 lookup main
 sudo ip route flush cache
 ```
 
@@ -163,18 +168,24 @@ Running it without root fails with `RTNETLINK answers: Operation not permitted`;
 
 ```bash
 ip route get 172.18.0.2
+ip route get 1.1.1.1 from 172.21.0.2 iif br-87d9ccbd3b58
 curl --noproxy '*' http://127.0.0.1:8000/ops/ping
+curl --noproxy '*' https://api.guessme.world/ops/ping
 ```
 
-Expected route should mention `br-46f5c9c9df08`, not `tailscale0 table 52`, and curl should return `{"status":"pong"}`.
+Expected route for `172.18.0.2` should mention `br-46f5c9c9df08`, not `tailscale0 table 52`. Expected route from the Caddy bridge source should leave through `enp0s4` via `65.108.67.1`. Both curl checks should return `{"status":"pong"}`.
 
 Verification after Lau ran the root helper on 2026-07-10:
 
-- Tailscale table 52 now contains `throw` routes for `172.17.0.0/16`, `172.18.0.0/16`, `172.19.0.0/16`, and `172.20.0.0/16`.
+- Tailscale table 52 now contains `throw` routes for `172.17.0.0/16`, `172.18.0.0/16`, `172.19.0.0/16`, `172.20.0.0/16`, and the Caddy ingress subnet `172.21.0.0/16`.
+- `ip rule show` contains bridge-to-main-table rules for active Docker bridges, including `br-46f5c9c9df08` and `br-87d9ccbd3b58`.
 - `ip route get 172.18.0.2` now selects `dev br-46f5c9c9df08 src 172.18.0.1`, not `tailscale0`.
+- `ip route get 1.1.1.1 from 172.21.0.2 iif br-87d9ccbd3b58` selects `via 65.108.67.1 dev enp0s4`, not `tailscale0`.
 - `curl --noproxy '*' http://127.0.0.1:8000/ops/ping` returns `200 {"status":"pong"}`.
 - `curl --noproxy '*' http://127.0.0.1:8000/ops/health` returns `200` JSON with `db`, `worker`, and `stockfish` all `ok`.
 - `curl --noproxy '*' http://172.18.0.2:8000/ops/health` also returns `200` JSON.
+- Public `curl --noproxy '*' https://api.guessme.world/ops/ping` returns `200 {"status":"pong"}`.
+- Public `curl --noproxy '*' https://api.guessme.world/ops/health` returns `200` JSON with `db`, `worker`, and `stockfish` all `ok`.
 - Compose remains healthy: `knightmind-api-1 api running healthy`, `knightmind-db-1 db running healthy`.
 
 Host-local API is repaired. Public API ingress is repaired as of 2026-07-10: `https://api.guessme.world/ops/ping` returns JSON.
@@ -200,7 +211,7 @@ Notes:
 - Docker port publishing to `65.108.67.53:80/443` via docker-proxy timed out even though DNAT/listeners existed. Host-network Caddy with an explicit public-IP bind is the working pattern on this host.
 - The `*.guessme.world -> pixie.porkbun.com` wildcard remains in Cloudflare. It does not affect `api.guessme.world` because the explicit `api` record wins. Do not delete it until there is a separate wildcard cleanup decision.
 
-Do not call the public app fully healthy until browser API calls are verified against JSON endpoints.
+Public app health is considered restored when both frontend loading and API JSON checks pass. API JSON checks passed on 2026-07-10; browser-level frontend flow should still be checked separately after any frontend rebuild.
 
 ## Safe inspection commands
 
@@ -225,13 +236,11 @@ docker compose --env-file .env.docker exec api alembic -c services/api/alembic.i
 docker volume rm knightmind_pgdata
 ```
 
-## Repair notes
+## Current open follow-up
 
-The live containers were originally created from the now-restored path `/home/lauureal/apps/knightmind`, but before 2026-07-10 that path was missing. Recreating the checkout at the Docker label path is intended to reduce future deployment drift.
+No public API ingress repair remains after 2026-07-10. Useful follow-ups are operational hardening, not emergency repair:
 
-Next repair work should focus on:
-
-1. Root-level inspection of Docker bridge/firewall/NAT rules.
-2. Choosing canonical domains: `guessme.world` and `api.guessme.world` versus `knightmind.dev` and `api.knightmind.dev`.
-3. Wiring public API ingress only after host-side `127.0.0.1:8000/ops/health` works.
-4. Rebuilding the frontend with the chosen API base after API ingress is verified.
+1. Persist the Tailscale/Docker route helper as a systemd oneshot that runs after Docker and Tailscale.
+2. Decide separately whether to keep or remove the `*.guessme.world -> pixie.porkbun.com` wildcard fallback.
+3. Verify the browser frontend flow against `https://api.guessme.world` after any frontend rebuild or Cloudflare Pages deploy.
+4. If `knightmind.dev` becomes the canonical production domain later, update DNS, Caddy, SEO metadata, and this operations doc together.

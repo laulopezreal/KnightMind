@@ -1,16 +1,20 @@
 # ============================================================================
-# KnightMind – Caddy Reverse Proxy
+# KnightMind - Caddy Reverse Proxy (legacy system Caddy template)
 # ============================================================================
-# Caddy provides automatic HTTPS via Let's Encrypt.
-# Install:  apt install caddy
-# Deploy:   cp deploy/Caddyfile /etc/caddy/Caddyfile && systemctl reload caddy
+# Current claw-home live ingress does NOT use this file directly.
+# Live path: /home/lauureal/apps/knightmind/deploy/public-caddy/Caddyfile
+# Live container: knightmind-public-caddy
+# Live domain: api.guessme.world
 #
-# Replace api.knightmind.dev with your actual domain.
+# Use this template only if deliberately migrating back to a host/system Caddy.
+# Keep the same public API hostname unless Lau explicitly approves a domain move.
 # ============================================================================
 
-api.knightmind.dev {
-	# Reverse proxy to the API (Docker or bare uvicorn on port 8000)
-	reverse_proxy localhost:8000
+api.guessme.world {
+	bind 65.108.67.53
+
+	# Reverse proxy to the API published on the host by the KnightMind Compose stack.
+	reverse_proxy 127.0.0.1:8000
 
 	# Request logging
 	log {

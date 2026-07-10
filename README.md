@@ -1,3 +1,6 @@
+---
+last_edited_at: 2026-07-10T13:35:08+02:00
+---
 # KnightMind
 
 Personal Chess Intelligence Platform - Analyze your games, track progress, and gain insights.
@@ -39,7 +42,7 @@ This repository is intentionally optimized for searches like:
 - "fastapi react chess dashboard"
 - "stockfish puzzle generator"
 
-Confirmed canonical public web URL is `https://knightmind.dev` (from `.env.example` production guidance). If this changes, update `apps/web/index.html`, `apps/web/public/robots.txt`, and `apps/web/public/sitemap.xml`.
+Confirmed canonical public web URL is `https://guessme.world`. The public API URL is `https://api.guessme.world`, served by the claw-home Caddy ingress documented in `OPERATIONS.md`. If the public web URL changes, update `apps/web/index.html`, `apps/web/public/robots.txt`, `apps/web/public/sitemap.xml`, and `docs/discoverability-audit.md`.
 
 ## GitHub Discoverability
 
