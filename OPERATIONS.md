@@ -145,6 +145,29 @@ Root-cause evidence gathered later the same session:
 
 Current hypothesis: host-to-KnightMind-container access is broken because the Tailscale exit-node routing table hijacks `172.18.0.0/16`, so Docker's host-side proxy cannot reach the API container. Fix requires root-level routing/Tailscale/Docker network change, not application code.
 
+Approved repair path A, matching the working Open Wearables pattern, is to add `throw` exceptions in Tailscale table 52 for Docker bridge subnets so host traffic falls back to the Docker bridge routes:
+
+```bash
+sudo ip route replace throw 172.17.0.0/16 table 52
+sudo ip route replace throw 172.18.0.0/16 table 52
+sudo ip route replace throw 172.19.0.0/16 table 52
+sudo ip route replace throw 172.20.0.0/16 table 52
+sudo ip route flush cache
+```
+
+Helper script prepared at:
+
+`/home/lauureal/apps/knightmind/deploy/tailscale-docker-route-exceptions.sh`
+
+Running it without root fails with `RTNETLINK answers: Operation not permitted`; `sudo -n` also fails because this session does not have a sudo credential. After root applies it, verify:
+
+```bash
+ip route get 172.18.0.2
+curl --noproxy '*' http://127.0.0.1:8000/ops/ping
+```
+
+Expected route should mention `br-46f5c9c9df08`, not `tailscale0 table 52`, and curl should return `{"status":"pong"}`.
+
 ## Public surface status at restoration time
 
 Frontend:
