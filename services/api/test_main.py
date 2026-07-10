@@ -379,7 +379,9 @@ def test_get_player_profile_invalid_json_returns_network_error(monkeypatch):
         async def get(self, url):
             return FakeResponse()
 
-    monkeypatch.setattr("services.ingest.chesscom._chesscom_client", lambda timeout: FakeClient())
+    monkeypatch.setattr(
+        "services.ingest.chesscom._chesscom_client", lambda timeout: FakeClient()
+    )
 
     with pytest.raises(NetworkError, match="invalid profile response"):
         asyncio.run(get_player_profile("lauureal"))
