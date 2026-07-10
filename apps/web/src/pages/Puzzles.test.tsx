@@ -150,6 +150,48 @@ describe('Puzzles', () => {
     });
   });
 
+  // Regression test for issue #145: games imported + puzzles exist + generation unavailable
+  describe('Generate disabled state copy', () => {
+    it('shows context-aware copy and button label when games imported, puzzles exist, and no new games', async () => {
+      // Exact scenario from issue #145: 840 games, 60 puzzles, 4 due, no unprocessed games
+      mockGetUserStatus.mockResolvedValue({
+        games_count: 840,
+        puzzles_count: 60,
+        due_count: 4,
+        has_new_games: false,
+      });
+
+      render(<Puzzles />);
+
+      await waitFor(() => {
+        // Visible helper text should guide user to train due puzzles
+        expect(
+          screen.getByText(/All imported games are already processed\. Train your 4 due puzzles/i)
+        ).toBeInTheDocument();
+      });
+      // Button label should reflect state, not generic "Generate New"
+      expect(screen.getByRole('button', { name: /No new games to generate/i })).toBeInTheDocument();
+    });
+
+    it('sets button title to sync-only message when no due puzzles remain', async () => {
+      // When due_count=0, startSessionDisabledReason takes the <p> slot;
+      // verify the generate reason is still surfaced as the button tooltip
+      mockGetUserStatus.mockResolvedValue({
+        games_count: 840,
+        puzzles_count: 60,
+        due_count: 0,
+        has_new_games: false,
+      });
+
+      render(<Puzzles />);
+
+      await waitFor(() => {
+        const btn = screen.getByRole('button', { name: /No new games to generate/i });
+        expect(btn).toHaveAttribute('title', expect.stringContaining('Sync newer games from Chess.com to generate more puzzles'));
+      });
+    });
+  });
+
   describe('Session Resume', () => {
     const mockActiveSession = {
       session_id: 'test-session-123',
