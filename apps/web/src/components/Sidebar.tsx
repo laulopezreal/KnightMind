@@ -114,7 +114,6 @@ export default function Sidebar({ mobileOpen = false, onMobileClose }: SidebarPr
 
                     <div onClick={handleLinkClick}><NavItem to="/insights" label="Insights" isActive={location.pathname === '/insights'} /></div>
                     <div onClick={handleLinkClick}><NavItem to="/rating-insights" label="Ratings" isActive={location.pathname === '/rating-insights'} /></div>
-                    <div onClick={handleLinkClick}><NavItem to="/ops" label="Ops" isActive={location.pathname === '/ops'} /></div>
                 </nav>
             </div>
 

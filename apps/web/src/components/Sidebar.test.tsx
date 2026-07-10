@@ -32,7 +32,16 @@ describe('Sidebar', () => {
     expect(screen.getByText('Train')).toBeInTheDocument();
     expect(screen.getByText('Insights')).toBeInTheDocument();
     expect(screen.getByText('Ratings')).toBeInTheDocument();
-    expect(screen.getByText('Ops')).toBeInTheDocument();
+  });
+
+  it('should not render Ops link in desktop navigation', () => {
+    render(<Sidebar />);
+    expect(screen.queryByText('Ops')).not.toBeInTheDocument();
+  });
+
+  it('should not render Ops link in mobile navigation', () => {
+    render(<Sidebar mobileOpen={true} />);
+    expect(screen.queryByText('Ops')).not.toBeInTheDocument();
   });
 
   it('should mark active page with aria-current', () => {
