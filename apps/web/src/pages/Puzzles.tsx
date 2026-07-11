@@ -187,8 +187,19 @@ export default function Puzzles() {
             : !controlsEnabled || isLoading
                 ? 'Please finish the current flow before generating more puzzles.'
                 : !userStatus?.has_new_games
-                    ? 'No new games found. Import more games to generate fresh puzzles.'
+                    ? !userStatus
+                        ? 'Loading your training data...'
+                        : userStatus.games_count === 0
+                            ? 'No games imported yet. Sync games from Chess.com to get started.'
+                            : userStatus.due_count > 0
+                                ? `All imported games are already processed. Train your ${userStatus.due_count} due puzzle${userStatus.due_count === 1 ? '' : 's'}, or sync newer games from Chess.com.`
+                                : 'All imported games are already processed. Sync newer games from Chess.com to generate more puzzles.'
                     : null;
+    const generateButtonLabel = isGenerating
+        ? 'Generating...'
+        : userStatus && !userStatus.has_new_games && userStatus.games_count > 0
+            ? 'No new games to generate'
+            : 'Generate New';
     const sessionDetailsA11yCopy = getSessionDetailsA11yCopy(showSessionDetails, screenReaderModeLabel);
     const puzzleActionA11yCopy = getPuzzleActionA11yCopy(activeSessionId, hintsUsed);
 
@@ -421,7 +432,7 @@ export default function Puzzles() {
                             disabled={generateNewDisabled}
                             title={generateDisabledReason ?? 'Generate puzzles from new games'}
                             className={`px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-colors km-focus-visible ${generateNewDisabled ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'}`}>
-                            {isGenerating ? 'Generating...' : 'Generate New'}
+                            {generateButtonLabel}
                         </button>
                     </div>
                 </div>
