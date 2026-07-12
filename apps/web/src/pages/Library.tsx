@@ -253,6 +253,7 @@ export default function Library() {
                     <select
                         value={statusFilter}
                         onChange={(e) => setStatusFilter(e.target.value as PuzzleStatus | '')}
+                        aria-label="Filter by status"
                         className="bg-bg-primary border border-primary/20 rounded-sm px-3 py-1.5 text-primary focus:outline-none focus:border-primary/60"
                     >
                         {STATUS_OPTIONS.map(o => (
@@ -264,6 +265,7 @@ export default function Library() {
                     <select
                         value={difficultyFilter}
                         onChange={(e) => setDifficultyFilter(e.target.value as PuzzleDifficulty | '')}
+                        aria-label="Filter by difficulty"
                         className="bg-bg-primary border border-primary/20 rounded-sm px-3 py-1.5 text-primary focus:outline-none focus:border-primary/60"
                     >
                         {DIFFICULTY_OPTIONS.map(o => (
@@ -276,6 +278,7 @@ export default function Library() {
                         <select
                             value={motifFilter}
                             onChange={(e) => setMotifFilter(e.target.value)}
+                            aria-label="Filter by motif"
                             className="bg-bg-primary border border-primary/20 rounded-sm px-3 py-1.5 text-primary focus:outline-none focus:border-primary/60"
                         >
                             <option value="">All motifs</option>
@@ -289,6 +292,7 @@ export default function Library() {
                     <select
                         value={sort}
                         onChange={(e) => setSort(e.target.value as PuzzleSort)}
+                        aria-label="Sort puzzles"
                         className="bg-bg-primary border border-primary/20 rounded-sm px-3 py-1.5 text-primary focus:outline-none focus:border-primary/60 ml-auto"
                     >
                         {SORT_OPTIONS.map(o => (
@@ -297,13 +301,13 @@ export default function Library() {
                     </select>
                 </div>
 
-                {/* Result count */}
+                {/* Result count — hidden on error so it can't contradict the error box */}
                 <div className="text-xs font-sans text-primary/40">
-                    {isLoading ? (
+                    {!error && (isLoading ? (
                         <DataStateLoading label="Loading library puzzles..." compact />
                     ) : (
                         <span>{total} puzzle{total !== 1 ? 's' : ''}</span>
-                    )}
+                    ))}
                 </div>
             </section>
 
