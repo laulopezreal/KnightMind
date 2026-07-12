@@ -175,7 +175,7 @@ export default function Puzzles() {
         : controlsDisabled
             ? 'Please wait for the current loading or generation task to finish.'
             : !userStatus
-                ? 'Loading your training data...'
+                ? (insightsError ? "Couldn't load your training data." : 'Loading your training data...')
                 : userStatus.puzzles_count === 0
                     ? 'Generate puzzles first to unlock sessions.'
                     : userStatus.due_count === 0
@@ -191,7 +191,7 @@ export default function Puzzles() {
                 ? 'Please finish the current flow before generating more puzzles.'
                 : !userStatus?.has_new_games
                     ? !userStatus
-                        ? 'Loading your training data...'
+                        ? (insightsError ? "Couldn't load your training data." : 'Loading your training data...')
                         : userStatus.games_count === 0
                             ? 'No games imported yet. Sync games from Chess.com to get started.'
                             : userStatus.due_count > 0
@@ -284,6 +284,17 @@ export default function Puzzles() {
         userStatus.puzzles_count > 0 &&
         (!motifPerformance || !!insightsError);
     const canRetryLoad = !!username && !isGenerating && !isLoading;
+    // Status fetch failed (not merely still loading): userStatus is null, we're
+    // not loading, and an error was recorded. Surfaces an error card instead of
+    // the misleading "Ready to train" / "Loading your training data..." states.
+    const statusLoadFailed =
+        !!username &&
+        !isLoadingStatus &&
+        !userStatus &&
+        !!insightsError &&
+        !isGenerating &&
+        !shouldShowJobStatusCard &&
+        !shouldShowErrorCard;
 
     const handleCheckAnswer = () => {
         if (!currentPuzzle) return;
@@ -590,12 +601,28 @@ export default function Puzzles() {
                             <span className="animate-pulse">Loading training status...</span>
                         </div>
                     )}
-                    {shouldShowEmptyState && !userStatus && !isLoadingStatus && (
+                    {shouldShowEmptyState && !userStatus && !isLoadingStatus && !insightsError && (
                         <div className="bg-primary/5 border border-primary/10 rounded-sm p-6 backdrop-blur-sm text-center space-y-4">
                             <h3 className="font-serif text-xl text-primary">Ready to train</h3>
                             <p className="text-primary/60 font-sans">
                                 Click &quot;Start Session&quot; to begin training, or &quot;Generate New&quot; to create fresh puzzles from your games.
                             </p>
+                        </div>
+                    )}
+                    {statusLoadFailed && (
+                        <div className="bg-red-500/5 border border-red-500/20 rounded-sm p-6 text-center space-y-4" role="alert" aria-live="assertive">
+                            <h3 className="font-serif text-xl text-primary">Couldn&apos;t load your training data</h3>
+                            <p className="text-primary/60 font-sans">
+                                We couldn&apos;t load your puzzles right now. Please try again.
+                            </p>
+                            <button
+                                type="button"
+                                onClick={handleRefreshInsights}
+                                disabled={isRefreshingInsights}
+                                className={`px-6 py-2 border border-primary/20 text-primary rounded-sm font-serif transition-all km-focus-visible ${isRefreshingInsights ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'}`}
+                            >
+                                {isRefreshingInsights ? 'Retrying...' : 'Retry'}
+                            </button>
                         </div>
                     )}
                     {shouldShowErrorCard && (
