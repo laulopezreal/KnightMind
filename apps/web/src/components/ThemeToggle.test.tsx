@@ -18,17 +18,34 @@ describe('ThemeToggle', () => {
     mockTheme = 'night';
   });
 
-  it('should render a toggle button', () => {
+  it('should render a toggle switch', () => {
     render(<ThemeToggle />);
 
-    const toggle = screen.getByRole('button');
+    const toggle = screen.getByRole('switch');
     expect(toggle).toBeInTheDocument();
+  });
+
+  it('should expose an accessible name and checked state', () => {
+    render(<ThemeToggle />);
+
+    const toggle = screen.getByRole('switch');
+    expect(toggle).toHaveAttribute('aria-label', 'Night theme');
+    // night theme is active, so the switch reads as "on"
+    expect(toggle).toHaveAttribute('aria-checked', 'true');
+  });
+
+  it('should reflect day theme as unchecked', () => {
+    mockTheme = 'day';
+    render(<ThemeToggle />);
+
+    const toggle = screen.getByRole('switch');
+    expect(toggle).toHaveAttribute('aria-checked', 'false');
   });
 
   it('should call toggleTheme on click', async () => {
     render(<ThemeToggle />);
 
-    const toggle = screen.getByRole('button');
+    const toggle = screen.getByRole('switch');
     await user.click(toggle);
 
     expect(mockToggleTheme).toHaveBeenCalledTimes(1);
@@ -37,7 +54,7 @@ describe('ThemeToggle', () => {
   it('should be keyboard accessible with Enter key', async () => {
     render(<ThemeToggle />);
 
-    const toggle = screen.getByRole('button');
+    const toggle = screen.getByRole('switch');
     toggle.focus();
     await user.keyboard('{Enter}');
 
@@ -47,7 +64,7 @@ describe('ThemeToggle', () => {
   it('should be keyboard accessible with Space key', async () => {
     render(<ThemeToggle />);
 
-    const toggle = screen.getByRole('button');
+    const toggle = screen.getByRole('switch');
     toggle.focus();
     await user.keyboard(' ');
 
@@ -57,7 +74,7 @@ describe('ThemeToggle', () => {
   it('should have tabIndex 0 for keyboard focus', () => {
     render(<ThemeToggle />);
 
-    const toggle = screen.getByRole('button');
+    const toggle = screen.getByRole('switch');
     expect(toggle).toHaveAttribute('tabindex', '0');
   });
 
