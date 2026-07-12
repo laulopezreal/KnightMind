@@ -68,6 +68,7 @@ export default function Puzzles() {
     }
 
     const handleReviewPuzzleRef = useRef<((result: 'pass' | 'fail', timeMs?: number) => Promise<void>)>(async () => { });
+    const isAdvancingPuzzle = useRef(false);
 
     const timer = usePuzzleTimer({
         sessionType,
@@ -115,7 +116,9 @@ export default function Puzzles() {
     const clueReset = clue.reset;
     const puzzlesAvailable = puzzles.length > 0;
     const isFinalPuzzle = puzzlesAvailable && currentIndex >= puzzles.length - 1;
-    const finishButtonDisabled = isFinalPuzzle ? sessionState !== 'active' : false;
+    // Disable only while the completion API call is in-flight. Once completed,
+    // render a real post-session action instead of a dead final-puzzle CTA.
+    const finishButtonDisabled = sessionState === 'completing';
     const controlsEnabled = sessionState === 'idle' || sessionState === 'error';
 
     // Sync activeJobId when username changes (during render, not in effect)
@@ -355,15 +358,23 @@ export default function Puzzles() {
     };
 
     const handleAdvancePuzzle = async () => {
-        if (status === 'correct') {
-            await handleReviewPuzzle('pass');
-        } else if (status === 'revealed') {
-            // If solution was revealed, mark as fail before completing
-            await handleReviewPuzzle('fail');
-        }
+        if (sessionState === 'completing' || sessionState === 'completed') return;
+        if (isAdvancingPuzzle.current) return;
 
-        if (!isFinalPuzzle) {
-            handleNextPuzzle();
+        isAdvancingPuzzle.current = true;
+        try {
+            if (status === 'correct') {
+                await handleReviewPuzzle('pass');
+            } else if (status === 'revealed') {
+                // If solution was revealed, mark as fail before completing
+                await handleReviewPuzzle('fail');
+            }
+
+            if (!isFinalPuzzle) {
+                handleNextPuzzle();
+            }
+        } finally {
+            isAdvancingPuzzle.current = false;
         }
     };
 
@@ -966,18 +977,32 @@ export default function Puzzles() {
                                         </div>
                                     )}
 
-                                    <button
-                                        type="button"
-                                        onClick={handleAdvancePuzzle}
-                                        disabled={finishButtonDisabled || sessionState === 'completing'}
-                                        className={`w-full px-6 py-4 bg-green-600 text-white rounded-sm font-serif text-lg transition-all shadow-lg shadow-green-900/20 km-focus-visible ${finishButtonDisabled || sessionState === 'completing' ? 'km-interactive-disabled' : 'km-interactive'} flex items-center justify-center`}>
-                                        {sessionState === 'completing' ? (
-                                            <>
-                                                <span className="animate-spin h-5 w-5 border-2 border-white/20 border-t-white rounded-full mr-2"></span>
-                                                Recording Session...
-                                            </>
-                                        ) : isFinalPuzzle ? 'All Done' : 'Next Puzzle →'}
-                                    </button>
+                                    {isFinalPuzzle && sessionState === 'completed' ? (
+                                        sessionSummary ? (
+                                            <p className="text-center text-primary/60 font-sans text-sm py-4">
+                                                Session complete — see your summary below.
+                                            </p>
+                                        ) : (
+                                            <Link
+                                                to="/dashboard"
+                                                className="w-full block text-center px-6 py-4 bg-green-600 text-white rounded-sm font-serif text-lg transition-all km-interactive km-focus-visible shadow-lg shadow-green-900/20">
+                                                Back to Dashboard
+                                            </Link>
+                                        )
+                                    ) : (
+                                        <button
+                                            type="button"
+                                            onClick={handleAdvancePuzzle}
+                                            disabled={finishButtonDisabled}
+                                            className={`w-full px-6 py-4 bg-green-600 text-white rounded-sm font-serif text-lg transition-all shadow-lg shadow-green-900/20 km-focus-visible ${finishButtonDisabled ? 'km-interactive-disabled' : 'km-interactive'} flex items-center justify-center`}>
+                                            {sessionState === 'completing' ? (
+                                                <>
+                                                    <span className="animate-spin h-5 w-5 border-2 border-white/20 border-t-white rounded-full mr-2"></span>
+                                                    Recording Session...
+                                                </>
+                                            ) : isFinalPuzzle ? 'All Done' : 'Next Puzzle →'}
+                                        </button>
+                                    )}
                                 </div>
                             )}
                             {status === 'incorrect' && (

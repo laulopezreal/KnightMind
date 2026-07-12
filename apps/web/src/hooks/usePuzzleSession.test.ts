@@ -412,6 +412,42 @@ describe('usePuzzleSession', () => {
         expect(result.current.sessionState).toBe('active');
     });
 
+    // ── Issue #154: double-completion guard ──
+
+    it('should not call completeSession again when handleCompleteSession called with no activeSessionId', async () => {
+        const opts = makeOpts({ activeSessionId: null });
+        const { result } = renderHook(() => usePuzzleSession(opts));
+
+        await act(async () => {
+            await result.current.handleCompleteSession();
+        });
+
+        expect(mockedCompleteSession).not.toHaveBeenCalled();
+    });
+
+    it('sessionState is completed (not active) after final puzzle review — UI handles completed state separately', async () => {
+        mockedCompleteSession.mockResolvedValue(mockSessionSummary as never);
+
+        const opts = makeOpts({ activeSessionId: 's1' });
+        const { result } = renderHook(() => usePuzzleSession(opts));
+
+        act(() => {
+            result.current.setPuzzles([mockPuzzle]);
+        });
+
+        mockedReviewPuzzle.mockResolvedValue(makeReviewResponse());
+
+        await act(async () => {
+            await result.current.handleReviewPuzzle('pass');
+        });
+
+        // Session auto-completed; sessionState is now 'completed', not 'active'
+        // With the fix in Puzzles.tsx, completed final-puzzle state is rendered
+        // as a post-session action instead of a disabled or no-op All Done CTA.
+        expect(result.current.sessionState).toBe('completed');
+        expect(mockedCompleteSession).toHaveBeenCalledTimes(1);
+    });
+
     // ── Best streak localStorage ──
 
     it('should persist best streak to localStorage', async () => {
