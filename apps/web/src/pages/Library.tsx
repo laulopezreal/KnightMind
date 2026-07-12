@@ -242,6 +242,7 @@ export default function Library() {
                 <input
                     type="text"
                     placeholder="Search by title or ID..."
+                    aria-label="Search puzzles by title or ID"
                     value={search}
                     onChange={(e) => setSearch(e.target.value)}
                     className="w-full bg-transparent border-b border-primary/20 py-2 text-primary font-sans placeholder:text-primary/30 focus:outline-none focus:border-primary/60 transition-colors"
@@ -302,13 +303,15 @@ export default function Library() {
                 </div>
 
                 {/* Result count — hidden on error so it can't contradict the error box */}
-                <div className="text-xs font-sans text-primary/40">
-                    {!error && (isLoading ? (
-                        <DataStateLoading label="Loading library puzzles..." compact />
-                    ) : (
-                        <span>{total} puzzle{total !== 1 ? 's' : ''}</span>
-                    ))}
-                </div>
+                {!error && (
+                    <div className="text-xs font-sans text-primary/40">
+                        {isLoading ? (
+                            <DataStateLoading label="Loading library puzzles..." compact />
+                        ) : (
+                            <span>{total} puzzle{total !== 1 ? 's' : ''}</span>
+                        )}
+                    </div>
+                )}
             </section>
 
             {/* Error */}
