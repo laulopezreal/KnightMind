@@ -71,7 +71,9 @@ describe('request()', () => {
         const err = await request('/bad').catch((e: unknown) => e) as ApiError;
         expect(err).toBeInstanceOf(ApiError);
         expect(err.statusCode).toBe(502);
-        expect(err.message).toContain('non-JSON response');
+        // User-facing message stays friendly; technical cause lives in `detail`.
+        expect(err.message).not.toContain('/bad');
+        expect(err.detail).toContain('non-JSON response');
     });
 
     it('should flag 200 responses that are not JSON (SPA fallback)', async () => {
@@ -88,7 +90,8 @@ describe('request()', () => {
         const err = await request('/fallback').catch((e: unknown) => e) as ApiError;
         expect(err).toBeInstanceOf(ApiError);
         expect(err.statusCode).toBe(502);
-        expect(err.message).toContain('HTML instead of JSON');
+        expect(err.message).not.toContain('/fallback');
+        expect(err.detail).toContain('HTML instead of JSON');
     });
 
     it('should throw ApiError with status 408 on timeout', async () => {
@@ -127,7 +130,8 @@ describe('request()', () => {
         const err = await request('/down').catch((e: unknown) => e) as ApiError;
         expect(err).toBeInstanceOf(ApiError);
         expect(err.statusCode).toBe(0);
-        expect(err.message).toBe('/down network error');
+        expect(err.message).not.toContain('/down');
+        expect(err.message).toContain('Check your connection');
         expect(err.detail).toContain('Failed to fetch');
     });
 

@@ -93,10 +93,10 @@ export default function Home() {
 
       // Only show page error if both requests fail
       if (statusResult.status === 'rejected' && importResult.status === 'rejected') {
-        setPageError('Unable to load your data. Please check your connection.');
+        setPageError("We couldn't load your data right now. Please try again.");
       }
     } catch {
-      setPageError('Unable to load your data. Please check your connection.');
+      setPageError("We couldn't load your data right now. Please try again.");
     } finally {
       setPageLoading(false);
     }
@@ -134,7 +134,8 @@ export default function Home() {
       setShowConnect(false);
     } catch (err) {
       if (err instanceof ApiError) {
-        setConnectError(err.detail || 'Could not validate username');
+        if (err.detail) console.error('[connect]', err.detail);
+        setConnectError(err.message || 'Could not validate username');
       } else {
         setConnectError('Could not validate username');
       }
