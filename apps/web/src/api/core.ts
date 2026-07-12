@@ -55,10 +55,14 @@ export async function request<T>(endpoint: string, options: RequestOptions = {})
                 );
             }
             const errorData = await response.json().catch(() => ({}));
-            const detail = errorData.detail || response.statusText;
-            // The backend's own `detail` is meant for display — surface it as the
-            // message, but never leak the internal endpoint path to the user.
-            throw new ApiError(detail, response.status, detail);
+            // Only a string `detail` from the backend is safe to show as the
+            // user-facing message. Otherwise fall back to a friendly generic —
+            // never surface a raw statusText, an empty string, or a non-string
+            // detail (e.g. FastAPI 422 arrays) as the message.
+            const backendDetail = typeof errorData.detail === 'string' ? errorData.detail : undefined;
+            const message = backendDetail || 'Something went wrong. Please try again in a moment.';
+            const detail = backendDetail || response.statusText || `HTTP ${response.status}`;
+            throw new ApiError(message, response.status, detail);
         }
 
         // Guard against 200 responses that are actually HTML (e.g. SPA fallback

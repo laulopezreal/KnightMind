@@ -55,7 +55,8 @@ export default function Engine() {
     } catch (err) {
       if (!isMountedRef.current) return;
       if (err instanceof ApiError) {
-        setEvaluationError(err.detail || err.message);
+        if (err.detail) console.error('[engine]', err.detail);
+        setEvaluationError(err.message);
       } else {
         setEvaluationError(err instanceof Error ? err.message : 'Evaluation failed');
       }

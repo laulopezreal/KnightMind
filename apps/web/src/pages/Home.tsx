@@ -215,7 +215,8 @@ export default function Home() {
       }
     } catch (error) {
       if (error instanceof ApiError) {
-        setActionStatus(error.detail || error.message);
+        if (error.detail) console.error('[import]', error.detail);
+        setActionStatus(error.message);
       } else {
         setActionStatus(error instanceof Error ? error.message : 'Unknown error');
       }

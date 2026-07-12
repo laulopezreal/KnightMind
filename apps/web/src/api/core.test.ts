@@ -38,6 +38,20 @@ describe('request()', () => {
         expect(err).toBeInstanceOf(ApiError);
         expect(err.statusCode).toBe(404);
         expect(err.detail).toBe('Not found');
+        // A string backend detail is surfaced as the user-facing message.
+        expect(err.message).toBe('Not found');
+    });
+
+    it('should use a friendly message when a JSON error has no detail', async () => {
+        mockFetch.mockReturnValue(jsonResponse({}, 500));
+
+        const err = await request('/nodetail').catch((e: unknown) => e) as ApiError;
+        expect(err).toBeInstanceOf(ApiError);
+        expect(err.statusCode).toBe(500);
+        // Never blank, never the raw endpoint — a friendly generic instead.
+        expect(err.message).not.toBe('');
+        expect(err.message).toMatch(/try again/i);
+        expect(err.message).not.toContain('/nodetail');
     });
 
     it('should handle unparseable JSON error bodies gracefully', async () => {
@@ -73,6 +87,7 @@ describe('request()', () => {
         expect(err.statusCode).toBe(502);
         // User-facing message stays friendly; technical cause lives in `detail`.
         expect(err.message).not.toContain('/bad');
+        expect(err.message).toMatch(/try again/i);
         expect(err.detail).toContain('non-JSON response');
     });
 
@@ -91,6 +106,7 @@ describe('request()', () => {
         expect(err).toBeInstanceOf(ApiError);
         expect(err.statusCode).toBe(502);
         expect(err.message).not.toContain('/fallback');
+        expect(err.message).toMatch(/try again/i);
         expect(err.detail).toContain('HTML instead of JSON');
     });
 
