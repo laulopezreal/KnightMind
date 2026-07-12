@@ -269,7 +269,7 @@ export default function Puzzles() {
             (!puzzlesAvailable && (job.status === 'succeeded' || job.status === 'failed')));
     const shouldShowErrorCard = sessionState === 'error' && !!error;
     const shouldShowLoadingCard =
-        (isLoading || isLoadingStatus || isResumingSession || isRefreshingInsights) && !isGenerating && !shouldShowJobStatusCard;
+        (isLoading || isLoadingStatus || isResumingSession) && !isGenerating && !shouldShowJobStatusCard;
     const shouldShowEmptyState =
         !isLoading &&
         !isGenerating &&
@@ -292,12 +292,13 @@ export default function Puzzles() {
     const statusLoadFailed =
         !!username &&
         !isLoadingStatus &&
-        !isRefreshingInsights &&
         !isLoading &&
         !isResumingSession &&
         !userStatus &&
         !puzzlesAvailable &&
-        !!insightsError &&
+        // Stay true while a retry is in flight so the error card keeps its place
+        // and its "Retrying..." button state shows, rather than unmounting.
+        (!!insightsError || isRefreshingInsights) &&
         !isGenerating &&
         !shouldShowJobStatusCard &&
         !shouldShowErrorCard;
@@ -677,7 +678,7 @@ export default function Puzzles() {
                     {shouldShowLoadingCard && (
                         <JobStatusCard
                             status="running"
-                            message={isResumingSession ? 'Resuming your session...' : (isLoadingStatus || isRefreshingInsights) ? 'Loading training status...' : 'Loading puzzles...'}
+                            message={isResumingSession ? 'Resuming your session...' : isLoadingStatus ? 'Loading training status...' : 'Loading puzzles...'}
                         />
                     )}
                     {shouldShowPartialDataCard && (
