@@ -61,7 +61,8 @@ export default function UsernameDisplay() {
             setEditorOpen(false);
         } catch (err) {
             if (err instanceof ApiError) {
-                setError(err.detail || 'Could not validate username');
+                if (err.detail) console.error('[connect]', err.detail);
+                setError(err.message || 'Could not validate username');
             } else {
                 setError('Could not validate username');
             }

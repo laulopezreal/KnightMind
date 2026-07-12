@@ -45,27 +45,33 @@ export async function request<T>(endpoint: string, options: RequestOptions = {})
         const contentType = response.headers.get('content-type') ?? '';
 
         if (!response.ok) {
-            // If the response is not JSON (e.g. proxy returned an HTML error page),
-            // provide a clear message instead of a cryptic JSON parse error.
+            // `message` is user-facing and must stay friendly; the technical cause
+            // (endpoint, status, content-type) goes into `detail` for debugging.
             if (!contentType.includes('application/json')) {
                 throw new ApiError(
-                    `${endpoint} returned ${response.status} (non-JSON response — backend may be unreachable)`,
+                    'Something went wrong on our end. Please try again in a moment.',
                     response.status,
-                    `${endpoint} → HTTP ${response.status}. The server returned HTML instead of JSON, which usually means the API is down or the proxy is misconfigured.`,
+                    `${endpoint} returned ${response.status} (non-JSON response — backend may be unreachable).`,
                 );
             }
             const errorData = await response.json().catch(() => ({}));
-            const detail = errorData.detail || response.statusText;
-            throw new ApiError(`${endpoint} failed: ${detail}`, response.status, detail);
+            // Only a string `detail` from the backend is safe to show as the
+            // user-facing message. Otherwise fall back to a friendly generic —
+            // never surface a raw statusText, an empty string, or a non-string
+            // detail (e.g. FastAPI 422 arrays) as the message.
+            const backendDetail = typeof errorData.detail === 'string' ? errorData.detail : undefined;
+            const message = backendDetail || 'Something went wrong. Please try again in a moment.';
+            const detail = backendDetail || response.statusText || `HTTP ${response.status}`;
+            throw new ApiError(message, response.status, detail);
         }
 
         // Guard against 200 responses that are actually HTML (e.g. SPA fallback
         // served by the dev server when the proxy target is unreachable).
         if (!contentType.includes('application/json')) {
             throw new ApiError(
-                `${endpoint} returned HTML instead of JSON — is the API running?`,
+                "We couldn't reach the server. Please try again.",
                 502,
-                `${endpoint} → received Content-Type "${contentType}". This usually means the backend is down and the dev server returned its own HTML fallback.`,
+                `${endpoint} returned HTML instead of JSON (Content-Type "${contentType}") — the backend is likely down.`,
             );
         }
 
@@ -73,12 +79,12 @@ export async function request<T>(endpoint: string, options: RequestOptions = {})
     } catch (err) {
         if (err instanceof ApiError) throw err;
         if (err instanceof DOMException && err.name === 'AbortError') {
-            throw new ApiError(`${endpoint} timed out`, 408, `${endpoint} → request timed out after ${timeout}ms.`);
+            throw new ApiError('The request timed out. Please try again.', 408, `${endpoint} → request timed out after ${timeout}ms.`);
         }
         // Network errors (e.g. ERR_CONNECTION_REFUSED)
         if (err instanceof TypeError) {
             throw new ApiError(
-                `${endpoint} network error`,
+                "Can't reach the server. Check your connection and try again.",
                 0,
                 `${endpoint} → ${err.message}. Check that the API server is running.`,
             );

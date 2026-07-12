@@ -59,7 +59,9 @@ export default function Openings() {
       setTreeData(data);
     } catch (err) {
       if (err instanceof ApiError) {
-        setError(err.detail || err.message);
+        // `message` is the user-facing text; `detail` is technical and logged only.
+        if (err.detail) console.error('[openings]', err.detail);
+        setError(err.message);
       } else {
         setError(err instanceof Error ? err.message : 'Failed to load openings');
       }
