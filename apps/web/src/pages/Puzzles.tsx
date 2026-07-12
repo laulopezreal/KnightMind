@@ -175,7 +175,7 @@ export default function Puzzles() {
         : controlsDisabled
             ? 'Please wait for the current loading or generation task to finish.'
             : !userStatus
-                ? (insightsError ? "Couldn't load your training data." : 'Loading your training data...')
+                ? ((insightsError && !isLoadingStatus && !isRefreshingInsights) ? "Couldn't load your training data." : 'Loading your training data...')
                 : userStatus.puzzles_count === 0
                     ? 'Generate puzzles first to unlock sessions.'
                     : userStatus.due_count === 0
@@ -191,7 +191,7 @@ export default function Puzzles() {
                 ? 'Please finish the current flow before generating more puzzles.'
                 : !userStatus?.has_new_games
                     ? !userStatus
-                        ? (insightsError ? "Couldn't load your training data." : 'Loading your training data...')
+                        ? ((insightsError && !isLoadingStatus && !isRefreshingInsights) ? "Couldn't load your training data." : 'Loading your training data...')
                         : userStatus.games_count === 0
                             ? 'No games imported yet. Sync games from Chess.com to get started.'
                             : userStatus.due_count > 0
@@ -269,7 +269,7 @@ export default function Puzzles() {
             (!puzzlesAvailable && (job.status === 'succeeded' || job.status === 'failed')));
     const shouldShowErrorCard = sessionState === 'error' && !!error;
     const shouldShowLoadingCard =
-        (isLoading || isLoadingStatus || isResumingSession) && !isGenerating && !shouldShowJobStatusCard;
+        (isLoading || isLoadingStatus || isResumingSession || isRefreshingInsights) && !isGenerating && !shouldShowJobStatusCard;
     const shouldShowEmptyState =
         !isLoading &&
         !isGenerating &&
@@ -284,13 +284,19 @@ export default function Puzzles() {
         userStatus.puzzles_count > 0 &&
         (!motifPerformance || !!insightsError);
     const canRetryLoad = !!username && !isGenerating && !isLoading;
-    // Status fetch failed (not merely still loading): userStatus is null, we're
-    // not loading, and an error was recorded. Surfaces an error card instead of
-    // the misleading "Ready to train" / "Loading your training data..." states.
+    // Status fetch failed (not merely still loading): userStatus is null, nothing
+    // is loading/resuming/refreshing, no puzzles are already loaded, and an error
+    // was recorded. Surfaces an error card instead of the misleading "Ready to
+    // train" / "Loading your training data..." states — and never stacks on top
+    // of a loading card or a working board.
     const statusLoadFailed =
         !!username &&
         !isLoadingStatus &&
+        !isRefreshingInsights &&
+        !isLoading &&
+        !isResumingSession &&
         !userStatus &&
+        !puzzlesAvailable &&
         !!insightsError &&
         !isGenerating &&
         !shouldShowJobStatusCard &&
@@ -601,7 +607,7 @@ export default function Puzzles() {
                             <span className="animate-pulse">Loading training status...</span>
                         </div>
                     )}
-                    {shouldShowEmptyState && !userStatus && !isLoadingStatus && !insightsError && (
+                    {shouldShowEmptyState && !userStatus && !isLoadingStatus && !insightsError && !isRefreshingInsights && (
                         <div className="bg-primary/5 border border-primary/10 rounded-sm p-6 backdrop-blur-sm text-center space-y-4">
                             <h3 className="font-serif text-xl text-primary">Ready to train</h3>
                             <p className="text-primary/60 font-sans">
@@ -671,7 +677,7 @@ export default function Puzzles() {
                     {shouldShowLoadingCard && (
                         <JobStatusCard
                             status="running"
-                            message={isResumingSession ? 'Resuming your session...' : isLoadingStatus ? 'Loading training status...' : 'Loading puzzles...'}
+                            message={isResumingSession ? 'Resuming your session...' : (isLoadingStatus || isRefreshingInsights) ? 'Loading training status...' : 'Loading puzzles...'}
                         />
                     )}
                     {shouldShowPartialDataCard && (
