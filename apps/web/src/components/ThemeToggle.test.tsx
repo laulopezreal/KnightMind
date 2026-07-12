@@ -29,7 +29,7 @@ describe('ThemeToggle', () => {
     render(<ThemeToggle />);
 
     const toggle = screen.getByRole('switch');
-    expect(toggle).toHaveAttribute('aria-label');
+    expect(toggle).toHaveAttribute('aria-label', 'Night theme');
     // night theme is active, so the switch reads as "on"
     expect(toggle).toHaveAttribute('aria-checked', 'true');
   });
