@@ -16,9 +16,11 @@ export default function ThemeToggle() {
             className="w-[130px] h-[50px] flex justify-center items-center scale-85 origin-center select-none km-interactive km-focus-visible rounded-full"
         >
             <div className="relative h-10 w-28 rounded-full border-2 border-primary flex items-center overflow-hidden bg-toggle-bg transition-slow">
-                {/* Track icons signal this is a day/night theme switch */}
-                <span aria-hidden="true" className="absolute left-[9px] text-xs text-primary/50 select-none">☀</span>
-                <span aria-hidden="true" className="absolute right-[9px] text-xs text-primary/50 select-none">☾</span>
+                {/* Track icons signal this is a day/night theme switch. They inherit
+                    --text-primary (via text-primary), which always contrasts the page
+                    background in both themes; 70% keeps them legible but subordinate. */}
+                <span aria-hidden="true" className="absolute left-[9px] text-xs text-primary/70 select-none">☀</span>
+                <span aria-hidden="true" className="absolute right-[9px] text-xs text-primary/70 select-none">☾</span>
                 {/* The "Yoke" (Moving Circle) */}
                 <div
                     className={`
