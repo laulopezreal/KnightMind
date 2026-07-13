@@ -356,8 +356,9 @@ export default function Library() {
                 )}
             </section>
 
-            {/* Pagination */}
-            {totalPages > 1 && (
+            {/* Pagination — hidden on error so stale totals can't contradict the
+                error box (same guard as the result count above). */}
+            {!error && totalPages > 1 && (
                 <div className="flex justify-center items-center gap-4 font-sans text-sm">
                     <button
                         type="button"
