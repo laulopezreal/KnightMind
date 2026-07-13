@@ -97,68 +97,66 @@ export default function Insights() {
         navigate(`/puzzles?motif=${encodeURIComponent(motif)}`);
     };
 
-    if (loading) {
-        return <DataStateLoading label="Loading insights..." />;
-    }
-
-    if (error) {
-        return (
-            <DataStateError
-                message={error}
-                onRetry={loadInsightsData}
-                retryLabel="Retry"
-                ariaLabel="Retry loading insights"
-            />
-        );
-    }
-
     const hasMotifs = motifPerformance && motifPerformance.motifs.length > 0;
     const hasTrends = trends && trends.motif_trends.length > 0;
     const hasTrickyPuzzles = trickyPuzzles && trickyPuzzles.puzzles.length > 0;
 
     return (
-        <main className="container mx-auto p-6 max-w-7xl space-y-8">
+        <div className="container mx-auto p-6 max-w-7xl space-y-8">
             <PageHeader title="Insights" subtitle="Deep analysis of your puzzle performance" />
 
-            {/* Empty state — only when no data at all */}
-            {!hasMotifs && !hasTrends && (
-                <DataStateEmpty
-                    title="No puzzle data yet"
-                    description="Complete a few puzzle sessions to see your tactical patterns and trends."
-                    actionLabel="Start Puzzles"
-                    onAction={() => navigate('/puzzles')}
+            {loading ? (
+                <DataStateLoading label="Loading insights..." />
+            ) : error ? (
+                <DataStateError
+                    message={error}
+                    onRetry={loadInsightsData}
+                    retryLabel="Retry"
+                    ariaLabel="Retry loading insights"
                 />
-            )}
+            ) : (
+                <>
+                    {/* Empty state — only when no data at all */}
+                    {!hasMotifs && !hasTrends && (
+                        <DataStateEmpty
+                            title="No puzzle data yet"
+                            description="Complete a few puzzle sessions to see your tactical patterns and trends."
+                            actionLabel="Start Puzzles"
+                            onAction={() => navigate('/puzzles')}
+                        />
+                    )}
 
-            {/* Tier 1: Tactical Radar — full width, visually dominant */}
-            {hasMotifs && (
-                <TacticalRadar
-                    motifs={motifPerformance.motifs}
-                    onMotifClick={handleMotifClick}
-                />
-            )}
+                    {/* Tier 1: Tactical Radar — full width, visually dominant */}
+                    {hasMotifs && (
+                        <TacticalRadar
+                            motifs={motifPerformance.motifs}
+                            onMotifClick={handleMotifClick}
+                        />
+                    )}
 
-            {/* Tier 2: Supporting content — trends (2/3) + tricky puzzles (1/3) */}
-            {(hasTrends || hasTrickyPuzzles) && (
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                    {hasTrends && (
-                        <div className={hasTrickyPuzzles ? 'md:col-span-2' : 'md:col-span-3'}>
-                            <MotifTrends
-                                trends={trends.motif_trends}
-                                windowDays={trends.window_days}
-                            />
+                    {/* Tier 2: Supporting content — trends (2/3) + tricky puzzles (1/3) */}
+                    {(hasTrends || hasTrickyPuzzles) && (
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                            {hasTrends && (
+                                <div className={hasTrickyPuzzles ? 'md:col-span-2' : 'md:col-span-3'}>
+                                    <MotifTrends
+                                        trends={trends.motif_trends}
+                                        windowDays={trends.window_days}
+                                    />
+                                </div>
+                            )}
+                            {hasTrickyPuzzles && (
+                                <div className={hasTrends ? 'md:col-span-1' : 'md:col-span-3'}>
+                                    <RecentlyTrickyCard
+                                        puzzles={trickyPuzzles.puzzles}
+                                        totalCount={trickyPuzzles.total_count}
+                                    />
+                                </div>
+                            )}
                         </div>
                     )}
-                    {hasTrickyPuzzles && (
-                        <div className={hasTrends ? 'md:col-span-1' : 'md:col-span-3'}>
-                            <RecentlyTrickyCard
-                                puzzles={trickyPuzzles.puzzles}
-                                totalCount={trickyPuzzles.total_count}
-                            />
-                        </div>
-                    )}
-                </div>
+                </>
             )}
-        </main>
+        </div>
     );
 }

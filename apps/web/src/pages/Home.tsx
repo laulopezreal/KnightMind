@@ -9,6 +9,7 @@ import { useJobPolling } from '../hooks/useJobPolling';
 import { Modal } from '../components/Modal';
 import { JobStatusCard } from '../components/JobStatusCard';
 import { LoadingSpinner } from '../components/LoadingSpinner';
+import { DataStateError } from '../components/DataState';
 
 
 type ImportStatus = {
@@ -93,10 +94,10 @@ export default function Home() {
 
       // Only show page error if both requests fail
       if (statusResult.status === 'rejected' && importResult.status === 'rejected') {
-        setPageError('Unable to load your data. Please check your connection.');
+        setPageError("We couldn't load your data right now. Please try again.");
       }
     } catch {
-      setPageError('Unable to load your data. Please check your connection.');
+      setPageError("We couldn't load your data right now. Please try again.");
     } finally {
       setPageLoading(false);
     }
@@ -119,7 +120,10 @@ export default function Home() {
 
   const handleConnectSave = async () => {
     const trimmed = connectInput.trim();
-    if (!trimmed) return;
+    if (!trimmed) {
+      setConnectError('Enter your Chess.com username');
+      return;
+    }
 
     setConnectValidating(true);
     setConnectError(null);
@@ -134,7 +138,8 @@ export default function Home() {
       setShowConnect(false);
     } catch (err) {
       if (err instanceof ApiError) {
-        setConnectError(err.detail || 'Could not validate username');
+        if (err.detail) console.error('[connect]', err.detail);
+        setConnectError(err.message || 'Could not validate username');
       } else {
         setConnectError('Could not validate username');
       }
@@ -214,7 +219,8 @@ export default function Home() {
       }
     } catch (error) {
       if (error instanceof ApiError) {
-        setActionStatus(error.detail || error.message);
+        if (error.detail) console.error('[import]', error.detail);
+        setActionStatus(error.message);
       } else {
         setActionStatus(error instanceof Error ? error.message : 'Unknown error');
       }
@@ -259,23 +265,21 @@ export default function Home() {
             Your personal chess intelligence platform.
           </p>
         </section>
-        <section className="bg-red-500/5 border border-red-500/20 rounded-sm p-8 max-w-lg">
-          <h3 className="text-xl font-serif text-primary mb-3">Unable to Load</h3>
-          <p className="text-primary/60 font-sans mb-6">{pageError}</p>
-          <button
-            type="button"
-            onClick={loadPageData}
-            className="px-6 py-3 bg-primary text-bg-primary rounded-sm font-serif km-interactive km-focus-visible"
-          >
-            Retry
-          </button>
-        </section>
+        <div className="max-w-lg">
+          <DataStateError
+            message={pageError}
+            onRetry={loadPageData}
+            retryLabel="Retry"
+            ariaLabel="Retry loading your data"
+            compact
+          />
+        </div>
       </div>
     );
   }
 
   return (
-    <main className="space-y-16 animate-teedin">
+    <div className="space-y-16 animate-teedin">
       {/* ── Hero Section ── */}
       <section className="space-y-6">
         <h1 className="text-6xl md:text-8xl font-serif text-primary tracking-tight">
@@ -479,7 +483,10 @@ export default function Home() {
 
       {/* ── Action Cards (authenticated users) ── */}
       {!isNewUser && (
-        <section className="grid grid-cols-1 md:grid-cols-3 gap-6" aria-label="Navigation">
+        <section className="grid grid-cols-1 md:grid-cols-3 gap-6" aria-labelledby="explore-heading">
+          {/* Gives the card <h3>s a parent heading so levels don't jump h1→h3,
+              and names this landmark region via aria-labelledby. */}
+          <h2 id="explore-heading" className="sr-only">Explore KnightMind</h2>
           <Link
             to="/puzzles"
             className="group bg-primary/5 border border-primary/10 rounded-sm p-6 transition-all hover:border-primary/30 km-focus-visible block"
@@ -541,21 +548,21 @@ export default function Home() {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-8 text-center">
             <div>
               <p className="text-4xl mb-3" aria-hidden="true">&#9823;</p>
-              <h4 className="font-serif text-primary text-lg mb-1">Import Games</h4>
+              <h2 className="font-serif text-primary text-lg mb-1">Import Games</h2>
               <p className="text-sm font-sans text-primary/40">
                 Connect your Chess.com account to pull in your game history.
               </p>
             </div>
             <div>
               <p className="text-4xl mb-3" aria-hidden="true">&#9822;</p>
-              <h4 className="font-serif text-primary text-lg mb-1">Generate Puzzles</h4>
+              <h2 className="font-serif text-primary text-lg mb-1">Generate Puzzles</h2>
               <p className="text-sm font-sans text-primary/40">
                 Puzzles are created from your actual missed tactics.
               </p>
             </div>
             <div>
               <p className="text-4xl mb-3" aria-hidden="true">&#9818;</p>
-              <h4 className="font-serif text-primary text-lg mb-1">Master Patterns</h4>
+              <h2 className="font-serif text-primary text-lg mb-1">Master Patterns</h2>
               <p className="text-sm font-sans text-primary/40">
                 Spaced repetition ensures you remember what you learn.
               </p>
@@ -588,6 +595,6 @@ export default function Home() {
           </p>
         </div>
       </Modal>
-    </main>
+    </div>
   );
 }

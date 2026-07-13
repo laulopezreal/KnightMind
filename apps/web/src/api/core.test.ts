@@ -38,6 +38,54 @@ describe('request()', () => {
         expect(err).toBeInstanceOf(ApiError);
         expect(err.statusCode).toBe(404);
         expect(err.detail).toBe('Not found');
+        // A string backend detail is surfaced as the user-facing message.
+        expect(err.message).toBe('Not found');
+    });
+
+    it('should use a friendly message when a JSON error has no detail', async () => {
+        mockFetch.mockReturnValue(jsonResponse({}, 500));
+
+        const err = await request('/nodetail').catch((e: unknown) => e) as ApiError;
+        expect(err).toBeInstanceOf(ApiError);
+        expect(err.statusCode).toBe(500);
+        // Never blank, never the raw endpoint — a friendly generic instead.
+        expect(err.message).not.toBe('');
+        expect(err.message).toMatch(/try again/i);
+        expect(err.message).not.toContain('/nodetail');
+    });
+
+    it('should not surface a raw 5xx detail as the user-facing message', async () => {
+        mockFetch.mockReturnValue(jsonResponse({ detail: 'Internal Server Error' }, 500));
+
+        const err = await request('/boom').catch((e: unknown) => e) as ApiError;
+        expect(err.statusCode).toBe(500);
+        // Friendly generic to the user…
+        expect(err.message).not.toBe('Internal Server Error');
+        expect(err.message).toMatch(/try again/i);
+        // …but the raw cause is preserved for developer logging.
+        expect(err.detail).toBe('Internal Server Error');
+    });
+
+    it('should pass through a JSON 502 detail (only bare 500 is genericised)', async () => {
+        // Guards the `=== 500` boundary: a future change to `>= 500` would wrongly
+        // swallow this, so pin the passthrough behaviour for other 5xx.
+        mockFetch.mockReturnValue(jsonResponse({ detail: 'Could not find rating for rapid in Chess.com response' }, 502));
+
+        const err = await request('/ratings').catch((e: unknown) => e) as ApiError;
+        expect(err.statusCode).toBe(502);
+        expect(err.message).toBe('Could not find rating for rapid in Chess.com response');
+    });
+
+    it('should still surface a curated 503 detail (e.g. re-import guidance)', async () => {
+        mockFetch.mockReturnValue(jsonResponse(
+            { detail: 'Games found but PGN content is missing. Re-import games to populate PGN data.' },
+            503,
+        ));
+
+        const err = await request('/openings').catch((e: unknown) => e) as ApiError;
+        expect(err.statusCode).toBe(503);
+        // 503 is used deliberately for actionable guidance — do not genericise it.
+        expect(err.message).toMatch(/Re-import games/);
     });
 
     it('should handle unparseable JSON error bodies gracefully', async () => {
@@ -71,7 +119,10 @@ describe('request()', () => {
         const err = await request('/bad').catch((e: unknown) => e) as ApiError;
         expect(err).toBeInstanceOf(ApiError);
         expect(err.statusCode).toBe(502);
-        expect(err.message).toContain('non-JSON response');
+        // User-facing message stays friendly; technical cause lives in `detail`.
+        expect(err.message).not.toContain('/bad');
+        expect(err.message).toMatch(/try again/i);
+        expect(err.detail).toContain('non-JSON response');
     });
 
     it('should flag 200 responses that are not JSON (SPA fallback)', async () => {
@@ -88,7 +139,9 @@ describe('request()', () => {
         const err = await request('/fallback').catch((e: unknown) => e) as ApiError;
         expect(err).toBeInstanceOf(ApiError);
         expect(err.statusCode).toBe(502);
-        expect(err.message).toContain('HTML instead of JSON');
+        expect(err.message).not.toContain('/fallback');
+        expect(err.message).toMatch(/try again/i);
+        expect(err.detail).toContain('HTML instead of JSON');
     });
 
     it('should throw ApiError with status 408 on timeout', async () => {
@@ -127,7 +180,8 @@ describe('request()', () => {
         const err = await request('/down').catch((e: unknown) => e) as ApiError;
         expect(err).toBeInstanceOf(ApiError);
         expect(err.statusCode).toBe(0);
-        expect(err.message).toBe('/down network error');
+        expect(err.message).not.toContain('/down');
+        expect(err.message).toContain('Check your connection');
         expect(err.detail).toContain('Failed to fetch');
     });
 

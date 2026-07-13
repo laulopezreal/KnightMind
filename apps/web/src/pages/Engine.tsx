@@ -55,7 +55,8 @@ export default function Engine() {
     } catch (err) {
       if (!isMountedRef.current) return;
       if (err instanceof ApiError) {
-        setEvaluationError(err.detail || err.message);
+        if (err.detail) console.error('[engine]', err.detail);
+        setEvaluationError(err.message);
       } else {
         setEvaluationError(err instanceof Error ? err.message : 'Evaluation failed');
       }
@@ -169,7 +170,7 @@ export default function Engine() {
   };
 
   const getEvalColor = (v: number) => {
-    if (v >= 1) return 'text-green-600'; if (v <= -1) return 'text-red-500';
+    if (v >= 1) return 'text-positive'; if (v <= -1) return 'text-negative';
     return 'text-primary';
   };
 
@@ -185,8 +186,8 @@ export default function Engine() {
   return (
     <div className="space-y-12 animate-teedin">
       <section className="space-y-6">
-        <Link to="/" className="km-interactive km-focus-visible km-inline-link text-primary/40 inline-block font-sans text-sm tracking-widest uppercase transition-colors">
-          ← Return Home
+        <Link to="/dashboard" className="km-interactive km-focus-visible km-inline-link text-primary/40 inline-block font-sans text-sm tracking-widest uppercase transition-colors">
+          ← Back to Dashboard
         </Link>
         <div className="relative bg-primary/5 border border-primary/10 rounded-sm p-8 lg:p-10">
           <div className="absolute top-8 right-8 lg:top-10 lg:right-10 flex items-center gap-2 rounded-full border border-primary/10 bg-primary/5 px-3 py-1.5 text-[10px] font-sans font-medium text-primary/60 uppercase tracking-widest">
@@ -323,16 +324,16 @@ export default function Engine() {
 
           {/* FEN */}
           <div className="space-y-2">
-            <label className="block text-xs font-sans uppercase tracking-widest text-primary/40">Or paste FEN position</label>
+            <label htmlFor="fen-input" className="block text-xs font-sans uppercase tracking-widest text-primary/40">Or paste FEN position</label>
             <div className="flex gap-4 border-b border-primary/20 pb-2 focus-within:border-primary/60 transition-colors">
-              <input type="text" value={fenInput} onChange={(e) => setFenInput(e.target.value)}
+              <input id="fen-input" type="text" value={fenInput} onChange={(e) => setFenInput(e.target.value)}
                 className="flex-1 bg-transparent border-none outline-none text-primary font-mono text-sm placeholder-primary/30"
               />
               <button type="button" onClick={handleFenSubmit} className="km-interactive km-focus-visible text-xs font-sans uppercase tracking-widest text-primary transition-colors">
                 Load
               </button>
             </div>
-            {fenError && <p className="text-red-500 text-xs font-sans">{fenError}</p>}
+            {fenError && <p className="text-negative text-xs font-sans">{fenError}</p>}
           </div>
         </div>
       </section>

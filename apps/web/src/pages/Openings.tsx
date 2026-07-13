@@ -7,7 +7,7 @@ import { OpeningGraph, type OpeningGraphHandle } from '../components/OpeningGrap
 import { getWinRateColor } from '../utils/openings';
 import { useLocalStorage } from '../hooks/useLocalStorage';
 import { PageHeader } from '../components/PageHeader';
-import { DataStateEmpty, DataStateLoading } from '../components/DataState';
+import { DataStateEmpty, DataStateError, DataStateLoading } from '../components/DataState';
 
 function countAllNodes(node: OpeningNode): number {
   let count = 1;
@@ -59,7 +59,9 @@ export default function Openings() {
       setTreeData(data);
     } catch (err) {
       if (err instanceof ApiError) {
-        setError(err.detail || err.message);
+        // `message` is the user-facing text; `detail` is technical and logged only.
+        if (err.detail) console.error('[openings]', err.detail);
+        setError(err.message);
       } else {
         setError(err instanceof Error ? err.message : 'Failed to load openings');
       }
@@ -90,6 +92,7 @@ export default function Openings() {
           <select
             value={colorFilter}
             onChange={(e) => setColorFilter(e.target.value as ColorFilter)}
+            aria-label="Filter openings by color played"
             className="bg-transparent border-b border-primary/20 py-1 text-primary focus:outline-none focus:border-primary/60 transition-colors font-serif text-lg cursor-pointer"
           >
             <option value="both">All games</option>
@@ -118,16 +121,13 @@ export default function Openings() {
 
       {/* Error */}
       {error && (
-        <div className="flex items-center gap-4">
-          <p className="text-red-500/80 font-sans">{error}</p>
-          <button
-            type="button"
-            onClick={handleFetchClick}
-            className="px-4 py-1 border border-red-500/20 text-red-500/80 hover:bg-red-500/10 rounded-sm font-serif transition-colors km-interactive km-focus-visible text-sm"
-          >
-            Retry
-          </button>
-        </div>
+        <DataStateError
+          message={error}
+          onRetry={handleFetchClick}
+          retryLabel="Retry"
+          ariaLabel="Retry loading openings"
+          compact
+        />
       )}
 
       {/* Graph */}

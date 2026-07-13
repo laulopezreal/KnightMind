@@ -209,10 +209,10 @@ export default function RatingInsights() {
         : undefined;
 
     const confidenceBadge = confidence === 'low'
-        ? { label: 'Low confidence', color: 'bg-red-500/10 text-red-600' }
+        ? { label: 'Low confidence', color: 'bg-negative-soft text-negative' }
         : confidence === 'medium'
-        ? { label: 'Medium confidence', color: 'bg-amber-500/10 text-amber-600' }
-        : { label: 'High confidence', color: 'bg-emerald-500/10 text-emerald-600' };
+        ? { label: 'Medium confidence', color: 'bg-status-learning-soft text-status-learning' }
+        : { label: 'High confidence', color: 'bg-positive-soft text-positive' };
 
     return (
         <div className="space-y-12 animate-teedin pb-20">
@@ -243,16 +243,18 @@ export default function RatingInsights() {
                             </button>
                         </div>
                         {hasSessions === false && !sessionsLoading && (
-                            <p className="text-[10px] text-primary/40 font-sans ml-1">
-                                No sessions yet. Start a puzzle session to use session-based insights.{' '}
+                            <div className="flex flex-col items-start gap-1.5 ml-1">
+                                <p className="text-[10px] text-primary/40 font-sans">
+                                    No sessions yet. Start a puzzle session to use session-based insights.
+                                </p>
                                 <button
                                     type="button"
                                     onClick={() => navigate('/puzzles')}
-                                    className="km-interactive km-focus-visible km-inline-link text-primary text-[10px] font-medium"
+                                    className="km-interactive km-focus-visible km-inline-link text-primary text-xs font-medium underline decoration-primary/30 underline-offset-4 transition-colors"
                                 >
                                     Start a session
                                 </button>
-                            </p>
+                            </div>
                         )}
                         {sessionsLoading && (
                             <div className="ml-1">
@@ -297,7 +299,7 @@ export default function RatingInsights() {
                             {snapshotSuccess ? '✓ Snapshot recorded' : snapshotLoading ? 'Recording...' : 'Record Snapshot'}
                         </button>
                         {snapshotError && (
-                            <p className="text-xs text-red-500/80 font-sans">
+                            <p className="text-xs text-negative font-sans">
                                 Could not record snapshot. Try again.
                             </p>
                         )}
@@ -388,7 +390,7 @@ export default function RatingInsights() {
                                     </span>
                                 )}
                                 {data.stats.missing_opponent_rating_games > 0 && (
-                                    <span className="text-[10px] font-sans text-amber-600/80">
+                                    <span className="text-[10px] font-sans text-status-learning">
                                         {data.stats.missing_opponent_rating_games} game{data.stats.missing_opponent_rating_games > 1 ? 's' : ''} excluded (missing opponent rating)
                                     </span>
                                 )}
@@ -510,7 +512,7 @@ export default function RatingInsights() {
                                             <div>
                                                 <h3 className="text-xl font-serif text-primary mb-6 flex items-center gap-2">
                                                     <span>Most Costly Games</span>
-                                                    <span className="text-xs font-sans bg-red-500/10 text-red-600 px-2 py-1 rounded-full">Negative Surprise</span>
+                                                    <span className="text-xs font-sans bg-negative-soft text-negative px-2 py-1 rounded-full">Negative Surprise</span>
                                                 </h3>
                                                 <div className="space-y-2">
                                                     {data.highlights.worst_surprises.map(game => (
@@ -524,7 +526,7 @@ export default function RatingInsights() {
                                             <div>
                                                 <h3 className="text-xl font-serif text-primary mb-6 flex items-center gap-2">
                                                     <span>Most Helpful Games</span>
-                                                    <span className="text-xs font-sans bg-emerald-500/10 text-emerald-600 px-2 py-1 rounded-full">Positive Surprise</span>
+                                                    <span className="text-xs font-sans bg-positive-soft text-positive px-2 py-1 rounded-full">Positive Surprise</span>
                                                 </h3>
                                                 <div className="space-y-2">
                                                     {data.highlights.best_surprises.map(game => (
@@ -554,7 +556,7 @@ export default function RatingInsights() {
 const Card = ({ label, value, sub, helper, highlight, positive, extra }: { label: string, value: string, sub?: string, helper?: string, highlight?: boolean, positive?: boolean, extra?: string }) => (
     <div className="p-6 bg-primary/5 rounded-sm border border-primary/10">
         <div className="text-xs font-sans uppercase tracking-widest text-primary/40 mb-2">{label}</div>
-        <div className={`text-3xl font-serif mb-1 ${highlight ? (positive ? 'text-emerald-600' : 'text-red-500') : 'text-primary'}`}>
+        <div className={`text-3xl font-serif mb-1 ${highlight ? (positive ? 'text-positive' : 'text-negative') : 'text-primary'}`}>
             {value}
         </div>
         {sub && <div className="text-xs font-sans text-primary/50 mb-1">{sub}</div>}
@@ -574,7 +576,7 @@ const GameRow = ({ game, type }: { game: HighlightGame, type: 'good' | 'bad' }) 
                     vs {game.opponent_rating}
                     {playedDate && <span className="text-xs font-normal text-primary/40 ml-2">{playedDate}</span>}
                 </div>
-                <div className={`text-sm font-bold ${type === 'good' ? 'text-emerald-600' : 'text-red-500'}`}>
+                <div className={`text-sm font-bold ${type === 'good' ? 'text-positive' : 'text-negative'}`}>
                     {game.result}
                 </div>
             </div>

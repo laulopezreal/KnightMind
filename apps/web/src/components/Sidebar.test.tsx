@@ -18,6 +18,12 @@ vi.mock('../context/PuzzleModeContext', () => ({
   usePuzzleMode: () => ({ sessionType: mockSessionType, setSessionType: mockSetSessionType }),
 }));
 
+// Mock focus-trap-react to avoid focus-trap issues in jsdom (no layout, so
+// tabbable() sees no visible nodes). Matches Modal.test.tsx.
+vi.mock('focus-trap-react', () => ({
+  FocusTrap: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}));
+
 describe('Sidebar', () => {
   const user = userEvent.setup();
 
@@ -42,6 +48,36 @@ describe('Sidebar', () => {
   it('should not render Ops link in mobile navigation', () => {
     render(<Sidebar mobileOpen={true} />);
     expect(screen.queryByText('Ops')).not.toBeInTheDocument();
+  });
+
+  it('exposes a single accessible close control that calls onMobileClose', async () => {
+    const onClose = vi.fn();
+    render(<Sidebar mobileOpen={true} onMobileClose={onClose} />);
+
+    // getByRole (singular) throws on multiple matches, so this asserts there is
+    // exactly ONE accessible "Close navigation menu" control — the panel ✕ — and
+    // that the presentational scrim is not exposed as a duplicate button.
+    const closeBtn = screen.getByRole('button', { name: /close navigation menu/i });
+    expect(closeBtn).toHaveTextContent('✕');
+
+    await user.click(closeBtn);
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('closes the mobile drawer when Escape is pressed', async () => {
+    const onClose = vi.fn();
+    render(<Sidebar mobileOpen={true} onMobileClose={onClose} />);
+
+    await user.keyboard('{Escape}');
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not listen for Escape when the drawer is closed', async () => {
+    const onClose = vi.fn();
+    render(<Sidebar mobileOpen={false} onMobileClose={onClose} />);
+
+    await user.keyboard('{Escape}');
+    expect(onClose).not.toHaveBeenCalled();
   });
 
   it('should mark active page with aria-current', () => {
