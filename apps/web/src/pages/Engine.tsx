@@ -170,7 +170,7 @@ export default function Engine() {
   };
 
   const getEvalColor = (v: number) => {
-    if (v >= 1) return 'text-green-600'; if (v <= -1) return 'text-red-500';
+    if (v >= 1) return 'text-positive'; if (v <= -1) return 'text-negative';
     return 'text-primary';
   };
 
@@ -333,7 +333,7 @@ export default function Engine() {
                 Load
               </button>
             </div>
-            {fenError && <p className="text-red-500 text-xs font-sans">{fenError}</p>}
+            {fenError && <p className="text-negative text-xs font-sans">{fenError}</p>}
           </div>
         </div>
       </section>

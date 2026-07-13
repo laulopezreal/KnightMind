@@ -40,10 +40,10 @@ const SORT_OPTIONS: { value: PuzzleSort; label: string }[] = [
 
 function StatusBadge({ status }: { status: PuzzleStatus }) {
     const styles: Record<PuzzleStatus, string> = {
-        new: 'bg-blue-500/15 text-blue-600',
-        due: 'bg-orange-500/15 text-orange-600',
-        learning: 'bg-yellow-500/15 text-yellow-700',
-        mastered: 'bg-green-500/15 text-green-600',
+        new: 'bg-status-new-soft text-status-new',
+        due: 'bg-status-due-soft text-status-due',
+        learning: 'bg-status-learning-soft text-status-learning',
+        mastered: 'bg-status-mastered-soft text-status-mastered',
     };
     return (
         <span className={`text-xs font-sans px-2 py-0.5 rounded-sm uppercase tracking-wider ${styles[status]}`}>
@@ -54,9 +54,9 @@ function StatusBadge({ status }: { status: PuzzleStatus }) {
 
 function DifficultyBadge({ difficulty }: { difficulty: PuzzleDifficulty }) {
     const styles: Record<PuzzleDifficulty, string> = {
-        easy: 'text-green-600',
-        medium: 'text-yellow-600',
-        hard: 'text-red-500',
+        easy: 'text-status-mastered',
+        medium: 'text-status-learning',
+        hard: 'text-negative',
     };
     return (
         <span className={`text-xs font-mono uppercase ${styles[difficulty]}`}>
@@ -99,7 +99,7 @@ function PuzzleRow({ puzzle }: { puzzle: LibraryPuzzle }) {
                             </span>
                         )}
                         {puzzle.fail_count > 0 && (
-                            <span className="text-red-500/70">{puzzle.fail_count} failed</span>
+                            <span className="text-negative">{puzzle.fail_count} failed</span>
                         )}
                         {puzzle.last_reviewed_at && (
                             <span>
@@ -228,10 +228,10 @@ export default function Library() {
                         // backgrounds. The colour coding stays on the large value +
                         // the container tint, which do carry the category.
                         { label: 'Total', value: corpusStats.total, containerClasses: 'bg-primary/5 border-primary/10', valueClasses: 'text-primary', labelClasses: 'text-primary/60' },
-                        { label: 'Due', value: corpusStats.due, containerClasses: 'bg-orange-500/5 border-orange-500/15', valueClasses: 'text-orange-600', labelClasses: 'text-primary/60' },
-                        { label: 'New', value: corpusStats.new, containerClasses: 'bg-blue-500/5 border-blue-500/15', valueClasses: 'text-blue-600', labelClasses: 'text-primary/60' },
-                        { label: 'Learning', value: corpusStats.learning, containerClasses: 'bg-yellow-500/5 border-yellow-500/15', valueClasses: 'text-yellow-700', labelClasses: 'text-primary/60' },
-                        { label: 'Mastered', value: corpusStats.mastered, containerClasses: 'bg-green-500/5 border-green-500/15', valueClasses: 'text-green-600', labelClasses: 'text-primary/60' },
+                        { label: 'Due', value: corpusStats.due, containerClasses: 'bg-orange-500/5 border-orange-500/15', valueClasses: 'text-status-due', labelClasses: 'text-primary/60' },
+                        { label: 'New', value: corpusStats.new, containerClasses: 'bg-blue-500/5 border-blue-500/15', valueClasses: 'text-status-new', labelClasses: 'text-primary/60' },
+                        { label: 'Learning', value: corpusStats.learning, containerClasses: 'bg-yellow-500/5 border-yellow-500/15', valueClasses: 'text-status-learning', labelClasses: 'text-primary/60' },
+                        { label: 'Mastered', value: corpusStats.mastered, containerClasses: 'bg-green-500/5 border-green-500/15', valueClasses: 'text-status-mastered', labelClasses: 'text-primary/60' },
                     ].map(stat => (
                         <div key={stat.label} className={`${stat.containerClasses} border rounded-sm p-3 text-center`}>
                             <span className={`block text-2xl font-serif ${stat.valueClasses}`}>{stat.value}</span>

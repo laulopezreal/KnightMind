@@ -44,6 +44,25 @@
   color: var(--color-toggle-knob);
 }
 
+/* Themeable semantic status/trend colors. Same rationale as the toggle utilities:
+   plain --color-status-* vars live in :root / body.night so the night override
+   cascades, and are exposed via @utility. A single fixed Tailwind color (e.g.
+   text-orange-600) can't clear 4.5:1 on both the cream (day) and espresso (night)
+   backgrounds — day uses darker saturated shades, night uses lighter -400 shades. */
+@utility text-status-due { color: var(--color-status-due); }
+@utility text-status-new { color: var(--color-status-new); }
+@utility text-status-learning { color: var(--color-status-learning); }
+@utility text-status-mastered { color: var(--color-status-mastered); }
+@utility text-positive { color: var(--color-positive); }
+@utility text-negative { color: var(--color-negative); }
+
+@utility bg-status-due-soft { background-color: var(--color-status-due-bg); }
+@utility bg-status-new-soft { background-color: var(--color-status-new-bg); }
+@utility bg-status-learning-soft { background-color: var(--color-status-learning-bg); }
+@utility bg-status-mastered-soft { background-color: var(--color-status-mastered-bg); }
+@utility bg-positive-soft { background-color: var(--color-positive-bg); }
+@utility bg-negative-soft { background-color: var(--color-negative-bg); }
+
 :root {
   /* Day Mode (White Pieces) */
   --bg-primary: var(--color-chess-cream-100);
@@ -51,6 +70,22 @@
   --border-primary: var(--color-chess-brown-700);
   --color-toggle-bg: var(--color-chess-brown-700);
   --color-toggle-knob: var(--color-chess-cream-100);
+
+  /* Status/trend colors — dark saturated shades that clear AA on the cream bg.
+     due uses orange-800 (not -700): on its own low-alpha orange pill tint, -700
+     measured 3.86:1; -800 clears 4.5. */
+  --color-status-due: #9a3412;      /* orange-800 */
+  --color-status-new: #1d4ed8;      /* blue-700 */
+  --color-status-learning: #92400e; /* amber-800 */
+  --color-status-mastered: #166534; /* green-800 */
+  --color-positive: #065f46;        /* emerald-800 (emerald-700 measured 4.11 on its pill tint) */
+  --color-negative: #991b1b;        /* red-800 (margin over 4.5 on the red pill tint) */
+  --color-status-due-bg: color-mix(in srgb, var(--color-status-due) 12%, transparent);
+  --color-status-new-bg: color-mix(in srgb, var(--color-status-new) 12%, transparent);
+  --color-status-learning-bg: color-mix(in srgb, var(--color-status-learning) 12%, transparent);
+  --color-status-mastered-bg: color-mix(in srgb, var(--color-status-mastered) 12%, transparent);
+  --color-positive-bg: color-mix(in srgb, var(--color-positive) 12%, transparent);
+  --color-negative-bg: color-mix(in srgb, var(--color-negative) 12%, transparent);
 }
 
 body.night {
@@ -60,6 +95,21 @@ body.night {
   --border-primary: var(--color-chess-cream-300);
   --color-toggle-bg: var(--color-chess-cream-200);
   --color-toggle-knob: var(--color-chess-brown-900);
+
+  /* Lighter -400 shades that clear AA on the near-black bg; keep pill bg alpha
+     low so a light tint doesn't erode the light text's contrast. */
+  --color-status-due: #fb923c;      /* orange-400 */
+  --color-status-new: #60a5fa;      /* blue-400 */
+  --color-status-learning: #fbbf24; /* amber-400 */
+  --color-status-mastered: #34d399; /* emerald-400 */
+  --color-positive: #34d399;        /* emerald-400 */
+  --color-negative: #f87171;        /* red-400 */
+  --color-status-due-bg: color-mix(in srgb, var(--color-status-due) 8%, transparent);
+  --color-status-new-bg: color-mix(in srgb, var(--color-status-new) 8%, transparent);
+  --color-status-learning-bg: color-mix(in srgb, var(--color-status-learning) 8%, transparent);
+  --color-status-mastered-bg: color-mix(in srgb, var(--color-status-mastered) 8%, transparent);
+  --color-positive-bg: color-mix(in srgb, var(--color-positive) 8%, transparent);
+  --color-negative-bg: color-mix(in srgb, var(--color-negative) 8%, transparent);
 }
 
 body {
