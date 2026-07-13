@@ -7,7 +7,7 @@ import { OpeningGraph, type OpeningGraphHandle } from '../components/OpeningGrap
 import { getWinRateColor } from '../utils/openings';
 import { useLocalStorage } from '../hooks/useLocalStorage';
 import { PageHeader } from '../components/PageHeader';
-import { DataStateEmpty, DataStateLoading } from '../components/DataState';
+import { DataStateEmpty, DataStateError, DataStateLoading } from '../components/DataState';
 
 function countAllNodes(node: OpeningNode): number {
   let count = 1;
@@ -120,16 +120,13 @@ export default function Openings() {
 
       {/* Error */}
       {error && (
-        <div className="flex items-center gap-4">
-          <p className="text-red-500/80 font-sans">{error}</p>
-          <button
-            type="button"
-            onClick={handleFetchClick}
-            className="px-4 py-1 border border-red-500/20 text-red-500/80 hover:bg-red-500/10 rounded-sm font-serif transition-colors km-interactive km-focus-visible text-sm"
-          >
-            Retry
-          </button>
-        </div>
+        <DataStateError
+          message={error}
+          onRetry={handleFetchClick}
+          retryLabel="Retry"
+          ariaLabel="Retry loading openings"
+          compact
+        />
       )}
 
       {/* Graph */}
