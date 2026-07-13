@@ -29,6 +29,21 @@
   transition: background-color 250ms ease-out, color 250ms ease-out, border-color 250ms ease-out;
 }
 
+/* Theme-toggle track/knob colors. Defined as @utility (not @theme) so they read
+   the inheriting --color-toggle-* vars from :root / body.night and theme
+   correctly. As @theme tokens Tailwind registers them as non-inheriting
+   @property, so the body.night override would not cascade to the toggle and
+   the track/knob would render with a single (day) color in both themes. */
+@utility bg-toggle-bg {
+  background-color: var(--color-toggle-bg);
+}
+@utility bg-toggle-knob {
+  background-color: var(--color-toggle-knob);
+}
+@utility text-toggle-knob {
+  color: var(--color-toggle-knob);
+}
+
 :root {
   /* Day Mode (White Pieces) */
   --bg-primary: var(--color-chess-cream-100);
