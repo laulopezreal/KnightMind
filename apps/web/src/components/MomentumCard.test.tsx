@@ -55,4 +55,21 @@ describe('MomentumCard', () => {
     const section = screen.getByRole('region', { name: /momentum/i });
     expect(section).toBeInTheDocument();
   });
+
+  it('summarises the results row as a single labelled image', () => {
+    render(<MomentumCard recentForm={defaultForm} />);
+
+    // One img with an aggregate label, instead of 20 individually-labelled divs.
+    const summary = screen.getByRole('img', { name: /20 puzzles: 10 correct, 10 incorrect/i });
+    expect(summary).toBeInTheDocument();
+  });
+
+  it('handles empty recent results gracefully', () => {
+    render(<MomentumCard recentForm={{ ...defaultForm, last_20_results: [] }} />);
+
+    const summary = screen.getByRole('img', { name: /no recent attempts yet/i });
+    expect(summary).toBeInTheDocument();
+    // Heading avoids the awkward "Last 0 puzzles".
+    expect(screen.getByText('Recent puzzles')).toBeInTheDocument();
+  });
 });

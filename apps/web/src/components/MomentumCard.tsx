@@ -24,18 +24,30 @@ export function MomentumCard({ recentForm }: MomentumCardProps) {
       </h3>
 
       <div className="space-y-4">
-        {/* Visual bar of last 20 puzzles */}
+        {/* Visual bar of last 20 puzzles. The row is a single labelled image so
+            screen readers announce one summary instead of 20 separate squares
+            (aria-label on a role-less div is also invalid ARIA). */}
         <div>
-          <p className="text-xs text-primary/60 font-sans mb-2">Last 20 puzzles</p>
-          <div className="flex gap-1 flex-wrap">
+          <p className="text-xs text-primary/60 font-sans mb-2">
+            {last_20_results.length > 0 ? `Last ${last_20_results.length} puzzles` : 'Recent puzzles'}
+          </p>
+          <div
+            className="flex gap-1 flex-wrap"
+            role="img"
+            aria-label={
+              last_20_results.length === 0
+                ? 'No recent attempts yet'
+                : `Last ${last_20_results.length} puzzles: ${last_20_results.filter((r) => r === 'pass').length} correct, ${last_20_results.filter((r) => r === 'fail').length} incorrect`
+            }
+          >
             {last_20_results.map((result, i) => (
               <div
                 key={i}
+                aria-hidden="true"
                 className={`w-6 h-6 rounded-sm transition-colors ${
                   result === 'pass' ? 'bg-green-800/20' : 'bg-red-800/15'
                 }`}
                 title={result === 'pass' ? 'Correct' : 'Incorrect'}
-                aria-label={result === 'pass' ? 'Correct attempt' : 'Incorrect attempt'}
               />
             ))}
           </div>
