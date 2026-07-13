@@ -327,13 +327,15 @@ export default function Engine() {
             <label htmlFor="fen-input" className="block text-xs font-sans uppercase tracking-widest text-primary/40">Or paste FEN position</label>
             <div className="flex gap-4 border-b border-primary/20 pb-2 focus-within:border-primary/60 transition-colors">
               <input id="fen-input" type="text" value={fenInput} onChange={(e) => setFenInput(e.target.value)}
+                aria-invalid={fenError ? true : undefined}
+                aria-describedby={fenError ? 'fen-error' : undefined}
                 className="flex-1 bg-transparent border-none outline-none text-primary font-mono text-sm placeholder-primary/30"
               />
               <button type="button" onClick={handleFenSubmit} className="km-interactive km-focus-visible text-xs font-sans uppercase tracking-widest text-primary transition-colors">
                 Load
               </button>
             </div>
-            {fenError && <p className="text-negative text-xs font-sans">{fenError}</p>}
+            {fenError && <p id="fen-error" role="alert" className="text-negative text-xs font-sans">{fenError}</p>}
           </div>
         </div>
       </section>
