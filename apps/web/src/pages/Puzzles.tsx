@@ -172,9 +172,13 @@ export default function Puzzles() {
     const modeAvailabilityLabel = sessionType === 'standard' ? 'Active' : 'Beta';
     const startSessionDisabledReason = !username
         ? 'Set your username first to start training.'
-        : controlsDisabled
-            ? 'Please wait for the current loading or generation task to finish.'
-            : !userStatus
+        // A session is running (the Start button is hidden), so there is nothing
+        // "loading or generating" to wait on — don't show a start reason at all.
+        : activeSessionId
+            ? null
+            : controlsDisabled
+                ? 'Please wait for the current task to finish.'
+                : !userStatus
                 ? ((insightsError && !isLoadingStatus && !isRefreshingInsights) ? "Couldn't load your training data." : 'Loading your training data...')
                 : userStatus.puzzles_count === 0
                     ? 'Generate puzzles first to unlock sessions.'
@@ -187,8 +191,10 @@ export default function Puzzles() {
         ? 'Set your username first to generate puzzles.'
         : isGenerating
             ? 'Puzzle generation is already in progress.'
-            : !controlsEnabled || isLoading
-                ? 'Please finish the current flow before generating more puzzles.'
+            : activeSessionId
+                ? 'Finish your current session before generating new puzzles.'
+                : !controlsEnabled || isLoading
+                    ? 'Please finish the current flow before generating more puzzles.'
                 : !userStatus?.has_new_games
                     ? !userStatus
                         ? ((insightsError && !isLoadingStatus && !isRefreshingInsights) ? "Couldn't load your training data." : 'Loading your training data...')
@@ -421,6 +427,9 @@ export default function Puzzles() {
                     </div>
                 </div>
             </section>
+
+            {/* Parents the status/session <h3>s so heading levels don't jump h1→h3. */}
+            <h2 className="sr-only">Your training</h2>
 
             {/* Controls */}
             <section className="bg-primary/5 border border-primary/10 rounded-sm p-6 backdrop-blur-sm space-y-6">
