@@ -198,6 +198,31 @@ describe('Home', () => {
       expect(screen.getByRole('textbox', { name: /Chess\.com Username/i })).toBeInTheDocument();
     });
 
+    it('shows an inline error and does not submit when username is empty', async () => {
+      const api = await import('../api');
+      (api.validateChessComUser as ReturnType<typeof vi.fn>).mockResolvedValue({ valid: true, username: 'x' });
+
+      mockUsername = '';
+      render(<Home />);
+
+      const connectBtn = await screen.findByRole('button', { name: /Connect Chess\.com Account/i });
+      fireEvent.click(connectBtn);
+
+      // Save with an empty (whitespace-only) username
+      const input = screen.getByRole('textbox', { name: /Chess\.com Username/i });
+      fireEvent.change(input, { target: { value: '   ' } });
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+      });
+
+      await waitFor(() => {
+        expect(screen.getByRole('alert')).toHaveTextContent(/enter your chess\.com username/i);
+      });
+      // The guard must block the network call entirely.
+      expect(api.validateChessComUser).not.toHaveBeenCalled();
+    });
+
     it('Cancel button closes the inline editor', async () => {
       mockUsername = '';
       render(<Home />);

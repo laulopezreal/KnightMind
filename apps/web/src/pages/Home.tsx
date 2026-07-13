@@ -265,13 +265,15 @@ export default function Home() {
             Your personal chess intelligence platform.
           </p>
         </section>
-        <DataStateError
-          message={pageError}
-          onRetry={loadPageData}
-          retryLabel="Retry"
-          ariaLabel="Retry loading your data"
-          compact
-        />
+        <div className="max-w-lg">
+          <DataStateError
+            message={pageError}
+            onRetry={loadPageData}
+            retryLabel="Retry"
+            ariaLabel="Retry loading your data"
+            compact
+          />
+        </div>
       </div>
     );
   }
