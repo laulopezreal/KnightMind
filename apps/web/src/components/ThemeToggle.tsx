@@ -19,8 +19,8 @@ export default function ThemeToggle() {
                 {/* Track icons signal this is a day/night theme switch. They inherit
                     --text-primary (via text-primary), which always contrasts the page
                     background in both themes; 70% keeps them legible but subordinate. */}
-                <span aria-hidden="true" className="absolute left-[9px] text-xs text-primary/70 select-none">☀</span>
-                <span aria-hidden="true" className="absolute right-[9px] text-xs text-primary/70 select-none">☾</span>
+                <span aria-hidden="true" className="absolute left-[9px] text-xs text-toggle-knob select-none">☀</span>
+                <span aria-hidden="true" className="absolute right-[9px] text-xs text-toggle-knob select-none">☾</span>
                 {/* The "Yoke" (Moving Circle) */}
                 <div
                     className={`
