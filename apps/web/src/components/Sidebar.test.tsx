@@ -44,6 +44,20 @@ describe('Sidebar', () => {
     expect(screen.queryByText('Ops')).not.toBeInTheDocument();
   });
 
+  it('exposes a single accessible close control that calls onMobileClose', async () => {
+    const onClose = vi.fn();
+    render(<Sidebar mobileOpen={true} onMobileClose={onClose} />);
+
+    // getByRole (singular) throws on multiple matches, so this asserts there is
+    // exactly ONE accessible "Close navigation menu" control — the panel ✕ — and
+    // that the presentational scrim is not exposed as a duplicate button.
+    const closeBtn = screen.getByRole('button', { name: /close navigation menu/i });
+    expect(closeBtn).toHaveTextContent('✕');
+
+    await user.click(closeBtn);
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
   it('should mark active page with aria-current', () => {
     mockPathname = '/dashboard';
     render(<Sidebar />);

@@ -58,7 +58,11 @@ export default function Sidebar({ mobileOpen = false, onMobileClose }: SidebarPr
                 <button
                     type="button"
                     className="fixed inset-0 bg-black/40 backdrop-blur-sm z-40 md:hidden"
-                    aria-label="Close navigation menu"
+                    // Presentational scrim: the panel's ✕ button is the accessible
+                    // close control, so keep this out of the a11y tree / tab order
+                    // to avoid a duplicate "Close navigation menu" control.
+                    aria-hidden="true"
+                    tabIndex={-1}
                     onClick={onMobileClose}
                 />
             )}
