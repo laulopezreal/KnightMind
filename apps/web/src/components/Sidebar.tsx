@@ -57,8 +57,12 @@ export default function Sidebar({ mobileOpen = false, onMobileClose }: SidebarPr
             {mobileOpen && (
                 <button
                     type="button"
-                    className="fixed inset-0 bg-primary/30 backdrop-blur-sm z-40 md:hidden"
-                    aria-label="Close navigation menu"
+                    className="fixed inset-0 bg-black/40 backdrop-blur-sm z-40 md:hidden"
+                    // Presentational scrim: the panel's ✕ button is the accessible
+                    // close control, so keep this out of the a11y tree / tab order
+                    // to avoid a duplicate "Close navigation menu" control.
+                    aria-hidden="true"
+                    tabIndex={-1}
                     onClick={onMobileClose}
                 />
             )}
@@ -69,6 +73,15 @@ export default function Sidebar({ mobileOpen = false, onMobileClose }: SidebarPr
                 }`}
                 aria-label="Sidebar"
             >
+            <button
+                type="button"
+                onClick={onMobileClose}
+                aria-label="Close navigation menu"
+                className="absolute top-4 right-4 h-11 w-11 flex items-center justify-center rounded-sm border border-primary/20 km-interactive km-focus-visible md:hidden"
+            >
+                <span className="text-xl leading-none" aria-hidden="true">✕</span>
+            </button>
+
             <div>
                 {/* Logo / Brand */}
                 <Link to="/" onClick={handleLinkClick} className="block mb-12 md:mb-20 km-interactive km-focus-visible rounded-full w-8 h-8 inline-block" aria-label="KnightMind home">
