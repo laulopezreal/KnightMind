@@ -54,6 +54,40 @@ describe('request()', () => {
         expect(err.message).not.toContain('/nodetail');
     });
 
+    it('should not surface a raw 5xx detail as the user-facing message', async () => {
+        mockFetch.mockReturnValue(jsonResponse({ detail: 'Internal Server Error' }, 500));
+
+        const err = await request('/boom').catch((e: unknown) => e) as ApiError;
+        expect(err.statusCode).toBe(500);
+        // Friendly generic to the user…
+        expect(err.message).not.toBe('Internal Server Error');
+        expect(err.message).toMatch(/try again/i);
+        // …but the raw cause is preserved for developer logging.
+        expect(err.detail).toBe('Internal Server Error');
+    });
+
+    it('should pass through a JSON 502 detail (only bare 500 is genericised)', async () => {
+        // Guards the `=== 500` boundary: a future change to `>= 500` would wrongly
+        // swallow this, so pin the passthrough behaviour for other 5xx.
+        mockFetch.mockReturnValue(jsonResponse({ detail: 'Could not find rating for rapid in Chess.com response' }, 502));
+
+        const err = await request('/ratings').catch((e: unknown) => e) as ApiError;
+        expect(err.statusCode).toBe(502);
+        expect(err.message).toBe('Could not find rating for rapid in Chess.com response');
+    });
+
+    it('should still surface a curated 503 detail (e.g. re-import guidance)', async () => {
+        mockFetch.mockReturnValue(jsonResponse(
+            { detail: 'Games found but PGN content is missing. Re-import games to populate PGN data.' },
+            503,
+        ));
+
+        const err = await request('/openings').catch((e: unknown) => e) as ApiError;
+        expect(err.statusCode).toBe(503);
+        // 503 is used deliberately for actionable guidance — do not genericise it.
+        expect(err.message).toMatch(/Re-import games/);
+    });
+
     it('should handle unparseable JSON error bodies gracefully', async () => {
         mockFetch.mockReturnValue(
             Promise.resolve({
