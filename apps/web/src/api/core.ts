@@ -60,7 +60,27 @@ export async function request<T>(endpoint: string, options: RequestOptions = {})
             // never surface a raw statusText, an empty string, or a non-string
             // detail (e.g. FastAPI 422 arrays) as the message.
             const backendDetail = typeof errorData.detail === 'string' ? errorData.detail : undefined;
-            const message = backendDetail || 'Something went wrong. Please try again in a moment.';
+            // Most backend details are user-actionable and safe to display: 4xx
+            // ("No games found", "User not found") and some deliberate 5xx — e.g.
+            // /openings raises 503 "Re-import games to populate PGN data". The one
+            // detail we suppress here is a bare 500 (explicit HTTPException(500),
+            // whose detail is an opaque "Internal server error: ..." wrapper) —
+            // it blames nothing the user can act on. Show a friendly generic
+            // there, keeping the raw detail in `detail` for logging. Scoped to
+            // 500 (not >= 500) so curated 503s still reach the user.
+            // NOTE: some other 5xx still pass their detail through unchanged
+            // (e.g. /engine/eval 503 surfaces a Stockfish install hint) — those
+            // are pre-existing and out of scope here; friendlying them is a
+            // separate follow-up.
+            const isOpaqueServerError = response.status === 500;
+            const isServerError = response.status >= 500;
+            const message = (!isOpaqueServerError && backendDetail)
+                ? backendDetail
+                // "on our end" only blames the server for actual 5xx; a detail-less
+                // 4xx (e.g. a bare 400) is a client-side issue, so stay neutral.
+                : isServerError
+                    ? 'Something went wrong on our end. Please try again in a moment.'
+                    : 'Something went wrong. Please try again in a moment.';
             const detail = backendDetail || response.statusText || `HTTP ${response.status}`;
             throw new ApiError(message, response.status, detail);
         }
