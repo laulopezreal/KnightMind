@@ -243,16 +243,18 @@ export default function RatingInsights() {
                             </button>
                         </div>
                         {hasSessions === false && !sessionsLoading && (
-                            <p className="text-[10px] text-primary/40 font-sans ml-1">
-                                No sessions yet. Start a puzzle session to use session-based insights.{' '}
+                            <div className="flex flex-col items-start gap-1.5 ml-1">
+                                <p className="text-[10px] text-primary/40 font-sans">
+                                    No sessions yet. Start a puzzle session to use session-based insights.
+                                </p>
                                 <button
                                     type="button"
                                     onClick={() => navigate('/puzzles')}
-                                    className="km-interactive km-focus-visible km-inline-link text-primary text-[10px] font-medium"
+                                    className="km-interactive km-focus-visible km-inline-link text-primary text-xs font-medium underline decoration-primary/30 underline-offset-4 transition-colors"
                                 >
                                     Start a session
                                 </button>
-                            </p>
+                            </div>
                         )}
                         {sessionsLoading && (
                             <div className="ml-1">
