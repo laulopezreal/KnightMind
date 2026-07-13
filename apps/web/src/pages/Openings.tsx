@@ -92,6 +92,7 @@ export default function Openings() {
           <select
             value={colorFilter}
             onChange={(e) => setColorFilter(e.target.value as ColorFilter)}
+            aria-label="Filter openings by color played"
             className="bg-transparent border-b border-primary/20 py-1 text-primary focus:outline-none focus:border-primary/60 transition-colors font-serif text-lg cursor-pointer"
           >
             <option value="both">All games</option>
