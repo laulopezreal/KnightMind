@@ -222,11 +222,16 @@ export default function Library() {
             {corpusStats && corpusStats.total > 0 && (
                 <section className="grid grid-cols-2 md:grid-cols-5 gap-3">
                     {[
-                        { label: 'Total', value: corpusStats.total, containerClasses: 'bg-primary/5 border-primary/10', valueClasses: 'text-primary', labelClasses: 'text-primary/50' },
-                        { label: 'Due', value: corpusStats.due, containerClasses: 'bg-orange-500/5 border-orange-500/15', valueClasses: 'text-orange-600', labelClasses: 'text-orange-600/60' },
-                        { label: 'New', value: corpusStats.new, containerClasses: 'bg-blue-500/5 border-blue-500/15', valueClasses: 'text-blue-600', labelClasses: 'text-blue-600/60' },
-                        { label: 'Learning', value: corpusStats.learning, containerClasses: 'bg-yellow-500/5 border-yellow-500/15', valueClasses: 'text-yellow-700', labelClasses: 'text-yellow-700/60' },
-                        { label: 'Mastered', value: corpusStats.mastered, containerClasses: 'bg-green-500/5 border-green-500/15', valueClasses: 'text-green-600', labelClasses: 'text-green-600/60' },
+                        // Labels are neutral text-primary/60: a coloured /60 label
+                        // rendered ~2:1 (fails AA) in both themes, and a single
+                        // colour token can't pass on both the light and dark card
+                        // backgrounds. The colour coding stays on the large value +
+                        // the container tint, which do carry the category.
+                        { label: 'Total', value: corpusStats.total, containerClasses: 'bg-primary/5 border-primary/10', valueClasses: 'text-primary', labelClasses: 'text-primary/60' },
+                        { label: 'Due', value: corpusStats.due, containerClasses: 'bg-orange-500/5 border-orange-500/15', valueClasses: 'text-orange-600', labelClasses: 'text-primary/60' },
+                        { label: 'New', value: corpusStats.new, containerClasses: 'bg-blue-500/5 border-blue-500/15', valueClasses: 'text-blue-600', labelClasses: 'text-primary/60' },
+                        { label: 'Learning', value: corpusStats.learning, containerClasses: 'bg-yellow-500/5 border-yellow-500/15', valueClasses: 'text-yellow-700', labelClasses: 'text-primary/60' },
+                        { label: 'Mastered', value: corpusStats.mastered, containerClasses: 'bg-green-500/5 border-green-500/15', valueClasses: 'text-green-600', labelClasses: 'text-primary/60' },
                     ].map(stat => (
                         <div key={stat.label} className={`${stat.containerClasses} border rounded-sm p-3 text-center`}>
                             <span className={`block text-2xl font-serif ${stat.valueClasses}`}>{stat.value}</span>
@@ -338,7 +343,15 @@ export default function Library() {
 
                 {!isLoading && puzzles.length === 0 && !error && (
                     <div className="bg-primary/5 border border-primary/10 rounded-sm p-8 text-center">
-                        <p className="text-primary/60 font-sans">No puzzles match your filters.</p>
+                        <p className="text-primary/60 font-sans">
+                            {/* Key off the whole corpus, not individual filters:
+                                total > 0 means filters excluded everything; total 0
+                                means the library is genuinely empty (even mid-search).
+                                Robust to future filters too. */}
+                            {corpusStats && corpusStats.total > 0
+                                ? 'No puzzles match your filters.'
+                                : "You don't have any puzzles yet. Generate some from your games to start building your library."}
+                        </p>
                     </div>
                 )}
             </section>
