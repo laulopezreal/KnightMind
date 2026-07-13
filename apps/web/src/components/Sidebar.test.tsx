@@ -50,6 +50,20 @@ describe('Sidebar', () => {
     expect(screen.queryByText('Ops')).not.toBeInTheDocument();
   });
 
+  it('is a modal dialog when open on mobile, a complementary landmark otherwise', () => {
+    const { rerender } = render(<Sidebar mobileOpen={false} />);
+    // Closed / desktop: the persistent sidebar landmark, not a dialog.
+    const panelClosed = document.getElementById('primary-sidebar');
+    expect(panelClosed).toHaveAttribute('role', 'complementary');
+    expect(panelClosed).not.toHaveAttribute('aria-modal');
+
+    // Open drawer: exposes modal dialog semantics for assistive tech.
+    rerender(<Sidebar mobileOpen={true} />);
+    const panelOpen = document.getElementById('primary-sidebar');
+    expect(panelOpen).toHaveAttribute('role', 'dialog');
+    expect(panelOpen).toHaveAttribute('aria-modal', 'true');
+  });
+
   it('exposes a single accessible close control that calls onMobileClose', async () => {
     const onClose = vi.fn();
     render(<Sidebar mobileOpen={true} onMobileClose={onClose} />);

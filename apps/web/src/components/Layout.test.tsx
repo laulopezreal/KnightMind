@@ -112,4 +112,18 @@ describe('Layout', () => {
     expect(hamburger).toHaveClass('h-11');
     expect(hamburger).toHaveClass('w-11');
   });
+
+  it('exposes the hamburger as a collapsed disclosure for the sidebar', () => {
+    render(
+      <Layout>
+        <div>Content</div>
+      </Layout>
+    );
+
+    const hamburger = screen.getByRole('button', { name: /open navigation menu/i });
+    // Collapsed by default; aria-controls points at the drawer so AT users know
+    // what the button toggles.
+    expect(hamburger).toHaveAttribute('aria-expanded', 'false');
+    expect(hamburger).toHaveAttribute('aria-controls', 'primary-sidebar');
+  });
 });
