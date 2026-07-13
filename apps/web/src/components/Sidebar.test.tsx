@@ -18,6 +18,12 @@ vi.mock('../context/PuzzleModeContext', () => ({
   usePuzzleMode: () => ({ sessionType: mockSessionType, setSessionType: mockSetSessionType }),
 }));
 
+// Mock focus-trap-react to avoid focus-trap issues in jsdom (no layout, so
+// tabbable() sees no visible nodes). Matches Modal.test.tsx.
+vi.mock('focus-trap-react', () => ({
+  FocusTrap: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}));
+
 describe('Sidebar', () => {
   const user = userEvent.setup();
 
@@ -56,6 +62,22 @@ describe('Sidebar', () => {
 
     await user.click(closeBtn);
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('closes the mobile drawer when Escape is pressed', async () => {
+    const onClose = vi.fn();
+    render(<Sidebar mobileOpen={true} onMobileClose={onClose} />);
+
+    await user.keyboard('{Escape}');
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not listen for Escape when the drawer is closed', async () => {
+    const onClose = vi.fn();
+    render(<Sidebar mobileOpen={false} onMobileClose={onClose} />);
+
+    await user.keyboard('{Escape}');
+    expect(onClose).not.toHaveBeenCalled();
   });
 
   it('should mark active page with aria-current', () => {
