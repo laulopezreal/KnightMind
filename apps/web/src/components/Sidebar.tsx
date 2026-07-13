@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { FocusTrap } from 'focus-trap-react';
 import { usePuzzleMode } from '../context/PuzzleModeContext';
@@ -57,6 +57,31 @@ export default function Sidebar({ mobileOpen = false, onMobileClose }: SidebarPr
     const { sessionType, setSessionType } = usePuzzleMode();
     const isPuzzlesRoute = location.pathname.startsWith('/puzzles');
     const closeButtonRef = useRef<HTMLButtonElement>(null);
+
+    // Track the mobile (drawer) breakpoint so we can mark the always-mounted aside
+    // `inert` while it's the *closed* off-screen drawer — otherwise its nav links
+    // stay in the tab order behind the page (phantom tab stops). On desktop the
+    // aside is the real sidebar and must stay interactive.
+    const [isMobileViewport, setIsMobileViewport] = useState(
+        () => typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+            ? window.matchMedia('(max-width: 767px)').matches
+            : false,
+    );
+    useEffect(() => {
+        if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
+        const mq = window.matchMedia('(max-width: 767px)');
+        const onChange = (e: MediaQueryListEvent) => setIsMobileViewport(e.matches);
+        mq.addEventListener('change', onChange);
+        return () => mq.removeEventListener('change', onChange);
+    }, []);
+
+    // Lock body scroll while the mobile drawer is open so the page behind the
+    // scrim doesn't scroll (matches Modal's behaviour).
+    useEffect(() => {
+        if (!mobileOpen) return;
+        document.body.classList.add('overflow-hidden');
+        return () => document.body.classList.remove('overflow-hidden');
+    }, [mobileOpen]);
 
     // The aside is always mounted and only becomes the desktop sidebar via CSS
     // (`md:` = >=768px). If the drawer is open when the viewport grows to desktop
@@ -117,6 +142,9 @@ export default function Sidebar({ mobileOpen = false, onMobileClose }: SidebarPr
                 }}
             >
             <aside
+                // Only the *closed* mobile drawer is inert: on desktop the aside is
+                // the visible sidebar and must stay interactive.
+                inert={!mobileOpen && isMobileViewport}
                 className={`fixed left-0 top-0 h-full w-72 md:w-64 flex flex-col justify-between p-6 md:p-12 z-50 bg-primary border-r border-primary/10 transition-transform duration-300 md:translate-x-0 ${
                     mobileOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'
                 }`}
