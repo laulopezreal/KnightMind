@@ -110,7 +110,7 @@ export default function Dashboard() {
     }
 
     return (
-        <main className="container mx-auto p-6 max-w-7xl space-y-8">
+        <div className="container mx-auto p-6 max-w-7xl space-y-8">
             <PageHeader title="Dashboard" subtitle="Your chess training overview" />
 
             {/* SECTION 1: Hero Train Card */}
@@ -149,6 +149,6 @@ export default function Dashboard() {
                     defaultExpanded={false}
                 />
             )}
-        </main>
+        </div>
     );
 }

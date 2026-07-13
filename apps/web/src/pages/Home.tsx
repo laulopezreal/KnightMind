@@ -279,7 +279,7 @@ export default function Home() {
   }
 
   return (
-    <main className="space-y-16 animate-teedin">
+    <div className="space-y-16 animate-teedin">
       {/* ── Hero Section ── */}
       <section className="space-y-6">
         <h1 className="text-6xl md:text-8xl font-serif text-primary tracking-tight">
@@ -483,7 +483,10 @@ export default function Home() {
 
       {/* ── Action Cards (authenticated users) ── */}
       {!isNewUser && (
-        <section className="grid grid-cols-1 md:grid-cols-3 gap-6" aria-label="Navigation">
+        <section className="grid grid-cols-1 md:grid-cols-3 gap-6" aria-labelledby="explore-heading">
+          {/* Gives the card <h3>s a parent heading so levels don't jump h1→h3,
+              and names this landmark region via aria-labelledby. */}
+          <h2 id="explore-heading" className="sr-only">Explore KnightMind</h2>
           <Link
             to="/puzzles"
             className="group bg-primary/5 border border-primary/10 rounded-sm p-6 transition-all hover:border-primary/30 km-focus-visible block"
@@ -545,21 +548,21 @@ export default function Home() {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-8 text-center">
             <div>
               <p className="text-4xl mb-3" aria-hidden="true">&#9823;</p>
-              <h4 className="font-serif text-primary text-lg mb-1">Import Games</h4>
+              <h2 className="font-serif text-primary text-lg mb-1">Import Games</h2>
               <p className="text-sm font-sans text-primary/40">
                 Connect your Chess.com account to pull in your game history.
               </p>
             </div>
             <div>
               <p className="text-4xl mb-3" aria-hidden="true">&#9822;</p>
-              <h4 className="font-serif text-primary text-lg mb-1">Generate Puzzles</h4>
+              <h2 className="font-serif text-primary text-lg mb-1">Generate Puzzles</h2>
               <p className="text-sm font-sans text-primary/40">
                 Puzzles are created from your actual missed tactics.
               </p>
             </div>
             <div>
               <p className="text-4xl mb-3" aria-hidden="true">&#9818;</p>
-              <h4 className="font-serif text-primary text-lg mb-1">Master Patterns</h4>
+              <h2 className="font-serif text-primary text-lg mb-1">Master Patterns</h2>
               <p className="text-sm font-sans text-primary/40">
                 Spaced repetition ensures you remember what you learn.
               </p>
@@ -592,6 +595,6 @@ export default function Home() {
           </p>
         </div>
       </Modal>
-    </main>
+    </div>
   );
 }

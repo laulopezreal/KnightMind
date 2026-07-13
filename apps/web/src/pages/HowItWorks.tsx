@@ -2,7 +2,7 @@ import { Link } from 'react-router-dom';
 
 export default function HowItWorks() {
   return (
-    <main className="space-y-12 animate-teedin">
+    <div className="space-y-12 animate-teedin">
       <section className="space-y-5 max-w-3xl">
         <h1 className="text-5xl md:text-7xl font-serif text-primary tracking-tight">How KnightMind Works</h1>
         <p className="text-lg md:text-xl font-light text-primary/60 leading-relaxed">
@@ -57,6 +57,6 @@ export default function HowItWorks() {
           </Link>
         </div>
       </section>
-    </main>
+    </div>
   );
 }
