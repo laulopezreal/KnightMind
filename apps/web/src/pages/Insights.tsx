@@ -102,7 +102,7 @@ export default function Insights() {
     const hasTrickyPuzzles = trickyPuzzles && trickyPuzzles.puzzles.length > 0;
 
     return (
-        <main className="container mx-auto p-6 max-w-7xl space-y-8">
+        <div className="container mx-auto p-6 max-w-7xl space-y-8">
             <PageHeader title="Insights" subtitle="Deep analysis of your puzzle performance" />
 
             {loading ? (
@@ -157,6 +157,6 @@ export default function Insights() {
                     )}
                 </>
             )}
-        </main>
+        </div>
     );
 }
