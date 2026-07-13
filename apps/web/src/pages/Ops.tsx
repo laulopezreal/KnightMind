@@ -369,7 +369,9 @@ export default function Ops() {
                 </aside>
 
                 {/* Activity Feed / Table - Improved to match mockup */}
-                <main className="xl:col-span-3">
+                {/* div, not <main>: Layout already provides the page's single main
+                    landmark; a nested one here would duplicate it. */}
+                <div className="xl:col-span-3">
                     <div className="border border-primary/10 rounded-sm">
                         <div className="px-6 py-4 border-b border-primary/10 bg-primary/[0.02] flex justify-between items-center">
                             <h3 className="font-serif text-lg opacity-80">Execution History</h3>
@@ -436,7 +438,7 @@ export default function Ops() {
                             </table>
                         </div>
                     </div>
-                </main>
+                </div>
             </div>
         </div>
     );
