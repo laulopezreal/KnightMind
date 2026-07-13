@@ -223,12 +223,27 @@ describe('Library', () => {
 
     // --- Empty state ---
 
-    it('should show empty message when no puzzles match', async () => {
+    it('should show an empty-corpus message when there are no puzzles and no filters', async () => {
         mockGetLibraryPuzzles.mockResolvedValue(EMPTY_RESPONSE);
+        render(<Library />);
+        await waitFor(() => {
+            expect(screen.getByText(/don't have any puzzles yet/i)).toBeInTheDocument();
+        });
+        // The filter-specific copy must NOT show when no filters are active.
+        expect(screen.queryByText(/No puzzles match your filters/i)).not.toBeInTheDocument();
+    });
+
+    it('should show the filter-empty message when the corpus is non-empty but nothing matches', async () => {
+        // Corpus has puzzles (stats.total > 0) but the current query returned none.
+        mockGetLibraryPuzzles.mockResolvedValue({
+            ...EMPTY_RESPONSE,
+            stats: { ...EMPTY_RESPONSE.stats, total: 12 },
+        });
         render(<Library />);
         await waitFor(() => {
             expect(screen.getByText(/No puzzles match your filters/i)).toBeInTheDocument();
         });
+        expect(screen.queryByText(/don't have any puzzles yet/i)).not.toBeInTheDocument();
     });
 
     // --- Error state ---
