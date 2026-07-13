@@ -235,7 +235,10 @@ export default function Puzzles() {
                         setError('No new games available. All current games have been used for puzzles. Import more games to generate new puzzles.');
                     }
                 } else {
-                    setError(err.detail || err.message);
+                    // Show the friendly message; keep the raw cause (endpoints,
+                    // timeouts, "backend is down") in the console for devs only.
+                    if (err.detail) console.error('[puzzles:generate]', err.detail);
+                    setError(err.message);
                 }
             } else {
                 setError(err instanceof Error ? err.message : 'Failed to generate puzzles');

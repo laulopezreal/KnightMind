@@ -137,8 +137,17 @@ export default function Sidebar({ mobileOpen = false, onMobileClose }: SidebarPr
                     allowOutsideClick: true,
                     escapeDeactivates: false,
                     initialFocus: () => closeButtonRef.current || undefined,
-                    // On close, hand focus back to whatever opened the drawer.
+                    // On close, hand focus back to whatever opened the drawer —
+                    // normally the hamburger. But if we closed because the viewport
+                    // grew to desktop, the hamburger is now display:none and focus
+                    // would strand on <body>; fall back to the (now-visible) sidebar
+                    // so keyboard focus stays in a sensible place.
                     returnFocusOnDeactivate: true,
+                    setReturnFocus: (opener) => {
+                        if (opener instanceof HTMLElement && opener.offsetParent !== null) return opener;
+                        const link = document.querySelector('aside[aria-label="Sidebar"] a');
+                        return link instanceof HTMLElement ? link : false;
+                    },
                 }}
             >
             <aside
