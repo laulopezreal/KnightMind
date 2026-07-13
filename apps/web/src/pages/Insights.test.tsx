@@ -63,6 +63,8 @@ describe('Insights', () => {
     render(<Insights />);
 
     expect(screen.getByText('Loading insights...')).toBeInTheDocument();
+    // The page heading renders even while loading (no bare early-return).
+    expect(screen.getByRole('heading', { name: /insights/i })).toBeInTheDocument();
   });
 
   it('should show error state when API fails', async () => {
@@ -76,6 +78,8 @@ describe('Insights', () => {
     });
 
     expect(screen.getByText('Retry')).toBeInTheDocument();
+    // The page heading renders in the error state too (previously it did not).
+    expect(screen.getByRole('heading', { name: /insights/i })).toBeInTheDocument();
   });
 
   it('should show empty state when no motif data', async () => {

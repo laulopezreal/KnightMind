@@ -186,8 +186,8 @@ export default function Engine() {
   return (
     <div className="space-y-12 animate-teedin">
       <section className="space-y-6">
-        <Link to="/" className="km-interactive km-focus-visible km-inline-link text-primary/40 inline-block font-sans text-sm tracking-widest uppercase transition-colors">
-          ← Return Home
+        <Link to="/dashboard" className="km-interactive km-focus-visible km-inline-link text-primary/40 inline-block font-sans text-sm tracking-widest uppercase transition-colors">
+          ← Back to Dashboard
         </Link>
         <div className="relative bg-primary/5 border border-primary/10 rounded-sm p-8 lg:p-10">
           <div className="absolute top-8 right-8 lg:top-10 lg:right-10 flex items-center gap-2 rounded-full border border-primary/10 bg-primary/5 px-3 py-1.5 text-[10px] font-sans font-medium text-primary/60 uppercase tracking-widest">
