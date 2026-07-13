@@ -9,6 +9,7 @@ import { useJobPolling } from '../hooks/useJobPolling';
 import { Modal } from '../components/Modal';
 import { JobStatusCard } from '../components/JobStatusCard';
 import { LoadingSpinner } from '../components/LoadingSpinner';
+import { DataStateError } from '../components/DataState';
 
 
 type ImportStatus = {
@@ -119,7 +120,10 @@ export default function Home() {
 
   const handleConnectSave = async () => {
     const trimmed = connectInput.trim();
-    if (!trimmed) return;
+    if (!trimmed) {
+      setConnectError('Enter your Chess.com username');
+      return;
+    }
 
     setConnectValidating(true);
     setConnectError(null);
@@ -261,17 +265,15 @@ export default function Home() {
             Your personal chess intelligence platform.
           </p>
         </section>
-        <section className="bg-red-500/5 border border-red-500/20 rounded-sm p-8 max-w-lg">
-          <h3 className="text-xl font-serif text-primary mb-3">Unable to Load</h3>
-          <p className="text-primary/60 font-sans mb-6">{pageError}</p>
-          <button
-            type="button"
-            onClick={loadPageData}
-            className="px-6 py-3 bg-primary text-bg-primary rounded-sm font-serif km-interactive km-focus-visible"
-          >
-            Retry
-          </button>
-        </section>
+        <div className="max-w-lg">
+          <DataStateError
+            message={pageError}
+            onRetry={loadPageData}
+            retryLabel="Retry"
+            ariaLabel="Retry loading your data"
+            compact
+          />
+        </div>
       </div>
     );
   }
