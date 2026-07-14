@@ -138,4 +138,27 @@ describe('UsernameDisplay', () => {
     const button = screen.getByRole('button');
     expect(button).toHaveClass('min-h-11');
   });
+
+  it('associates the username input with its visible label', () => {
+    mockIsEditorOpen = true;
+    render(<UsernameDisplay />);
+
+    // getByLabelText resolves the label→input link (htmlFor/id), so this passes
+    // only when the input has a programmatic name (not just a placeholder).
+    expect(screen.getByLabelText('Chess.com Username')).toBeInTheDocument();
+  });
+
+  it('returns focus to the trigger when the editor closes via Escape', async () => {
+    mockUsername = 'testplayer';
+    mockIsEditorOpen = true;
+    render(<UsernameDisplay />);
+
+    const input = screen.getByLabelText('Chess.com Username');
+    input.focus();
+    await user.keyboard('{Escape}');
+
+    expect(mockSetEditorOpen).toHaveBeenCalledWith(false);
+    const trigger = screen.getByRole('button', { name: /chess\.com/i });
+    expect(document.activeElement).toBe(trigger);
+  });
 });

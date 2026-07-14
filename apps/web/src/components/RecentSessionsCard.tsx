@@ -1,3 +1,4 @@
+import { LOCALE } from '../utils/locale';
 import { useState } from 'react';
 import { type SessionSummary } from '../api';
 import { calculateAccuracy } from '../utils/accuracy';
@@ -53,7 +54,7 @@ export function RecentSessionsCard({
                 <div className="space-y-2" role="list">
                     {sessions.map((session) => {
                         const accuracy = calculateAccuracy(session.pass_count, session.fail_count);
-                        const sessionDate = new Date(session.created_at).toLocaleDateString();
+                        const sessionDate = new Date(session.created_at).toLocaleDateString(LOCALE);
                         return (
                             <div
                                 key={session.session_id}

@@ -1,3 +1,4 @@
+import { LOCALE } from '../utils/locale';
 import { type SessionSummary } from '../api';
 
 interface Achievement {
@@ -38,7 +39,7 @@ export function SessionSummaryCard({
 
             {sessionSummary.completed_at && (
                 <div className="text-sm text-primary/70 mb-4">
-                    Completed on {new Date(sessionSummary.completed_at).toLocaleString()}
+                    Completed on {new Date(sessionSummary.completed_at).toLocaleString(LOCALE)}
                 </div>
             )}
 

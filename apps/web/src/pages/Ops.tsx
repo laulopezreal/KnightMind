@@ -1,3 +1,4 @@
+import { LOCALE } from '../utils/locale';
 import { useState, useEffect, useCallback } from 'react';
 import { getHealth, getOpsStatus, getStorageReport, getUsers, ApiError, API_TARGET } from '../api';
 import type { HealthResponse, OpsStatusResponse, RecentJob, StorageReportResponse } from '../api';
@@ -245,7 +246,7 @@ export default function Ops() {
                         </span>
                     </div>
                     <span className="opacity-40 text-[10px]">
-                        {opsStatus?.last_recovery?.last_recovery_at != null && new Date(opsStatus.last_recovery.last_recovery_at).toLocaleTimeString()}
+                        {opsStatus?.last_recovery?.last_recovery_at != null && new Date(opsStatus.last_recovery.last_recovery_at).toLocaleTimeString(LOCALE)}
                     </span>
                 </div>
             )}
@@ -264,11 +265,11 @@ export default function Ops() {
                     SHA: <span className="font-mono text-primary/70">{(health?.version?.sha ?? '').substring(0, 7) || 'unknown'}</span>
                 </div>
                 <div>
-                    BUILT: <span className="text-primary/70">{health?.version?.built_at ? new Date(health.version.built_at).toLocaleString() : '-'}</span>
+                    BUILT: <span className="text-primary/70">{health?.version?.built_at ? new Date(health.version.built_at).toLocaleString(LOCALE) : '-'}</span>
                 </div>
                 {opsStatus?.now && (
                     <div>
-                        NOW: <span className="text-primary/70 text-[10px]">{new Date(opsStatus.now).toLocaleTimeString()}</span>
+                        NOW: <span className="text-primary/70 text-[10px]">{new Date(opsStatus.now).toLocaleTimeString(LOCALE)}</span>
                     </div>
                 )}
             </div>
@@ -492,7 +493,7 @@ function StatusBadge({ status }: { status: RecentJob['status'] }) {
 // Helpers
 function formatTime(iso: string) {
     const date = new Date(iso);
-    return date.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    return date.toLocaleString(LOCALE, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
 function calculateDuration(start: string, end: string) {

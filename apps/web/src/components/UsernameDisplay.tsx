@@ -10,6 +10,14 @@ export default function UsernameDisplay() {
     const [error, setError] = useState<string | null>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLInputElement>(null);
+    const triggerRef = useRef<HTMLButtonElement>(null);
+
+    // Close the editor and hand keyboard focus back to the trigger, so a
+    // keyboard user isn't dropped to the top of the page after Escape/Save.
+    const closeAndRestoreFocus = () => {
+        setEditorOpen(false);
+        triggerRef.current?.focus();
+    };
 
     useEffect(() => {
         if (isEditorOpen) {
@@ -34,14 +42,14 @@ export default function UsernameDisplay() {
         if (!trimmed) {
             if (username) {
                 setUsername('');
-                setEditorOpen(false);
+                closeAndRestoreFocus();
                 return;
             }
             return;
         }
 
         if (trimmed === username) {
-            setEditorOpen(false);
+            closeAndRestoreFocus();
             return;
         }
 
@@ -58,7 +66,7 @@ export default function UsernameDisplay() {
             }
 
             setUsername(data.username || trimmed);
-            setEditorOpen(false);
+            closeAndRestoreFocus();
         } catch (err) {
             if (err instanceof ApiError) {
                 if (err.detail) console.error('[connect]', err.detail);
@@ -73,14 +81,17 @@ export default function UsernameDisplay() {
 
     const handleKeyDown = (e: React.KeyboardEvent) => {
         if (e.key === 'Enter') handleSave();
-        if (e.key === 'Escape') setEditorOpen(false);
+        if (e.key === 'Escape') closeAndRestoreFocus();
     };
 
     return (
         <div ref={containerRef} className="relative font-sans">
             <button
+                ref={triggerRef}
                 type="button"
                 onClick={() => setEditorOpen(!isEditorOpen)}
+                aria-haspopup="dialog"
+                aria-expanded={isEditorOpen}
                 className={`
                     km-interactive km-focus-visible flex items-center gap-2 px-3 py-1.5 min-h-11 rounded-sm transition-all duration-300
                     ${username
@@ -102,11 +113,12 @@ export default function UsernameDisplay() {
 
             {isEditorOpen && (
                 <div className="absolute top-full right-0 mt-2 w-72 bg-bg-primary border border-primary/20 shadow-xl rounded-sm p-4 z-50 animate-teedin">
-                    <label className="block text-xs font-sans uppercase tracking-widest text-primary/70 mb-2">
+                    <label htmlFor="chesscom-username-input" className="block text-xs font-sans uppercase tracking-widest text-primary/70 mb-2">
                         Chess.com Username
                     </label>
                     <div className="flex gap-2">
                         <input
+                            id="chesscom-username-input"
                             ref={inputRef}
                             type="text"
                             value={inputValue}

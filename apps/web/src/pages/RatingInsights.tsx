@@ -1,3 +1,4 @@
+import { LOCALE } from '../utils/locale';
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceDot } from 'recharts';
@@ -165,7 +166,7 @@ export default function RatingInsights() {
     const chartData = useMemo(() => {
         const dateCounts = new Map<string, number>();
         return history.map(h => {
-            const base = new Date(h.recorded_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+            const base = new Date(h.recorded_at).toLocaleDateString(LOCALE, { month: 'short', day: 'numeric' });
             const count = (dateCounts.get(base) ?? 0) + 1;
             dateCounts.set(base, count);
             return { label: count > 1 ? `${base} (${count})` : base, rating: h.rating };
@@ -202,7 +203,7 @@ export default function RatingInsights() {
 
     const formatDate = (iso: string) => {
         const d = new Date(iso);
-        return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+        return d.toLocaleDateString(LOCALE, { month: 'short', day: 'numeric', year: 'numeric' });
     };
     const windowDates = data?.window
         ? `${formatDate(data.window.start)} – ${formatDate(data.window.end)}`
@@ -230,6 +231,7 @@ export default function RatingInsights() {
                                 type="button"
                                 onClick={() => setWindowSource('session')}
                                 disabled={hasSessions === false}
+                                aria-pressed={windowSource === 'session'}
                                 className={`km-toggle-option km-focus-visible px-3 py-2 text-sm font-sans transition-all rounded-sm ${windowSource === 'session' ? 'km-toggle-selected bg-primary text-bg-primary shadow-sm' : 'text-primary/70'} ${hasSessions === false ? 'km-interactive-disabled' : ''}`}
                             >
                                 Since Session
@@ -237,6 +239,7 @@ export default function RatingInsights() {
                             <button
                                 type="button"
                                 onClick={() => setWindowSource('fallback_7d')}
+                                aria-pressed={windowSource === 'fallback_7d'}
                                 className={`km-toggle-option km-focus-visible px-3 py-2 text-sm font-sans transition-all rounded-sm ${windowSource === 'fallback_7d' ? 'km-toggle-selected bg-primary text-bg-primary shadow-sm' : 'text-primary/70'}`}
                             >
                                 Last 7 Days
@@ -276,6 +279,7 @@ export default function RatingInsights() {
                                     key={tc}
                                     type="button"
                                     onClick={() => setTimeControl(tc)}
+                                    aria-pressed={timeControl === tc}
                                     className={`km-toggle-option km-focus-visible px-3 py-2 text-sm font-sans transition-all rounded-sm ${timeControl === tc ? 'km-toggle-selected bg-primary text-bg-primary shadow-sm' : 'text-primary/70'}`}
                                 >
                                     {tc.charAt(0).toUpperCase() + tc.slice(1)}
@@ -567,7 +571,7 @@ const Card = ({ label, value, sub, helper, highlight, positive, extra }: { label
 
 const GameRow = ({ game, type }: { game: HighlightGame, type: 'good' | 'bad' }) => {
     const playedDate = game.played_at
-        ? new Date(game.played_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+        ? new Date(game.played_at).toLocaleDateString(LOCALE, { month: 'short', day: 'numeric' })
         : null;
     return (
         <a href={game.url} target="_blank" rel="noopener noreferrer" className="block p-4 hover:bg-primary/5 transition-colors border-b border-primary/5 group">
