@@ -78,7 +78,7 @@ export function HeroTrainCard({
           <button
             type="button"
             onClick={onStartSession}
-            className="px-8 py-3 bg-accent text-bg-primary rounded-sm font-serif text-lg transition-colors km-focus-visible km-interactive"
+            className="px-8 py-3 bg-cta text-cta-fg rounded-sm font-serif text-lg transition-opacity hover:opacity-90 cursor-pointer km-focus-visible"
           >
             {buttonText}
           </button>
