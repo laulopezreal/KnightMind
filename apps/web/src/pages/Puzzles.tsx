@@ -1093,10 +1093,19 @@ export default function Puzzles() {
                                         <button
                                             type="button"
                                             onClick={async () => {
-                                                await handleReviewPuzzle('fail');
-                                                // Finishing the final puzzle (as a fail) ends the session.
-                                                setReviewedCount(prev => prev + 1);
-                                                await handleCompleteSession();
+                                                // Guard re-entry (same as handleAdvancePuzzle) so a fast
+                                                // double-click can't fire two concurrent complete calls
+                                                // before `disabled` catches up with sessionState.
+                                                if (isAdvancingPuzzle.current) return;
+                                                isAdvancingPuzzle.current = true;
+                                                try {
+                                                    await handleReviewPuzzle('fail');
+                                                    // Finishing the final puzzle (as a fail) ends the session.
+                                                    setReviewedCount(prev => prev + 1);
+                                                    await handleCompleteSession();
+                                                } finally {
+                                                    isAdvancingPuzzle.current = false;
+                                                }
                                             }}
                                             disabled={sessionState === 'completing'}
                                             className="w-full px-6 py-4 bg-orange-600 text-white rounded-sm font-serif text-lg transition-all km-focus-visible km-interactive mt-4">
