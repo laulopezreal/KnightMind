@@ -114,6 +114,23 @@ describe('SessionSummaryCard', () => {
     expect(onStartNewSession).toHaveBeenCalledTimes(1);
   });
 
+  it('renders the primary CTA with a solid fill, not the no-op bg-primary', () => {
+    render(
+      <SessionSummaryCard
+        sessionSummary={mockSessionSummary}
+        achievements={mockAchievements}
+        onStartNewSession={vi.fn()}
+      />
+    );
+
+    // bg-primary/text-bg-primary generated no CSS (unregistered tokens), so the
+    // button read as plain text. It must use the theme-aware fill utilities.
+    const cta = screen.getByRole('button', { name: 'Start New Session' });
+    expect(cta).toHaveClass('bg-cta');
+    expect(cta).toHaveClass('text-cta-fg');
+    expect(cta).not.toHaveClass('bg-primary');
+  });
+
   it('should not show achievements section when none earned', () => {
     const noAchievements = [{ id: '1', name: 'Locked', description: 'Not yet', icon: '🔒', earned: false }];
 

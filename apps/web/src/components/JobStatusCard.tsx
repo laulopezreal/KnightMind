@@ -36,9 +36,15 @@ export function JobStatusCard({ status, progress = 0, message, error, onCancel }
 
             {isProcessing && (
                 <>
-                    <div className="w-full bg-primary/10 rounded-full h-1.5 overflow-hidden">
+                    {/* Faint themeable track: bg-primary/10 never rendered (unregistered
+                        token) and bg-current/10 collapses to solid currentColor in
+                        Tailwind v4, so mix the runtime ink var inline. */}
+                    <div
+                        className="w-full rounded-full h-1.5 overflow-hidden"
+                        style={{ backgroundColor: 'color-mix(in srgb, var(--text-primary) 12%, transparent)' }}
+                    >
                         <div
-                            className="bg-primary h-full transition-all duration-500 ease-out"
+                            className="bg-cta h-full transition-all duration-500 ease-out"
                             style={{ width: `${Math.max(5, progress)}%` }} // Minimum 5% visibility
                         />
                     </div>
