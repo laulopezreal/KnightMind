@@ -256,7 +256,9 @@ describe('usePuzzleSession', () => {
 
         expect(result.current.streak).toBe(1);
         expect(result.current.lastFeedback).toBe('Good job!');
-        expect(result.current.reviewedCount).toBe(1);
+        // Reviewing no longer advances session progress — that happens when the
+        // user moves on from a puzzle (Puzzles.tsx), so retries can't inflate it.
+        expect(result.current.reviewedCount).toBe(0);
     });
 
     it('should reset streak on fail', async () => {
@@ -303,19 +305,16 @@ describe('usePuzzleSession', () => {
         });
     });
 
-    it('should auto-complete session on final puzzle', async () => {
+    it('does not complete the session on review (completion is driven by advancing)', async () => {
         mockedCompleteSession.mockResolvedValue(mockSessionSummary as never);
 
-        const setActiveSessionId = vi.fn();
-        const checkSessionAchievements = vi.fn();
-        const opts = makeOpts({
-            activeSessionId: 's1',
-            setActiveSessionId,
-            checkSessionAchievements,
-        });
+        const opts = makeOpts({ activeSessionId: 's1' });
         const { result } = renderHook(() => usePuzzleSession(opts));
 
-        // Load exactly one puzzle so reviewedCount (0 + 1) >= puzzles.length (1)
+        // Even a single-puzzle session must not end on review: "mark failed & try
+        // again" and revealed solutions re-review the SAME puzzle, and only the
+        // page's advance step ends the session. Ending on review could complete
+        // before the last puzzle, stranding a dead "Next Puzzle" button.
         act(() => {
             result.current.setPuzzles([mockPuzzle]);
         });
@@ -326,12 +325,9 @@ describe('usePuzzleSession', () => {
             await result.current.handleReviewPuzzle('pass');
         });
 
-        expect(mockedCompleteSession).toHaveBeenCalledWith('s1', 'testuser');
-        expect(result.current.sessionState).toBe('completed');
-        expect(checkSessionAchievements).toHaveBeenCalledWith({
-            passCount: 3,
-            failCount: 2,
-        });
+        expect(mockedCompleteSession).not.toHaveBeenCalled();
+        expect(result.current.sessionState).not.toBe('completed');
+        expect(result.current.reviewedCount).toBe(0);
     });
 
     // ── handleCompleteSession ──
@@ -423,29 +419,6 @@ describe('usePuzzleSession', () => {
         });
 
         expect(mockedCompleteSession).not.toHaveBeenCalled();
-    });
-
-    it('sessionState is completed (not active) after final puzzle review — UI handles completed state separately', async () => {
-        mockedCompleteSession.mockResolvedValue(mockSessionSummary as never);
-
-        const opts = makeOpts({ activeSessionId: 's1' });
-        const { result } = renderHook(() => usePuzzleSession(opts));
-
-        act(() => {
-            result.current.setPuzzles([mockPuzzle]);
-        });
-
-        mockedReviewPuzzle.mockResolvedValue(makeReviewResponse());
-
-        await act(async () => {
-            await result.current.handleReviewPuzzle('pass');
-        });
-
-        // Session auto-completed; sessionState is now 'completed', not 'active'
-        // With the fix in Puzzles.tsx, completed final-puzzle state is rendered
-        // as a post-session action instead of a disabled or no-op All Done CTA.
-        expect(result.current.sessionState).toBe('completed');
-        expect(mockedCompleteSession).toHaveBeenCalledTimes(1);
     });
 
     // ── Best streak localStorage ──

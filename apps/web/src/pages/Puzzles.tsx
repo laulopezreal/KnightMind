@@ -105,8 +105,8 @@ export default function Puzzles() {
         streak, bestStreak, hintsUsed, reviewedCount, performanceHistory,
         puzzles, currentIndex, isLoading, error, lastFeedback,
         setPuzzles, setCurrentIndex, setError, setLastFeedback,
-        setSessionSummary, setSessionState,
-        handleStartSession, handleReviewPuzzle, handleUseHint,
+        setSessionSummary, setSessionState, setReviewedCount,
+        handleStartSession, handleReviewPuzzle, handleCompleteSession, handleUseHint,
         calculateRecentPerformance, getPerformanceTrend,
     } = session;
 
@@ -397,8 +397,14 @@ export default function Puzzles() {
                 await handleReviewPuzzle('fail');
             }
 
+            // One step of progress per puzzle finished — so retries (mark-failed
+            // / reveal) never advance or complete the session early. Complete
+            // only after the last puzzle is done.
+            setReviewedCount(prev => prev + 1);
             if (!isFinalPuzzle) {
                 handleNextPuzzle();
+            } else {
+                await handleCompleteSession();
             }
         } finally {
             isAdvancingPuzzle.current = false;
@@ -1023,7 +1029,7 @@ export default function Puzzles() {
                                         </div>
                                     )}
 
-                                    {isFinalPuzzle && sessionState === 'completed' ? (
+                                    {sessionState === 'completed' ? (
                                         sessionSummary ? (
                                             <p className="text-center text-primary/60 font-sans text-sm py-4">
                                                 Session complete — see your summary below.
@@ -1088,7 +1094,9 @@ export default function Puzzles() {
                                             type="button"
                                             onClick={async () => {
                                                 await handleReviewPuzzle('fail');
-                                                // Session will auto-complete via handleCompleteSession in handleReviewPuzzle
+                                                // Finishing the final puzzle (as a fail) ends the session.
+                                                setReviewedCount(prev => prev + 1);
+                                                await handleCompleteSession();
                                             }}
                                             disabled={sessionState === 'completing'}
                                             className="w-full px-6 py-4 bg-orange-600 text-white rounded-sm font-serif text-lg transition-all km-focus-visible km-interactive mt-4">

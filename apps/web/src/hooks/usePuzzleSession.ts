@@ -333,12 +333,12 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
             const effectiveStreak = result === 'pass' ? streak + 1 : 0;
             checkAchievements({ streak: effectiveStreak, currentPuzzleTime: timer.currentPuzzleTime });
 
-            const newCount = reviewedCount + 1;
-            setReviewedCount(newCount);
-
-            if (activeSessionId && newCount >= puzzles.length) {
-                await handleCompleteSession();
-            }
+            // Session progress (reviewedCount) and completion are advanced in
+            // Puzzles.tsx when the user *moves on* from a puzzle — one step per
+            // puzzle — NOT here. Counting every review would let a "mark failed &
+            // try again" or a revealed solution (both of which re-review the same
+            // puzzle) inflate the count and end the session before the last
+            // puzzle, stranding a dead "Next Puzzle" button.
         } catch (err) {
             console.error('Failed to review puzzle:', err);
             setError(err instanceof Error ? err.message : 'Failed to review puzzle');
@@ -348,11 +348,8 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
         bestStreak,
         checkAchievements,
         currentPuzzle,
-        handleCompleteSession,
         timer.puzzleStartTime,
         timer.currentPuzzleTime,
-        puzzles.length,
-        reviewedCount,
         streak,
         username,
     ]);
