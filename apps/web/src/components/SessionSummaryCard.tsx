@@ -109,7 +109,7 @@ export function SessionSummaryCard({
             <button
                 type="button"
                 onClick={onStartNewSession}
-                className="w-full px-6 py-3 bg-primary text-bg-primary rounded-sm font-serif transition-colors km-interactive km-focus-visible">
+                className="w-full px-6 py-3 bg-cta text-cta-fg rounded-sm font-serif transition-opacity hover:opacity-90 cursor-pointer km-focus-visible">
                 Start New Session
             </button>
         </section>
