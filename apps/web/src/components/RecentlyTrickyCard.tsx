@@ -27,7 +27,7 @@ export function RecentlyTrickyCard({ puzzles, totalCount }: RecentlyTrickyCardPr
         {puzzles.map((puzzle, index) => (
           <Link
             key={puzzle.puzzle_id}
-            to={`/puzzles?motif=${encodeURIComponent(puzzle.title)}`}
+            to={`/library/${encodeURIComponent(puzzle.puzzle_id)}`}
             className={`block py-3 km-interactive rounded-sm px-2 -mx-2 ${
               index !== puzzles.length - 1 ? 'border-b border-primary/5' : ''
             }`}

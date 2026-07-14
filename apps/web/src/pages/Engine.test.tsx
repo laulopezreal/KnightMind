@@ -28,6 +28,12 @@ vi.mock('chess.js', () => {
   class MockChess {
     private currentFen: string;
     constructor(fen?: string) {
+      // Mirror chess.js: reject obviously-invalid FEN so the component's
+      // validation/catch path is exercised. Real FENs always contain a board
+      // rank separator ('/'); the fixtures used elsewhere here do.
+      if (fen !== undefined && !fen.includes('/')) {
+        throw new Error('Invalid FEN');
+      }
       this.currentFen = fen || 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
     }
     fen() { return this.currentFen; }
@@ -507,6 +513,23 @@ describe('Engine - Clue Functionality', () => {
         const newClueButton = screen.getByText('Reveal squares');
         expect(document.activeElement).toBe(newClueButton);
       });
+    });
+  });
+
+  describe('Invalid FEN accessibility', () => {
+    it('exposes the FEN validation error to assistive tech', async () => {
+      render(<Engine />);
+
+      const fenInput = screen.getByDisplayValue(STARTING_FEN);
+      fireEvent.change(fenInput, { target: { value: 'not a valid fen' } });
+      fireEvent.click(screen.getByText('Load'));
+
+      // The error must be an alert (announced) and programmatically tied to the
+      // input, not merely visible — a sighted-only error is an a11y defect.
+      const alert = await screen.findByText('Invalid FEN string');
+      expect(alert).toHaveAttribute('role', 'alert');
+      expect(fenInput).toHaveAttribute('aria-invalid', 'true');
+      expect(fenInput).toHaveAttribute('aria-describedby', alert.id);
     });
   });
 });
