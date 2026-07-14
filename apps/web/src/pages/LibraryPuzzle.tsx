@@ -5,6 +5,7 @@ import { Chess } from 'chess.js';
 import { useChessUsername } from '../context/ChessUsernameContext';
 import { getLibraryPuzzle, reviewPuzzle, type LibraryPuzzle as LibraryPuzzleType } from '../api/puzzles';
 import { ApiError } from '../api/core';
+import { DataStateError } from '../components/DataState';
 
 type SolveStatus = 'solving' | 'correct' | 'incorrect' | 'revealed';
 
@@ -153,15 +154,29 @@ export default function LibraryPuzzle() {
     }
 
     if (error || !puzzle) {
+        // A 404 is terminal — retrying refetches the same missing id — so only a
+        // transient error (500/network) gets a Retry, matching the other pages'
+        // DataStateError affordance. "Back to Library" is always the escape hatch.
+        const notFound = error === 'Puzzle not found' || (!error && !puzzle);
         return (
             <div className="space-y-12 animate-teedin">
                 <section>
                     <Link to="/library" className="text-primary/40 hover:text-primary mb-4 inline-block font-sans text-sm tracking-widest uppercase transition-colors">
                         ← Back to Library
                     </Link>
-                    <div className="bg-red-500/10 border border-red-500/20 rounded-sm p-6 text-center">
-                        <p className="text-red-500 font-sans">{error || 'Puzzle not found'}</p>
-                    </div>
+                    {notFound ? (
+                        <div className="bg-red-500/10 border border-red-500/20 rounded-sm p-6 text-center" role="alert">
+                            <p className="text-red-500 font-sans">{error || 'Puzzle not found'}</p>
+                        </div>
+                    ) : (
+                        <DataStateError
+                            message={error!}
+                            onRetry={fetchPuzzle}
+                            retryLabel="Retry"
+                            ariaLabel="Retry loading this puzzle"
+                            compact
+                        />
+                    )}
                 </section>
             </div>
         );
