@@ -130,7 +130,9 @@ export default function Openings() {
         />
       )}
 
-      {/* Graph */}
+      {/* Graph — omitted when an error card has replaced it (and there's no stale
+          tree to keep showing), so no empty framed box appears under the error. */}
+      {(!error || treeData) && (
       <section className="relative min-h-[300px] md:min-h-[500px] max-h-[70vh] bg-primary/5 border border-primary/10 rounded-sm overflow-hidden">
         {!treeData && !loading && !error && (
           <div className="absolute inset-0 flex items-center justify-center px-6">
@@ -246,8 +248,11 @@ export default function Openings() {
             document.body
           )}
       </section>
+      )}
 
-      {/* Legend + Stats */}
+      {/* Legend + Stats — only meaningful alongside a rendered graph, so hidden
+          in the empty/error states (a colour key for a graph that isn't shown). */}
+      {treeData && (
       <section className="flex flex-wrap gap-6 items-center justify-center text-xs font-sans text-primary/60">
         <span className="uppercase tracking-widest mr-2">Win Rate:</span>
         <div className="flex items-center gap-1"><div className="w-3 h-3 rounded-full bg-emerald-600"></div> 60%+</div>
@@ -273,6 +278,7 @@ export default function Openings() {
           </div>
         )}
       </section>
+      )}
     </div>
   );
 }

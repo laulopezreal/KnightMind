@@ -20,6 +20,16 @@ vi.mock('../api', () => ({
   ApiError: class extends Error { detail?: string },
 }));
 
+// Isolate the page's legend/state logic from the graph renderer.
+vi.mock('../components/OpeningGraph', () => ({
+  OpeningGraph: () => <div data-testid="opening-graph" />,
+}));
+
+const MOCK_TREE = {
+  move_san: 'start', ply: 0, games_count: 42, wins: 20, draws: 12, losses: 10,
+  win_rate: 0.48, children: [],
+};
+
 // Mock d3 minimally — renderTree uses d3 heavily
 vi.mock('d3', () => ({
   select: () => ({
@@ -90,10 +100,21 @@ describe('Openings', () => {
     });
   });
 
-  it('should show win rate legend', () => {
-    mockGetOpenings.mockReturnValue(new Promise(() => {}));
+  it('should show win rate legend once a tree is loaded', async () => {
+    mockGetOpenings.mockResolvedValue(MOCK_TREE);
     render(<Openings />);
 
-    expect(screen.getByText('Win Rate:')).toBeInTheDocument();
+    expect(await screen.findByText('Win Rate:')).toBeInTheDocument();
+  });
+
+  it('should not show the win rate legend on error (no graph to explain)', async () => {
+    mockGetOpenings.mockRejectedValue(new Error('Network error'));
+    render(<Openings />);
+
+    // Error card + Retry appear; the graph legend must not, since there is no
+    // graph rendered beneath it.
+    expect(await screen.findByText('Network error')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /retry loading openings/i })).toBeInTheDocument();
+    expect(screen.queryByText('Win Rate:')).not.toBeInTheDocument();
   });
 });
