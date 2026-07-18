@@ -1,3 +1,4 @@
+import { LOCALE } from '../utils/locale';
 import { type Achievement } from '../hooks/useAchievements';
 
 interface AchievementsListProps {
@@ -26,7 +27,7 @@ export function AchievementsList({ achievements }: AchievementsListProps) {
                                 <p className="text-xs text-primary/70 mt-1">{achievement.description}</p>
                                 {achievement.earned && achievement.earnedAt && (
                                     <p className="text-xs text-positive mt-1">
-                                        Earned: {achievement.earnedAt.toLocaleDateString()}
+                                        Earned: {achievement.earnedAt.toLocaleDateString(LOCALE)}
                                     </p>
                                 )}
                             </div>

@@ -1,3 +1,4 @@
+import { LOCALE } from '../utils/locale';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { Chessboard } from 'react-chessboard';
@@ -220,12 +221,12 @@ export default function LibraryPuzzle() {
                 )}
                 {puzzle.last_reviewed_at && (
                     <span className="px-3 py-1 bg-primary/5 rounded-sm border border-primary/10">
-                        Last: {new Date(puzzle.last_reviewed_at).toLocaleDateString()}
+                        Last: {new Date(puzzle.last_reviewed_at).toLocaleDateString(LOCALE)}
                     </span>
                 )}
                 {puzzle.next_due_at && !recorded && (
                     <span className="px-3 py-1 bg-primary/5 rounded-sm border border-primary/10">
-                        Due: {new Date(puzzle.next_due_at).toLocaleDateString()}
+                        Due: {new Date(puzzle.next_due_at).toLocaleDateString(LOCALE)}
                     </span>
                 )}
             </section>
@@ -296,7 +297,7 @@ export default function LibraryPuzzle() {
                             </div>
                             {nextDueAt && (
                                 <p className="text-positive font-sans text-sm mt-1">
-                                    Next review: {new Date(nextDueAt).toLocaleDateString(undefined, {
+                                    Next review: {new Date(nextDueAt).toLocaleDateString(LOCALE, {
                                         weekday: 'long', month: 'short', day: 'numeric'
                                     })}
                                 </p>
@@ -330,6 +331,7 @@ export default function LibraryPuzzle() {
                                 <input
                                     type="text"
                                     placeholder="e.g. e2e4"
+                                    aria-label="Your move in coordinate notation, for example e2e4"
                                     value={userMove}
                                     onChange={(e) => setUserMove(e.target.value)}
                                     className="w-full bg-primary/5 border border-primary/20 p-3 rounded-sm text-primary font-mono text-center focus:outline-none focus:border-primary/60 transition-colors"

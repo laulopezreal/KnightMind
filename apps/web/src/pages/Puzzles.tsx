@@ -1,3 +1,4 @@
+import { LOCALE } from '../utils/locale';
 import { useEffect, useRef, useState } from 'react';
 import { Link, useSearchParams, useNavigate } from 'react-router-dom';
 import { Chessboard } from 'react-chessboard';
@@ -595,7 +596,7 @@ export default function Puzzles() {
                                     <h3 className="font-serif text-xl text-primary">All caught up</h3>
                                     <p className="text-primary/70 font-sans">
                                         {userStatus.next_due_at
-                                            ? `Next review on ${new Date(userStatus.next_due_at).toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' })}.`
+                                            ? `Next review on ${new Date(userStatus.next_due_at).toLocaleDateString(LOCALE, { weekday: 'long', month: 'short', day: 'numeric' })}.`
                                             : 'No puzzles are due for review yet.'}
                                     </p>
                                     {userStatus.has_new_games && (
@@ -857,7 +858,7 @@ export default function Puzzles() {
                                                                     <div
                                                                         key={index}
                                                                         className={`flex-1 ${item.result === 'pass' ? 'bg-green-500' : 'bg-red-500'}`}
-                                                                        title={`${item.result.toUpperCase()} - ${new Date(item.time).toLocaleTimeString()}`}
+                                                                        title={`${item.result.toUpperCase()} - ${new Date(item.time).toLocaleTimeString(LOCALE)}`}
                                                                     />
                                                                 ))}
                                                             </div>
@@ -1022,7 +1023,7 @@ export default function Puzzles() {
                                                 <div className="flex justify-between mt-1">
                                                     <span className="text-primary/70">Next Review:</span>
                                                     <span className="font-mono">
-                                                        {new Date(currentPuzzle.next_due_at).toLocaleDateString()}
+                                                        {new Date(currentPuzzle.next_due_at).toLocaleDateString(LOCALE)}
                                                     </span>
                                                 </div>
                                             )}

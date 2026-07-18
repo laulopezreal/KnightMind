@@ -1,3 +1,4 @@
+import { LOCALE } from '../utils/locale';
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useChessUsername } from '../context/ChessUsernameContext';
@@ -103,12 +104,12 @@ function PuzzleRow({ puzzle }: { puzzle: LibraryPuzzle }) {
                         )}
                         {puzzle.last_reviewed_at && (
                             <span>
-                                Last: {new Date(puzzle.last_reviewed_at).toLocaleDateString()}
+                                Last: {new Date(puzzle.last_reviewed_at).toLocaleDateString(LOCALE)}
                             </span>
                         )}
                         {puzzle.next_due_at && (
                             <span>
-                                Due: {new Date(puzzle.next_due_at).toLocaleDateString()}
+                                Due: {new Date(puzzle.next_due_at).toLocaleDateString(LOCALE)}
                             </span>
                         )}
                     </div>
