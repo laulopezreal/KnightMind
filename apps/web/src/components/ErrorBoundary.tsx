@@ -80,7 +80,7 @@ export class ErrorBoundary extends Component<Props, State> {
               <button
                 type="button"
                 onClick={() => window.location.reload()}
-                className="px-6 py-2 bg-cta text-cta-fg rounded-sm font-serif transition-opacity hover:opacity-90 cursor-pointer km-focus-visible"
+                className="px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-opacity hover:opacity-90 cursor-pointer km-focus-visible"
                 aria-label="Reload the page"
               >
                 Reload Page

@@ -24,6 +24,21 @@
   --animate-teedout: teedout 0.45s ease-out forwards;
 }
 
+/* Register the semantic color tokens so Tailwind actually generates the
+   background, text and border color utilities. `inline` makes the generated CSS
+   reference the runtime vars directly, so the body.night overrides below still
+   cascade.
+   - primary    = the ink/foreground colour (text-primary, bg-primary fill, borders)
+   - bg-primary = the paper/surface colour  (bg-bg-primary surfaces, text-bg-primary)
+   - accent     = ink for now (monochrome palette; distinct accent is a future call)
+   Before this, these utilities emitted no CSS: text survived via body-colour
+   inheritance and fills/tints painted transparent. */
+@theme inline {
+  --color-primary: var(--text-primary);
+  --color-bg-primary: var(--bg-primary);
+  --color-accent: var(--text-primary);
+}
+
 /* Custom Utilities for the slow vibe */
 @utility transition-slow {
   transition: background-color 250ms ease-out, color 250ms ease-out, border-color 250ms ease-out;
@@ -55,15 +70,6 @@
 @utility text-status-mastered { color: var(--color-status-mastered); }
 @utility text-positive { color: var(--color-positive); }
 @utility text-negative { color: var(--color-negative); }
-
-/* Solid CTA button fill. The semantic bg-* color utilities never generated CSS
-   (the theme registered no --color-primary / --color-accent), so buttons using
-   `bg-accent` / `bg-primary` painted no fill and read as plain text. These read
-   the runtime theme vars directly — same approach as the toggle/status colors
-   above — so a primary CTA renders a solid, high-contrast, theme-aware fill:
-   ink-on-paper flips to paper-on-ink between day and night. */
-@utility bg-cta { background-color: var(--text-primary); }
-@utility text-cta-fg { color: var(--bg-primary); }
 
 @utility bg-status-due-soft { background-color: var(--color-status-due-bg); }
 @utility bg-status-new-soft { background-color: var(--color-status-new-bg); }

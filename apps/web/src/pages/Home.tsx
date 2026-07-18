@@ -578,7 +578,7 @@ export default function Home() {
         closeOnEscape={true}
         closeOnOverlayClick={true}
       >
-        <div className="bg-primary border border-green-500/30 rounded-sm p-12 max-w-md text-center">
+        <div className="bg-bg-primary border border-green-500/30 rounded-sm p-12 max-w-md text-center">
           <div className="flex justify-center mb-6">
             <div className="h-16 w-16 rounded-full bg-green-500 flex items-center justify-center">
               <svg className="h-10 w-10 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">

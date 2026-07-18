@@ -44,7 +44,7 @@ export function JobStatusCard({ status, progress = 0, message, error, onCancel }
                         style={{ backgroundColor: 'color-mix(in srgb, var(--text-primary) 12%, transparent)' }}
                     >
                         <div
-                            className="bg-cta h-full transition-all duration-500 ease-out"
+                            className="bg-primary h-full transition-all duration-500 ease-out"
                             style={{ width: `${Math.max(5, progress)}%` }} // Minimum 5% visibility
                         />
                     </div>

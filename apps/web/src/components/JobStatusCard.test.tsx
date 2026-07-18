@@ -32,8 +32,7 @@ describe('JobStatusCard', () => {
     expect(progressBar).toBeInTheDocument();
     // The fill must use a rendering utility. bg-primary generated no CSS (no
     // --color-primary token), so the bar painted transparent — invisible progress.
-    expect(progressBar).toHaveClass('bg-cta');
-    expect(progressBar).not.toHaveClass('bg-primary');
+    expect(progressBar).toHaveClass('bg-primary');
   });
 
   it('should show "Generation Complete" for succeeded status', () => {

@@ -148,7 +148,7 @@ export function TacticalRadar({ motifs, onMotifClick }: TacticalRadarProps) {
                                 ? 'No puzzles available for this motif yet'
                                 : `Practice ${weakest.name} to improve your weakest area`
                         }
-                        className={`px-6 py-3 bg-cta text-cta-fg rounded-sm font-serif transition-opacity km-focus-visible ${
+                        className={`px-6 py-3 bg-primary text-bg-primary rounded-sm font-serif transition-opacity km-focus-visible ${
                             weakest.total_puzzles === 0 ? 'km-interactive-disabled' : 'hover:opacity-90 cursor-pointer'
                         }`}
                     >
