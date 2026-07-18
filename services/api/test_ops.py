@@ -77,11 +77,16 @@ def db_session(test_db_instance):
 
 @pytest.fixture(scope="function")
 def client(db_session):
+    from services.api.auth import require_operator
     from services.api.db import get_db
     from services.api.main import app
 
     # Override dependency to use our test session
     app.dependency_overrides[get_db] = lambda: db_session
+    # Treat the default test client as an authenticated tailnet operator so the
+    # operator gate on /ops/status is exercised as "allowed". The gate itself is
+    # covered explicitly in test_ops_gate.py.
+    app.dependency_overrides[require_operator] = lambda: "test@operator"
 
     with TestClient(app) as c:
         yield c

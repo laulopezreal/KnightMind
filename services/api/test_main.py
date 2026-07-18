@@ -43,8 +43,13 @@ def db_session():
 
 @pytest.fixture
 def client_with_db(db_session, monkeypatch):
+    from services.api.auth import require_operator
+
     monkeypatch.setenv("KNIGHTMIND_WORKER_DISABLED", "true")
     app.dependency_overrides[get_db] = lambda: db_session
+    # Default test client acts as an authenticated tailnet operator; the gate on
+    # the bare /users list is covered explicitly in test_ops_gate.py.
+    app.dependency_overrides[require_operator] = lambda: "test@operator"
     yield TestClient(app)
     app.dependency_overrides.clear()
 

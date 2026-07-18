@@ -5,7 +5,20 @@
 
 api.guessme.world {
 	bind {$PUBLIC_IP}
-	reverse_proxy 127.0.0.1:8000
+
+	# SECURITY: strip any inbound Tailscale identity headers before proxying to
+	# the API. The operator gate (services/api/auth.py) trusts Tailscale-User-Login,
+	# which `tailscale serve` injects on the tailnet path. Stripping it on the
+	# upstream request here means a public client cannot forge it to reach
+	# /ops/status, the bare /users list, etc. header_up (not request_header) is
+	# used so the removal is unambiguously applied to the request sent upstream.
+	# Header names are case-insensitive, so this covers any casing a client sends.
+	# Do NOT add this on the tailnet (tailscale serve) path.
+	reverse_proxy 127.0.0.1:8000 {
+		header_up -Tailscale-User-Login
+		header_up -Tailscale-User-Name
+		header_up -Tailscale-User-Profile-Pic
+	}
 
 	log {
 		output stdout

@@ -26,6 +26,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")
 
 import asyncio
 
+from services.api.auth import require_operator
 from services.api.db import SessionLocal, get_db
 from services.api.engine import (
     EngineNotAvailableError,
@@ -191,9 +192,13 @@ class UserStatusResponse(BaseModel):
     has_new_games: bool
 
 
-@app.get("/users")
+@app.get("/users", dependencies=[Depends(require_operator)])
 async def get_users(db: Session = Depends(get_db)):
-    """Get list of users who have imported games."""
+    """Get list of all users who have imported games.
+
+    Operator-only (enumerates every account) — gated to the tailnet. The public
+    app only ever looks up a single known username via /users/{username}/...
+    """
     game_repository = GameRepository(db)
     users = game_repository.get_users()
     return {"users": users}
