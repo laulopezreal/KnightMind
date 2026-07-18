@@ -6,6 +6,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
+from services.api.auth import require_operator
 from services.api.db import get_db
 from services.api.engine import is_engine_available
 from services.api.models import Job, JobStatus
@@ -96,7 +97,7 @@ def get_ready(db: Session = Depends(get_db)):
     return JSONResponse(content=body, status_code=status_code)
 
 
-@router.get("/status")
+@router.get("/status", dependencies=[Depends(require_operator)])
 def get_ops_status(db: Session = Depends(get_db)):
     now = datetime.now(timezone.utc)
 

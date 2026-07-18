@@ -5,6 +5,16 @@
 
 api.guessme.world {
 	bind {$PUBLIC_IP}
+
+	# SECURITY: strip any inbound Tailscale identity headers on the PUBLIC ingress.
+	# The operator gate (services/api/auth.py) trusts Tailscale-User-Login, which
+	# `tailscale serve` injects on the tailnet path. Stripping it here means a
+	# public client cannot forge it to reach /ops/status, the bare /users list,
+	# etc. Do NOT add these on the tailnet (tailscale serve) path.
+	request_header -Tailscale-User-Login
+	request_header -Tailscale-User-Name
+	request_header -Tailscale-User-Profile-Pic
+
 	reverse_proxy 127.0.0.1:8000
 
 	log {

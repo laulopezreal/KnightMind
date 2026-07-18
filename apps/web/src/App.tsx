@@ -45,6 +45,14 @@ const Insights = lazyPage(() => import('./pages/Insights'));
 const RatingInsights = lazyPage(() => import('./pages/RatingInsights'));
 const HowItWorks = lazyPage(() => import('./pages/HowItWorks'));
 
+// Operator board. Gated behind a build-time flag so it is tree-shaken out of the
+// public (Cloudflare) bundle entirely — the chunk is only emitted when
+// VITE_ENABLE_OPS=true, i.e. the operator's tailnet build. The API it talks to
+// is separately gated to the tailnet (see services/api/auth.py), so the flag is
+// a convenience/defence-in-depth layer, not the security boundary.
+const OPS_ENABLED = import.meta.env.VITE_ENABLE_OPS === 'true';
+const Ops = OPS_ENABLED ? lazyPage(() => import('./pages/Ops')) : null;
+
 function App() {
   return (
     <ErrorBoundary>
@@ -64,7 +72,7 @@ function App() {
                     <Route path="/puzzles" element={<Puzzles />} />
                     <Route path="/insights" element={<Insights />} />
                     <Route path="/rating-insights" element={<RatingInsights />} />
-                    <Route path="/ops" element={<Navigate to="/" replace />} />
+                    <Route path="/ops" element={OPS_ENABLED && Ops ? <Ops /> : <Navigate to="/" replace />} />
                     <Route path="/how-it-works" element={<HowItWorks />} />
                   </Routes>
                 </Suspense>
