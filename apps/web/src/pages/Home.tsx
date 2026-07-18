@@ -261,7 +261,7 @@ export default function Home() {
           <h1 className="text-6xl md:text-8xl font-serif text-primary tracking-tight">
             KnightMind
           </h1>
-          <p className="text-xl font-light text-primary/60 max-w-2xl leading-relaxed">
+          <p className="text-xl font-light text-primary/70 max-w-2xl leading-relaxed">
             Your personal chess intelligence platform.
           </p>
         </section>
@@ -285,7 +285,7 @@ export default function Home() {
         <h1 className="text-6xl md:text-8xl font-serif text-primary tracking-tight">
           KnightMind
         </h1>
-        <p className="text-xl md:text-2xl font-light text-primary/60 max-w-2xl leading-relaxed">
+        <p className="text-xl md:text-2xl font-light text-primary/70 max-w-2xl leading-relaxed">
           {isNewUser
             ? 'Your personal chess intelligence platform. Connect your Chess.com account to begin.'
             : hasPuzzles && userStatus!.due_count > 0
@@ -311,13 +311,13 @@ export default function Home() {
                 >
                   Connect Chess.com Account
                 </button>
-                <p className="text-sm font-sans text-primary/40">
+                <p className="text-sm font-sans text-primary/70">
                   Import your games and generate puzzles from your real positions.
                 </p>
               </>
             ) : (
               <div className="space-y-3">
-                <label className="block text-xs font-sans uppercase tracking-widest text-primary/40">
+                <label className="block text-xs font-sans uppercase tracking-widest text-primary/70">
                   Chess.com Username
                 </label>
                 <div className="flex gap-2">
@@ -350,7 +350,7 @@ export default function Home() {
                 <button
                   type="button"
                   onClick={() => setShowConnect(false)}
-                  className="text-sm font-sans text-primary/40 km-interactive km-focus-visible"
+                  className="text-sm font-sans text-primary/70 km-interactive km-focus-visible"
                 >
                   Cancel
                 </button>
@@ -376,14 +376,14 @@ export default function Home() {
                     type="button"
                     onClick={handleImport}
                     disabled={loading}
-                    className={`min-h-11 flex items-center px-4 py-2 border border-primary/20 text-primary/60 rounded-sm font-sans text-sm transition-all km-focus-visible ${
+                    className={`min-h-11 flex items-center px-4 py-2 border border-primary/20 text-primary/70 rounded-sm font-sans text-sm transition-all km-focus-visible ${
                       loading ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive hover:text-primary hover:border-primary/40'
                     }`}
                   >
                     {loading ? 'Syncing...' : 'Sync new games'}
                   </button>
                   {importStatus.lastImportedAt && (
-                    <span className="text-sm font-sans text-primary/40">
+                    <span className="text-sm font-sans text-primary/70">
                       Last synced {formatRelativeTime(importStatus.lastImportedAt)}
                     </span>
                   )}
@@ -403,7 +403,7 @@ export default function Home() {
                   {loading ? 'Syncing...' : hasData ? 'Sync New Games' : 'Import Games'}
                 </button>
                 {importStatus.lastImportedAt && (
-                  <span className="text-sm font-sans text-primary/40">
+                  <span className="text-sm font-sans text-primary/70">
                     Last synced {formatRelativeTime(importStatus.lastImportedAt)}
                   </span>
                 )}
@@ -411,7 +411,7 @@ export default function Home() {
             )}
             {actionStatus && (
               <div
-                className={`text-sm font-sans ${isError ? 'text-red-500/80' : 'text-primary/60'}`}
+                className={`text-sm font-sans ${isError ? 'text-red-500/80' : 'text-primary/70'}`}
                 role="status"
                 aria-live="polite"
               >
@@ -434,7 +434,7 @@ export default function Home() {
         {onboardingPhase === 'importing' && (
           <div className="max-w-lg flex items-center gap-4">
             <LoadingSpinner size="sm" label="Importing games" />
-            <p className="text-lg font-sans text-primary/60">{actionStatus || 'Importing games...'}</p>
+            <p className="text-lg font-sans text-primary/70">{actionStatus || 'Importing games...'}</p>
           </div>
         )}
 
@@ -451,7 +451,7 @@ export default function Home() {
             ) : (
               <div className="flex items-center gap-4">
                 <LoadingSpinner size="sm" label="Starting puzzle generation" />
-                <p className="text-lg font-sans text-primary/60">Starting puzzle generation...</p>
+                <p className="text-lg font-sans text-primary/70">Starting puzzle generation...</p>
               </div>
             )}
           </div>
@@ -466,16 +466,16 @@ export default function Home() {
         >
           <div>
             <p className="text-3xl font-mono text-primary">{userStatus.games_count}</p>
-            <p className="text-sm font-sans text-primary/40">games imported</p>
+            <p className="text-sm font-sans text-primary/70">games imported</p>
           </div>
           <div>
             <p className="text-3xl font-mono text-primary">{userStatus.puzzles_count}</p>
-            <p className="text-sm font-sans text-primary/40">puzzles generated</p>
+            <p className="text-sm font-sans text-primary/70">puzzles generated</p>
           </div>
           {userStatus.due_count > 0 && (
             <div>
               <p className="text-3xl font-mono text-primary">{userStatus.due_count}</p>
-              <p className="text-sm font-sans text-primary/40">puzzles due</p>
+              <p className="text-sm font-sans text-primary/70">puzzles due</p>
             </div>
           )}
         </section>
@@ -494,14 +494,14 @@ export default function Home() {
             <h3 className="text-xl font-serif text-primary mb-2 group-hover:translate-x-1 transition-transform duration-300">
               Daily Puzzles
             </h3>
-            <p className="text-sm font-sans text-primary/50 mb-4">
+            <p className="text-sm font-sans text-primary/70 mb-4">
               {hasPuzzles && userStatus
                 ? userStatus.due_count > 0
                   ? `${userStatus.due_count} puzzles ready for review`
                   : 'All caught up — practice more anytime'
                 : 'Import games to generate puzzles'}
             </p>
-            <span className="text-primary/30 group-hover:text-primary/60 transition-colors text-sm font-sans">
+            <span className="text-primary/70 group-hover:text-primary/70 transition-colors text-sm font-sans">
               Open →
             </span>
           </Link>
@@ -513,12 +513,12 @@ export default function Home() {
             <h3 className="text-xl font-serif text-primary mb-2 group-hover:translate-x-1 transition-transform duration-300">
               Dashboard
             </h3>
-            <p className="text-sm font-sans text-primary/50 mb-4">
+            <p className="text-sm font-sans text-primary/70 mb-4">
               {hasData
                 ? 'Review your tactical radar, streaks, and trends'
                 : 'Your training overview will appear here'}
             </p>
-            <span className="text-primary/30 group-hover:text-primary/60 transition-colors text-sm font-sans">
+            <span className="text-primary/70 group-hover:text-primary/70 transition-colors text-sm font-sans">
               Open →
             </span>
           </Link>
@@ -530,12 +530,12 @@ export default function Home() {
             <h3 className="text-xl font-serif text-primary mb-2 group-hover:translate-x-1 transition-transform duration-300">
               Opening Explorer
             </h3>
-            <p className="text-sm font-sans text-primary/50 mb-4">
+            <p className="text-sm font-sans text-primary/70 mb-4">
               {hasData
                 ? 'Explore your opening repertoire and trends'
                 : 'Visualize your opening choices after import'}
             </p>
-            <span className="text-primary/30 group-hover:text-primary/60 transition-colors text-sm font-sans">
+            <span className="text-primary/70 group-hover:text-primary/70 transition-colors text-sm font-sans">
               Open →
             </span>
           </Link>
@@ -549,21 +549,21 @@ export default function Home() {
             <div>
               <p className="text-4xl mb-3" aria-hidden="true">&#9823;</p>
               <h2 className="font-serif text-primary text-lg mb-1">Import Games</h2>
-              <p className="text-sm font-sans text-primary/40">
+              <p className="text-sm font-sans text-primary/70">
                 Connect your Chess.com account to pull in your game history.
               </p>
             </div>
             <div>
               <p className="text-4xl mb-3" aria-hidden="true">&#9822;</p>
               <h2 className="font-serif text-primary text-lg mb-1">Generate Puzzles</h2>
-              <p className="text-sm font-sans text-primary/40">
+              <p className="text-sm font-sans text-primary/70">
                 Puzzles are created from your actual missed tactics.
               </p>
             </div>
             <div>
               <p className="text-4xl mb-3" aria-hidden="true">&#9818;</p>
               <h2 className="font-serif text-primary text-lg mb-1">Master Patterns</h2>
-              <p className="text-sm font-sans text-primary/40">
+              <p className="text-sm font-sans text-primary/70">
                 Spaced repetition ensures you remember what you learn.
               </p>
             </div>
@@ -587,10 +587,10 @@ export default function Home() {
             </div>
           </div>
           <h2 className="text-3xl font-serif text-primary mb-4">All Set!</h2>
-          <p className="text-primary/60 font-sans mb-2">
+          <p className="text-primary/70 font-sans mb-2">
             {newGamesCount} puzzles generated from your games.
           </p>
-          <p className="text-primary/40 text-sm font-sans">
+          <p className="text-primary/70 text-sm font-sans">
             Taking you to your dashboard...
           </p>
         </div>

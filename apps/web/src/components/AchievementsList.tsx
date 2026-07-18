@@ -23,7 +23,7 @@ export function AchievementsList({ achievements }: AchievementsListProps) {
                                 <h4 className={`font-serif ${achievement.earned ? 'text-green-600' : 'text-primary'}`}>
                                     {achievement.name}
                                 </h4>
-                                <p className="text-xs text-primary/60 mt-1">{achievement.description}</p>
+                                <p className="text-xs text-primary/70 mt-1">{achievement.description}</p>
                                 {achievement.earned && achievement.earnedAt && (
                                     <p className="text-xs text-green-600/80 mt-1">
                                         Earned: {achievement.earnedAt.toLocaleDateString()}

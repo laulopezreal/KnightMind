@@ -59,7 +59,7 @@ export function HeroTrainCard({
           >
             {title}
           </h2>
-          <p className="text-lg text-primary/60 font-sans">
+          <p className="text-lg text-primary/70 font-sans">
             {supportingText}
           </p>
         </div>
@@ -70,7 +70,7 @@ export function HeroTrainCard({
             <p className="text-4xl md:text-5xl font-mono text-primary leading-none">
               {dueCount}
             </p>
-            <p className="text-primary/60 text-sm font-sans mt-1">
+            <p className="text-primary/70 text-sm font-sans mt-1">
               puzzle{dueCount !== 1 ? 's' : ''} due
             </p>
           </div>
@@ -84,7 +84,7 @@ export function HeroTrainCard({
           </button>
 
           {nextReviewAt && (
-            <p className="mt-3 text-sm text-primary/40 font-sans">
+            <p className="mt-3 text-sm text-primary/70 font-sans">
               Next review: {formatRelativeTime(nextReviewAt)}
             </p>
           )}

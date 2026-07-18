@@ -36,7 +36,7 @@
 @theme inline {
   --color-primary: var(--text-primary);
   --color-bg-primary: var(--bg-primary);
-  --color-accent: var(--text-primary);
+  --color-accent: var(--accent);
 }
 
 /* Custom Utilities for the slow vibe */
@@ -82,7 +82,12 @@
   /* Day Mode (White Pieces) */
   --bg-primary: var(--color-chess-cream-100);
   --text-primary: var(--color-chess-brown-900);
-  --border-primary: var(--color-chess-brown-700);
+  /* Borders share the ink foreground so the border-primary utility (--color-primary)
+     and direct var(--border-primary) usages render one consistent colour. */
+  --border-primary: var(--text-primary);
+  /* Warm gold accent — the one non-monochrome hue, for the connect-account pill.
+     Day shade tuned to clear AA (4.5:1) on the cream background. */
+  --accent: #8a5313;
   --color-toggle-bg: var(--color-chess-brown-700);
   --color-toggle-knob: var(--color-chess-cream-100);
 
@@ -107,7 +112,9 @@ body.night {
   /* Night Mode (Black Pieces) */
   --bg-primary: var(--color-chess-brown-900);
   --text-primary: var(--color-chess-cream-200);
-  --border-primary: var(--color-chess-cream-300);
+  --border-primary: var(--text-primary);
+  /* Lighter warm gold that clears AA on the near-black night background. */
+  --accent: #e0b45c;
   --color-toggle-bg: var(--color-chess-cream-200);
   --color-toggle-knob: var(--color-chess-brown-900);
 

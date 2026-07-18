@@ -62,10 +62,10 @@ export class ErrorBoundary extends Component<Props, State> {
             <h1 className="text-4xl font-serif text-primary mb-4">
               Something went wrong
             </h1>
-            <p className="text-primary/60 font-sans mb-2">
+            <p className="text-primary/70 font-sans mb-2">
               {this.state.error?.message || 'An unexpected error occurred'}
             </p>
-            <p className="text-primary/40 font-sans text-sm mb-6">
+            <p className="text-primary/70 font-sans text-sm mb-6">
               This error has been logged. Try reloading the page.
             </p>
             <div className="flex gap-4 justify-center">

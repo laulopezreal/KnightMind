@@ -146,7 +146,7 @@ export default function LibraryPuzzle() {
     if (isLoading) {
         return (
             <div className="space-y-12 animate-teedin">
-                <div className="text-center text-primary/40 py-12">
+                <div className="text-center text-primary/70 py-12">
                     <span className="animate-pulse font-sans">Loading puzzle...</span>
                 </div>
             </div>
@@ -161,7 +161,7 @@ export default function LibraryPuzzle() {
         return (
             <div className="space-y-12 animate-teedin">
                 <section>
-                    <Link to="/library" className="text-primary/40 hover:text-primary mb-4 inline-block font-sans text-sm tracking-widest uppercase transition-colors">
+                    <Link to="/library" className="text-primary/70 hover:text-primary mb-4 inline-block font-sans text-sm tracking-widest uppercase transition-colors">
                         ← Back to Library
                     </Link>
                     {notFound ? (
@@ -190,7 +190,7 @@ export default function LibraryPuzzle() {
         <div className="space-y-12 animate-teedin">
             {/* Back link + Header */}
             <section>
-                <Link to="/library" className="text-primary/40 hover:text-primary mb-4 inline-block font-sans text-sm tracking-widest uppercase transition-colors">
+                <Link to="/library" className="text-primary/70 hover:text-primary mb-4 inline-block font-sans text-sm tracking-widest uppercase transition-colors">
                     ← Back to Library
                 </Link>
                 <h1 className="text-3xl md:text-4xl font-serif text-primary">
@@ -199,7 +199,7 @@ export default function LibraryPuzzle() {
             </section>
 
             {/* Metadata strip */}
-            <section className="flex flex-wrap gap-4 text-sm font-sans text-primary/60">
+            <section className="flex flex-wrap gap-4 text-sm font-sans text-primary/70">
                 <span className="px-3 py-1 bg-primary/5 rounded-sm border border-primary/10">
                     {puzzle.difficulty.charAt(0).toUpperCase() + puzzle.difficulty.slice(1)}
                 </span>
@@ -252,7 +252,7 @@ export default function LibraryPuzzle() {
                 <div className="order-1 lg:order-2 space-y-8 flex flex-col justify-center">
                     {/* Side to move */}
                     <div className="bg-primary/5 p-4 rounded-sm border-l-2 border-primary">
-                        <span className="font-sans text-sm tracking-wide uppercase text-primary/60">
+                        <span className="font-sans text-sm tracking-wide uppercase text-primary/70">
                             {puzzle.side_to_move === 'white' ? 'White to Move' : 'Black to Move'}
                         </span>
                     </div>
@@ -260,7 +260,7 @@ export default function LibraryPuzzle() {
                     {/* Status feedback */}
                     <div className="min-h-[80px] flex items-center justify-center text-center p-6 border border-primary/10 rounded-sm">
                         {status === 'solving' && (
-                            <p className="text-primary/60 font-serif text-lg italic">Find the best move...</p>
+                            <p className="text-primary/70 font-serif text-lg italic">Find the best move...</p>
                         )}
                         {status === 'correct' && (
                             <div className="text-center">
@@ -273,7 +273,7 @@ export default function LibraryPuzzle() {
                         )}
                         {status === 'revealed' && (
                             <div>
-                                <p className="text-primary/60 font-sans text-xs uppercase tracking-widest mb-1">Solution</p>
+                                <p className="text-primary/70 font-sans text-xs uppercase tracking-widest mb-1">Solution</p>
                                 <p className="text-primary font-mono text-xl">{puzzle.best_move_uci}</p>
                             </div>
                         )}
@@ -315,7 +315,7 @@ export default function LibraryPuzzle() {
                     <div className="space-y-4">
                         {/* Manual UCI input toggle */}
                         <div className="flex justify-between items-center px-2">
-                            <span className="text-xs text-primary/40 uppercase tracking-widest font-sans">Input Method</span>
+                            <span className="text-xs text-primary/70 uppercase tracking-widest font-sans">Input Method</span>
                             <button
                                 type="button"
                                 onClick={() => setShowUciInput(!showUciInput)}

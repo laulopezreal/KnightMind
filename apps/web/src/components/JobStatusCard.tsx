@@ -29,7 +29,7 @@ export function JobStatusCard({ status, progress = 0, message, error, onCancel }
             </div>
 
             {(message || error) && (
-                <p className={`font-sans text-sm ${isError ? 'text-red-500/80' : 'text-primary/60'}`}>
+                <p className={`font-sans text-sm ${isError ? 'text-red-500/80' : 'text-primary/70'}`}>
                     {error || message}
                 </p>
             )}

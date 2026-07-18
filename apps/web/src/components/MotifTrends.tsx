@@ -61,11 +61,11 @@ export function MotifTrends({ trends, windowDays }: MotifTrendsProps) {
                 <h2 id="motif-trends-heading" className="text-2xl font-serif text-primary mb-2 text-center">
                     📈 Progress Trends
                 </h2>
-                <p className="text-primary/60 text-center mb-6">
+                <p className="text-primary/70 text-center mb-6">
                     Track your improvement over time
                 </p>
                 <div className="text-center py-12">
-                    <p className="text-primary/60 font-sans">
+                    <p className="text-primary/70 font-sans">
                         Complete more puzzles over time to see your progress trends.
                         At least {windowDays} days of training data is needed.
                     </p>
@@ -79,7 +79,7 @@ export function MotifTrends({ trends, windowDays }: MotifTrendsProps) {
             <h2 id="motif-trends-heading" className="text-2xl font-serif text-primary mb-2 text-center">
                 📈 Progress Trends
             </h2>
-            <p className="text-primary/60 text-center mb-6">
+            <p className="text-primary/70 text-center mb-6">
                 Last {windowDays} days of training
             </p>
 
@@ -142,11 +142,11 @@ export function MotifTrends({ trends, windowDays }: MotifTrendsProps) {
             <div className="mt-6 grid grid-cols-1 md:grid-cols-3 gap-4">
                 {trends.slice(0, 3).map(trend => (
                     <div key={trend.motif} className="text-center">
-                        <p className="text-sm text-primary/60 mb-1">{trend.motif}</p>
+                        <p className="text-sm text-primary/70 mb-1">{trend.motif}</p>
                         <p className={`text-lg font-serif ${
                             trend.trend === 'up' ? 'text-green-500' :
                             trend.trend === 'down' ? 'text-red-500' :
-                            'text-primary/60'
+                            'text-primary/70'
                         }`}>
                             {trend.trend === 'up' ? '↗' : trend.trend === 'down' ? '↘' : '→'}
                             {' '}

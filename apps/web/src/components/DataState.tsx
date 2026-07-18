@@ -6,7 +6,7 @@ interface DataStateLoadingProps {
 export function DataStateLoading({ label, compact = false }: DataStateLoadingProps) {
   if (compact) {
     return (
-      <div className="flex items-center gap-2 text-primary/50 font-sans text-xs" role="status" aria-live="polite">
+      <div className="flex items-center gap-2 text-primary/70 font-sans text-xs" role="status" aria-live="polite">
         <div className="animate-spin h-4 w-4 border-2 border-primary/20 border-t-primary rounded-full" aria-hidden="true" />
         <span>{label}</span>
       </div>
@@ -55,8 +55,8 @@ interface DataStateEmptyProps {
 export function DataStateEmpty({ title, description, actionLabel, onAction }: DataStateEmptyProps) {
   return (
     <div className="bg-primary/5 border border-primary/10 rounded-sm p-10 text-center">
-      <p className="text-primary/60 font-sans text-lg mb-3">{title}</p>
-      <p className="text-primary/40 font-sans text-sm mb-6">{description}</p>
+      <p className="text-primary/70 font-sans text-lg mb-3">{title}</p>
+      <p className="text-primary/70 font-sans text-sm mb-6">{description}</p>
       <button
         type="button"
         onClick={onAction}

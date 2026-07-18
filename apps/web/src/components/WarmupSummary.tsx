@@ -34,7 +34,7 @@ export function WarmupSummary({ sessionSummary, onContinue }: WarmupSummaryProps
         <h2 id="warmup-summary-heading" className="text-3xl font-serif text-primary mb-2">
           Warmup Complete! 🎯
         </h2>
-        <p className="text-primary/60 font-sans">
+        <p className="text-primary/70 font-sans">
           Here's how you did after your break
         </p>
       </div>
@@ -44,7 +44,7 @@ export function WarmupSummary({ sessionSummary, onContinue }: WarmupSummaryProps
         <div className="text-6xl font-serif text-primary mb-2" aria-label={`Overall accuracy: ${accuracy} percent`}>
           {accuracy}%
         </div>
-        <p className="text-primary/60 font-sans">Overall Accuracy</p>
+        <p className="text-primary/70 font-sans">Overall Accuracy</p>
       </div>
 
       {/* Pattern Retention Grid */}
@@ -53,7 +53,7 @@ export function WarmupSummary({ sessionSummary, onContinue }: WarmupSummaryProps
           <div className="text-3xl font-serif text-green-600" aria-label={`${sessionSummary.pass_count} patterns retained`}>
             {sessionSummary.pass_count}
           </div>
-          <div className="text-xs uppercase tracking-widest text-primary/40 mt-1">
+          <div className="text-xs uppercase tracking-widest text-primary/70 mt-1">
             Patterns Retained
           </div>
         </div>
@@ -61,7 +61,7 @@ export function WarmupSummary({ sessionSummary, onContinue }: WarmupSummaryProps
           <div className="text-3xl font-serif text-red-500" aria-label={`${sessionSummary.fail_count} patterns need review`}>
             {sessionSummary.fail_count}
           </div>
-          <div className="text-xs uppercase tracking-widest text-primary/40 mt-1">
+          <div className="text-xs uppercase tracking-widest text-primary/70 mt-1">
             Need Review
           </div>
         </div>
@@ -69,7 +69,7 @@ export function WarmupSummary({ sessionSummary, onContinue }: WarmupSummaryProps
 
       {/* Feedback Message */}
       <div className="bg-primary/5 border border-primary/10 rounded-sm p-6 mb-6">
-        <p className="text-primary/60 font-sans text-center">
+        <p className="text-primary/70 font-sans text-center">
           {getFeedbackMessage(accuracy)}
         </p>
       </div>
