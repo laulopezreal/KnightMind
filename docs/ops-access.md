@@ -61,6 +61,29 @@ cd apps/web && npm run dev -- --mode ops        # or build with --mode ops and s
 # open http://localhost:5173/ops
 ```
 
+## Security assumptions (what this does and doesn't guarantee)
+
+- **The public API can only be reached through Caddy.** The API container is
+  published as `127.0.0.1:${API_PORT}:8000` (loopback-only), so there is no way
+  to hit `:8000` directly from the internet and skip the header-strip. If you
+  ever change that port publish to `0.0.0.0`, this gate is bypassed — don't.
+- **On the tailnet path, `tailscale serve` is the source of truth for identity.**
+  It sets `Tailscale-User-Login` from the authenticated tailnet connection. Set
+  `KNIGHTMIND_OPS_TAILNET_USER` to pin access to your login so that even another
+  member of your tailnet can't reach the board.
+- **Out of scope (pre-existing, still public because the normal app needs them):**
+  `GET /jobs/{id}` and `GET /import/status?username=` return status for a *known*
+  job id / username. They aren't part of the operator gate; gating them would
+  break the public app. Flag separately if you want them tightened.
+
+## CORS for the operator build
+
+The operator frontend (e.g. `localhost:5173`) calling the tailnet API base is
+**cross-origin**, so the API's `KNIGHTMIND_CORS_ORIGINS` must include that origin
+or the browser will block the response. The gate itself doesn't rely on cookies
+— `tailscale serve` injects the identity header server-side — so you only need
+the origin allow-listed, not credentialed CORS.
+
 ## Verify
 
 ```bash
