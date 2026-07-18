@@ -496,7 +496,7 @@ export default function Puzzles() {
                         <span>Games: {userStatus.games_count}</span>
                         <span>Puzzles: {userStatus.puzzles_count}</span>
                         {userStatus.has_new_games ? (
-                            <span className="text-green-600">
+                            <span className="text-positive">
                                 ✓ New games available for puzzles
                             </span>
                         ) : userStatus.games_count > 0 ? (
@@ -736,7 +736,7 @@ export default function Puzzles() {
                                         </span>
                                     </div>
                                     <div className="flex items-center gap-2">
-                                        <span className="text-red-500 font-mono text-sm">
+                                        <span className="text-negative font-mono text-sm">
                                             {Math.round(motif.accuracy * 100)}%
                                         </span>
                                         <span className="text-xs text-primary/70">needs work</span>
@@ -864,8 +864,8 @@ export default function Puzzles() {
                                                             <div className="flex justify-between text-xs text-primary/70 mt-1">
                                                                 <span>
                                                                     Trend:
-                                                                    <span className={`ml-1 ${getPerformanceTrend(performanceHistory) === 'improving' ? 'text-green-500' :
-                                                                        getPerformanceTrend(performanceHistory) === 'declining' ? 'text-red-500' : 'text-primary/70'
+                                                                    <span className={`ml-1 ${getPerformanceTrend(performanceHistory) === 'improving' ? 'text-positive' :
+                                                                        getPerformanceTrend(performanceHistory) === 'declining' ? 'text-negative' : 'text-primary/70'
                                                                         }`}>
                                                                         {getPerformanceTrend(performanceHistory) === 'improving' ? '↗ Improving' :
                                                                             getPerformanceTrend(performanceHistory) === 'declining' ? '↘ Declining' : '→ Stable'}
@@ -881,7 +881,7 @@ export default function Puzzles() {
                                                     {/* Timed Session Timer */}
                                                     {sessionSummary.session_type === 'timed' && timer.timeRemaining > 0 && (
                                                         <div className="text-center">
-                                                            <span className={`font-mono text-sm ${timer.timeRemaining < 60 ? 'text-red-500' : 'text-primary/80'}`}>
+                                                            <span className={`font-mono text-sm ${timer.timeRemaining < 60 ? 'text-negative' : 'text-primary/80'}`}>
                                                                 Time Remaining: {Math.floor(timer.timeRemaining / 60)}:{(timer.timeRemaining % 60).toString().padStart(2, '0')}
                                                             </span>
                                                         </div>
@@ -929,17 +929,17 @@ export default function Puzzles() {
                             )}
                             {status === 'correct' && (
                                 <div className="text-center">
-                                    <p className="text-green-600 font-serif text-2xl animate-teedin">Correct! Excellent.</p>
+                                    <p className="text-positive font-serif text-2xl animate-teedin">Correct! Excellent.</p>
                                     {lastFeedback && (
-                                        <p className="text-green-600 font-sans text-sm mt-2 animate-teedin">{lastFeedback}</p>
+                                        <p className="text-positive font-sans text-sm mt-2 animate-teedin">{lastFeedback}</p>
                                     )}
                                 </div>
                             )}
                             {status === 'incorrect' && (
                                 <div className="text-center">
-                                    <p className="text-red-500 font-serif text-2xl animate-teedin">Incorrect.</p>
+                                    <p className="text-negative font-serif text-2xl animate-teedin">Incorrect.</p>
                                     {lastFeedback && (
-                                        <p className="text-red-500 font-sans text-sm mt-2 animate-teedin">{lastFeedback}</p>
+                                        <p className="text-negative font-sans text-sm mt-2 animate-teedin">{lastFeedback}</p>
                                     )}
                                 </div>
                             )}
@@ -1062,7 +1062,7 @@ export default function Puzzles() {
                                     {/* Detailed feedback for incorrect answers */}
                                     {lastFeedback && (
                                         <div className="bg-red-500/10 border border-red-500/20 p-3 rounded-sm text-sm">
-                                            <p className="text-red-500 font-sans">{lastFeedback}</p>
+                                            <p className="text-negative font-sans">{lastFeedback}</p>
                                         </div>
                                     )}
 
@@ -1179,9 +1179,9 @@ export default function Puzzles() {
                                         {motif.passed}/{motif.total_puzzles} solved
                                     </span>
                                     <span className={`font-mono ${
-                                        motif.rank === 'mastered' ? 'text-green-600' :
-                                        motif.rank === 'learning' ? 'text-yellow-600' :
-                                        'text-red-500'
+                                        motif.rank === 'mastered' ? 'text-positive' :
+                                        motif.rank === 'learning' ? 'text-warning' :
+                                        'text-negative'
                                     }`}>
                                         {Math.round(motif.accuracy * 100)}%
                                     </span>

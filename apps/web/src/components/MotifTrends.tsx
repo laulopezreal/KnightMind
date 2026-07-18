@@ -144,8 +144,8 @@ export function MotifTrends({ trends, windowDays }: MotifTrendsProps) {
                     <div key={trend.motif} className="text-center">
                         <p className="text-sm text-primary/70 mb-1">{trend.motif}</p>
                         <p className={`text-lg font-serif ${
-                            trend.trend === 'up' ? 'text-green-500' :
-                            trend.trend === 'down' ? 'text-red-500' :
+                            trend.trend === 'up' ? 'text-positive' :
+                            trend.trend === 'down' ? 'text-negative' :
                             'text-primary/70'
                         }`}>
                             {trend.trend === 'up' ? '↗' : trend.trend === 'down' ? '↘' : '→'}

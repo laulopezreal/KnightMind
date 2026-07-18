@@ -32,7 +32,7 @@ interface DataStateErrorProps {
 export function DataStateError({ message, onRetry, retryLabel, ariaLabel, compact = false }: DataStateErrorProps) {
   return (
     <div className={`${compact ? "text-left p-4" : "max-w-md mx-auto mt-24 text-center p-8"} bg-red-500/5 border border-red-500/20 rounded-sm`} role="alert" aria-live="assertive">
-      <p className="text-red-500 mb-4">{message}</p>
+      <p className="text-negative mb-4">{message}</p>
       <button
         type="button"
         onClick={onRetry}

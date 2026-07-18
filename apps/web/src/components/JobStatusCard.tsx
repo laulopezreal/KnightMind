@@ -29,7 +29,7 @@ export function JobStatusCard({ status, progress = 0, message, error, onCancel }
             </div>
 
             {(message || error) && (
-                <p className={`font-sans text-sm ${isError ? 'text-red-500/80' : 'text-primary/70'}`}>
+                <p className={`font-sans text-sm ${isError ? 'text-negative' : 'text-primary/70'}`}>
                     {error || message}
                 </p>
             )}
@@ -52,7 +52,7 @@ export function JobStatusCard({ status, progress = 0, message, error, onCancel }
                         <button
                             type="button"
                             onClick={onCancel}
-                            className="km-interactive km-focus-visible px-4 py-2 text-sm border border-red-500/30 text-red-500 rounded-sm font-serif transition-all hover:bg-red-500/10"
+                            className="km-interactive km-focus-visible px-4 py-2 text-sm border border-red-500/30 text-negative rounded-sm font-serif transition-all hover:bg-red-500/10"
                         >
                             Cancel
                         </button>
@@ -61,7 +61,7 @@ export function JobStatusCard({ status, progress = 0, message, error, onCancel }
             )}
 
             {isSuccess && (
-                <div className="flex items-center gap-2 text-green-600 font-serif text-sm">
+                <div className="flex items-center gap-2 text-positive font-serif text-sm">
                     <span>✓</span>
                     <span>Ready to solve!</span>
                 </div>

@@ -345,7 +345,7 @@ export default function Home() {
                   </button>
                 </div>
                 {connectError && (
-                  <p className="text-xs font-sans text-red-500" role="alert">{connectError}</p>
+                  <p className="text-xs font-sans text-negative" role="alert">{connectError}</p>
                 )}
                 <button
                   type="button"
@@ -411,7 +411,7 @@ export default function Home() {
             )}
             {actionStatus && (
               <div
-                className={`text-sm font-sans ${isError ? 'text-red-500/80' : 'text-primary/70'}`}
+                className={`text-sm font-sans ${isError ? 'text-negative' : 'text-primary/70'}`}
                 role="status"
                 aria-live="polite"
               >

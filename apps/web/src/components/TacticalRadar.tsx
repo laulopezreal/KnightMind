@@ -117,7 +117,7 @@ export function TacticalRadar({ motifs, onMotifClick }: TacticalRadarProps) {
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                             </svg>
                         </div>
-                        <p className="text-2xl font-serif text-green-600">
+                        <p className="text-2xl font-serif text-positive">
                             All Motifs Mastered!
                         </p>
                     </div>
@@ -134,7 +134,7 @@ export function TacticalRadar({ motifs, onMotifClick }: TacticalRadarProps) {
                     <p className="text-primary/70 text-sm mb-2">
                         Your weakest area:
                     </p>
-                    <p className="text-xl font-serif text-red-500 mb-4">
+                    <p className="text-xl font-serif text-negative mb-4">
                         {weakest.name} ({Math.round(weakest.accuracy * 100)}%)
                     </p>
                     <button

@@ -70,6 +70,7 @@
 @utility text-status-mastered { color: var(--color-status-mastered); }
 @utility text-positive { color: var(--color-positive); }
 @utility text-negative { color: var(--color-negative); }
+@utility text-warning { color: var(--color-warning); }
 
 @utility bg-status-due-soft { background-color: var(--color-status-due-bg); }
 @utility bg-status-new-soft { background-color: var(--color-status-new-bg); }
@@ -100,6 +101,7 @@
   --color-status-mastered: #166534; /* green-800 */
   --color-positive: #065f46;        /* emerald-800 (emerald-700 measured 4.11 on its pill tint) */
   --color-negative: #991b1b;        /* red-800 (margin over 4.5 on the red pill tint) */
+  --color-warning: #92400e;         /* amber-800 — clears 4.5 on cream and on faint amber tints */
   --color-status-due-bg: color-mix(in srgb, var(--color-status-due) 12%, transparent);
   --color-status-new-bg: color-mix(in srgb, var(--color-status-new) 12%, transparent);
   --color-status-learning-bg: color-mix(in srgb, var(--color-status-learning) 12%, transparent);
@@ -126,6 +128,7 @@ body.night {
   --color-status-mastered: #34d399; /* emerald-400 */
   --color-positive: #34d399;        /* emerald-400 */
   --color-negative: #f87171;        /* red-400 */
+  --color-warning: #fbbf24;         /* amber-400 — light shade for the near-black night bg */
   --color-status-due-bg: color-mix(in srgb, var(--color-status-due) 8%, transparent);
   --color-status-new-bg: color-mix(in srgb, var(--color-status-new) 8%, transparent);
   --color-status-learning-bg: color-mix(in srgb, var(--color-status-learning) 8%, transparent);

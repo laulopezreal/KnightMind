@@ -50,7 +50,7 @@ export function WarmupSummary({ sessionSummary, onContinue }: WarmupSummaryProps
       {/* Pattern Retention Grid */}
       <div className="grid grid-cols-2 gap-6 mb-8">
         <div className="text-center">
-          <div className="text-3xl font-serif text-green-600" aria-label={`${sessionSummary.pass_count} patterns retained`}>
+          <div className="text-3xl font-serif text-positive" aria-label={`${sessionSummary.pass_count} patterns retained`}>
             {sessionSummary.pass_count}
           </div>
           <div className="text-xs uppercase tracking-widest text-primary/70 mt-1">
@@ -58,7 +58,7 @@ export function WarmupSummary({ sessionSummary, onContinue }: WarmupSummaryProps
           </div>
         </div>
         <div className="text-center">
-          <div className="text-3xl font-serif text-red-500" aria-label={`${sessionSummary.fail_count} patterns need review`}>
+          <div className="text-3xl font-serif text-negative" aria-label={`${sessionSummary.fail_count} patterns need review`}>
             {sessionSummary.fail_count}
           </div>
           <div className="text-xs uppercase tracking-widest text-primary/70 mt-1">

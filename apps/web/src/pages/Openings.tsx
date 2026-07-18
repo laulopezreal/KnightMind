@@ -236,9 +236,9 @@ export default function Openings() {
               </div>
               <div className="space-y-1 font-sans text-sm text-primary/80">
                 <div className="flex justify-between"><span>Games</span> <span>{tooltip.data.games_count}</span></div>
-                <div className="flex justify-between text-green-600"><span>Won</span> <span>{tooltip.data.wins}</span></div>
-                <div className="flex justify-between text-gray-500"><span>Draw</span> <span>{tooltip.data.draws}</span></div>
-                <div className="flex justify-between text-red-500"><span>Lost</span> <span>{tooltip.data.losses}</span></div>
+                <div className="flex justify-between text-positive"><span>Won</span> <span>{tooltip.data.wins}</span></div>
+                <div className="flex justify-between text-primary/70"><span>Draw</span> <span>{tooltip.data.draws}</span></div>
+                <div className="flex justify-between text-negative"><span>Lost</span> <span>{tooltip.data.losses}</span></div>
                 <div className="pt-2 border-t border-primary/10 flex justify-between font-medium">
                   <span>Win Rate</span>
                   <span style={{ color: getWinRateColor(tooltip.data.win_rate) }}>{tooltip.data.win_rate}%</span>

@@ -112,12 +112,12 @@ export default function Ops() {
             </header>
 
             {backendIssue && (
-                <div className="bg-red-500/10 border border-red-500/20 text-red-500 p-6 rounded-sm font-sans text-sm flex flex-col gap-3">
+                <div className="bg-red-500/10 border border-red-500/20 text-negative p-6 rounded-sm font-sans text-sm flex flex-col gap-3">
                     <span className="font-bold uppercase tracking-widest text-[10px]">Backend Unavailable</span>
                     <span>
                         {error ? error : 'Backend health checks reported degraded services.'}
                     </span>
-                    <div className="text-xs text-red-500/70 space-y-1">
+                    <div className="text-xs text-negative space-y-1">
                         <span className="text-[10px] uppercase tracking-widest block">Attempted endpoints</span>
                         <code className="block font-mono text-[11px]">{API_TARGET}/ops/health</code>
                         <code className="block font-mono text-[11px]">{API_TARGET}/ops/status</code>
@@ -178,7 +178,7 @@ export default function Ops() {
                                 Set Active
                             </button>
                         </div>
-                        {usersError && <p className="text-xs text-red-500/70">{usersError}</p>}
+                        {usersError && <p className="text-xs text-negative">{usersError}</p>}
                         {!usersError && users.length === 0 && (
                             <p className="text-xs text-primary/70">No users found yet.</p>
                         )}
@@ -206,7 +206,7 @@ export default function Ops() {
                         <div className="text-xs text-primary/70 animate-pulse">Loading report...</div>
                     )}
                     {storageError && (
-                        <div className="text-xs text-red-500/70">{storageError}</div>
+                        <div className="text-xs text-negative">{storageError}</div>
                     )}
                     {!storageLoading && !storageError && reportEntries.length === 0 && (
                         <div className="text-xs text-primary/70">No storage report data available.</div>
@@ -237,7 +237,7 @@ export default function Ops() {
             </div>
 
             {(opsStatus?.last_recovery?.recovered_count ?? 0) > 0 && (
-                <div className="bg-amber-500/10 border border-amber-500/20 text-amber-500 p-4 rounded-sm font-sans text-xs flex items-center justify-between">
+                <div className="bg-amber-500/10 border border-amber-500/20 text-warning p-4 rounded-sm font-sans text-xs flex items-center justify-between">
                     <div className="flex items-center gap-3">
                         <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
                         <span>
@@ -328,8 +328,8 @@ export default function Ops() {
                         })()}
                         {activeJob.error_message && (
                             <div>
-                                <span className="text-[10px] uppercase tracking-widest text-red-500/70 font-sans block mb-1">Error</span>
-                                <p className="text-xs text-red-500/80 font-sans">{activeJob.error_message}</p>
+                                <span className="text-[10px] uppercase tracking-widest text-negative font-sans block mb-1">Error</span>
+                                <p className="text-xs text-negative font-sans">{activeJob.error_message}</p>
                             </div>
                         )}
                     </div>
@@ -420,7 +420,7 @@ export default function Ops() {
                                                     <span className="text-[10px] opacity-40">—</span>
                                                 )}
                                                 {job.error_message && (
-                                                    <span className="text-red-500/60 block mt-1 leading-tight max-w-[180px] truncate text-left" title={job.error_message}>
+                                                    <span className="text-negative block mt-1 leading-tight max-w-[180px] truncate text-left" title={job.error_message}>
                                                         {job.error_message}
                                                     </span>
                                                 )}
@@ -450,10 +450,10 @@ function HealthCard({ label, status, value }: { label: string, status: 'up' | 'd
         <div className="border border-primary/10 rounded-sm p-6 relative group hover:border-primary/20 transition-all">
             <div className={`absolute left-0 top-6 bottom-6 w-[3px] rounded-r-full ${isUp ? 'bg-green-500/40' : 'bg-red-500/40'}`} />
             <div className="text-[9px] uppercase tracking-[0.3em] opacity-40 mb-3 font-bold">{label}</div>
-            <div className={`text-2xl font-serif font-medium ${isUp ? 'text-primary' : 'text-red-500 opacity-80'}`}>
+            <div className={`text-2xl font-serif font-medium ${isUp ? 'text-primary' : 'text-negative'}`}>
                 {value}
             </div>
-            <div className={`text-[9px] uppercase tracking-widest mt-3 flex items-center gap-2 ${isUp ? 'opacity-30' : 'text-red-500 opacity-50'}`}>
+            <div className={`text-[9px] uppercase tracking-widest mt-3 flex items-center gap-2 ${isUp ? 'opacity-30' : 'text-negative'}`}>
                 <span className={`w-1.5 h-1.5 rounded-full ${isUp ? 'bg-green-500/40 animate-pulse' : 'bg-red-500'}`} />
                 {isUp ? 'Operational' : 'Critical Issue'}
             </div>
@@ -465,7 +465,7 @@ function MetricItem({ label, value, trend }: { label: string, value: string | nu
     return (
         <div className="flex flex-col gap-1">
             <span className="text-[10px] uppercase tracking-widest opacity-50 font-sans">{label}</span>
-            <span className={`text-lg font-serif tabular-nums ${trend === 'bad' ? 'text-red-500 opacity-70' : 'text-primary'}`}>
+            <span className={`text-lg font-serif tabular-nums ${trend === 'bad' ? 'text-negative' : 'text-primary'}`}>
                 {value}
             </span>
         </div>
@@ -474,10 +474,10 @@ function MetricItem({ label, value, trend }: { label: string, value: string | nu
 
 function StatusBadge({ status }: { status: RecentJob['status'] }) {
     const colors: Record<RecentJob['status'], string> = {
-        succeeded: 'text-green-500/70 border-green-500/20',
-        failed: 'text-red-500/70 border-red-500/20',
-        running: 'text-amber-500/70 border-amber-500/20',
-        queued: 'text-blue-500/70 border-blue-500/20',
+        succeeded: 'text-positive border-green-500/20',
+        failed: 'text-negative border-red-500/20',
+        running: 'text-warning border-amber-500/20',
+        queued: 'text-status-new border-blue-500/20',
         canceled: 'text-primary/70 border-primary/10',
     };
     const style = colors[status] ?? 'text-primary/70 border-primary/10';

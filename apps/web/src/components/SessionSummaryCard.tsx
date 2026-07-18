@@ -44,11 +44,11 @@ export function SessionSummaryCard({
 
             <div className="grid grid-cols-2 md:grid-cols-4 gap-6 mb-6">
                 <div className="text-center">
-                    <div className="text-3xl font-serif text-green-600">{sessionSummary.pass_count}</div>
+                    <div className="text-3xl font-serif text-positive">{sessionSummary.pass_count}</div>
                     <div className="text-xs uppercase tracking-widest text-primary/70 mt-1">Passed</div>
                 </div>
                 <div className="text-center">
-                    <div className="text-3xl font-serif text-red-500">{sessionSummary.fail_count}</div>
+                    <div className="text-3xl font-serif text-negative">{sessionSummary.fail_count}</div>
                     <div className="text-xs uppercase tracking-widest text-primary/70 mt-1">Failed</div>
                 </div>
                 <div className="text-center">

@@ -126,7 +126,7 @@ export default function UsernameDisplay() {
                         </button>
                     </div>
                     {error && (
-                        <p className="mt-2 text-xs text-red-500">{error}</p>
+                        <p className="mt-2 text-xs text-negative">{error}</p>
                     )}
                 </div>
             )}

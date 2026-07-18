@@ -146,7 +146,7 @@ export default function LibraryPuzzle() {
     if (isLoading) {
         return (
             <div className="space-y-12 animate-teedin">
-                <div className="text-center text-primary/70 py-12">
+                <div className="text-center text-primary/70 py-12" role="status" aria-live="polite">
                     <span className="animate-pulse font-sans">Loading puzzle...</span>
                 </div>
             </div>
@@ -166,7 +166,7 @@ export default function LibraryPuzzle() {
                     </Link>
                     {notFound ? (
                         <div className="bg-red-500/10 border border-red-500/20 rounded-sm p-6 text-center" role="alert">
-                            <p className="text-red-500 font-sans">{error || 'Puzzle not found'}</p>
+                            <p className="text-negative font-sans">{error || 'Puzzle not found'}</p>
                         </div>
                     ) : (
                         <DataStateError
@@ -214,7 +214,7 @@ export default function LibraryPuzzle() {
                     </span>
                 )}
                 {puzzle.fail_count > 0 && (
-                    <span className="px-3 py-1 bg-red-500/10 rounded-sm border border-red-500/20 text-red-500/80">
+                    <span className="px-3 py-1 bg-red-500/10 rounded-sm border border-red-500/20 text-negative">
                         {puzzle.fail_count} failed
                     </span>
                 )}
@@ -264,12 +264,12 @@ export default function LibraryPuzzle() {
                         )}
                         {status === 'correct' && (
                             <div className="text-center">
-                                <p className="text-green-600 font-serif text-2xl animate-teedin">Correct!</p>
-                                {feedback && <p className="text-green-600 font-sans text-sm mt-2">{feedback}</p>}
+                                <p className="text-positive font-serif text-2xl animate-teedin">Correct!</p>
+                                {feedback && <p className="text-positive font-sans text-sm mt-2">{feedback}</p>}
                             </div>
                         )}
                         {status === 'incorrect' && (
-                            <p className="text-red-500 font-serif text-2xl animate-teedin">Incorrect.</p>
+                            <p className="text-negative font-serif text-2xl animate-teedin">Incorrect.</p>
                         )}
                         {status === 'revealed' && (
                             <div>
@@ -282,8 +282,8 @@ export default function LibraryPuzzle() {
                     {/* Recorded confirmation */}
                     {recorded && (
                         <div className="bg-green-500/10 border border-green-500/20 rounded-sm p-4 text-center animate-teedin">
-                            <p className="text-green-600 font-serif font-medium">Recorded</p>
-                            <div className="flex items-center justify-center gap-4 mt-2 text-sm font-sans text-green-600/70">
+                            <p className="text-positive font-serif font-medium">Recorded</p>
+                            <div className="flex items-center justify-center gap-4 mt-2 text-sm font-sans text-positive">
                                 {solveTimeMs && (
                                     <span>{formatSolveTime(solveTimeMs)}</span>
                                 )}
@@ -295,7 +295,7 @@ export default function LibraryPuzzle() {
                                 )}
                             </div>
                             {nextDueAt && (
-                                <p className="text-green-600/70 font-sans text-sm mt-1">
+                                <p className="text-positive font-sans text-sm mt-1">
                                     Next review: {new Date(nextDueAt).toLocaleDateString(undefined, {
                                         weekday: 'long', month: 'short', day: 'numeric'
                                     })}
@@ -307,7 +307,7 @@ export default function LibraryPuzzle() {
                     {/* Record error */}
                     {recordError && (
                         <div className="bg-red-500/10 border border-red-500/20 rounded-sm p-4 text-center animate-teedin">
-                            <p className="text-red-500 font-sans text-sm">{recordError}</p>
+                            <p className="text-negative font-sans text-sm">{recordError}</p>
                         </div>
                     )}
 
