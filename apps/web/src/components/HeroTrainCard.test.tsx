@@ -85,15 +85,14 @@ describe('HeroTrainCard', () => {
     expect(section).toBeInTheDocument();
   });
 
-  it('renders the CTA with a solid fill, not the no-op bg-accent utility', () => {
+  it('renders the CTA with a solid fill via the registered primary token', () => {
     render(<HeroTrainCard {...defaultProps} />);
 
-    // bg-accent/text-bg-primary never generated CSS (no --color-accent token), so
-    // the primary CTA painted no fill and read as plain text. It must use the
-    // theme-aware fill utilities instead.
+    // bg-accent never generated CSS (no --color-accent token), so the CTA read as
+    // plain text. It now uses the registered bg-primary/text-bg-primary fill.
     const cta = screen.getByRole('button', { name: 'Start Session' });
-    expect(cta).toHaveClass('bg-cta');
-    expect(cta).toHaveClass('text-cta-fg');
+    expect(cta).toHaveClass('bg-primary');
+    expect(cta).toHaveClass('text-bg-primary');
     expect(cta).not.toHaveClass('bg-accent');
   });
 });

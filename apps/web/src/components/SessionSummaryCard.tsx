@@ -37,31 +37,31 @@ export function SessionSummaryCard({
             </div>
 
             {sessionSummary.completed_at && (
-                <div className="text-sm text-primary/60 mb-4">
+                <div className="text-sm text-primary/70 mb-4">
                     Completed on {new Date(sessionSummary.completed_at).toLocaleString()}
                 </div>
             )}
 
             <div className="grid grid-cols-2 md:grid-cols-4 gap-6 mb-6">
                 <div className="text-center">
-                    <div className="text-3xl font-serif text-green-600">{sessionSummary.pass_count}</div>
-                    <div className="text-xs uppercase tracking-widest text-primary/40 mt-1">Passed</div>
+                    <div className="text-3xl font-serif text-positive">{sessionSummary.pass_count}</div>
+                    <div className="text-xs uppercase tracking-widest text-primary/70 mt-1">Passed</div>
                 </div>
                 <div className="text-center">
-                    <div className="text-3xl font-serif text-red-500">{sessionSummary.fail_count}</div>
-                    <div className="text-xs uppercase tracking-widest text-primary/40 mt-1">Failed</div>
+                    <div className="text-3xl font-serif text-negative">{sessionSummary.fail_count}</div>
+                    <div className="text-xs uppercase tracking-widest text-primary/70 mt-1">Failed</div>
                 </div>
                 <div className="text-center">
                     <div className="text-3xl font-serif text-primary">
                         {calculateAccuracy(sessionSummary.pass_count, sessionSummary.fail_count)}%
                     </div>
-                    <div className="text-xs uppercase tracking-widest text-primary/40 mt-1">Accuracy</div>
+                    <div className="text-xs uppercase tracking-widest text-primary/70 mt-1">Accuracy</div>
                 </div>
                 <div className="text-center">
                     <div className="text-3xl font-serif text-primary">
                         {Math.floor(sessionSummary.total_time_ms / 60000)}m {Math.floor((sessionSummary.total_time_ms % 60000) / 1000)}s
                     </div>
-                    <div className="text-xs uppercase tracking-widest text-primary/40 mt-1">Total Time</div>
+                    <div className="text-xs uppercase tracking-widest text-primary/70 mt-1">Total Time</div>
                 </div>
             </div>
 
@@ -69,11 +69,11 @@ export function SessionSummaryCard({
             <div className="grid grid-cols-2 md:grid-cols-4 gap-6 mb-6">
                 <div className="text-center">
                     <div className="text-3xl font-serif text-primary">{sessionSummary.best_streak}</div>
-                    <div className="text-xs uppercase tracking-widest text-primary/40 mt-1">Best Streak</div>
+                    <div className="text-xs uppercase tracking-widest text-primary/70 mt-1">Best Streak</div>
                 </div>
                 <div className="text-center">
                     <div className="text-3xl font-serif text-primary">{sessionSummary.hints_used}</div>
-                    <div className="text-xs uppercase tracking-widest text-primary/40 mt-1">Hints Used</div>
+                    <div className="text-xs uppercase tracking-widest text-primary/70 mt-1">Hints Used</div>
                 </div>
                 {sessionSummary.session_type && sessionSummary.session_type !== 'standard' && (
                     <div className="text-center md:col-span-2">
@@ -82,7 +82,7 @@ export function SessionSummaryCard({
                             {sessionSummary.target_accuracy && ` (${sessionSummary.target_accuracy}% accuracy)`}
                             {sessionSummary.target_time_minutes && ` (${sessionSummary.target_time_minutes} minutes)`}
                         </div>
-                        <div className="text-xs uppercase tracking-widest text-primary/40 mt-1">Session Type</div>
+                        <div className="text-xs uppercase tracking-widest text-primary/70 mt-1">Session Type</div>
                     </div>
                 )}
             </div>
@@ -109,7 +109,7 @@ export function SessionSummaryCard({
             <button
                 type="button"
                 onClick={onStartNewSession}
-                className="w-full px-6 py-3 bg-cta text-cta-fg rounded-sm font-serif transition-opacity hover:opacity-90 cursor-pointer km-focus-visible">
+                className="w-full px-6 py-3 bg-primary text-bg-primary rounded-sm font-serif transition-opacity hover:opacity-90 cursor-pointer km-focus-visible">
                 Start New Session
             </button>
         </section>

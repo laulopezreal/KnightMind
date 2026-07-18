@@ -84,7 +84,7 @@ export default function UsernameDisplay() {
                 className={`
                     km-interactive km-focus-visible flex items-center gap-2 px-3 py-1.5 min-h-11 rounded-sm transition-all duration-300
                     ${username
-                        ? 'text-primary/60'
+                        ? 'text-primary/70'
                         : 'text-accent border border-accent/20 bg-accent/5'
                     }
                     ${isEditorOpen ? 'bg-primary/5 text-primary' : ''}
@@ -92,7 +92,7 @@ export default function UsernameDisplay() {
             >
                 {username ? (
                     <>
-                        <span className="opacity-50 text-xs uppercase tracking-wider">Chess.com</span>
+                        <span className="text-xs uppercase tracking-wider">Chess.com</span>
                         <span className="font-medium truncate max-w-[100px] md:max-w-none">· {username}</span>
                     </>
                 ) : (
@@ -102,7 +102,7 @@ export default function UsernameDisplay() {
 
             {isEditorOpen && (
                 <div className="absolute top-full right-0 mt-2 w-72 bg-bg-primary border border-primary/20 shadow-xl rounded-sm p-4 z-50 animate-teedin">
-                    <label className="block text-xs font-sans uppercase tracking-widest text-primary/40 mb-2">
+                    <label className="block text-xs font-sans uppercase tracking-widest text-primary/70 mb-2">
                         Chess.com Username
                     </label>
                     <div className="flex gap-2">
@@ -120,13 +120,13 @@ export default function UsernameDisplay() {
                             type="button"
                             onClick={handleSave}
                             disabled={isValidating}
-                            className={`px-4 py-2 bg-cta text-cta-fg font-medium rounded-sm transition-opacity km-focus-visible ${isValidating ? 'km-interactive-disabled disabled:opacity-50' : 'hover:opacity-90 cursor-pointer'}`}
+                            className={`px-4 py-2 bg-primary text-bg-primary font-medium rounded-sm transition-opacity km-focus-visible ${isValidating ? 'km-interactive-disabled disabled:opacity-50' : 'hover:opacity-90 cursor-pointer'}`}
                         >
                             {isValidating ? '...' : 'Save'}
                         </button>
                     </div>
                     {error && (
-                        <p className="mt-2 text-xs text-red-500">{error}</p>
+                        <p className="mt-2 text-xs text-negative">{error}</p>
                     )}
                 </div>
             )}

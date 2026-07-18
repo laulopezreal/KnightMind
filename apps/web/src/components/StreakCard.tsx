@@ -27,19 +27,19 @@ export function StreakCard({ streakDays, lastSessionAt }: StreakCardProps) {
           <p className="text-4xl font-mono text-primary leading-tight">
             {streakDays}
           </p>
-          <p className="text-xs text-primary/60 font-sans">
+          <p className="text-xs text-primary/70 font-sans">
             day streak
           </p>
         </div>
 
         {/* Encouraging message */}
-        <p className="text-sm text-primary/60 font-sans">
+        <p className="text-sm text-primary/70 font-sans">
           {encouragement}
         </p>
 
         {/* Last session timestamp */}
         {lastSessionAt && (
-          <p className="text-xs text-primary/40 font-sans pt-2 border-t border-primary/5">
+          <p className="text-xs text-primary/70 font-sans pt-2 border-t border-primary/5">
             Last session: {formatRelativeTime(lastSessionAt)}
           </p>
         )}

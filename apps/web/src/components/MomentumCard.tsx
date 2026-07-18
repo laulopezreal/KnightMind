@@ -28,7 +28,7 @@ export function MomentumCard({ recentForm }: MomentumCardProps) {
             screen readers announce one summary instead of 20 separate squares
             (aria-label on a role-less div is also invalid ARIA). */}
         <div>
-          <p className="text-xs text-primary/60 font-sans mb-2">
+          <p className="text-xs text-primary/70 font-sans mb-2">
             {last_20_results.length > 0 ? `Last ${last_20_results.length} puzzles` : 'Recent puzzles'}
           </p>
           <div
@@ -55,7 +55,7 @@ export function MomentumCard({ recentForm }: MomentumCardProps) {
 
         {/* Accuracy */}
         <div className="flex justify-between items-center pt-2">
-          <span className="text-primary/60 font-sans text-sm">Accuracy</span>
+          <span className="text-primary/70 font-sans text-sm">Accuracy</span>
           <span className="text-2xl font-mono text-primary">
             {Math.round(accuracy * 100)}%
           </span>
@@ -63,7 +63,7 @@ export function MomentumCard({ recentForm }: MomentumCardProps) {
 
         {/* Trend indicator (informational, not judgmental) */}
         <div className="flex items-center gap-2 text-sm">
-          <span className="text-primary/60 font-sans">Trend:</span>
+          <span className="text-primary/70 font-sans">Trend:</span>
           <span className="text-primary/80 font-sans">
             {trendText}
           </span>

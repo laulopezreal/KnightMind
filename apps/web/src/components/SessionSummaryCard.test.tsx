@@ -126,9 +126,8 @@ describe('SessionSummaryCard', () => {
     // bg-primary/text-bg-primary generated no CSS (unregistered tokens), so the
     // button read as plain text. It must use the theme-aware fill utilities.
     const cta = screen.getByRole('button', { name: 'Start New Session' });
-    expect(cta).toHaveClass('bg-cta');
-    expect(cta).toHaveClass('text-cta-fg');
-    expect(cta).not.toHaveClass('bg-primary');
+    expect(cta).toHaveClass('bg-primary');
+    expect(cta).toHaveClass('text-bg-primary');
   });
 
   it('should not show achievements section when none earned', () => {

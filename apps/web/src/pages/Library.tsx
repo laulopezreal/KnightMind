@@ -85,13 +85,13 @@ function PuzzleRow({ puzzle }: { puzzle: LibraryPuzzle }) {
                         <StatusBadge status={puzzle.status} />
                         <DifficultyBadge difficulty={puzzle.difficulty} />
                         {puzzle.primary_motif && (
-                            <span className="text-xs font-sans text-primary/60 px-2 py-0.5 bg-primary/10 rounded-sm">
+                            <span className="text-xs font-sans text-primary/70 px-2 py-0.5 bg-primary/10 rounded-sm">
                                 {puzzle.primary_motif}
                             </span>
                         )}
                     </div>
                     {/* Stats row */}
-                    <div className="flex items-center gap-4 mt-1 text-xs font-sans text-primary/50">
+                    <div className="flex items-center gap-4 mt-1 text-xs font-sans text-primary/70">
                         {puzzle.attempts > 0 && (
                             <span>
                                 {puzzle.pass_count}/{puzzle.attempts} solved
@@ -116,7 +116,7 @@ function PuzzleRow({ puzzle }: { puzzle: LibraryPuzzle }) {
 
                 {/* Right: side to move indicator */}
                 <div className="flex-shrink-0">
-                    <span className="text-xs font-sans text-primary/40 uppercase tracking-wider">
+                    <span className="text-xs font-sans text-primary/70 uppercase tracking-wider">
                         {puzzle.side_to_move === 'white' ? 'W' : 'B'}
                     </span>
                 </div>
@@ -222,16 +222,16 @@ export default function Library() {
             {corpusStats && corpusStats.total > 0 && (
                 <section className="grid grid-cols-2 md:grid-cols-5 gap-3">
                     {[
-                        // Labels are neutral text-primary/60: a coloured /60 label
+                        // Labels are neutral text-primary/70: a coloured /60 label
                         // rendered ~2:1 (fails AA) in both themes, and a single
                         // colour token can't pass on both the light and dark card
                         // backgrounds. The colour coding stays on the large value +
                         // the container tint, which do carry the category.
-                        { label: 'Total', value: corpusStats.total, containerClasses: 'bg-primary/5 border-primary/10', valueClasses: 'text-primary', labelClasses: 'text-primary/60' },
-                        { label: 'Due', value: corpusStats.due, containerClasses: 'bg-orange-500/5 border-orange-500/15', valueClasses: 'text-status-due', labelClasses: 'text-primary/60' },
-                        { label: 'New', value: corpusStats.new, containerClasses: 'bg-blue-500/5 border-blue-500/15', valueClasses: 'text-status-new', labelClasses: 'text-primary/60' },
-                        { label: 'Learning', value: corpusStats.learning, containerClasses: 'bg-yellow-500/5 border-yellow-500/15', valueClasses: 'text-status-learning', labelClasses: 'text-primary/60' },
-                        { label: 'Mastered', value: corpusStats.mastered, containerClasses: 'bg-green-500/5 border-green-500/15', valueClasses: 'text-status-mastered', labelClasses: 'text-primary/60' },
+                        { label: 'Total', value: corpusStats.total, containerClasses: 'bg-primary/5 border-primary/10', valueClasses: 'text-primary', labelClasses: 'text-primary/70' },
+                        { label: 'Due', value: corpusStats.due, containerClasses: 'bg-orange-500/5 border-orange-500/15', valueClasses: 'text-status-due', labelClasses: 'text-primary/70' },
+                        { label: 'New', value: corpusStats.new, containerClasses: 'bg-blue-500/5 border-blue-500/15', valueClasses: 'text-status-new', labelClasses: 'text-primary/70' },
+                        { label: 'Learning', value: corpusStats.learning, containerClasses: 'bg-yellow-500/5 border-yellow-500/15', valueClasses: 'text-status-learning', labelClasses: 'text-primary/70' },
+                        { label: 'Mastered', value: corpusStats.mastered, containerClasses: 'bg-green-500/5 border-green-500/15', valueClasses: 'text-status-mastered', labelClasses: 'text-primary/70' },
                     ].map(stat => (
                         <div key={stat.label} className={`${stat.containerClasses} border rounded-sm p-3 text-center`}>
                             <span className={`block text-2xl font-serif ${stat.valueClasses}`}>{stat.value}</span>
@@ -250,7 +250,7 @@ export default function Library() {
                     aria-label="Search puzzles by title or ID"
                     value={search}
                     onChange={(e) => setSearch(e.target.value)}
-                    className="w-full bg-transparent border-b border-primary/20 py-2 text-primary font-sans placeholder:text-primary/30 focus:outline-none focus:border-primary/60 transition-colors"
+                    className="w-full bg-transparent border-b border-primary/20 py-2 text-primary font-sans placeholder:text-primary/70 focus:outline-none focus:border-primary/60 transition-colors"
                 />
 
                 {/* Filter row */}
@@ -309,7 +309,7 @@ export default function Library() {
 
                 {/* Result count — hidden on error so it can't contradict the error box */}
                 {!error && (
-                    <div className="text-xs font-sans text-primary/40">
+                    <div className="text-xs font-sans text-primary/70">
                         {isLoading ? (
                             <DataStateLoading label="Loading library puzzles..." compact />
                         ) : (
@@ -343,7 +343,7 @@ export default function Library() {
 
                 {!isLoading && puzzles.length === 0 && !error && (
                     <div className="bg-primary/5 border border-primary/10 rounded-sm p-8 text-center">
-                        <p className="text-primary/60 font-sans">
+                        <p className="text-primary/70 font-sans">
                             {/* Key off the whole corpus, not individual filters:
                                 total > 0 means filters excluded everything; total 0
                                 means the library is genuinely empty (even mid-search).
@@ -368,7 +368,7 @@ export default function Library() {
                     >
                         Previous
                     </button>
-                    <span className="text-primary/60">
+                    <span className="text-primary/70">
                         Page {currentPage} of {totalPages}
                     </span>
                     <button
@@ -383,7 +383,7 @@ export default function Library() {
             )}
 
             {/* Training nudge */}
-            <div className="text-center text-sm font-sans text-primary/40">
+            <div className="text-center text-sm font-sans text-primary/70">
                 {corpusStats && corpusStats.due > 0 ? (
                     <Link to="/puzzles" className="km-interactive km-inline-link underline decoration-primary/20 underline-offset-4 hover:text-primary/70 transition-colors">
                         {corpusStats.due} puzzle{corpusStats.due !== 1 ? 's' : ''} due for review — Start Training

@@ -165,7 +165,7 @@ export default function Sidebar({ mobileOpen = false, onMobileClose }: SidebarPr
                 // is inert, complementing the FocusTrap for keyboard.
                 role={mobileOpen ? 'dialog' : 'complementary'}
                 aria-modal={mobileOpen ? true : undefined}
-                className={`fixed left-0 top-0 h-full w-72 md:w-64 flex flex-col justify-between p-6 md:p-12 z-50 bg-primary border-r border-primary/10 transition-transform duration-300 md:translate-x-0 ${
+                className={`fixed left-0 top-0 h-full w-72 md:w-64 flex flex-col justify-between p-6 md:p-12 z-50 bg-bg-primary border-r border-primary/10 transition-transform duration-300 md:translate-x-0 ${
                     mobileOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'
                 }`}
                 aria-label="Sidebar"

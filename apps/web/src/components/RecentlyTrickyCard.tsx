@@ -38,7 +38,7 @@ export function RecentlyTrickyCard({ puzzles, totalCount }: RecentlyTrickyCardPr
             </p>
 
             {/* Metadata */}
-            <p className="text-xs text-primary/40 font-sans">
+            <p className="text-xs text-primary/70 font-sans">
               Failed {puzzle.fail_count}&times; · Last tried {formatRelativeTime(puzzle.last_attempted_at)}
             </p>
           </Link>
@@ -46,7 +46,7 @@ export function RecentlyTrickyCard({ puzzles, totalCount }: RecentlyTrickyCardPr
       </div>
 
       {remaining > 0 && (
-        <p className="mt-4 pt-4 border-t border-primary/5 text-xs text-primary/50 font-sans">
+        <p className="mt-4 pt-4 border-t border-primary/5 text-xs text-primary/70 font-sans">
           and {remaining} more tricky puzzle{remaining !== 1 ? 's' : ''}
         </p>
       )}
