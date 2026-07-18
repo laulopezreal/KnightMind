@@ -1,7 +1,7 @@
 import { LOCALE } from '../utils/locale';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { Chessboard } from 'react-chessboard';
+import { AccessibleChessboard } from '../components/AccessibleChessboard';
 import { Chess } from 'chess.js';
 import { useChessUsername } from '../context/ChessUsernameContext';
 import { getLibraryPuzzle, reviewPuzzle, type LibraryPuzzle as LibraryPuzzleType } from '../api/puzzles';
@@ -236,7 +236,7 @@ export default function LibraryPuzzle() {
                 {/* Chessboard */}
                 <div className="order-2 lg:order-1">
                     <div className="aspect-square w-full max-w-[600px] mx-auto shadow-2xl shadow-primary/5 rounded-sm overflow-hidden border border-primary/10">
-                        <Chessboard
+                        <AccessibleChessboard
                             options={{
                                 position: game.fen(),
                                 onPieceDrop: ({ sourceSquare, targetSquare }) =>
