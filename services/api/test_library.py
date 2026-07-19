@@ -742,6 +742,7 @@ class TestGetPuzzleDetail:
             "fen",
             "side_to_move",
             "best_move_uci",
+            "accept_moves_uci",
             "status",
             "attempts",
             "pass_count",

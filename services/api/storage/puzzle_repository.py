@@ -26,6 +26,7 @@ class Puzzle:
     swing: float  # eval_before - eval_after (magnitude of blunder)
     created_at: str  # ISO timestamp
     used_on: str | None  # Date when puzzle was used (YYYY-MM-DD), None if unused
+    accept_moves_uci: str | None = None  # Comma-separated equivalence set
 
 
 class PuzzleRepository:
@@ -47,6 +48,7 @@ class PuzzleRepository:
             swing=puzzle.swing,
             created_at=puzzle.created_at.replace(tzinfo=timezone.utc).isoformat(),
             used_on=puzzle.used_on.isoformat() if puzzle.used_on else None,
+            accept_moves_uci=puzzle.accept_moves_uci,
         )
 
     def save_puzzle(
@@ -66,6 +68,7 @@ class PuzzleRepository:
         used_on: date | None = None,
         imported_at: datetime | None = None,
         source_path: str | None = None,
+        accept_moves_uci: str | None = None,
     ) -> tuple[bool, str]:
         username_lower = username.lower()
         puzzle_id = puzzle_id or str(uuid.uuid4())
@@ -79,6 +82,7 @@ class PuzzleRepository:
             side_to_move=side_to_move,
             played_move_uci=played_move_uci,
             best_move_uci=best_move_uci,
+            accept_moves_uci=accept_moves_uci,
             eval_before=eval_before,
             eval_after=eval_after,
             swing=swing,

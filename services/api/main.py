@@ -445,6 +445,9 @@ class PuzzleListItem(BaseModel):
     fen: str
     side_to_move: str
     best_move_uci: str
+    # Full set of accepted solutions (multi-PV equivalence set). Falls back to
+    # [best_move_uci] for puzzles generated before this was persisted.
+    accept_moves_uci: list[str] = []
     status: str  # "new" | "due" | "learning" | "mastered"
     attempts: int
     pass_count: int
@@ -883,6 +886,19 @@ def _swing_to_difficulty(swing: float) -> str:
     return "hard"
 
 
+def _accept_moves(puzzle) -> list[str]:
+    """Parse a puzzle's stored equivalence set, falling back to the best move.
+
+    Older puzzles predate the accept_moves_uci column, so we always guarantee
+    at least the single best move is accepted.
+    """
+    raw = getattr(puzzle, "accept_moves_uci", None)
+    moves = [m for m in (raw or "").split(",") if m] if raw else []
+    if puzzle.best_move_uci and puzzle.best_move_uci not in moves:
+        moves.insert(0, puzzle.best_move_uci)
+    return moves
+
+
 @app.get("/puzzles/list", response_model=PuzzleListResponse)
 async def list_puzzles(
     username: str = Query(..., description="Username to list puzzles for"),
@@ -1069,6 +1085,7 @@ async def list_puzzles(
                 fen=puzzle.fen,
                 side_to_move=puzzle.side_to_move,
                 best_move_uci=puzzle.best_move_uci,
+                accept_moves_uci=_accept_moves(puzzle),
                 status=row_status,
                 attempts=stats.attempts if stats else 0,
                 pass_count=stats.pass_count if stats else 0,
@@ -1152,6 +1169,7 @@ async def get_puzzle_detail(
         fen=puzzle.fen,
         side_to_move=puzzle.side_to_move,
         best_move_uci=puzzle.best_move_uci,
+        accept_moves_uci=_accept_moves(puzzle),
         status=computed_status,
         attempts=stats.attempts if stats else 0,
         pass_count=stats.pass_count if stats else 0,
