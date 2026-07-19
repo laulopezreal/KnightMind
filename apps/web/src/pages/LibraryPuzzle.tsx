@@ -6,7 +6,9 @@ import { Chess } from 'chess.js';
 import { useChessUsername } from '../context/ChessUsernameContext';
 import { getLibraryPuzzle, reviewPuzzle, type LibraryPuzzle as LibraryPuzzleType } from '../api/puzzles';
 import { ApiError } from '../api/core';
-import { DataStateError } from '../components/DataState';
+import { DataStateError, DataStateOffline } from '../components/DataState';
+import { useOnlineStatus } from '../hooks/useOnlineStatus';
+import { useLatestRequest } from '../hooks/useLatestRequest';
 
 type SolveStatus = 'solving' | 'correct' | 'incorrect' | 'revealed';
 
@@ -43,25 +45,33 @@ export default function LibraryPuzzle() {
     const [solveTimeMs, setSolveTimeMs] = useState<number | null>(null);
     const [recordError, setRecordError] = useState<string | null>(null);
 
+    const online = useOnlineStatus();
+    const request = useLatestRequest();
+
     const fetchPuzzle = useCallback(async () => {
         if (!username || !puzzleId) return;
+        // Guard against stale-response races: if the username (or puzzle) changes
+        // mid-flight, an older, slower response must not clobber the newer one.
+        const token = request.begin();
         setIsLoading(true);
         setError(null);
         try {
             const found = await getLibraryPuzzle(puzzleId, username);
+            if (token.isStale()) return;
             setPuzzle(found);
             setGame(new Chess(found.fen));
             solveStartRef.current = Date.now();
         } catch (err) {
+            if (token.isStale()) return;
             if (err instanceof ApiError && err.statusCode === 404) {
                 setError('Puzzle not found');
             } else {
                 setError(err instanceof Error ? err.message : 'Failed to load puzzle');
             }
         } finally {
-            setIsLoading(false);
+            if (!token.isStale()) setIsLoading(false);
         }
-    }, [username, puzzleId]);
+    }, [username, puzzleId, request]);
 
     useEffect(() => {
         fetchPuzzle();
@@ -86,10 +96,10 @@ export default function LibraryPuzzle() {
         }
     };
 
-    const onPieceDrop = (sourceSquare: string, targetSquare: string) => {
+    const onPieceDrop = (sourceSquare: string, targetSquare: string, promotion: string = 'q') => {
         if (!puzzle || status === 'correct' || status === 'revealed') return false;
         try {
-            const move = game.move({ from: sourceSquare, to: targetSquare, promotion: 'q' });
+            const move = game.move({ from: sourceSquare, to: targetSquare, promotion: promotion || 'q' });
             if (move === null) return false;
             setGame(new Chess(game.fen()));
             const uciMove = `${move.from}${move.to}${move.promotion || ''}`;
@@ -169,6 +179,10 @@ export default function LibraryPuzzle() {
                         <div className="bg-red-500/10 border border-red-500/20 rounded-sm p-6 text-center" role="alert">
                             <p className="text-negative font-sans">{error || 'Puzzle not found'}</p>
                         </div>
+                    ) : !online ? (
+                        // A failed load while the browser is offline is a connectivity
+                        // problem, not a server error — say so instead of a bare message.
+                        <DataStateOffline onRetry={fetchPuzzle} compact />
                     ) : (
                         <DataStateError
                             message={error!}
@@ -237,6 +251,9 @@ export default function LibraryPuzzle() {
                 <div className="order-2 lg:order-1">
                     <div className="aspect-square w-full max-w-[600px] mx-auto shadow-2xl shadow-primary/5 rounded-sm overflow-hidden border border-primary/10">
                         <AccessibleChessboard
+                            onKeyboardMove={({ sourceSquare, targetSquare, promotion }) =>
+                                onPieceDrop(sourceSquare, targetSquare, promotion ?? 'q')
+                            }
                             options={{
                                 position: game.fen(),
                                 onPieceDrop: ({ sourceSquare, targetSquare }) =>
@@ -259,7 +276,7 @@ export default function LibraryPuzzle() {
                     </div>
 
                     {/* Status feedback */}
-                    <div className="min-h-[80px] flex items-center justify-center text-center p-6 border border-primary/10 rounded-sm">
+                    <div className="min-h-[80px] flex items-center justify-center text-center p-6 border border-primary/10 rounded-sm" role="status" aria-live="polite">
                         {status === 'solving' && (
                             <p className="text-primary/70 font-serif text-lg italic">Find the best move...</p>
                         )}
