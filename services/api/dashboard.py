@@ -22,7 +22,8 @@ from services.api.analytics_confidence import (
 )
 from services.api.day_boundary import day_expr, day_key, utc_today
 from services.api.db import get_db
-from services.api.models import PuzzleReview, PuzzleStats, TrainingSession
+from services.api.identity import assert_owns_username, require_account
+from services.api.models import Account, PuzzleReview, PuzzleStats, TrainingSession
 from services.api.storage.spaced_repetition import (
     get_due_puzzle_count,
     get_next_due_date,
@@ -244,7 +245,11 @@ def calculate_training_streak(db: Session, username: str) -> int:
 
 
 @router.get("/{username}/dashboard", response_model=DashboardSummary)
-async def get_dashboard_summary(username: str, db: Session = Depends(get_db)):
+async def get_dashboard_summary(
+    username: str,
+    db: Session = Depends(get_db),
+    account: Account | None = Depends(require_account),
+):
     """
     Get comprehensive dashboard summary for a user.
 
@@ -254,6 +259,7 @@ async def get_dashboard_summary(username: str, db: Session = Depends(get_db)):
         - Recent form (last 20 puzzles)
         - Streak information
     """
+    assert_owns_username(account, username, db)
     # Get last session
     stmt = (
         select(TrainingSession)
@@ -334,6 +340,7 @@ async def get_motif_trends(
     username: str,
     window: int = Query(30, ge=7, le=90, description="Number of days to analyze"),
     db: Session = Depends(get_db),
+    account: Account | None = Depends(require_account),
 ):
     """
     Get motif performance trends over time.
@@ -345,6 +352,7 @@ async def get_motif_trends(
     Returns:
         Trend data for each motif showing improvement/decline
     """
+    assert_owns_username(account, username, db)
     cutoff_date = datetime.now(timezone.utc) - timedelta(days=window)
 
     # Get all reviews within the window, grouped by motif and UTC day.
@@ -447,6 +455,7 @@ async def get_tricky_puzzles(
         5, ge=1, le=20, description="Maximum number of puzzles to return"
     ),
     db: Session = Depends(get_db),
+    account: Account | None = Depends(require_account),
 ):
     """
     Get puzzles the user has failed multiple times.
@@ -462,6 +471,7 @@ async def get_tricky_puzzles(
     Returns:
         List of tricky puzzles with fail counts and last attempt timestamps
     """
+    assert_owns_username(account, username, db)
     # Base filter for tricky puzzles (shared by count and result queries)
     base_query = select(PuzzleStats).where(
         PuzzleStats.username == username,
