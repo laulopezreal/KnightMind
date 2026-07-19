@@ -183,7 +183,9 @@ def test_explain_rating_changes_basic(client_with_db, db_session):
 
 1. e4 e5 2. Nf3 Nc6 1-0"""
 
-    for i in range(2):
+    # Seed enough rated games (>= MIN_GAMES_FOR_RATING_DRIVERS) so directional
+    # drivers are emitted rather than suppressed as insufficient data.
+    for i in range(5):
         db_session.add(
             Game(
                 game_id=f"game-explain-{i}",
@@ -212,10 +214,12 @@ def test_explain_rating_changes_basic(client_with_db, db_session):
 
     assert response.status_code == 200
     data = response.json()
-    assert data["stats"]["wins"] == 2
+    assert data["stats"]["wins"] == 5
     assert data["stats"]["losses"] == 0
     assert data["rating"]["reference_rating"] == 1400
     assert data["rating"]["reference_is_approx"] is False
+    assert data["insufficient_data"] is False
+    assert data["confidence"] == "low"  # 5 games: below medium (10) threshold
     assert any("outperformed" in driver["text"].lower() for driver in data["drivers"])
 
 
