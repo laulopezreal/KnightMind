@@ -124,7 +124,29 @@ class PuzzleStats(Base):
 
 class PuzzleReview(Base):
     __tablename__ = "puzzle_reviews"
-    __table_args__ = {"extend_existing": True}
+    __table_args__ = (
+        # Idempotency: a client-supplied review key must be unique per
+        # (puzzle, user, session) so a retried/double-submitted POST cannot be
+        # recorded (and re-scheduled/re-counted) twice. Rows with a NULL
+        # client_review_id are exempt (NULLs are distinct in a unique index),
+        # preserving the legacy no-key behaviour.
+        #
+        # session_id is wrapped in COALESCE(session_id, '') so a NULL session
+        # collapses to a single key value: a plain multi-column unique index
+        # treats each NULL as distinct (SQLite and Postgres), which would let
+        # two concurrent session-less submits with the same client_review_id
+        # both insert and double-count. The COALESCE functional index closes
+        # that hole while leaving no-key (NULL client_review_id) rows exempt.
+        Index(
+            "uq_puzzle_reviews_client_key",
+            "puzzle_id",
+            "username",
+            text("coalesce(session_id, '')"),
+            "client_review_id",
+            unique=True,
+        ),
+        {"extend_existing": True},
+    )
 
     id: Mapped[str] = mapped_column(
         String, primary_key=True, default=lambda: str(uuid.uuid4())
@@ -137,6 +159,7 @@ class PuzzleReview(Base):
     result: Mapped[PuzzleResult] = mapped_column(String)
     time_spent_ms: Mapped[int] = mapped_column(Integer, nullable=True)
     session_id: Mapped[str] = mapped_column(String, nullable=True, index=True)
+    client_review_id: Mapped[str] = mapped_column(String, nullable=True)
 
 
 class TrainingSession(Base):

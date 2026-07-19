@@ -39,6 +39,7 @@ from services.api.models import (
     Job,
     JobStatus,
     PuzzleResult,
+    PuzzleReview,
     PuzzleStats,
     RatingSnapshot,
 )
@@ -47,10 +48,12 @@ from services.api.openings import build_opening_tree
 from services.api.puzzles.identity import backfill_puzzle_identity
 from services.api.storage import GameRepository, PuzzleRepository
 from services.api.storage.spaced_repetition import (
+    _utcnow_naive,
     get_adaptive_puzzles,
     get_all_puzzle_stats,
     get_due_puzzle_count,
     get_next_due_date,
+    get_puzzle_stats,
     insert_puzzle_review,
     update_puzzle_stats,
 )
@@ -474,6 +477,10 @@ class ReviewRequest(BaseModel):
     result: PuzzleResult
     time_spent_ms: int | None = None
     session_id: str | None = None
+    # Optional client-supplied idempotency key (stable per puzzle presentation).
+    # A retried/double-submitted review with the same key is replayed without
+    # re-counting stats/session or advancing scheduling.
+    client_review_id: str | None = None
 
 
 @app.get("/")
@@ -877,7 +884,10 @@ async def list_puzzles(
     """
     from services.api.models import Puzzle as PuzzleModel
 
-    now = datetime.now(timezone.utc)
+    # naive-UTC bound for SQL comparisons against naive next_due_at columns
+    # (see spaced_repetition module note); an aware now would misclassify on
+    # Postgres with a non-UTC session TimeZone.
+    now = _utcnow_naive()
     username_lower = username.lower()
 
     join_cond = (PuzzleModel.id == PuzzleStats.puzzle_id) & (
@@ -1074,7 +1084,9 @@ async def get_puzzle_detail(
     from services.api.models import Puzzle as PuzzleModel
 
     username_lower = username.lower()
-    now = datetime.now(timezone.utc)
+    # naive-UTC bound for SQL comparison against naive next_due_at (see
+    # spaced_repetition module note).
+    now = _utcnow_naive()
 
     detail_status_case = case(
         (
@@ -1129,6 +1141,60 @@ async def get_puzzle_detail(
     )
 
 
+def _find_existing_review(db, puzzle_id, username, session_id, client_review_id):
+    """Return the prior review for this idempotency key, or None.
+
+    Matches the uniqueness tuple (puzzle_id, username, session_id,
+    client_review_id); a NULL session_id is compared with IS NULL, mirroring the
+    COALESCE(session_id, '') unique index.
+    """
+    return db.scalars(
+        select(PuzzleReview).where(
+            PuzzleReview.puzzle_id == puzzle_id,
+            PuzzleReview.username == username,
+            PuzzleReview.session_id == session_id,
+            PuzzleReview.client_review_id == client_review_id,
+        )
+    ).first()
+
+
+def _build_review_response(stats, puzzle_stats, result) -> dict:
+    """Build the review endpoint payload for a given (stats, result).
+
+    Shared by the normal path and the idempotent-replay path so a replayed
+    review returns the same shape without re-running any scheduling logic.
+    """
+    result_val = result.value if isinstance(result, PuzzleResult) else result
+    feedback_message = ""
+    if result_val == "pass":
+        if stats.attempts == 1:
+            feedback_message = "Perfect! First try!"
+        elif stats.attempts > 0 and stats.pass_count / stats.attempts > 0.8:
+            feedback_message = "Great job! You're mastering this pattern."
+        else:
+            feedback_message = "Good solve!"
+    else:
+        if stats.attempts > 0 and stats.fail_count / stats.attempts > 0.5:
+            feedback_message = "Keep practicing this pattern."
+        else:
+            feedback_message = "Almost! Review the solution carefully."
+
+    return {
+        "next_due_at": stats.next_due_at,
+        "interval_days": stats.interval_days,
+        "ease_factor": stats.ease_factor,
+        "feedback": feedback_message,
+        "puzzle_info": puzzle_stats,
+        "stats": {
+            "attempts": stats.attempts,
+            "pass_count": stats.pass_count,
+            "fail_count": stats.fail_count,
+            "last_reviewed_at": stats.last_reviewed_at,
+            "last_result": stats.last_result,
+        },
+    }
+
+
 @app.post("/puzzles/{puzzle_id}/review")
 async def review_puzzle(
     puzzle_id: str, request: ReviewRequest, db: Session = Depends(get_db)
@@ -1138,11 +1204,34 @@ async def review_puzzle(
 
     Optionally tracks the review in a training session.
     Provides enhanced feedback including puzzle statistics.
+
+    Idempotent replay: when ``client_review_id`` is supplied and a review with
+    that key already exists for this (puzzle, user, session), the prior outcome
+    is returned WITHOUT re-recording the review, re-incrementing session
+    counters, or advancing scheduling. This makes double-clicks and network
+    retries safe.
     """
     puzzle_repository = PuzzleRepository(db)
     puzzle = puzzle_repository.get_puzzle(request.username, puzzle_id)
     if not puzzle:
         raise HTTPException(status_code=404, detail="Puzzle not found")
+
+    # Idempotent replay: short-circuit before any mutation if this exact
+    # client_review_id was already recorded for this (puzzle, user, session).
+    if request.client_review_id:
+        existing = _find_existing_review(
+            db,
+            puzzle_id,
+            request.username,
+            request.session_id,
+            request.client_review_id,
+        )
+        if existing:
+            stats = get_puzzle_stats(db, puzzle_id, request.username)
+            puzzle_stats = puzzle_repository.get_puzzle_stats(
+                request.username, puzzle_id
+            )
+            return _build_review_response(stats, puzzle_stats, existing.result)
 
     # If session_id provided, validate session and update counters
     if request.session_id:
@@ -1179,55 +1268,53 @@ async def review_puzzle(
         if request.time_spent_ms:
             session.total_time_ms += request.time_spent_ms
 
-    # 1. Record individual review (with optional session_id)
-    insert_puzzle_review(
-        db,
-        puzzle_id,
-        request.username,
-        request.result,
-        request.time_spent_ms,
-        session_id=request.session_id,
-    )
+    try:
+        # 1. Record individual review (with optional session_id + idempotency key)
+        insert_puzzle_review(
+            db,
+            puzzle_id,
+            request.username,
+            request.result,
+            request.time_spent_ms,
+            session_id=request.session_id,
+            client_review_id=request.client_review_id,
+        )
 
-    # 2. Update aggregate stats (triggers scheduling logic)
-    stats = update_puzzle_stats(db, puzzle_id, request.username, request.result)
+        # 2. Update aggregate stats (triggers scheduling logic)
+        stats = update_puzzle_stats(db, puzzle_id, request.username, request.result)
 
-    # 3. Get puzzle details for feedback
-    puzzle_stats = puzzle_repository.get_puzzle_stats(request.username, puzzle_id)
+        # 3. Get puzzle details for feedback
+        puzzle_stats = puzzle_repository.get_puzzle_stats(request.username, puzzle_id)
 
-    # 4. Commit all changes atomically (single transaction boundary;
-    #    the storage helpers above only flush, they never commit)
-    db.commit()
+        # 4. Commit all changes atomically (single transaction boundary;
+        #    the storage helpers above only flush, they never commit)
+        db.commit()
+    except IntegrityError:
+        # A concurrent same-key submit slipped past the replay SELECT above and
+        # committed first; the unique index rejects this duplicate. Roll back our
+        # (uncommitted) mutations — including the session counter increments —
+        # and replay the winner's outcome instead of surfacing a 500 or double
+        # counting. This is the concurrency backstop for the replay-before-mutate
+        # fast path.
+        db.rollback()
+        if request.client_review_id:
+            existing = _find_existing_review(
+                db,
+                puzzle_id,
+                request.username,
+                request.session_id,
+                request.client_review_id,
+            )
+            if existing:
+                stats = get_puzzle_stats(db, puzzle_id, request.username)
+                puzzle_stats = puzzle_repository.get_puzzle_stats(
+                    request.username, puzzle_id
+                )
+                return _build_review_response(stats, puzzle_stats, existing.result)
+        raise
 
-    # 5. Generate feedback message
-    feedback_message = ""
-    if request.result == "pass":
-        if stats.attempts == 1:
-            feedback_message = "Perfect! First try!"
-        elif stats.attempts > 0 and stats.pass_count / stats.attempts > 0.8:
-            feedback_message = "Great job! You're mastering this pattern."
-        else:
-            feedback_message = "Good solve!"
-    else:
-        if stats.attempts > 0 and stats.fail_count / stats.attempts > 0.5:
-            feedback_message = "Keep practicing this pattern."
-        else:
-            feedback_message = "Almost! Review the solution carefully."
-
-    return {
-        "next_due_at": stats.next_due_at,
-        "interval_days": stats.interval_days,
-        "ease_factor": stats.ease_factor,
-        "feedback": feedback_message,
-        "puzzle_info": puzzle_stats,
-        "stats": {
-            "attempts": stats.attempts,
-            "pass_count": stats.pass_count,
-            "fail_count": stats.fail_count,
-            "last_reviewed_at": stats.last_reviewed_at,
-            "last_result": stats.last_result,
-        },
-    }
+    # 5. Build the response (feedback + scheduling + stats)
+    return _build_review_response(stats, puzzle_stats, request.result)
 
 
 # --- Rating Drivers Explainer Support ---

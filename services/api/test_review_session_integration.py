@@ -150,6 +150,192 @@ def test_review_endpoint_increments_session_counters(client, test_db):
     assert updated_session.best_streak == 1
 
 
+def test_review_endpoint_idempotent_replay_with_client_key(client, test_db):
+    """
+    Regression: a retried / double-clicked review carrying the same
+    client_review_id must be counted exactly ONCE.
+
+    Before the idempotency fix, two identical POSTs recorded two review rows and
+    double-counted attempts, pass_count, session pass/streak/time, and advanced
+    scheduling twice (interval_days 1 -> 3).
+    """
+    session_id = str(uuid.uuid4())
+    session = TrainingSession(
+        id=session_id,
+        username="testuser",
+        requested_n=5,
+        pass_count=0,
+        fail_count=0,
+        total_time_ms=0,
+    )
+    test_db.add(session)
+    test_db.commit()
+
+    puzzle_id = str(uuid.uuid4())
+    _create_puzzle(test_db, puzzle_id, "testuser", "game-idem", 10)
+
+    body = {
+        "username": "testuser",
+        "result": "pass",
+        "time_spent_ms": 5000,
+        "session_id": session_id,
+        "client_review_id": "attempt-key-1",
+    }
+
+    r1 = client.post(f"/puzzles/{puzzle_id}/review", json=body)
+    r2 = client.post(f"/puzzles/{puzzle_id}/review", json=body)  # double-submit
+    assert r1.status_code == 200
+    assert r2.status_code == 200
+    # The replayed response mirrors the original outcome (scheduling not advanced)
+    assert r2.json()["interval_days"] == r1.json()["interval_days"] == 1
+
+    # Exactly one review row, counted once
+    review_count = test_db.scalar(select(func.count()).select_from(PuzzleReview))
+    assert review_count == 1
+
+    stats = test_db.scalars(
+        select(PuzzleStats).where(PuzzleStats.puzzle_id == puzzle_id)
+    ).first()
+    assert stats.attempts == 1
+    assert stats.pass_count == 1
+    assert stats.interval_days == 1  # NOT advanced to 3
+
+    test_db.refresh(session)
+    assert session.pass_count == 1
+    assert session.current_streak == 1
+    assert session.best_streak == 1
+    assert session.total_time_ms == 5000
+
+
+def test_review_endpoint_distinct_client_keys_both_count(client, test_db):
+    """A genuinely new attempt (different client_review_id) is still recorded."""
+    puzzle_id = str(uuid.uuid4())
+    _create_puzzle(test_db, puzzle_id, "testuser", "game-idem2", 10)
+
+    base = {"username": "testuser", "result": "pass", "time_spent_ms": 1000}
+    client.post(f"/puzzles/{puzzle_id}/review", json={**base, "client_review_id": "k1"})
+    client.post(f"/puzzles/{puzzle_id}/review", json={**base, "client_review_id": "k2"})
+
+    review_count = test_db.scalar(select(func.count()).select_from(PuzzleReview))
+    assert review_count == 2
+    stats = test_db.scalars(
+        select(PuzzleStats).where(PuzzleStats.puzzle_id == puzzle_id)
+    ).first()
+    assert stats.attempts == 2
+
+
+def _make_race_find(monkeypatch):
+    """Force the endpoint's *initial* replay SELECT to miss exactly once.
+
+    Simulates a concurrent same-key submit that slips past the replay-before-
+    mutate fast path (the winning row was not yet committed when this request's
+    SELECT ran), so this request proceeds to INSERT and hits the unique index.
+    Subsequent calls (the post-IntegrityError replay) use the real lookup.
+    """
+    import services.api.main as main_module
+
+    real_find = main_module._find_existing_review
+    state = {"calls": 0}
+
+    def fake_find(*args, **kwargs):
+        state["calls"] += 1
+        if state["calls"] == 1:
+            return None  # pretend the winner's row is not visible yet
+        return real_find(*args, **kwargs)
+
+    monkeypatch.setattr(main_module, "_find_existing_review", fake_find)
+
+
+def test_review_endpoint_concurrent_same_key_replays_with_session(
+    client, test_db, monkeypatch
+):
+    """Concurrent same-key submit (session present) => graceful replay, no 500,
+    no double-count. The unique index rejects the duplicate INSERT and the
+    endpoint replays the winner's outcome."""
+    session_id = str(uuid.uuid4())
+    test_db.add(
+        TrainingSession(
+            id=session_id,
+            username="testuser",
+            requested_n=5,
+            pass_count=0,
+            fail_count=0,
+            total_time_ms=0,
+        )
+    )
+    test_db.commit()
+
+    puzzle_id = str(uuid.uuid4())
+    _create_puzzle(test_db, puzzle_id, "testuser", "game-race", 10)
+
+    body = {
+        "username": "testuser",
+        "result": "pass",
+        "time_spent_ms": 5000,
+        "session_id": session_id,
+        "client_review_id": "race-key",
+    }
+
+    # Winner: first request records the review + stats + session counters.
+    assert client.post(f"/puzzles/{puzzle_id}/review", json=body).status_code == 200
+
+    # Loser: initial replay SELECT is forced to miss, so it tries to INSERT a
+    # duplicate and must recover via IntegrityError -> replay.
+    _make_race_find(monkeypatch)
+    resp = client.post(f"/puzzles/{puzzle_id}/review", json=body)
+    assert resp.status_code == 200  # graceful, not 500
+    assert resp.json()["interval_days"] == 1  # scheduling NOT advanced to 3
+
+    assert test_db.scalar(select(func.count()).select_from(PuzzleReview)) == 1
+    stats = test_db.scalars(
+        select(PuzzleStats).where(PuzzleStats.puzzle_id == puzzle_id)
+    ).first()
+    assert stats.attempts == 1
+    assert stats.pass_count == 1
+    assert stats.interval_days == 1
+
+    session = test_db.get(TrainingSession, session_id)
+    test_db.refresh(session)
+    assert session.pass_count == 1
+    assert session.current_streak == 1
+    assert session.total_time_ms == 5000
+
+
+def test_review_endpoint_concurrent_same_key_replays_session_less(
+    client, test_db, monkeypatch
+):
+    """Concurrent same-key submit with NO session must also dedupe.
+
+    Guards the COALESCE(session_id, '') index: a plain multi-column unique index
+    treats each NULL session as distinct, so both session-less inserts would
+    succeed and double-count. Here the duplicate INSERT must be rejected and the
+    endpoint must replay the winner's outcome.
+    """
+    puzzle_id = str(uuid.uuid4())
+    _create_puzzle(test_db, puzzle_id, "testuser", "game-race2", 10)
+
+    body = {
+        "username": "testuser",
+        "result": "pass",
+        "time_spent_ms": 3000,
+        "client_review_id": "race-key-no-session",
+    }
+
+    assert client.post(f"/puzzles/{puzzle_id}/review", json=body).status_code == 200
+
+    _make_race_find(monkeypatch)
+    resp = client.post(f"/puzzles/{puzzle_id}/review", json=body)
+    assert resp.status_code == 200  # graceful, not 500
+    assert resp.json()["interval_days"] == 1
+
+    assert test_db.scalar(select(func.count()).select_from(PuzzleReview)) == 1
+    stats = test_db.scalars(
+        select(PuzzleStats).where(PuzzleStats.puzzle_id == puzzle_id)
+    ).first()
+    assert stats.attempts == 1
+    assert stats.pass_count == 1
+
+
 def test_review_endpoint_rolls_back_atomically_on_failure(client, test_db, monkeypatch):
     """
     If the review flow fails midway (after the review row and session counters

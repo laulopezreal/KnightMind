@@ -68,6 +68,16 @@ export interface UsePuzzleSessionReturn {
 
 // ─── Helpers (pure functions) ───────────────────────────────────────
 
+/** Generate a stable idempotency key for a single review submission. */
+function generateReviewKey(): string {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+        return crypto.randomUUID();
+    }
+    // Fallback for environments without crypto.randomUUID
+    return `rev-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+
 export function calculateRecentPerformance(
     history: Array<{ time: number; result: 'pass' | 'fail' }>,
     minutes: number = 5,
@@ -295,9 +305,22 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
     }, [activeSessionId, checkSessionAchievements, refreshMotifPerformance, refreshRecentSessions, setActiveSessionId, timer.cleanup, username]);
 
     // ── handleReviewPuzzle ──
+    // In-flight guard: a fast double-click must not fire two concurrent POSTs.
+    const isReviewingRef = useRef(false);
+    // Idempotency key for the current submission. Held across an error so a
+    // manual retry of the *same* submission replays idempotently on the server;
+    // cleared after success so the next distinct submission gets a fresh key.
+    const reviewKeyRef = useRef<string | null>(null);
     const currentPuzzle = puzzles[currentIndex];
     const handleReviewPuzzle = useCallback(async (result: 'pass' | 'fail', timeMs?: number) => {
         if (!currentPuzzle || !username.trim()) return;
+        if (isReviewingRef.current) return; // block concurrent double-submit
+        isReviewingRef.current = true;
+
+        if (!reviewKeyRef.current) {
+            reviewKeyRef.current = generateReviewKey();
+        }
+        const clientReviewId = reviewKeyRef.current;
 
         let timeSpent = timeMs;
         if (!timeSpent && timer.puzzleStartTime) {
@@ -311,7 +334,11 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
                 result,
                 timeSpent,
                 activeSessionId || undefined,
+                clientReviewId,
             );
+
+            // Success: rotate the key so the next distinct review gets a new one.
+            reviewKeyRef.current = null;
 
             if (response.feedback) {
                 setLastFeedback(response.feedback);
@@ -342,6 +369,9 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
         } catch (err) {
             console.error('Failed to review puzzle:', err);
             setError(err instanceof Error ? err.message : 'Failed to review puzzle');
+            // Keep reviewKeyRef so a manual retry replays idempotently server-side.
+        } finally {
+            isReviewingRef.current = false;
         }
     }, [
         activeSessionId,

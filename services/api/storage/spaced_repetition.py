@@ -12,6 +12,27 @@ from services.api.models import PuzzleResult, PuzzleReview, PuzzleStats
 from services.api.puzzles.identity import assign_primary_motif, generate_puzzle_title
 from services.api.storage.puzzle_repository import PuzzleRepository
 
+# Datetime convention (single documented rule for all "due" comparisons):
+# every datetime is persisted as naive-UTC (values come from
+# ``datetime.now(timezone.utc)`` and land in naive ``DateTime`` columns).
+#   * In SQL, compare ``next_due_at`` against a NAIVE-UTC ``now`` so both sides
+#     match the stored representation. Passing an aware ``now`` is correct on
+#     SQLite (tzinfo is stripped symmetrically) but silently wrong on Postgres
+#     when the session ``TimeZone`` is not UTC, because a naive column is then
+#     reinterpreted in the session zone — shifting the due boundary by the UTC
+#     offset. Use ``_utcnow_naive()`` for every SQL comparison.
+#   * In Python, coerce a naive value read back from the DB to aware-UTC before
+#     comparing it against an aware ``now`` (see ``get_adaptive_puzzles``).
+
+
+def _utcnow_naive() -> datetime:
+    """Return the current UTC time as a naive datetime (tzinfo stripped).
+
+    Used as the bound for SQL comparisons against naive-UTC ``DateTime``
+    columns so the comparison is backend-independent (see module note).
+    """
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
 
 def calculate_next_interval(
     current_interval: int | None, ease_factor: float, result: PuzzleResult | str
@@ -67,6 +88,7 @@ def insert_puzzle_review(
     time_spent_ms: int | None = None,
     reviewed_at: datetime | None = None,
     session_id: str | None = None,
+    client_review_id: str | None = None,
 ) -> PuzzleReview:
     """
     Record a puzzle review in the database.
@@ -79,6 +101,9 @@ def insert_puzzle_review(
         time_spent_ms: Time spent on the puzzle in milliseconds
         reviewed_at: Timestamp of the review (defaults to current time)
         session_id: Optional training session ID
+        client_review_id: Optional client-supplied idempotency key. When set, a
+            unique index over (puzzle_id, username, session_id, client_review_id)
+            prevents a retried/double-submitted review from being recorded twice.
 
     Returns:
         The created PuzzleReview object
@@ -101,6 +126,7 @@ def insert_puzzle_review(
         result=result_val,
         time_spent_ms=time_spent_ms,
         session_id=session_id,
+        client_review_id=client_review_id,
     )
     db.add(review)
     db.flush()
@@ -266,7 +292,8 @@ def get_due_puzzles(
 
 def get_due_puzzle_count(db: Session, username: str) -> int:
     """Get count of puzzles due for review."""
-    now = datetime.now(timezone.utc)
+    # naive-UTC bound: match the naive-UTC storage of next_due_at (see module note)
+    now = _utcnow_naive()
     stmt = select(func.count(PuzzleStats.puzzle_id)).where(
         PuzzleStats.username == username, PuzzleStats.next_due_at <= now
     )
@@ -275,7 +302,8 @@ def get_due_puzzle_count(db: Session, username: str) -> int:
 
 def get_next_due_date(db: Session, username: str) -> datetime | None:
     """Get the next upcoming due date for a user's puzzles."""
-    now = datetime.now(timezone.utc)
+    # naive-UTC bound: match the naive-UTC storage of next_due_at (see module note)
+    now = _utcnow_naive()
     stmt = select(func.min(PuzzleStats.next_due_at)).where(
         PuzzleStats.username == username, PuzzleStats.next_due_at > now
     )
