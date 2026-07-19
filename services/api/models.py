@@ -130,11 +130,18 @@ class PuzzleReview(Base):
         # recorded (and re-scheduled/re-counted) twice. Rows with a NULL
         # client_review_id are exempt (NULLs are distinct in a unique index),
         # preserving the legacy no-key behaviour.
+        #
+        # session_id is wrapped in COALESCE(session_id, '') so a NULL session
+        # collapses to a single key value: a plain multi-column unique index
+        # treats each NULL as distinct (SQLite and Postgres), which would let
+        # two concurrent session-less submits with the same client_review_id
+        # both insert and double-count. The COALESCE functional index closes
+        # that hole while leaving no-key (NULL client_review_id) rows exempt.
         Index(
             "uq_puzzle_reviews_client_key",
             "puzzle_id",
             "username",
-            "session_id",
+            text("coalesce(session_id, '')"),
             "client_review_id",
             unique=True,
         ),

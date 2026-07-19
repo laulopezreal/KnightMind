@@ -1135,6 +1135,23 @@ async def get_puzzle_detail(
     )
 
 
+def _find_existing_review(db, puzzle_id, username, session_id, client_review_id):
+    """Return the prior review for this idempotency key, or None.
+
+    Matches the uniqueness tuple (puzzle_id, username, session_id,
+    client_review_id); a NULL session_id is compared with IS NULL, mirroring the
+    COALESCE(session_id, '') unique index.
+    """
+    return db.scalars(
+        select(PuzzleReview).where(
+            PuzzleReview.puzzle_id == puzzle_id,
+            PuzzleReview.username == username,
+            PuzzleReview.session_id == session_id,
+            PuzzleReview.client_review_id == client_review_id,
+        )
+    ).first()
+
+
 def _build_review_response(stats, puzzle_stats, result) -> dict:
     """Build the review endpoint payload for a given (stats, result).
 
@@ -1196,14 +1213,13 @@ async def review_puzzle(
     # Idempotent replay: short-circuit before any mutation if this exact
     # client_review_id was already recorded for this (puzzle, user, session).
     if request.client_review_id:
-        existing = db.scalars(
-            select(PuzzleReview).where(
-                PuzzleReview.puzzle_id == puzzle_id,
-                PuzzleReview.username == request.username,
-                PuzzleReview.session_id == request.session_id,
-                PuzzleReview.client_review_id == request.client_review_id,
-            )
-        ).first()
+        existing = _find_existing_review(
+            db,
+            puzzle_id,
+            request.username,
+            request.session_id,
+            request.client_review_id,
+        )
         if existing:
             stats = get_puzzle_stats(db, puzzle_id, request.username)
             puzzle_stats = puzzle_repository.get_puzzle_stats(
@@ -1246,26 +1262,50 @@ async def review_puzzle(
         if request.time_spent_ms:
             session.total_time_ms += request.time_spent_ms
 
-    # 1. Record individual review (with optional session_id + idempotency key)
-    insert_puzzle_review(
-        db,
-        puzzle_id,
-        request.username,
-        request.result,
-        request.time_spent_ms,
-        session_id=request.session_id,
-        client_review_id=request.client_review_id,
-    )
+    try:
+        # 1. Record individual review (with optional session_id + idempotency key)
+        insert_puzzle_review(
+            db,
+            puzzle_id,
+            request.username,
+            request.result,
+            request.time_spent_ms,
+            session_id=request.session_id,
+            client_review_id=request.client_review_id,
+        )
 
-    # 2. Update aggregate stats (triggers scheduling logic)
-    stats = update_puzzle_stats(db, puzzle_id, request.username, request.result)
+        # 2. Update aggregate stats (triggers scheduling logic)
+        stats = update_puzzle_stats(db, puzzle_id, request.username, request.result)
 
-    # 3. Get puzzle details for feedback
-    puzzle_stats = puzzle_repository.get_puzzle_stats(request.username, puzzle_id)
+        # 3. Get puzzle details for feedback
+        puzzle_stats = puzzle_repository.get_puzzle_stats(request.username, puzzle_id)
 
-    # 4. Commit all changes atomically (single transaction boundary;
-    #    the storage helpers above only flush, they never commit)
-    db.commit()
+        # 4. Commit all changes atomically (single transaction boundary;
+        #    the storage helpers above only flush, they never commit)
+        db.commit()
+    except IntegrityError:
+        # A concurrent same-key submit slipped past the replay SELECT above and
+        # committed first; the unique index rejects this duplicate. Roll back our
+        # (uncommitted) mutations — including the session counter increments —
+        # and replay the winner's outcome instead of surfacing a 500 or double
+        # counting. This is the concurrency backstop for the replay-before-mutate
+        # fast path.
+        db.rollback()
+        if request.client_review_id:
+            existing = _find_existing_review(
+                db,
+                puzzle_id,
+                request.username,
+                request.session_id,
+                request.client_review_id,
+            )
+            if existing:
+                stats = get_puzzle_stats(db, puzzle_id, request.username)
+                puzzle_stats = puzzle_repository.get_puzzle_stats(
+                    request.username, puzzle_id
+                )
+                return _build_review_response(stats, puzzle_stats, existing.result)
+        raise
 
     # 5. Build the response (feedback + scheduling + stats)
     return _build_review_response(stats, puzzle_stats, request.result)
