@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Link } from 'react-router-dom';
-import { Chessboard } from 'react-chessboard';
+import { AccessibleChessboard } from '../components/AccessibleChessboard';
 import { Chess } from 'chess.js';
 import { evaluateFen, getEngineStatus, ApiError } from '../api';
 import { useClue } from '../hooks/useClue';
@@ -212,7 +212,7 @@ export default function Engine() {
         {/* Board */}
         <div className="order-2 lg:order-1">
           <div className="aspect-square w-full max-w-[600px] mx-auto shadow-2xl shadow-primary/5 rounded-sm overflow-hidden border border-primary/10">
-            <Chessboard
+            <AccessibleChessboard
               options={{
                 position: fen,
                 onPieceDrop: ({ sourceSquare, targetSquare }) => targetSquare ? onDrop(sourceSquare, targetSquare) : false,
