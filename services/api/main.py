@@ -564,9 +564,28 @@ async def get_engine_status():
     return EngineStatusResponse(available=available, message=message)
 
 
+# /engine/eval is unauthenticated, so bound how many evaluations may be in
+# flight per process. Excess requests are rejected with 429 rather than queued,
+# so a caller cannot pile up unbounded Stockfish work. NOTE: this is a
+# per-process guard only; it is NOT a substitute for auth / per-client rate
+# limiting at the ingress, which must still be added to prevent abuse.
+_ENGINE_EVAL_MAX_INFLIGHT = int(os.environ.get("ENGINE_EVAL_MAX_CONCURRENCY", "4"))
+_engine_eval_inflight = 0
+_engine_eval_lock = asyncio.Lock()
+
+
 @app.post("/engine/eval", response_model=EvalResponse)
 async def evaluate_fen(request: EvalRequest):
     """Evaluate a chess position using Stockfish with caching."""
+    global _engine_eval_inflight
+    async with _engine_eval_lock:
+        if _engine_eval_inflight >= _ENGINE_EVAL_MAX_INFLIGHT:
+            raise HTTPException(
+                status_code=429,
+                detail="Engine evaluation capacity reached; retry later.",
+            )
+        _engine_eval_inflight += 1
+
     try:
         result = await asyncio.to_thread(get_or_compute_eval, request.fen)
         return EvalResponse(best_move_uci=result.best_move_uci, eval=result.eval)
@@ -574,6 +593,9 @@ async def evaluate_fen(request: EvalRequest):
         raise HTTPException(status_code=503, detail=str(e)) from e
     except InvalidFenError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+    finally:
+        async with _engine_eval_lock:
+            _engine_eval_inflight -= 1
 
 
 @app.post("/puzzles/generate", response_model=JobStatusResponse)

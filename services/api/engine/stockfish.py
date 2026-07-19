@@ -8,9 +8,12 @@ returning the best move and evaluation in pawns from the side-to-move perspectiv
 import hashlib
 import logging
 import os
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeoutError
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Callable, Optional
 
 try:
     from stockfish import Stockfish as StockfishEngine
@@ -33,6 +36,19 @@ class StockfishNotFoundError(Exception):
 
 class StockfishError(Exception):
     """Raised when Stockfish encounters an error during evaluation."""
+
+    pass
+
+
+class StockfishEngineDeadError(StockfishError):
+    """
+    Raised when an evaluation timed out and its engine subprocess was killed.
+
+    Subclasses StockfishError so existing broad handlers still catch it, but
+    lets a caller that owns a long-lived engine (e.g. the puzzle-generator
+    batch) detect that the shared subprocess is now dead and recreate it
+    instead of running every subsequent eval against a corpse.
+    """
 
     pass
 
@@ -96,6 +112,107 @@ def create_engine() -> "StockfishEngine":
     return engine
 
 
+def _get_env_positive(name: str, default: float) -> float:
+    """Read a positive numeric env var, falling back to ``default`` on error."""
+    raw = os.environ.get(name)
+    if raw:
+        try:
+            value = float(raw)
+            if value > 0:
+                return value
+        except ValueError:
+            logger.warning("Invalid %s=%r, using default %s", name, raw, default)
+    return default
+
+
+def _get_max_concurrency() -> int:
+    """Max number of concurrent Stockfish evaluations allowed in this process."""
+    return int(_get_env_positive("STOCKFISH_MAX_CONCURRENCY", 2))
+
+
+def _get_eval_timeout_s() -> float:
+    """Per-evaluation wall-clock timeout in seconds."""
+    return _get_env_positive("STOCKFISH_EVAL_TIMEOUT_S", 30.0)
+
+
+def _get_acquire_timeout_s() -> float:
+    """How long to wait for a concurrency slot before rejecting the request."""
+    return _get_env_positive("STOCKFISH_ACQUIRE_TIMEOUT_S", 60.0)
+
+
+# Bounds how many engine evaluations may run at once, so a caller cannot spawn
+# unbounded Stockfish work. Shared by every path that goes through evaluate_fen
+# (the /engine/eval endpoint and the puzzle generator batch).
+_EVAL_SEMAPHORE = threading.BoundedSemaphore(_get_max_concurrency())
+
+# Dedicated pool used only to enforce the per-eval timeout. Concurrency is
+# bounded by _EVAL_SEMAPHORE before we ever submit here; the extra headroom
+# lets a wedged worker linger without blocking healthy evaluations.
+_EVAL_EXECUTOR = ThreadPoolExecutor(
+    max_workers=_get_max_concurrency() + 2, thread_name_prefix="sf-eval"
+)
+
+
+def _kill_engine_process(engine: Optional["StockfishEngine"]) -> None:
+    """Best-effort hard kill of the underlying Stockfish subprocess."""
+    if engine is None:
+        return
+    proc = getattr(engine, "_stockfish", None)
+    if proc is not None:
+        try:
+            proc.kill()
+        except Exception:
+            logger.debug("Failed to kill Stockfish subprocess", exc_info=True)
+
+
+def close_engine(engine: Optional["StockfishEngine"]) -> None:
+    """
+    Terminate a Stockfish engine subprocess, releasing its OS process.
+
+    stockfish>=4.x exposes ``send_quit_command()``, which sends ``quit`` and
+    waits for the subprocess to exit. We guard it so a partially constructed or
+    already-dead engine cannot raise, and fall back to killing the underlying
+    subprocess directly if the quit command is unavailable or fails.
+    """
+    if engine is None:
+        return
+    quit_cmd = getattr(engine, "send_quit_command", None)
+    if callable(quit_cmd):
+        try:
+            quit_cmd()
+            return
+        except Exception:
+            logger.debug("send_quit_command failed during teardown", exc_info=True)
+    _kill_engine_process(engine)
+
+
+def _run_with_timeout(
+    func: Callable[[], EvalResult],
+    timeout_s: float,
+    engine: "StockfishEngine",
+) -> EvalResult:
+    """
+    Run ``func`` with a wall-clock timeout so a wedged engine call cannot block
+    forever. On timeout the underlying subprocess is killed (which unblocks the
+    worker thread) and a StockfishEngineDeadError is raised so the caller knows
+    the engine is dead.
+
+    Note: future.result(timeout=...) cannot cancel an already-running task, so
+    the worker thread only unwinds once the killed subprocess makes its pending
+    read return. If proc.kill() ever fails to unblock the read, that worker can
+    linger; _EVAL_EXECUTOR is sized with headroom above the concurrency bound so
+    a stray lingering worker does not starve healthy evaluations.
+    """
+    future = _EVAL_EXECUTOR.submit(func)
+    try:
+        return future.result(timeout=timeout_s)
+    except FutureTimeoutError as e:
+        _kill_engine_process(engine)
+        raise StockfishEngineDeadError(
+            f"Engine evaluation timed out after {timeout_s}s"
+        ) from e
+
+
 def evaluate_fen(fen: str, engine: Optional["StockfishEngine"] = None) -> EvalResult:
     """
     Evaluate a chess position given its FEN string.
@@ -111,9 +228,35 @@ def evaluate_fen(fen: str, engine: Optional["StockfishEngine"] = None) -> EvalRe
         StockfishNotFoundError: If Stockfish is not available
         StockfishError: If evaluation fails
     """
-    if engine is None:
-        engine = create_engine()
+    # Bound concurrency BEFORE creating an engine so a flood of callers cannot
+    # spawn unbounded Stockfish subprocesses. Reject rather than queue forever.
+    if not _EVAL_SEMAPHORE.acquire(timeout=_get_acquire_timeout_s()):
+        raise StockfishError(
+            "Engine evaluation concurrency limit reached; try again later"
+        )
 
+    try:
+        owns_engine = engine is None
+        if owns_engine:
+            engine = create_engine()
+
+        try:
+            return _run_with_timeout(
+                lambda: _evaluate_fen_core(fen, engine),
+                _get_eval_timeout_s(),
+                engine,
+            )
+        finally:
+            # Only tear down engines we created. If one was passed in, the
+            # caller owns its lifecycle (e.g. the puzzle generator batch).
+            if owns_engine:
+                close_engine(engine)
+    finally:
+        _EVAL_SEMAPHORE.release()
+
+
+def _evaluate_fen_core(fen: str, engine: "StockfishEngine") -> EvalResult:
+    """Run the actual Stockfish evaluation. Assumes ``engine`` is ready."""
     try:
         # Set position
         if not engine.is_fen_valid(fen):
@@ -147,12 +290,6 @@ def evaluate_fen(fen: str, engine: Optional["StockfishEngine"] = None) -> EvalRe
         raise
     except Exception as e:
         raise StockfishError(f"Evaluation failed: {e}") from e
-    finally:
-        # Only close if we created it locally.
-        # Note: The stockfish library wrapper might not have a close/quit method exposed simply,
-        # but generally for a local variable it's fine.
-        # If we passed it in, the caller is responsible.
-        pass
 
 
 # Arbitrary large value representing a decisive advantage (mate)
@@ -190,6 +327,7 @@ def _convert_eval_to_pawns(evaluation: dict) -> float:
 
 def is_stockfish_available() -> bool:
     """Check if Stockfish is available and working."""
+    engine = None
     try:
         engine = create_engine()
         # Quick test
@@ -199,6 +337,8 @@ def is_stockfish_available() -> bool:
         return True
     except (StockfishNotFoundError, StockfishError):
         return False
+    finally:
+        close_engine(engine)
 
 
 def _compute_cache_key(

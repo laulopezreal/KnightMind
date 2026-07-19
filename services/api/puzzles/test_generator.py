@@ -12,7 +12,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from services.api.db import Base
-from services.api.engine import EvalResult
+from services.api.engine import EvalResult, StockfishEngineDeadError
 from services.api.models import Game
 from services.api.puzzles.generator import _is_user_move, generate_puzzles
 from services.api.storage.puzzle_repository import PuzzleRepository
@@ -245,6 +245,55 @@ def test_generate_puzzles_with_mocked_engine(mock_create_engine, temp_storage):
     assert result.generated == 0
     assert result.skipped == 0
     assert result.analyzed_positions == 0
+
+
+@patch("services.api.puzzles.generator.create_engine")
+def test_generate_puzzles_recovers_from_engine_timeout(
+    mock_create_engine, temp_storage
+):
+    """A mid-batch engine timeout must recreate the shared engine.
+
+    Regression: previously a per-eval timeout killed the shared batch engine
+    and raised, but the generator kept it, so every subsequent position ran
+    against a dead subprocess (each stalling until the timeout fired again).
+    Now the batch recreates the engine and keeps going, so positions after the
+    timeout are still evaluated.
+    """
+    db = temp_storage
+    # Distinct engines so a recreation is observable via call_count.
+    mock_create_engine.side_effect = [Mock(), Mock(), Mock()]
+
+    pgn = """[Event "Test Game"]
+[White "testuser"]
+[Black "opponent"]
+
+1. e4 e5 2. Nf3 Nc6 3. Bc4 Nf6 4. d3 Bc5 5. O-O O-O 6. c3 d6 7. h3 h6 8. Re1 a6 9. Bb3 Ba7"""
+
+    _store_game(db, pgn)
+
+    call_state = {"n": 0}
+
+    def eval_side_effect(fen, engine=None, cache_stats=None):
+        call_state["n"] += 1
+        # Fail the 'after' eval of the FIRST analyzed position (call #2),
+        # simulating a timeout that killed the shared engine mid-batch. The
+        # move is already pushed by then, so the board stays consistent.
+        if call_state["n"] == 2:
+            raise StockfishEngineDeadError("Engine evaluation timed out")
+        return EvalResult(best_move_uci="d2d4", eval=2.0)
+
+    with patch(
+        "services.api.puzzles.generator.get_or_compute_eval",
+        side_effect=eval_side_effect,
+    ):
+        result = generate_puzzles("testuser", max_games=1, max_puzzles=30)
+
+    # The engine was recreated after the timeout (initial create + >=1 recreate).
+    assert mock_create_engine.call_count >= 2
+    # Positions k+1..N were still evaluated (and produced puzzles), i.e. the
+    # batch was NOT poisoned by the dead engine.
+    assert result.analyzed_positions >= 2
+    assert result.generated >= 1
 
 
 @patch("services.api.puzzles.generator.create_engine")

@@ -6,8 +6,10 @@ Provides position evaluation using Stockfish chess engine.
 
 from .stockfish import (
     EvalResult,
+    StockfishEngineDeadError,
     StockfishError,
     StockfishNotFoundError,
+    close_engine,
     create_engine,
     evaluate_fen,
     get_or_compute_eval,
@@ -40,8 +42,10 @@ __all__ = [
     "EvalResult",
     "StockfishNotFoundError",
     "StockfishError",
+    "StockfishEngineDeadError",
     "evaluate_fen",
     "is_stockfish_available",
     "create_engine",
+    "close_engine",
     "get_or_compute_eval",
 ]

@@ -14,7 +14,12 @@ import chess
 import chess.pgn
 
 from services.api.db import SessionLocal
-from services.api.engine import create_engine, get_or_compute_eval
+from services.api.engine import (
+    StockfishEngineDeadError,
+    close_engine,
+    create_engine,
+    get_or_compute_eval,
+)
 from services.api.storage import GameRepository, PuzzleRepository
 
 logger = logging.getLogger(__name__)
@@ -117,139 +122,166 @@ def generate_puzzles(
             # (logging would be good here)
             return GenerationResult(generated=0, skipped=0, analyzed_positions=0)
 
-        # Bulk-load PGNs keyed by game_id (one query per 1000 ids instead of
-        # one per game). A dict rather than iter_pgns because each PGN must
-        # stay paired with its game_id for save_puzzle(source_game_id=...);
-        # memory is bounded by max_games PGN blobs (capped at the endpoint
-        # and worker). Fetched only after the engine is known to be usable.
-        pgns_by_game_id = game_repository.get_pgns(
-            username, [game.game_id for game in recent_games]
-        )
+        # Ensure the batch engine subprocess is always terminated, even on
+        # early return, exception, or cancellation.
+        try:
+            # Bulk-load PGNs keyed by game_id (one query per 1000 ids instead of
+            # one per game). A dict rather than iter_pgns because each PGN must
+            # stay paired with its game_id for save_puzzle(source_game_id=...);
+            # memory is bounded by max_games PGN blobs (capped at the endpoint
+            # and worker). Fetched only after the engine is known to be usable.
+            pgns_by_game_id = game_repository.get_pgns(
+                username, [game.game_id for game in recent_games]
+            )
 
-        generated = 0
-        skipped = 0
-        analyzed_positions = 0
-        cache_stats = {"hits": 0, "misses": 0}  # Track cache performance
+            generated = 0
+            skipped = 0
+            analyzed_positions = 0
+            cache_stats = {"hits": 0, "misses": 0}  # Track cache performance
 
-        for game_meta in recent_games:
-            # Check for cancellation before processing each game
-            if cancellation_check and cancellation_check():
-                logger.info(f"Puzzle generation canceled for {username}")
-                break
-
-            if generated >= max_puzzles:
-                break
-
-            # Load PGN (bulk-fetched above)
-            pgn_text = pgns_by_game_id.get(game_meta.game_id)
-            if not pgn_text:
-                continue
-
-            # Parse game
-            pgn_io = io.StringIO(pgn_text)
-            game = chess.pgn.read_game(pgn_io)
-            if not game:
-                continue
-
-            # Get player usernames
-            white_username = game.headers.get("White", "")
-            black_username = game.headers.get("Black", "")
-
-            # Walk through the game
-            board = game.board()
-            ply = 0
-
-            for move in game.mainline_moves():
-                ply += 1
-
-                # Heartbeat + cancellation *within* the game so no single deep
-                # game can exceed the crash-recovery lease. The per-game check
-                # above only fires between games; this fires every
-                # HEARTBEAT_PLY_INTERVAL plies. On cancel we break the inner
-                # loop; the per-game check then ends the outer loop too.
-                if (
-                    cancellation_check
-                    and ply % HEARTBEAT_PLY_INTERVAL == 0
-                    and cancellation_check()
-                ):
+            for game_meta in recent_games:
+                # Check for cancellation before processing each game
+                if cancellation_check and cancellation_check():
                     logger.info(f"Puzzle generation canceled for {username}")
                     break
 
-                # Skip moves outside the target range
-                if ply < ply_start or ply > ply_end:
-                    board.push(move)
+                if generated >= max_puzzles:
+                    break
+
+                # Load PGN (bulk-fetched above)
+                pgn_text = pgns_by_game_id.get(game_meta.game_id)
+                if not pgn_text:
                     continue
 
-                # Only analyze when it's the user's move
-                if not _is_user_move(board, username, white_username, black_username):
-                    board.push(move)
+                # Parse game
+                pgn_io = io.StringIO(pgn_text)
+                game = chess.pgn.read_game(pgn_io)
+                if not game:
                     continue
 
-                analyzed_positions += 1
+                # Get player usernames
+                white_username = game.headers.get("White", "")
+                black_username = game.headers.get("Black", "")
 
-                # Get FEN before the move
-                fen_before = board.fen()
-                side_to_move = "white" if board.turn == chess.WHITE else "black"
+                # Walk through the game
+                board = game.board()
+                ply = 0
 
-                try:
-                    # Evaluate position before the move (with cache)
-                    eval_result_before = get_or_compute_eval(
-                        fen_before, engine=engine, cache_stats=cache_stats
-                    )
-                    eval_before = eval_result_before.eval
-                    best_move_uci = eval_result_before.best_move_uci
+                for move in game.mainline_moves():
+                    ply += 1
 
-                    # Make the user's move
-                    played_move_uci = move.uci()
-                    board.push(move)
+                    # Heartbeat + cancellation *within* the game so no single
+                    # deep game can exceed the crash-recovery lease. The
+                    # per-game check above only fires between games; this fires
+                    # every HEARTBEAT_PLY_INTERVAL plies. On cancel we break the
+                    # inner loop; the per-game check then ends the outer loop too.
+                    if (
+                        cancellation_check
+                        and ply % HEARTBEAT_PLY_INTERVAL == 0
+                        and cancellation_check()
+                    ):
+                        logger.info(f"Puzzle generation canceled for {username}")
+                        break
 
-                    # Evaluate position after the move (with cache)
-                    fen_after = board.fen()
-                    eval_result_after = get_or_compute_eval(
-                        fen_after, engine=engine, cache_stats=cache_stats
-                    )
-                    eval_after = eval_result_after.eval
+                    # Skip moves outside the target range
+                    if ply < ply_start or ply > ply_end:
+                        board.push(move)
+                        continue
 
-                    # Calculate swing
-                    # Important: eval is always from side-to-move perspective
-                    # So we need to flip the sign for eval_after since it's from opponent's perspective
-                    swing = eval_before - (-eval_after)
+                    # Only analyze when it's the user's move
+                    if not _is_user_move(
+                        board, username, white_username, black_username
+                    ):
+                        board.push(move)
+                        continue
 
-                    # Check if this is a blunder
-                    if swing >= swing_threshold:
-                        # Save puzzle
-                        is_new, _ = puzzle_repository.save_puzzle(
-                            username=username,
-                            source_game_id=game_meta.game_id,
-                            ply=ply,
-                            fen=fen_before,
-                            side_to_move=side_to_move,
-                            played_move_uci=played_move_uci,
-                            best_move_uci=best_move_uci,
-                            eval_before=eval_before,
-                            eval_after=-eval_after,  # Store from original player's perspective
-                            swing=swing,
+                    analyzed_positions += 1
+
+                    # Get FEN before the move
+                    fen_before = board.fen()
+                    side_to_move = "white" if board.turn == chess.WHITE else "black"
+
+                    try:
+                        # Evaluate position before the move (with cache)
+                        eval_result_before = get_or_compute_eval(
+                            fen_before, engine=engine, cache_stats=cache_stats
                         )
+                        eval_before = eval_result_before.eval
+                        best_move_uci = eval_result_before.best_move_uci
 
-                        if is_new:
-                            generated += 1
-                            if generated >= max_puzzles:
-                                break
-                        else:
-                            skipped += 1
+                        # Make the user's move
+                        played_move_uci = move.uci()
+                        board.push(move)
 
-                except Exception as e:
-                    # Skip positions that fail to evaluate
-                    # (e.g., checkmate, stalemate, engine errors)
-                    logger.warning(
-                        f"Failed to generate puzzle for FEN {fen_before}", exc_info=e
-                    )
-                    continue
+                        # Evaluate position after the move (with cache)
+                        fen_after = board.fen()
+                        eval_result_after = get_or_compute_eval(
+                            fen_after, engine=engine, cache_stats=cache_stats
+                        )
+                        eval_after = eval_result_after.eval
 
-        return GenerationResult(
-            generated=generated,
-            skipped=skipped,
-            analyzed_positions=analyzed_positions,
-            cache_hits=cache_stats["hits"],
-            cache_misses=cache_stats["misses"],
-        )
+                        # Calculate swing
+                        # Important: eval is always from side-to-move perspective
+                        # So we need to flip the sign for eval_after since it's from opponent's perspective
+                        swing = eval_before - (-eval_after)
+
+                        # Check if this is a blunder
+                        if swing >= swing_threshold:
+                            # Save puzzle
+                            is_new, _ = puzzle_repository.save_puzzle(
+                                username=username,
+                                source_game_id=game_meta.game_id,
+                                ply=ply,
+                                fen=fen_before,
+                                side_to_move=side_to_move,
+                                played_move_uci=played_move_uci,
+                                best_move_uci=best_move_uci,
+                                eval_before=eval_before,
+                                eval_after=-eval_after,  # Store from original player's perspective
+                                swing=swing,
+                            )
+
+                            if is_new:
+                                generated += 1
+                                if generated >= max_puzzles:
+                                    break
+                            else:
+                                skipped += 1
+
+                    except StockfishEngineDeadError:
+                        # A position timed out and its subprocess was killed.
+                        # The shared batch engine is now dead, so recreate it
+                        # before continuing; otherwise every remaining position
+                        # would run against a corpse (each stalling until the
+                        # timeout fires again).
+                        logger.warning(
+                            "Stockfish engine died mid-batch (timeout); "
+                            "recreating before continuing"
+                        )
+                        try:
+                            engine = create_engine()
+                        except Exception:
+                            logger.error(
+                                "Failed to recreate Stockfish engine; "
+                                "aborting remaining puzzle generation"
+                            )
+                            break
+                        continue
+                    except Exception as e:
+                        # Skip positions that fail to evaluate
+                        # (e.g., checkmate, stalemate, engine errors)
+                        logger.warning(
+                            f"Failed to generate puzzle for FEN {fen_before}",
+                            exc_info=e,
+                        )
+                        continue
+
+            return GenerationResult(
+                generated=generated,
+                skipped=skipped,
+                analyzed_positions=analyzed_positions,
+                cache_hits=cache_stats["hits"],
+                cache_misses=cache_stats["misses"],
+            )
+        finally:
+            close_engine(engine)
