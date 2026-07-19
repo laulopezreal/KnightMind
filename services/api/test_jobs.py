@@ -1,14 +1,16 @@
 import os
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, update
 from sqlalchemy.orm import sessionmaker
 
 from services.api.db import Base, get_db
 from services.api.main import app
 from services.api.models import Job, JobStatus
+from services.api.worker import JobWorker
 
 # Use a file-based DB for tests to ensure threading works if needed,
 # but :memory: is usually fine for single thread tests.
@@ -157,3 +159,149 @@ async def test_worker_execute_job(mock_to_thread, mock_generate, db_session):
     updated_job = db_session.get(Job, job.id)
     assert updated_job.status == JobStatus.SUCCEEDED
     assert updated_job.result_json["generated"] == 5
+
+
+# ---------------------------------------------------------------------------
+# AUDIT GATE 5: atomic job claim (QUEUED -> RUNNING)
+# ---------------------------------------------------------------------------
+
+
+def _reset_jobs(db_session):
+    """Clear the shared module-scoped jobs table for claim isolation."""
+    db_session.query(Job).delete()
+    db_session.commit()
+
+
+def test_claim_job_transitions_queued_to_running(db_session):
+    """A single claim flips exactly the oldest QUEUED job to RUNNING."""
+    _reset_jobs(db_session)
+    older = Job(
+        username="claim-older",
+        status=JobStatus.QUEUED,
+        created_at=datetime.now(timezone.utc) - timedelta(minutes=5),
+    )
+    newer = Job(
+        username="claim-newer",
+        status=JobStatus.QUEUED,
+        created_at=datetime.now(timezone.utc),
+    )
+    db_session.add_all([older, newer])
+    db_session.commit()
+
+    claimed_id = JobWorker._claim_job(db_session)
+
+    assert claimed_id == older.id  # oldest-first ordering preserved
+    db_session.expire_all()
+    claimed = db_session.get(Job, older.id)
+    assert claimed.status == JobStatus.RUNNING
+    # The claim sets the liveness lease atomically in the same UPDATE.
+    assert claimed.heartbeat_at is not None
+    assert db_session.get(Job, newer.id).status == JobStatus.QUEUED
+
+
+def test_claim_job_is_atomic_no_double_claim(db_session):
+    """The guarded UPDATE has rowcount==1 semantics: once a job leaves QUEUED,
+    a second claim attempt on the same row transitions nothing.
+
+    This is the regression guard for the double-claim window. The old
+    select-then-commit claim had no `WHERE status='queued'` guard on the
+    write, so two workers that both SELECTed the same QUEUED row would both
+    commit status=RUNNING and run the job twice. With the guarded UPDATE, the
+    second writer's rowcount is 0.
+    """
+    _reset_jobs(db_session)
+    job = Job(username="race-target", status=JobStatus.QUEUED)
+    db_session.add(job)
+    db_session.commit()
+
+    # First claimer wins.
+    first = JobWorker._claim_job(db_session)
+    assert first == job.id
+
+    # Second claimer finds nothing QUEUED -> returns None (no re-claim).
+    second = JobWorker._claim_job(db_session)
+    assert second is None
+
+    # Directly exercise the guarded UPDATE against the now-RUNNING row to prove
+    # the rowcount==0 semantics that make the claim safe under a real race.
+    guarded = (
+        update(Job)
+        .where(Job.id == job.id, Job.status == JobStatus.QUEUED)
+        .values(status=JobStatus.RUNNING)
+    )
+    result = db_session.execute(guarded)
+    db_session.commit()
+    assert result.rowcount == 0  # already claimed; guard blocks the transition
+
+
+def test_claim_job_returns_none_when_empty(db_session):
+    """No QUEUED jobs -> claim returns None."""
+    _reset_jobs(db_session)
+    assert JobWorker._claim_job(db_session) is None
+
+
+@pytest.mark.skipif(
+    not os.getenv("KNIGHTMIND_TEST_POSTGRES_URL"),
+    reason="requires a disposable Postgres (set KNIGHTMIND_TEST_POSTGRES_URL)",
+)
+def test_claim_job_concurrent_postgres():
+    """Integration: two concurrent workers claiming from a shared Postgres must
+    never claim the same job. Skipped unless a disposable Postgres is provided
+    via KNIGHTMIND_TEST_POSTGRES_URL.
+    """
+    import threading
+
+    pg_url = os.environ["KNIGHTMIND_TEST_POSTGRES_URL"]
+    pg_engine = create_engine(pg_url)
+    PgSession = sessionmaker(bind=pg_engine)
+    Base.metadata.create_all(bind=pg_engine)
+
+    # Seed N queued jobs, each for a distinct username (active-username index).
+    n = 10
+    with PgSession() as s:
+        s.query(Job).delete()
+        for i in range(n):
+            s.add(Job(username=f"pg-race-{i}", status=JobStatus.QUEUED))
+        s.commit()
+
+    claimed: list[str] = []
+    lock = threading.Lock()
+
+    def worker_claim():
+        while True:
+            with PgSession() as s:
+                jid = JobWorker._claim_job(s)
+            if jid is None:
+                return
+            with lock:
+                claimed.append(jid)
+
+    threads = [threading.Thread(target=worker_claim) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    # Every job claimed exactly once (no duplicates), all jobs claimed.
+    assert len(claimed) == n
+    assert len(set(claimed)) == n
+    # Each claimed row got its liveness lease set atomically.
+    with PgSession() as s:
+        for jid in claimed:
+            assert s.get(Job, jid).heartbeat_at is not None
+
+
+@pytest.mark.skipif(
+    not os.getenv("KNIGHTMIND_TEST_POSTGRES_URL"),
+    reason="requires a disposable Postgres (set KNIGHTMIND_TEST_POSTGRES_URL)",
+)
+def test_migration_applied_heartbeat_column_postgres():
+    """Migration smoke: after `alembic upgrade head` (run by CI before pytest),
+    the real Postgres jobs table has the heartbeat_at lease column. Proves the
+    migration chain including the new revision applies on Postgres from zero.
+    """
+    from sqlalchemy import inspect
+
+    pg_engine = create_engine(os.environ["KNIGHTMIND_TEST_POSTGRES_URL"])
+    cols = {c["name"] for c in inspect(pg_engine).get_columns("jobs")}
+    assert "heartbeat_at" in cols

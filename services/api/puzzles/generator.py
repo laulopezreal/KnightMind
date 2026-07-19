@@ -20,6 +20,14 @@ from services.api.storage import GameRepository, PuzzleRepository
 logger = logging.getLogger(__name__)
 
 
+# How often (in plies) to heartbeat / check cancellation *within* a single
+# game. The per-game check between games isn't enough on its own: one very deep
+# game (or the initial bulk PGN load + first game) could otherwise outlast the
+# crash-recovery lease and be falsely reset. Checking every N plies bounds the
+# gap between heartbeats to N positions regardless of game length.
+HEARTBEAT_PLY_INTERVAL = 10
+
+
 def get_swing_threshold() -> float:
     """Get the minimum evaluation swing to consider a move a blunder."""
     return float(os.environ.get("SWING_THRESHOLD", "2.0"))
@@ -153,6 +161,19 @@ def generate_puzzles(
 
             for move in game.mainline_moves():
                 ply += 1
+
+                # Heartbeat + cancellation *within* the game so no single deep
+                # game can exceed the crash-recovery lease. The per-game check
+                # above only fires between games; this fires every
+                # HEARTBEAT_PLY_INTERVAL plies. On cancel we break the inner
+                # loop; the per-game check then ends the outer loop too.
+                if (
+                    cancellation_check
+                    and ply % HEARTBEAT_PLY_INTERVAL == 0
+                    and cancellation_check()
+                ):
+                    logger.info(f"Puzzle generation canceled for {username}")
+                    break
 
                 # Skip moves outside the target range
                 if ply < ply_start or ply > ply_end:
