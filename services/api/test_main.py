@@ -451,6 +451,39 @@ def test_import_chesscom_success(mock_import_games, client_with_db):
 
 
 @patch("services.api.main.import_all_games")
+def test_import_chesscom_skips_malformed_game(mock_import_games, client_with_db):
+    """One empty-url game is skipped; the good ones still import (no 500)."""
+
+    async def mock_generator(username):
+        from services.ingest import ChessGame
+
+        # A malformed game with an empty url between two valid ones.
+        payloads = [MOCK_GAMES[0], {**MOCK_GAMES[1], "url": ""}]
+        for game_data in payloads:
+            yield ChessGame(
+                url=game_data["url"],
+                pgn=game_data["pgn"],
+                time_control=game_data["time_control"],
+                end_time=game_data["end_time"],
+                rated=game_data["rated"],
+                white_username=game_data["white"]["username"],
+                black_username=game_data["black"]["username"],
+                white_result=game_data["white"]["result"],
+                black_result=game_data["black"]["result"],
+            )
+
+    mock_import_games.side_effect = mock_generator
+
+    response = client_with_db.post("/import/chesscom?username=testuser")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["games_count"] == 2
+    assert data["new_games"] == 1  # only the valid game stored
+    assert data["skipped_duplicates"] == 1  # malformed game skipped
+
+
+@patch("services.api.main.import_all_games")
 def test_import_status_after_import(mock_import_games, client_with_db):
     """Test import status before and after an import."""
 
