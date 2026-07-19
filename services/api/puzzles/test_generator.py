@@ -111,6 +111,80 @@ def test_generate_puzzles_no_games(temp_storage):
         generate_puzzles("nonexistent_user")
 
 
+# A single long game (30 plies): enough that intra-game heartbeats must fire.
+_LONG_GAME_PGN = """[Event "Test Long Game"]
+[White "testuser"]
+[Black "opponent"]
+
+1. e4 e5 2. Nf3 Nc6 3. Bb5 a6 4. Ba4 Nf6 5. O-O Be7 6. Re1 b5 7. Bb3 d6 \
+8. c3 O-O 9. h3 Nb8 10. d4 Nbd7 11. Nbd2 Bb7 12. Bc2 Re8 13. Nf1 Bf8 \
+14. Ng3 g6 15. a4 c5"""
+
+
+@patch("services.api.puzzles.generator.create_engine")
+def test_heartbeat_fires_within_single_long_game(mock_create_engine, temp_storage):
+    """Regression: the heartbeat must fire WITHIN a single game, not only
+    between games. A 30-ply game must invoke cancellation_check more than once
+    (once per game + once every HEARTBEAT_PLY_INTERVAL plies), so one deep game
+    can't outlast the crash-recovery lease.
+    """
+    from services.api.puzzles.generator import HEARTBEAT_PLY_INTERVAL
+
+    db = temp_storage
+    mock_create_engine.return_value = Mock()
+    _store_game(db, _LONG_GAME_PGN)
+
+    calls = {"n": 0}
+
+    def counting_check() -> bool:
+        calls["n"] += 1
+        return False  # never cancel
+
+    with patch("services.api.puzzles.generator.get_or_compute_eval") as mock_eval:
+        mock_eval.return_value = EvalResult(best_move_uci="e2e4", eval=0.3)
+        generate_puzzles(
+            "testuser",
+            max_games=1,
+            max_puzzles=10,
+            cancellation_check=counting_check,
+        )
+
+    # 1 per-game check + one every HEARTBEAT_PLY_INTERVAL plies over 30 plies.
+    assert calls["n"] > 1  # fired within the game, not just between games
+    assert calls["n"] >= 1 + 30 // HEARTBEAT_PLY_INTERVAL
+
+
+@patch("services.api.puzzles.generator.create_engine")
+def test_intra_game_cancellation_stops_generation(mock_create_engine, temp_storage):
+    """Cancellation detected mid-game via the intra-game heartbeat halts the
+    run promptly instead of grinding through the rest of the game.
+    """
+    db = temp_storage
+    mock_create_engine.return_value = Mock()
+    _store_game(db, _LONG_GAME_PGN)
+
+    calls = {"n": 0}
+
+    def cancel_after_first_intra_check() -> bool:
+        calls["n"] += 1
+        # First call is the per-game check (return False); cancel on the first
+        # intra-game heartbeat so we stop well before the game ends.
+        return calls["n"] >= 2
+
+    with patch("services.api.puzzles.generator.get_or_compute_eval") as mock_eval:
+        mock_eval.return_value = EvalResult(best_move_uci="e2e4", eval=0.3)
+        result = generate_puzzles(
+            "testuser",
+            max_games=1,
+            max_puzzles=10,
+            cancellation_check=cancel_after_first_intra_check,
+        )
+
+    # Stopped at the first intra-game heartbeat (~ply 10), not after all 30.
+    assert calls["n"] == 2
+    assert result.analyzed_positions < 10
+
+
 @patch("services.api.puzzles.generator.create_engine")
 @patch("services.api.puzzles.generator.get_ply_range")
 def test_generate_puzzles_swing_calculation(

@@ -240,3 +240,90 @@ def test_null_heartbeat_falls_back_to_updated_at(monkeypatch):
     assert stale_null.status == JobStatus.QUEUED  # fell back to stale updated_at
     assert fresh_null.status == JobStatus.RUNNING  # fell back to fresh updated_at
     db.close()
+
+
+# 30-ply single game: long enough that the intra-game heartbeat must fire.
+_LONG_GAME_PGN = """[Event "Test Long Game"]
+[White "longuser"]
+[Black "opponent"]
+
+1. e4 e5 2. Nf3 Nc6 3. Bb5 a6 4. Ba4 Nf6 5. O-O Be7 6. Re1 b5 7. Bb3 d6 \
+8. c3 O-O 9. h3 Nb8 10. d4 Nbd7 11. Nbd2 Bb7 12. Bc2 Re8 13. Nf1 Bf8 \
+14. Ng3 g6 15. a4 c5"""
+
+
+def test_long_single_game_keeps_lease_fresh_and_not_reset(monkeypatch):
+    """End-to-end: a legitimately long SINGLE-game run keeps heartbeat_at fresh
+    (the generator heartbeats within the game) so crash recovery does NOT reset
+    it, even though it was claimed long ago.
+    """
+    import asyncio
+    from unittest.mock import Mock, patch
+
+    from services.api.engine import EvalResult
+    from services.api.models import Game
+    from services.api.puzzles.generator import generate_puzzles
+
+    # Both the generator and the worker heartbeat must hit the same test DB.
+    monkeypatch.setattr("services.api.worker.SessionLocal", TestSessionLocal)
+    monkeypatch.setattr("services.api.puzzles.generator.SessionLocal", TestSessionLocal)
+
+    db = TestSessionLocal()
+    worker = JobWorker()
+
+    db.add(
+        Game(
+            game_id="long-game-1",
+            url="https://chess.com/game/long-1",
+            username="longuser",
+            white_username="longuser",
+            black_username="opponent",
+            white_result="win",
+            black_result="loss",
+            time_control="600",
+            end_time=1234567890,
+            rated=True,
+            pgn_blob=_LONG_GAME_PGN,
+        )
+    )
+
+    # Job was CLAIMED 20 min ago: without an intra-game heartbeat its lease
+    # would be stale and cleanup would falsely reset it.
+    claim_time = datetime.now(timezone.utc) - timedelta(minutes=20)
+    job = Job(
+        id="long-job-1",
+        type="puzzle_generation",
+        username="longuser",
+        status=JobStatus.RUNNING,
+        updated_at=claim_time,
+        heartbeat_at=claim_time,
+        created_at=claim_time,
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    heartbeat_before = job.heartbeat_at
+
+    with (
+        patch("services.api.puzzles.generator.create_engine", return_value=Mock()),
+        patch("services.api.puzzles.generator.get_or_compute_eval") as mock_eval,
+    ):
+        mock_eval.return_value = EvalResult(best_move_uci="e2e4", eval=0.3)
+        generate_puzzles(
+            "longuser",
+            max_games=1,
+            max_puzzles=10,
+            cancellation_check=lambda: worker._heartbeat_and_check_cancellation(
+                "long-job-1"
+            ),
+        )
+
+    # The single game's intra-game heartbeats advanced the lease.
+    db.refresh(job)
+    assert job.heartbeat_at > heartbeat_before
+
+    # Crash recovery must leave the still-live long job alone.
+    asyncio.run(worker.cleanup_stuck_jobs())
+    db.refresh(job)
+    assert job.status == JobStatus.RUNNING
+    db.close()

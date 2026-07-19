@@ -202,9 +202,10 @@ class JobWorker:
                 max_puzzles = min(max(int(params.get("max_puzzles", 30)), 1), 2000)
 
             # Run generation (CPU bound). The generator calls the callback as it
-            # makes progress; we use it both to check for cancellation AND to
-            # heartbeat `updated_at`, so crash recovery can tell a live long job
-            # (recent heartbeat) apart from a crashed one (stale heartbeat).
+            # makes progress (between games AND every N plies within a game); we
+            # use it both to check for cancellation AND to bump the heartbeat_at
+            # lease, so crash recovery can tell a live long job (fresh lease)
+            # apart from a crashed one (stale lease).
             result = await asyncio.to_thread(
                 generate_puzzles,
                 username=username,
