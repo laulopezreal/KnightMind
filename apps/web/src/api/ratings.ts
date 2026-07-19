@@ -59,6 +59,9 @@ export interface ExplainResponse {
     stats: DriverStats;
     drivers: Driver[];
     highlights: Highlights;
+    // Canonical server-side uncertainty signal (from rated-game count).
+    confidence: 'low' | 'medium' | 'high';
+    insufficient_data: boolean;
 }
 
 export interface SnapshotHistoryItem {

@@ -197,7 +197,10 @@ export default function RatingInsights() {
     const isState0 = data && !hasGames;
 
     const N = data?.stats.games ?? 0;
-    const confidence = N < LOW_CONFIDENCE_THRESHOLD ? 'low' : N < HIGH_CONFIDENCE_THRESHOLD ? 'medium' : 'high';
+    // Prefer the server's canonical confidence (computed from rated games with a
+    // known opponent rating). Fall back to the game count only for older payloads.
+    const confidence = data?.confidence
+        ?? (N < LOW_CONFIDENCE_THRESHOLD ? 'low' : N < HIGH_CONFIDENCE_THRESHOLD ? 'medium' : 'high');
     const timeControlLabel = timeControl === 'rapid' ? 'Rapid' : timeControl === 'blitz' ? 'Blitz' : 'Bullet';
     const windowLabel = N >= HIGH_CONFIDENCE_THRESHOLD ? `Last ${HIGH_CONFIDENCE_THRESHOLD} ${timeControlLabel} games` : `Last ${N} ${timeControlLabel} games`;
 

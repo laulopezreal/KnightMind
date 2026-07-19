@@ -9,19 +9,28 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from services.api.analytics_confidence import MIN_ATTEMPTS_FOR_MOTIF_RANK
 from services.api.models import PuzzleStats
 
 MotifRank = Literal["needs_work", "learning", "mastered"]
 
 
 class MotifPerformance(BaseModel):
-    """Performance statistics for a single chess motif/pattern."""
+    """Performance statistics for a single chess motif/pattern.
+
+    Descriptive only. `rank` is a bucketed view of observed accuracy; when
+    `attempts` is below MIN_ATTEMPTS_FOR_MOTIF_RANK the accuracy is not yet
+    reliable and `insufficient_data` is True. Such motifs are excluded from
+    `weakest_motifs` so one unlucky attempt is never called a weakness.
+    """
 
     name: str
     total_puzzles: int
     passed: int
     accuracy: float
     rank: MotifRank
+    attempts: int
+    insufficient_data: bool
 
 
 class MotifPerformanceResponse(BaseModel):
@@ -90,6 +99,7 @@ def get_user_motif_performance(db: Session, username: str) -> MotifPerformanceRe
         # Calculate accuracy (avoid division by zero)
         accuracy = passed / attempts if attempts > 0 else 0.0
         rank = calculate_motif_rank(accuracy)
+        insufficient_data = attempts < MIN_ATTEMPTS_FOR_MOTIF_RANK
 
         motifs.append(
             MotifPerformance(
@@ -98,11 +108,16 @@ def get_user_motif_performance(db: Session, username: str) -> MotifPerformanceRe
                 passed=passed,
                 accuracy=accuracy,
                 rank=rank,
+                attempts=attempts,
+                insufficient_data=insufficient_data,
             )
         )
 
-    # Identify weakest motifs (bottom 2, needs_work rank only)
-    weakest = [m.name for m in motifs if m.rank == "needs_work"][:2]
+    # Identify weakest motifs (bottom 2, needs_work rank only). Motifs with too
+    # few attempts are excluded — an unreliable accuracy is not a "weakness".
+    weakest = [
+        m.name for m in motifs if m.rank == "needs_work" and not m.insufficient_data
+    ][:2]
 
     return MotifPerformanceResponse(
         motifs=motifs, weakest_motifs=weakest, total_motifs_practiced=len(motifs)

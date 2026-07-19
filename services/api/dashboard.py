@@ -8,7 +8,7 @@ Provides comprehensive dashboard data including:
 - Improvement trends over time
 """
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Query
@@ -16,6 +16,11 @@ from pydantic import BaseModel
 from sqlalchemy import case, desc, func, select
 from sqlalchemy.orm import Session
 
+from services.api.analytics_confidence import (
+    MIN_REVIEWS_FOR_FORM_TREND,
+    MIN_REVIEWS_FOR_MOTIF_TREND,
+)
+from services.api.day_boundary import day_expr, day_key, utc_today
 from services.api.db import get_db
 from services.api.models import PuzzleReview, PuzzleStats, TrainingSession
 from services.api.storage.spaced_repetition import (
@@ -28,11 +33,19 @@ router = APIRouter(prefix="/users", tags=["dashboard"])
 
 # Response Models
 class RecentFormData(BaseModel):
-    """Recent performance data for last 20 puzzles."""
+    """Recent performance data for last 20 puzzles.
+
+    Descriptive only: `accuracy` and `trend` summarize observed results, they
+    are not a forecast. `trend` stays "steady" until at least
+    MIN_REVIEWS_FOR_FORM_TREND reviews exist; `insufficient_data` says whether
+    the sample was too small to read a direction.
+    """
 
     last_20_results: list[Literal["pass", "fail"]]
     accuracy: float
     trend: Literal["up", "down", "steady"]
+    sample_size: int
+    insufficient_data: bool
 
 
 class ScheduleData(BaseModel):
@@ -64,13 +77,20 @@ class TrendDataPoint(BaseModel):
 
 
 class MotifTrend(BaseModel):
-    """Trend data for a single motif."""
+    """Trend data for a single motif.
+
+    Descriptive only. `trend` stays "steady" (and `insufficient_data` is True)
+    until the motif has at least MIN_REVIEWS_FOR_MOTIF_TREND reviews in the
+    window, so a two-attempt swing is never rendered as a direction.
+    """
 
     motif: str
     start_accuracy: float
     end_accuracy: float
     change: float
     trend: Literal["up", "down", "steady"]
+    total_reviews: int
+    insufficient_data: bool
     data_points: list[TrendDataPoint]
 
 
@@ -119,7 +139,13 @@ def calculate_recent_form(db: Session, username: str) -> RecentFormData:
     reviews = db.scalars(stmt).all()
 
     if not reviews:
-        return RecentFormData(last_20_results=[], accuracy=0.0, trend="steady")
+        return RecentFormData(
+            last_20_results=[],
+            accuracy=0.0,
+            trend="steady",
+            sample_size=0,
+            insufficient_data=True,
+        )
 
     # Extract results
     results = [r.result for r in reversed(reviews)]  # Oldest first
@@ -128,8 +154,12 @@ def calculate_recent_form(db: Session, username: str) -> RecentFormData:
     pass_count = sum(1 for r in results if r == "pass")
     accuracy = pass_count / len(results) if results else 0.0
 
-    # Calculate trend (compare first half vs second half)
-    if len(results) >= 4:
+    # Trend is directional only with enough reviews; below the threshold the
+    # honest signal is "steady" + insufficient_data (a 2/2 split is not a trend).
+    insufficient_data = len(results) < MIN_REVIEWS_FOR_FORM_TREND
+    if insufficient_data:
+        trend = "steady"
+    else:
         mid = len(results) // 2
         first_half = results[:mid]
         second_half = results[mid:]
@@ -143,10 +173,14 @@ def calculate_recent_form(db: Session, username: str) -> RecentFormData:
             trend = "down"
         else:
             trend = "steady"
-    else:
-        trend = "steady"
 
-    return RecentFormData(last_20_results=results, accuracy=accuracy, trend=trend)
+    return RecentFormData(
+        last_20_results=results,
+        accuracy=accuracy,
+        trend=trend,
+        sample_size=len(results),
+        insufficient_data=insufficient_data,
+    )
 
 
 def calculate_training_streak(db: Session, username: str) -> int:
@@ -159,38 +193,49 @@ def calculate_training_streak(db: Session, username: str) -> int:
 
     Returns:
         Number of consecutive days with training
+
+    Day boundary is UTC (see services.api.day_boundary). ``func.date`` returns a
+    string on SQLite but a ``date`` on Postgres; both are normalized to
+    "YYYY-MM-DD" strings via ``day_key`` so the comparison is backend-agnostic.
+    Previously the raw SQLite string was compared to Python ``date`` objects,
+    which never matched — collapsing every SQLite streak to 0.
     """
-    # Get all unique completed session dates, ordered descending
+    # Get all unique completed session (UTC) dates, ordered descending
     stmt = (
-        select(func.date(TrainingSession.completed_at))
+        select(day_expr(TrainingSession.completed_at))
         .where(
             TrainingSession.username == username,
             TrainingSession.completed_at.isnot(None),
         )
         .distinct()
-        .order_by(desc(func.date(TrainingSession.completed_at)))
+        .order_by(desc(day_expr(TrainingSession.completed_at)))
     )
 
-    session_dates_iter = db.scalars(stmt)
+    session_days = [day_key(d) for d in db.scalars(stmt) if d is not None]
 
-    try:
-        latest_session_date = next(session_dates_iter)
-    except StopIteration:
+    if not session_days:
         return 0
 
-    today = datetime.now(timezone.utc).date()
+    latest_day = session_days[0]
+    today = utc_today()
+    valid_latest = {day_key(today), day_key(today - timedelta(days=1))}
 
-    # A current streak must include today or yesterday.
-    if latest_session_date not in [today, today - timedelta(days=1)]:
+    # A current streak must include today or yesterday (UTC).
+    if latest_day not in valid_latest:
         return 0
 
+    # Walk backwards one UTC day at a time until a gap appears.
     streak = 1
-    expected_date = latest_session_date - timedelta(days=1)
+    latest_date = datetime.strptime(latest_day, "%Y-%m-%d").date()
+    expected_day = day_key(latest_date - timedelta(days=1))
 
-    for session_date in session_dates_iter:
-        if session_date == expected_date:
+    for session_day in session_days[1:]:
+        if session_day == expected_day:
             streak += 1
-            expected_date -= timedelta(days=1)
+            expected_date = datetime.strptime(
+                session_day, "%Y-%m-%d"
+            ).date() - timedelta(days=1)
+            expected_day = day_key(expected_date)
         else:
             # Gap in dates, streak is broken.
             break
@@ -302,12 +347,12 @@ async def get_motif_trends(
     """
     cutoff_date = datetime.now(timezone.utc) - timedelta(days=window)
 
-    # Get all reviews within the window, grouped by motif and week
-    # Join reviews with stats to get motif information
+    # Get all reviews within the window, grouped by motif and UTC day.
+    # Join reviews with stats to get motif information.
     stmt = (
         select(
             PuzzleStats.primary_motif,
-            func.date(PuzzleReview.reviewed_at).label("week"),
+            day_expr(PuzzleReview.reviewed_at).label("day"),
             func.count(PuzzleReview.id).label("total"),
             func.sum(case((PuzzleReview.result == "pass", 1), else_=0)).label("passed"),
         )
@@ -317,18 +362,19 @@ async def get_motif_trends(
             PuzzleReview.reviewed_at >= cutoff_date,
             PuzzleStats.primary_motif.isnot(None),
         )
-        .group_by(PuzzleStats.primary_motif, func.date(PuzzleReview.reviewed_at))
-        .order_by(PuzzleStats.primary_motif, func.date(PuzzleReview.reviewed_at))
+        .group_by(PuzzleStats.primary_motif, day_expr(PuzzleReview.reviewed_at))
+        .order_by(PuzzleStats.primary_motif, day_expr(PuzzleReview.reviewed_at))
     )
 
     results = db.execute(stmt).all()
 
-    # Organize by motif
-    motif_data: dict[str, list[tuple[datetime, float]]] = {}
+    # Organize by motif. day_key normalizes SQLite(str)/Postgres(date) buckets.
+    motif_data: dict[str, list[tuple[str, float]]] = {}
+    motif_review_totals: dict[str, int] = {}
 
     for row in results:
         motif = row.primary_motif
-        week = row.week
+        day = day_key(row.day)
         total = row.total or 0
         passed = row.passed or 0
 
@@ -337,47 +383,42 @@ async def get_motif_trends(
 
         accuracy = passed / total
 
-        if motif not in motif_data:
-            motif_data[motif] = []
-
-        motif_data[motif].append((week, accuracy))
+        motif_data.setdefault(motif, []).append((day, accuracy))
+        motif_review_totals[motif] = motif_review_totals.get(motif, 0) + total
 
     # Build trend objects
     trends = []
 
     for motif, data_points in motif_data.items():
         if len(data_points) < 2:
-            # Not enough data for trend
+            # Need at least two day buckets to describe any movement.
             continue
 
-        # Sort by date
+        # Sort by day (string dates sort chronologically as "YYYY-MM-DD").
         data_points.sort(key=lambda x: x[0])
+
+        total_reviews = motif_review_totals[motif]
 
         # Get start and end accuracy
         start_accuracy = data_points[0][1]
         end_accuracy = data_points[-1][1]
         change = end_accuracy - start_accuracy
 
-        # Determine trend
-        if change > 0.05:
+        # Direction is descriptive and only reported once the sample is big
+        # enough; otherwise a two-attempt swing would read as a "trend".
+        insufficient_data = total_reviews < MIN_REVIEWS_FOR_MOTIF_TREND
+        if insufficient_data:
+            trend = "steady"
+        elif change > 0.05:
             trend = "up"
         elif change < -0.05:
             trend = "down"
         else:
             trend = "steady"
 
-        # Format data points
-        # func.date() returns a string on SQLite, a date object on PostgreSQL
         formatted_points = [
-            TrendDataPoint(
-                date=(
-                    dp_date.strftime("%Y-%m-%d")
-                    if isinstance(dp_date, (date, datetime))
-                    else str(dp_date)
-                ),
-                accuracy=round(accuracy, 3),
-            )
-            for dp_date, accuracy in data_points
+            TrendDataPoint(date=day, accuracy=round(accuracy, 3))
+            for day, accuracy in data_points
         ]
 
         trends.append(
@@ -387,6 +428,8 @@ async def get_motif_trends(
                 end_accuracy=round(end_accuracy, 3),
                 change=round(change, 3),
                 trend=trend,
+                total_reviews=total_reviews,
+                insufficient_data=insufficient_data,
                 data_points=formatted_points,
             )
         )

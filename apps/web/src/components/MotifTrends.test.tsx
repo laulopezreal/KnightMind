@@ -36,6 +36,8 @@ describe('MotifTrends', () => {
         change: 0.15,
         start_accuracy: 0.7,
         end_accuracy: 0.85,
+        total_reviews: 20,
+        insufficient_data: false,
         data_points: [
           { date: '2025-01-10', accuracy: 0.7 },
           { date: '2025-01-15', accuracy: 0.85 },
@@ -50,13 +52,25 @@ describe('MotifTrends', () => {
 
   it('should show trend summaries for up to 3 motifs', () => {
     const trends = [
-      { motif: 'Fork', trend: 'up' as const, change: 0.15, start_accuracy: 0.7, end_accuracy: 0.85, data_points: [{ date: '2025-01-15', accuracy: 0.85 }] },
-      { motif: 'Pin', trend: 'down' as const, change: -0.1, start_accuracy: 0.7, end_accuracy: 0.6, data_points: [{ date: '2025-01-15', accuracy: 0.6 }] },
+      { motif: 'Fork', trend: 'up' as const, change: 0.15, start_accuracy: 0.7, end_accuracy: 0.85, total_reviews: 20, insufficient_data: false, data_points: [{ date: '2025-01-15', accuracy: 0.85 }] },
+      { motif: 'Pin', trend: 'down' as const, change: -0.1, start_accuracy: 0.7, end_accuracy: 0.6, total_reviews: 18, insufficient_data: false, data_points: [{ date: '2025-01-15', accuracy: 0.6 }] },
     ];
 
     render(<MotifTrends trends={trends} windowDays={30} />);
 
     expect(screen.getByText('Fork')).toBeInTheDocument();
     expect(screen.getByText('Pin')).toBeInTheDocument();
+  });
+
+  it('shows "Limited data" instead of a direction for low-sample motifs', () => {
+    const trends = [
+      { motif: 'Skewer', trend: 'steady' as const, change: -1.0, start_accuracy: 1.0, end_accuracy: 0.0, total_reviews: 2, insufficient_data: true, data_points: [{ date: '2025-01-10', accuracy: 1.0 }, { date: '2025-01-15', accuracy: 0.0 }] },
+    ];
+
+    render(<MotifTrends trends={trends} windowDays={30} />);
+
+    // The misleading "-100.0%" must not appear; a neutral label shows instead.
+    expect(screen.getByText(/Limited data/)).toBeInTheDocument();
+    expect(screen.queryByText(/-100\.0%/)).not.toBeInTheDocument();
   });
 });
