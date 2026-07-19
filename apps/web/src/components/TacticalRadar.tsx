@@ -22,11 +22,9 @@ export function TacticalRadar({ motifs, onMotifClick }: TacticalRadarProps) {
     // reliable accuracy — a single unlucky attempt is not a "weakest area".
     // Fall back to all motifs if none yet clear the reliability bar.
     const weakest = useMemo(() => {
-        if (motifs.length === 0) return null;
         const reliable = motifs.filter(m => !m.insufficient_data);
-        const pool = reliable.length > 0 ? reliable : null;
-        if (!pool) return null;
-        return pool.reduce((min, m) =>
+        if (reliable.length === 0) return null;
+        return reliable.reduce((min, m) =>
             m.accuracy < min.accuracy ? m : min
         );
     }, [motifs]);

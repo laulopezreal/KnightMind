@@ -746,6 +746,51 @@ def test_get_daily_puzzles_rotation(client_with_db, db_session):
         assert puzzle_data["used_on"] == today_str
 
 
+def test_daily_puzzles_use_utc_day_boundary(db_session, monkeypatch):
+    """Daily-puzzle read and write both use the UTC day boundary.
+
+    Independent of the server's local `date.today()`: mark_puzzles_used stamps
+    the UTC date and get_daily_puzzles reads back the same "used today" set, so
+    the rotation flips at the same midnight as the training streak.
+    """
+    from services.api.storage.puzzle_repository import PuzzleRepository
+
+    fixed_utc_day = date(2026, 3, 14)
+    # Patch the repository's day-boundary helper; leave real date.today() alone
+    # so the test proves the code no longer depends on server-local time.
+    monkeypatch.setattr(
+        "services.api.storage.puzzle_repository.utc_today", lambda: fixed_utc_day
+    )
+
+    for i in range(3):
+        _create_puzzle(
+            db_session,
+            f"utc-puz-{i}",
+            "utcuser",
+            source_game_id=f"utc-game-{i}",
+            ply=10 + i,
+        )
+    db_session.commit()
+
+    repo = PuzzleRepository(db_session)
+
+    # Write: no explicit date -> stamps the UTC day.
+    marked = repo.mark_puzzles_used("utcuser", ["utc-puz-0", "utc-puz-1"])
+    assert marked == 2
+    stamped = {
+        p.used_on
+        for p in db_session.query(PuzzleModel).filter(
+            PuzzleModel.id.in_(["utc-puz-0", "utc-puz-1"])
+        )
+    }
+    assert stamped == {fixed_utc_day}
+
+    # Read: those two are treated as "used today" (UTC), so a request for 2
+    # returns exactly them rather than the unused puzzle.
+    selected = repo.get_daily_puzzles("utcuser", n=2)
+    assert {p.id for p in selected} == {"utc-puz-0", "utc-puz-1"}
+
+
 def test_get_daily_puzzles_no_puzzles(client_with_db):
     """Test 404 when user has no puzzles."""
     response = client_with_db.post(
