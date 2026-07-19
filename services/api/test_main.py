@@ -68,7 +68,7 @@ def _create_game(
     end_time: int | None = None,
 ):
     """Helper: create a Game row."""
-    existing = db.get(Game, game_id)
+    existing = db.get(Game, (game_id, username))
     if existing:
         return
     db.add(

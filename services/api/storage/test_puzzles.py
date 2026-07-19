@@ -48,7 +48,7 @@ def repository(db_session):
 
 
 def _add_game(db_session, game_id: str, username: str = "testuser"):
-    existing = db_session.get(Game, game_id)
+    existing = db_session.get(Game, (game_id, username))
     if not existing:
         db_session.add(
             Game(
