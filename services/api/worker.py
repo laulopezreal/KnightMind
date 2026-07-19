@@ -4,7 +4,7 @@ import traceback
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from services.api.db import SessionLocal
@@ -57,18 +57,23 @@ class JobWorker:
         """Reset jobs that have been 'running' for too long (e.g. crash recovery)."""
 
         def _cleanup(db: Session):
-            # Cleanup jobs that have been RUNNING for more than 15 minutes.
-            # This is a safe threshold for crash recovery.
-            limit = datetime.now(timezone.utc) - timedelta(minutes=15)
-            stmt = select(Job).where(
-                Job.status == JobStatus.RUNNING, Job.updated_at < limit
-            )
+            # Reset jobs whose liveness lease has gone stale (crash recovery).
+            # Staleness is measured against heartbeat_at (the lease the running
+            # worker keeps bumping), NOT updated_at — a live long job keeps its
+            # heartbeat fresh and is left alone, while a crashed worker stops
+            # heartbeating and gets recovered. COALESCE falls back to
+            # updated_at then created_at for pre-migration rows whose
+            # heartbeat_at is still NULL, so no in-flight job is stranded.
+            now = datetime.now(timezone.utc)
+            limit = now - timedelta(minutes=15)
+            liveness = func.coalesce(Job.heartbeat_at, Job.updated_at, Job.created_at)
+            stmt = select(Job).where(Job.status == JobStatus.RUNNING, liveness < limit)
             stuck_jobs = db.scalars(stmt).all()
             count = 0
             for job in stuck_jobs:
                 job.status = JobStatus.QUEUED
                 job.message = "Recovered from crash"
-                job.updated_at = datetime.now(timezone.utc)
+                job.updated_at = now
                 count += 1
             db.commit()
             return count
@@ -118,7 +123,7 @@ class JobWorker:
         update_stmt = (
             update(Job)
             .where(Job.id == candidate_id, Job.status == JobStatus.QUEUED)
-            .values(status=JobStatus.RUNNING, updated_at=now)
+            .values(status=JobStatus.RUNNING, updated_at=now, heartbeat_at=now)
         )
         result = db.execute(update_stmt)
         db.commit()
@@ -149,10 +154,16 @@ class JobWorker:
         it makes progress on each game.
 
         Returns True if the job has been canceled (so the generator should
-        stop). As a side effect, bumps `updated_at` on a still-running job so
-        `cleanup_stuck_jobs` can distinguish a live long-running job (fresh
-        heartbeat) from a crashed one (stale heartbeat) instead of resetting
-        purely on wall-clock time since the claim.
+        stop). As a side effect, bumps the `heartbeat_at` lease on a
+        still-running job so `cleanup_stuck_jobs` can distinguish a live
+        long-running job (fresh heartbeat) from a crashed one (stale heartbeat)
+        instead of resetting purely on wall-clock time since the claim.
+
+        We update `heartbeat_at` via a Core UPDATE and explicitly re-set
+        `updated_at` to its current value: `updated_at` has a column-level
+        `onupdate` that would otherwise fire on ANY UPDATE, so pinning it in the
+        SET clause suppresses that and keeps liveness decoupled from
+        status-write timestamps.
         """
         with SessionLocal() as db:
             job = db.get(Job, job_id)
@@ -160,7 +171,14 @@ class JobWorker:
                 return False
             if job.status == JobStatus.CANCELED:
                 return True
-            job.updated_at = datetime.now(timezone.utc)
+            db.execute(
+                update(Job)
+                .where(Job.id == job_id)
+                .values(
+                    heartbeat_at=datetime.now(timezone.utc),
+                    updated_at=job.updated_at,  # pin: suppress onupdate
+                )
+            )
             db.commit()
         return False
 

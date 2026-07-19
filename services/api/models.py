@@ -69,6 +69,12 @@ class Job(Base):
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
     )
+    # Liveness lease, decoupled from status-write timestamps. Set at claim and
+    # bumped by the worker's per-game heartbeat; crash recovery keys on this
+    # (not updated_at) so an ordinary status write can never look like liveness.
+    # Nullable so pre-migration rows exist as NULL; recovery falls back to
+    # updated_at/created_at for those.
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class FenEvalCache(Base):

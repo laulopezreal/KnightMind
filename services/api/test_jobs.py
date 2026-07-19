@@ -192,7 +192,10 @@ def test_claim_job_transitions_queued_to_running(db_session):
 
     assert claimed_id == older.id  # oldest-first ordering preserved
     db_session.expire_all()
-    assert db_session.get(Job, older.id).status == JobStatus.RUNNING
+    claimed = db_session.get(Job, older.id)
+    assert claimed.status == JobStatus.RUNNING
+    # The claim sets the liveness lease atomically in the same UPDATE.
+    assert claimed.heartbeat_at is not None
     assert db_session.get(Job, newer.id).status == JobStatus.QUEUED
 
 
@@ -282,3 +285,23 @@ def test_claim_job_concurrent_postgres():
     # Every job claimed exactly once (no duplicates), all jobs claimed.
     assert len(claimed) == n
     assert len(set(claimed)) == n
+    # Each claimed row got its liveness lease set atomically.
+    with PgSession() as s:
+        for jid in claimed:
+            assert s.get(Job, jid).heartbeat_at is not None
+
+
+@pytest.mark.skipif(
+    not os.getenv("KNIGHTMIND_TEST_POSTGRES_URL"),
+    reason="requires a disposable Postgres (set KNIGHTMIND_TEST_POSTGRES_URL)",
+)
+def test_migration_applied_heartbeat_column_postgres():
+    """Migration smoke: after `alembic upgrade head` (run by CI before pytest),
+    the real Postgres jobs table has the heartbeat_at lease column. Proves the
+    migration chain including the new revision applies on Postgres from zero.
+    """
+    from sqlalchemy import inspect
+
+    pg_engine = create_engine(os.environ["KNIGHTMIND_TEST_POSTGRES_URL"])
+    cols = {c["name"] for c in inspect(pg_engine).get_columns("jobs")}
+    assert "heartbeat_at" in cols

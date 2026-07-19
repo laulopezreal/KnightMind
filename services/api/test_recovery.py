@@ -82,9 +82,10 @@ def test_startup_recovery(monkeypatch):
     db.close()
 
 
-def test_heartbeat_advances_updated_at(monkeypatch):
-    """The generator's progress callback bumps updated_at (liveness heartbeat)
-    and returns False for a still-running job.
+def test_heartbeat_advances_lease_not_updated_at(monkeypatch):
+    """The generator's progress callback bumps the heartbeat_at lease and
+    returns False for a still-running job. Liveness must stay decoupled from
+    status writes, so updated_at MUST NOT move.
     """
     monkeypatch.setattr("services.api.worker.SessionLocal", TestSessionLocal)
 
@@ -98,18 +99,21 @@ def test_heartbeat_advances_updated_at(monkeypatch):
         username="beatuser",
         status=JobStatus.RUNNING,
         updated_at=old_ts,
+        heartbeat_at=old_ts,
         created_at=datetime.now(timezone.utc) - timedelta(minutes=25),
     )
     db.add(job)
     db.commit()
     db.refresh(job)
-    before = job.updated_at  # read back as stored (SQLite -> naive)
+    updated_before = job.updated_at
+    heartbeat_before = job.heartbeat_at
 
     canceled = worker._heartbeat_and_check_cancellation("beat-1")
 
     assert canceled is False
     db.refresh(job)
-    assert job.updated_at > before  # heartbeat advanced liveness timestamp
+    assert job.heartbeat_at > heartbeat_before  # lease advanced
+    assert job.updated_at == updated_before  # status-write ts untouched
     db.close()
 
 
@@ -142,8 +146,8 @@ def test_live_long_job_not_reset_but_crashed_one_is(monkeypatch):
     Regression for the bug where cleanup_stuck_jobs reset any RUNNING job older
     than 15 min purely on wall-clock time since the claim. With no heartbeat, a
     live deep-analysis job that had been running 20 min would be reset and
-    re-run (duplicate generation). Now a live job heartbeats updated_at, so it
-    survives; a crashed job stops heartbeating and is correctly recovered.
+    re-run (duplicate generation). Now a live job bumps the heartbeat_at lease,
+    so it survives; a crashed job stops heartbeating and is correctly recovered.
     """
     import asyncio
 
@@ -152,7 +156,7 @@ def test_live_long_job_not_reset_but_crashed_one_is(monkeypatch):
     db = TestSessionLocal()
     worker = JobWorker()
 
-    # Both jobs were CLAIMED 20 min ago (created/claim time is old).
+    # Both jobs were CLAIMED 20 min ago: claim-time heartbeat_at is old.
     claim_time = datetime.now(timezone.utc) - timedelta(minutes=20)
 
     live_job = Job(
@@ -161,6 +165,7 @@ def test_live_long_job_not_reset_but_crashed_one_is(monkeypatch):
         username="liveuser",
         status=JobStatus.RUNNING,
         updated_at=claim_time,
+        heartbeat_at=claim_time,
         created_at=claim_time,
     )
     crashed_job = Job(
@@ -169,12 +174,13 @@ def test_live_long_job_not_reset_but_crashed_one_is(monkeypatch):
         username="crasheduser",
         status=JobStatus.RUNNING,
         updated_at=claim_time,
+        heartbeat_at=claim_time,
         created_at=claim_time,
     )
     db.add_all([live_job, crashed_job])
     db.commit()
 
-    # The live job makes progress -> its heartbeat refreshes updated_at.
+    # The live job makes progress -> its heartbeat refreshes heartbeat_at.
     # The crashed job never heartbeats (its worker died).
     worker._heartbeat_and_check_cancellation("live-long")
 
@@ -187,4 +193,50 @@ def test_live_long_job_not_reset_but_crashed_one_is(monkeypatch):
     assert live_job.status == JobStatus.RUNNING
     assert crashed_job.status == JobStatus.QUEUED
     assert "Recovered" in crashed_job.message
+    db.close()
+
+
+def test_null_heartbeat_falls_back_to_updated_at(monkeypatch):
+    """Pre-migration rows have heartbeat_at = NULL. Recovery must COALESCE to
+    updated_at (then created_at) so those rows aren't stranded: a NULL-lease row
+    with a fresh updated_at survives, one with a stale updated_at is recovered.
+    """
+    import asyncio
+
+    monkeypatch.setattr("services.api.worker.SessionLocal", TestSessionLocal)
+
+    db = TestSessionLocal()
+    worker = JobWorker()
+
+    old = datetime.now(timezone.utc) - timedelta(minutes=20)
+    recent = datetime.now(timezone.utc) - timedelta(minutes=2)
+
+    stale_null = Job(
+        id="null-stale",
+        type="puzzle_generation",
+        username="nullstale",
+        status=JobStatus.RUNNING,
+        updated_at=old,
+        heartbeat_at=None,  # pre-migration row
+        created_at=old,
+    )
+    fresh_null = Job(
+        id="null-fresh",
+        type="puzzle_generation",
+        username="nullfresh",
+        status=JobStatus.RUNNING,
+        updated_at=recent,
+        heartbeat_at=None,  # pre-migration row
+        created_at=old,
+    )
+    db.add_all([stale_null, fresh_null])
+    db.commit()
+
+    asyncio.run(worker.cleanup_stuck_jobs())
+
+    db.refresh(stale_null)
+    db.refresh(fresh_null)
+
+    assert stale_null.status == JobStatus.QUEUED  # fell back to stale updated_at
+    assert fresh_null.status == JobStatus.RUNNING  # fell back to fresh updated_at
     db.close()
