@@ -44,7 +44,7 @@ def client(db_session, monkeypatch):
 
 def _create_game(db, game_id: str, username: str = "testuser"):
     """Helper: create a Game row."""
-    existing = db.get(Game, game_id)
+    existing = db.get(Game, (game_id, username))
     if existing:
         return
     db.add(

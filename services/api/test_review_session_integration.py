@@ -53,7 +53,7 @@ def client(test_db):
 
 def _create_puzzle(db, puzzle_id: str, username: str, source_game_id: str, ply: int):
     """Helper: create a Game + Puzzle in the DB."""
-    existing_game = db.get(Game, source_game_id)
+    existing_game = db.get(Game, (source_game_id, username))
     if not existing_game:
         db.add(
             Game(

@@ -9,6 +9,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     String,
@@ -213,9 +214,11 @@ class Game(Base):
         {"extend_existing": True},
     )
 
+    # Composite primary key: the same canonical game (game_id derived from the
+    # url) can be owned by every participant who imports it, one row per user.
     game_id: Mapped[str] = mapped_column(String, primary_key=True)
     url: Mapped[str] = mapped_column(Text, nullable=False)
-    username: Mapped[str] = mapped_column(String, index=True)
+    username: Mapped[str] = mapped_column(String, primary_key=True, index=True)
     white_username: Mapped[str] = mapped_column(String, nullable=False)
     black_username: Mapped[str] = mapped_column(String, nullable=False)
     white_result: Mapped[str] = mapped_column(String, nullable=False)
@@ -241,14 +244,19 @@ class Puzzle(Base):
             "ply",
             unique=True,
         ),
+        # A puzzle references the owning user's copy of the source game, so the
+        # FK is composite now that games is keyed by (game_id, username).
+        ForeignKeyConstraint(
+            ["source_game_id", "username"],
+            ["games.game_id", "games.username"],
+            name="fk_puzzles_source_game",
+        ),
         {"extend_existing": True},
     )
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
     username: Mapped[str] = mapped_column(String, index=True)
-    source_game_id: Mapped[str] = mapped_column(
-        String, ForeignKey("games.game_id"), nullable=False
-    )
+    source_game_id: Mapped[str] = mapped_column(String, nullable=False)
     ply: Mapped[int] = mapped_column(Integer, nullable=False)
     fen: Mapped[str] = mapped_column(Text, nullable=False)
     side_to_move: Mapped[str] = mapped_column(String, nullable=False)

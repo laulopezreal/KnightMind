@@ -312,19 +312,26 @@ async def import_chesscom_games(username: str, db: Session = Depends(get_db)):
             """
             nonlocal new_games, skipped
             for game in games:
-                is_new, _ = game_repository.store_game(
-                    username=username,
-                    url=game.url,
-                    pgn=game.pgn,
-                    white_username=game.white_username,
-                    black_username=game.black_username,
-                    white_result=game.white_result,
-                    black_result=game.black_result,
-                    time_control=game.time_control,
-                    end_time=game.end_time,
-                    rated=game.rated,
-                    commit=False,
-                )
+                try:
+                    is_new, _ = game_repository.store_game(
+                        username=username,
+                        url=game.url,
+                        pgn=game.pgn,
+                        white_username=game.white_username,
+                        black_username=game.black_username,
+                        white_result=game.white_result,
+                        black_result=game.black_result,
+                        time_control=game.time_control,
+                        end_time=game.end_time,
+                        rated=game.rated,
+                        commit=False,
+                    )
+                except ValueError:
+                    # A single malformed game (e.g. empty/missing url, which
+                    # store_game rejects to avoid identity collapse) must not
+                    # abort the whole import: skip it and keep the rest.
+                    skipped += 1
+                    continue
                 if is_new:
                     new_games += 1
                 else:

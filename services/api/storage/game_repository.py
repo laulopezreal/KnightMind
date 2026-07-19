@@ -76,10 +76,19 @@ class GameRepository:
         and the caller owns the transaction: this lets bulk importers batch
         many inserts into a single commit instead of one commit per game.
         """
+        if not url:
+            # game_id is derived from the url; an empty/missing url would
+            # collapse every such game to one sha256 hash and silently merge
+            # unrelated games into a single identity.
+            raise ValueError("store_game requires a non-empty game url")
+
         username_lower = username.lower()
         game_id = self._game_id_from_url(url)
 
-        existing = self.db.get(Game, game_id)
+        # Ownership is per (game_id, username): the same canonical game may be
+        # owned by every participant who imports it. Only short-circuit when
+        # THIS user already owns their copy.
+        existing = self.db.get(Game, (game_id, username_lower))
         if existing is not None:
             return False, game_id
 
@@ -152,8 +161,8 @@ class GameRepository:
         return datetime.fromtimestamp(max_time, tz=timezone.utc) if max_time else None
 
     def get_pgn(self, username: str, game_id: str) -> str | None:
-        game = self.db.get(Game, game_id)
-        if game and game.username == username.lower() and game.pgn_blob:
+        game = self.db.get(Game, (game_id, username.lower()))
+        if game and game.pgn_blob:
             return game.pgn_blob
         return None
 
