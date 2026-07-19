@@ -5,10 +5,13 @@ interface MomentumCardProps {
 }
 
 export function MomentumCard({ recentForm }: MomentumCardProps) {
-  const { last_20_results, accuracy, trend } = recentForm;
+  const { last_20_results, accuracy, trend, insufficient_data } = recentForm;
 
-  // Map trend to informational text (not judgmental)
-  const trendText = trend === 'up'
+  // Map trend to informational text (not judgmental). With too few reviews the
+  // direction is not meaningful, so we say so rather than imply a trend.
+  const trendText = insufficient_data
+    ? 'Not enough data yet'
+    : trend === 'up'
     ? 'Improving'
     : trend === 'down'
     ? 'Slight dip'
