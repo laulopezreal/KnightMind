@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Link } from 'react-router-dom';
-import { Chessboard } from 'react-chessboard';
+import { AccessibleChessboard } from '../components/AccessibleChessboard';
 import { Chess } from 'chess.js';
 import { evaluateFen, getEngineStatus, ApiError } from '../api';
 import { useClue } from '../hooks/useClue';
@@ -186,11 +186,11 @@ export default function Engine() {
   return (
     <div className="space-y-12 animate-teedin">
       <section className="space-y-6">
-        <Link to="/dashboard" className="km-interactive km-focus-visible km-inline-link text-primary/40 inline-block font-sans text-sm tracking-widest uppercase transition-colors">
+        <Link to="/dashboard" className="km-interactive km-focus-visible km-inline-link text-primary/70 inline-block font-sans text-sm tracking-widest uppercase transition-colors">
           ← Back to Dashboard
         </Link>
         <div className="relative bg-primary/5 border border-primary/10 rounded-sm p-8 lg:p-10">
-          <div className="absolute top-8 right-8 lg:top-10 lg:right-10 flex items-center gap-2 rounded-full border border-primary/10 bg-primary/5 px-3 py-1.5 text-[10px] font-sans font-medium text-primary/60 uppercase tracking-widest">
+          <div className="absolute top-8 right-8 lg:top-10 lg:right-10 flex items-center gap-2 rounded-full border border-primary/10 bg-primary/5 px-3 py-1.5 text-[10px] font-sans font-medium text-primary/70 uppercase tracking-widest">
             <span
               className={`h-2 w-2 rounded-full shrink-0 ${engineAvailable === null ? 'bg-primary/40 animate-pulse' : engineAvailable ? 'bg-green-500' : 'bg-red-500'}`}
             />
@@ -201,7 +201,7 @@ export default function Engine() {
               title="Engine Analysis"
               subtitle="Evaluate any position and surface the best next move."
             />
-            <p className="text-xs font-sans uppercase tracking-widest text-primary/40">
+            <p className="text-xs font-sans uppercase tracking-widest text-primary/70">
               Drag pieces or paste a FEN position
             </p>
           </div>
@@ -212,7 +212,7 @@ export default function Engine() {
         {/* Board */}
         <div className="order-2 lg:order-1">
           <div className="aspect-square w-full max-w-[600px] mx-auto shadow-2xl shadow-primary/5 rounded-sm overflow-hidden border border-primary/10">
-            <Chessboard
+            <AccessibleChessboard
               options={{
                 position: fen,
                 onPieceDrop: ({ sourceSquare, targetSquare }) => targetSquare ? onDrop(sourceSquare, targetSquare) : false,
@@ -231,7 +231,7 @@ export default function Engine() {
               disabled={historyIndex <= 0}
               aria-label="Go back a position"
               title="Go back"
-              className="km-interactive km-focus-visible border border-primary/20 px-4 py-2 text-primary/60 font-sans text-xs uppercase tracking-widest transition-colors rounded-sm disabled:opacity-40"
+              className="km-interactive km-focus-visible border border-primary/20 px-4 py-2 text-primary/70 font-sans text-xs uppercase tracking-widest transition-colors rounded-sm disabled:opacity-40"
             >
               ←
             </button>
@@ -241,14 +241,14 @@ export default function Engine() {
               disabled={historyIndex >= fenHistory.length - 1}
               aria-label="Go forward a position"
               title="Go forward"
-              className="km-interactive km-focus-visible border border-primary/20 px-4 py-2 text-primary/60 font-sans text-xs uppercase tracking-widest transition-colors rounded-sm disabled:opacity-40"
+              className="km-interactive km-focus-visible border border-primary/20 px-4 py-2 text-primary/70 font-sans text-xs uppercase tracking-widest transition-colors rounded-sm disabled:opacity-40"
             >
               →
             </button>
             <button
               type="button"
               onClick={handleReset}
-              className="km-interactive km-focus-visible px-6 py-2 text-primary/50 font-sans text-xs uppercase tracking-widest transition-colors rounded-sm"
+              className="km-interactive km-focus-visible px-6 py-2 text-primary/70 font-sans text-xs uppercase tracking-widest transition-colors rounded-sm"
             >
               Reset Position
             </button>
@@ -269,7 +269,7 @@ export default function Engine() {
               ) : loading ? (
                 <DataStateLoading label="Calculating..." compact />
               ) : (
-                <span className="text-primary/40 font-serif italic">Waiting for position</span>
+                <span className="text-primary/70 font-serif italic">Waiting for position</span>
               )}
             </div>
 
@@ -286,19 +286,19 @@ export default function Engine() {
             {evaluation ? (
               <div className="space-y-3 pt-2">
                 <div className="flex justify-between items-center">
-                  <span className="font-sans text-sm text-primary/60 uppercase tracking-widest">Best Move</span>
+                  <span className="font-sans text-sm text-primary/70 uppercase tracking-widest">Best Move</span>
                   <div className="flex gap-4 items-center">
                     {showBestMove ? (
                       <span className="font-mono text-primary text-lg">{evaluation.bestMove}</span>
                     ) : (
-                      <span className="text-primary/40 italic text-sm">Hidden</span>
+                      <span className="text-primary/70 italic text-sm">Hidden</span>
                     )}
                     <button type="button" onClick={() => setShowBestMove(!showBestMove)} className="km-interactive km-focus-visible text-primary text-xs uppercase tracking-widest border border-primary/20 px-3 py-1 rounded-sm transition-colors">
                       {showBestMove ? 'Hide' : 'Show'}
                     </button>
                   </div>
                 </div>
-                <div className="flex flex-wrap items-center gap-3 text-xs font-sans text-primary/60">
+                <div className="flex flex-wrap items-center gap-3 text-xs font-sans text-primary/70">
                   <button
                     type="button"
                     onClick={handleClue}
@@ -316,7 +316,7 @@ export default function Engine() {
                 </div>
               </div>
             ) : (
-              <p className="text-primary/50 font-sans text-sm">
+              <p className="text-primary/70 font-sans text-sm">
                 {loading ? 'Waiting for Stockfish output…' : 'Set or paste a position to analyze.'}
               </p>
             )}
@@ -324,16 +324,18 @@ export default function Engine() {
 
           {/* FEN */}
           <div className="space-y-2">
-            <label htmlFor="fen-input" className="block text-xs font-sans uppercase tracking-widest text-primary/40">Or paste FEN position</label>
+            <label htmlFor="fen-input" className="block text-xs font-sans uppercase tracking-widest text-primary/70">Or paste FEN position</label>
             <div className="flex gap-4 border-b border-primary/20 pb-2 focus-within:border-primary/60 transition-colors">
               <input id="fen-input" type="text" value={fenInput} onChange={(e) => setFenInput(e.target.value)}
+                aria-invalid={fenError ? true : undefined}
+                aria-describedby={fenError ? 'fen-error' : undefined}
                 className="flex-1 bg-transparent border-none outline-none text-primary font-mono text-sm placeholder-primary/30"
               />
               <button type="button" onClick={handleFenSubmit} className="km-interactive km-focus-visible text-xs font-sans uppercase tracking-widest text-primary transition-colors">
                 Load
               </button>
             </div>
-            {fenError && <p className="text-negative text-xs font-sans">{fenError}</p>}
+            {fenError && <p id="fen-error" role="alert" className="text-negative text-xs font-sans">{fenError}</p>}
           </div>
         </div>
       </section>

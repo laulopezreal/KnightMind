@@ -1,3 +1,4 @@
+import { LOCALE } from '../utils/locale';
 import { useState } from 'react';
 import { type SessionSummary } from '../api';
 import { calculateAccuracy } from '../utils/accuracy';
@@ -33,7 +34,7 @@ export function RecentSessionsCard({
                     <button
                         type="button"
                         onClick={() => setIsExpanded(!isExpanded)}
-                        className="text-primary/60 hover:text-primary transition-colors km-interactive km-focus-visible text-sm"
+                        className="text-primary/70 hover:text-primary transition-colors km-interactive km-focus-visible text-sm"
                         aria-expanded={isExpanded}
                         aria-controls="sessions-list"
                     >
@@ -53,7 +54,7 @@ export function RecentSessionsCard({
                 <div className="space-y-2" role="list">
                     {sessions.map((session) => {
                         const accuracy = calculateAccuracy(session.pass_count, session.fail_count);
-                        const sessionDate = new Date(session.created_at).toLocaleDateString();
+                        const sessionDate = new Date(session.created_at).toLocaleDateString(LOCALE);
                         return (
                             <div
                                 key={session.session_id}
@@ -62,9 +63,9 @@ export function RecentSessionsCard({
                                 aria-label={`Session from ${sessionDate}: ${session.pass_count} passed, ${session.fail_count} failed, ${accuracy}% accuracy${session.best_streak > 0 ? `, best streak ${session.best_streak}` : ''}`}
                             >
                                 <div className="flex gap-4">
-                                    <span className="text-primary/60" aria-label={`${session.pass_count} passed`}>{session.pass_count}P</span>
-                                    <span className="text-primary/40" aria-label={`${session.fail_count} failed`}>{session.fail_count}F</span>
-                                    <span className="text-primary/60">
+                                    <span className="text-primary/70" aria-label={`${session.pass_count} passed`}>{session.pass_count}P</span>
+                                    <span className="text-primary/70" aria-label={`${session.fail_count} failed`}>{session.fail_count}F</span>
+                                    <span className="text-primary/70">
                                         {accuracy}%
                                     </span>
                                     {session.best_streak > 0 && (
@@ -73,11 +74,11 @@ export function RecentSessionsCard({
                                 </div>
                                 <div className="flex gap-2">
                                     {session.session_type && session.session_type !== 'standard' && (
-                                        <span className="text-primary/40 text-xs capitalize">
+                                        <span className="text-primary/70 text-xs capitalize">
                                             {session.session_type.replace('_', ' ')}
                                         </span>
                                     )}
-                                    <span className="text-primary/40 text-xs">
+                                    <span className="text-primary/70 text-xs">
                                         {sessionDate}
                                     </span>
                                 </div>

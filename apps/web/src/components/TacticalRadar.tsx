@@ -39,11 +39,11 @@ export function TacticalRadar({ motifs, onMotifClick }: TacticalRadarProps) {
                 <h2 id="tactical-radar-heading" className="text-2xl font-serif text-primary mb-2 text-center">
                     🎯 Tactical Vision
                 </h2>
-                <p className="text-primary/60 text-center mb-6">
+                <p className="text-primary/70 text-center mb-6">
                     Your chess pattern mastery
                 </p>
                 <div className="text-center py-12">
-                    <p className="text-primary/60 font-sans">
+                    <p className="text-primary/70 font-sans">
                         No motif data yet. Complete your first training session to start tracking your tactical patterns!
                     </p>
                 </div>
@@ -58,11 +58,11 @@ export function TacticalRadar({ motifs, onMotifClick }: TacticalRadarProps) {
                 <h2 id="tactical-radar-heading" className="text-2xl font-serif text-primary mb-2 text-center">
                     🎯 Tactical Vision
                 </h2>
-                <p className="text-primary/60 text-center mb-6">
+                <p className="text-primary/70 text-center mb-6">
                     Your chess pattern mastery
                 </p>
                 <div className="text-center py-12">
-                    <p className="text-primary/60 font-sans">
+                    <p className="text-primary/70 font-sans">
                         Complete more puzzles to unlock your tactical radar.
                         At least 3 different motifs are needed for meaningful visualization.
                     </p>
@@ -76,7 +76,7 @@ export function TacticalRadar({ motifs, onMotifClick }: TacticalRadarProps) {
             <h2 id="tactical-radar-heading" className="text-2xl font-serif text-primary mb-2 text-center">
                 🎯 Tactical Vision
             </h2>
-            <p className="text-primary/60 text-center mb-6" id="tactical-radar-desc">
+            <p className="text-primary/70 text-center mb-6" id="tactical-radar-desc">
                 Your chess pattern mastery
             </p>
 
@@ -117,11 +117,11 @@ export function TacticalRadar({ motifs, onMotifClick }: TacticalRadarProps) {
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                             </svg>
                         </div>
-                        <p className="text-2xl font-serif text-green-600">
+                        <p className="text-2xl font-serif text-positive">
                             All Motifs Mastered!
                         </p>
                     </div>
-                    <p className="text-primary/60 text-sm font-sans">
+                    <p className="text-primary/70 text-sm font-sans">
                         Congratulations! You've achieved 85%+ accuracy on all tactical patterns.
                         Keep training to maintain your mastery!
                     </p>
@@ -131,10 +131,10 @@ export function TacticalRadar({ motifs, onMotifClick }: TacticalRadarProps) {
             {/* Weakest area: Show only if not all mastered */}
             {!allMastered && weakest && (
                 <div className="mt-6 text-center">
-                    <p className="text-primary/60 text-sm mb-2">
+                    <p className="text-primary/70 text-sm mb-2">
                         Your weakest area:
                     </p>
-                    <p className="text-xl font-serif text-red-500 mb-4">
+                    <p className="text-xl font-serif text-negative mb-4">
                         {weakest.name} ({Math.round(weakest.accuracy * 100)}%)
                     </p>
                     <button
@@ -148,8 +148,8 @@ export function TacticalRadar({ motifs, onMotifClick }: TacticalRadarProps) {
                                 ? 'No puzzles available for this motif yet'
                                 : `Practice ${weakest.name} to improve your weakest area`
                         }
-                        className={`px-6 py-3 bg-primary text-bg-primary rounded-sm font-serif transition-colors km-focus-visible ${
-                            weakest.total_puzzles === 0 ? 'km-interactive-disabled' : 'km-interactive'
+                        className={`px-6 py-3 bg-primary text-bg-primary rounded-sm font-serif transition-opacity km-focus-visible ${
+                            weakest.total_puzzles === 0 ? 'km-interactive-disabled' : 'hover:opacity-90 cursor-pointer'
                         }`}
                     >
                         Practice {weakest.name} Now

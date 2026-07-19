@@ -18,11 +18,13 @@ export default function Layout({ children }: LayoutProps) {
         <div className="min-h-screen font-serif selection:bg-chess-brown-700 selection:text-chess-cream-100">
             <Sidebar mobileOpen={mobileNavOpen} onMobileClose={() => setMobileNavOpen(false)} />
 
-            <header aria-label="Site header" className="fixed top-0 left-0 right-0 z-30 flex md:hidden items-center justify-between px-5 py-4 bg-primary/95 backdrop-blur-sm border-b border-primary/10">
+            <header aria-label="Site header" className="fixed top-0 left-0 right-0 z-30 flex md:hidden items-center justify-between px-5 py-4 bg-bg-primary/95 backdrop-blur-sm border-b border-primary/10">
                 <button
                     type="button"
                     onClick={() => setMobileNavOpen(true)}
                     aria-label="Open navigation menu"
+                    aria-expanded={mobileNavOpen}
+                    aria-controls="primary-sidebar"
                     className="h-11 w-11 flex items-center justify-center rounded-sm border border-primary/20 km-interactive km-focus-visible"
                 >
                     <span className="text-xl leading-none" aria-hidden="true">☰</span>

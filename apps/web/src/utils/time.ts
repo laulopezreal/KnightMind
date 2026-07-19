@@ -1,3 +1,5 @@
+import { LOCALE } from './locale';
+
 /**
  * Format a date/time into a human-readable relative time string.
  * Handles both past dates ("5m ago") and future dates ("5m").
@@ -35,7 +37,7 @@ export const formatRelativeTime = (isoString: string | null): string => {
             if (days < 7) {
                 timeString = `${days}d`;
             } else {
-                return date.toLocaleDateString();
+                return date.toLocaleDateString(LOCALE);
             }
         }
     }

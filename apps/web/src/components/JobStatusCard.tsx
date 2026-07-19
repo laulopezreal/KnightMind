@@ -29,14 +29,20 @@ export function JobStatusCard({ status, progress = 0, message, error, onCancel }
             </div>
 
             {(message || error) && (
-                <p className={`font-sans text-sm ${isError ? 'text-red-500/80' : 'text-primary/60'}`}>
+                <p className={`font-sans text-sm ${isError ? 'text-negative' : 'text-primary/70'}`}>
                     {error || message}
                 </p>
             )}
 
             {isProcessing && (
                 <>
-                    <div className="w-full bg-primary/10 rounded-full h-1.5 overflow-hidden">
+                    {/* Faint themeable track: bg-primary/10 never rendered (unregistered
+                        token) and bg-current/10 collapses to solid currentColor in
+                        Tailwind v4, so mix the runtime ink var inline. */}
+                    <div
+                        className="w-full rounded-full h-1.5 overflow-hidden"
+                        style={{ backgroundColor: 'color-mix(in srgb, var(--text-primary) 12%, transparent)' }}
+                    >
                         <div
                             className="bg-primary h-full transition-all duration-500 ease-out"
                             style={{ width: `${Math.max(5, progress)}%` }} // Minimum 5% visibility
@@ -46,7 +52,7 @@ export function JobStatusCard({ status, progress = 0, message, error, onCancel }
                         <button
                             type="button"
                             onClick={onCancel}
-                            className="km-interactive km-focus-visible px-4 py-2 text-sm border border-red-500/30 text-red-500 rounded-sm font-serif transition-all hover:bg-red-500/10"
+                            className="km-interactive km-focus-visible px-4 py-2 text-sm border border-red-500/30 text-negative rounded-sm font-serif transition-all hover:bg-red-500/10"
                         >
                             Cancel
                         </button>
@@ -55,7 +61,7 @@ export function JobStatusCard({ status, progress = 0, message, error, onCancel }
             )}
 
             {isSuccess && (
-                <div className="flex items-center gap-2 text-green-600 font-serif text-sm">
+                <div className="flex items-center gap-2 text-positive font-serif text-sm">
                     <span>✓</span>
                     <span>Ready to solve!</span>
                 </div>

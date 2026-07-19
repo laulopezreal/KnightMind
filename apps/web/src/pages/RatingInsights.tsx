@@ -1,3 +1,4 @@
+import { LOCALE } from '../utils/locale';
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceDot } from 'recharts';
@@ -165,7 +166,7 @@ export default function RatingInsights() {
     const chartData = useMemo(() => {
         const dateCounts = new Map<string, number>();
         return history.map(h => {
-            const base = new Date(h.recorded_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+            const base = new Date(h.recorded_at).toLocaleDateString(LOCALE, { month: 'short', day: 'numeric' });
             const count = (dateCounts.get(base) ?? 0) + 1;
             dateCounts.set(base, count);
             return { label: count > 1 ? `${base} (${count})` : base, rating: h.rating };
@@ -180,7 +181,7 @@ export default function RatingInsights() {
     if (!username) {
         return (
             <div className="h-full flex flex-col justify-center items-center space-y-4">
-                <p className="text-primary/60 font-sans text-lg">Please set a username to see rating insights.</p>
+                <p className="text-primary/70 font-sans text-lg">Please set a username to see rating insights.</p>
                 <button
                     onClick={() => setEditorOpen(true)}
                     className="text-primary underline hover:text-primary/80 font-medium font-serif text-xl"
@@ -202,7 +203,7 @@ export default function RatingInsights() {
 
     const formatDate = (iso: string) => {
         const d = new Date(iso);
-        return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+        return d.toLocaleDateString(LOCALE, { month: 'short', day: 'numeric', year: 'numeric' });
     };
     const windowDates = data?.window
         ? `${formatDate(data.window.start)} – ${formatDate(data.window.end)}`
@@ -230,21 +231,23 @@ export default function RatingInsights() {
                                 type="button"
                                 onClick={() => setWindowSource('session')}
                                 disabled={hasSessions === false}
-                                className={`km-toggle-option km-focus-visible px-3 py-2 text-sm font-sans transition-all rounded-sm ${windowSource === 'session' ? 'km-toggle-selected bg-primary text-bg-primary shadow-sm' : 'text-primary/60'} ${hasSessions === false ? 'km-interactive-disabled' : ''}`}
+                                aria-pressed={windowSource === 'session'}
+                                className={`km-toggle-option km-focus-visible px-3 py-2 text-sm font-sans transition-all rounded-sm ${windowSource === 'session' ? 'km-toggle-selected bg-primary text-bg-primary shadow-sm' : 'text-primary/70'} ${hasSessions === false ? 'km-interactive-disabled' : ''}`}
                             >
                                 Since Session
                             </button>
                             <button
                                 type="button"
                                 onClick={() => setWindowSource('fallback_7d')}
-                                className={`km-toggle-option km-focus-visible px-3 py-2 text-sm font-sans transition-all rounded-sm ${windowSource === 'fallback_7d' ? 'km-toggle-selected bg-primary text-bg-primary shadow-sm' : 'text-primary/60'}`}
+                                aria-pressed={windowSource === 'fallback_7d'}
+                                className={`km-toggle-option km-focus-visible px-3 py-2 text-sm font-sans transition-all rounded-sm ${windowSource === 'fallback_7d' ? 'km-toggle-selected bg-primary text-bg-primary shadow-sm' : 'text-primary/70'}`}
                             >
                                 Last 7 Days
                             </button>
                         </div>
                         {hasSessions === false && !sessionsLoading && (
                             <div className="flex flex-col items-start gap-1.5 ml-1">
-                                <p className="text-[10px] text-primary/40 font-sans">
+                                <p className="text-[10px] text-primary/70 font-sans">
                                     No sessions yet. Start a puzzle session to use session-based insights.
                                 </p>
                                 <button
@@ -262,7 +265,7 @@ export default function RatingInsights() {
                             </div>
                         )}
                         {hasSessions === true && (
-                            <p className="text-[10px] text-primary/40 font-sans ml-1 uppercase tracking-wider">
+                            <p className="text-[10px] text-primary/70 font-sans ml-1 uppercase tracking-wider">
                                 Choose the time window used to explain rating changes.
                             </p>
                         )}
@@ -276,14 +279,15 @@ export default function RatingInsights() {
                                     key={tc}
                                     type="button"
                                     onClick={() => setTimeControl(tc)}
-                                    className={`km-toggle-option km-focus-visible px-3 py-2 text-sm font-sans transition-all rounded-sm ${timeControl === tc ? 'km-toggle-selected bg-primary text-bg-primary shadow-sm' : 'text-primary/60'}`}
+                                    aria-pressed={timeControl === tc}
+                                    className={`km-toggle-option km-focus-visible px-3 py-2 text-sm font-sans transition-all rounded-sm ${timeControl === tc ? 'km-toggle-selected bg-primary text-bg-primary shadow-sm' : 'text-primary/70'}`}
                                 >
                                     {tc.charAt(0).toUpperCase() + tc.slice(1)}
                                 </button>
                             ))}
                         </div>
                         {data && data.stats.games === 0 && (
-                            <div className="text-[10px] text-primary/40 font-sans ml-1">
+                            <div className="text-[10px] text-primary/70 font-sans ml-1">
                                 <span>No data yet for {timeControl.charAt(0).toUpperCase() + timeControl.slice(1)}.</span>
                             </div>
                         )}
@@ -328,10 +332,10 @@ export default function RatingInsights() {
                     <p className="text-primary/80 font-sans text-sm">
                         {timeControl.charAt(0).toUpperCase() + timeControl.slice(1)} · {latestSnapshot.rating}
                     </p>
-                    <p className="text-primary/50 font-sans text-xs">
+                    <p className="text-primary/70 font-sans text-xs">
                         Recorded just now
                     </p>
-                    <p className="text-primary/60 font-sans text-sm mt-2">
+                    <p className="text-primary/70 font-sans text-sm mt-2">
                         Play a few {timeControl} games on Chess.com to unlock insights.
                     </p>
                 </div>
@@ -344,13 +348,13 @@ export default function RatingInsights() {
                         <div className="max-w-xl mx-auto bg-primary/5 border border-primary/10 p-12 rounded-sm space-y-10">
                             <div>
                                 <h2 className="text-2xl font-serif text-primary mb-2">Rating Insights</h2>
-                                <p className="text-primary/60 font-sans">See what influenced your rating changes over time.</p>
+                                <p className="text-primary/70 font-sans">See what influenced your rating changes over time.</p>
                             </div>
 
                             <div className="space-y-8">
                                 <div className="space-y-2">
                                     <h3 className="font-serif text-lg text-primary">Step 1 — Record your first snapshot</h3>
-                                    <p className="text-sm text-primary/60 font-sans leading-relaxed">
+                                    <p className="text-sm text-primary/70 font-sans leading-relaxed">
                                         This saves your current Chess.com rating so we can compare future progress.
                                     </p>
                                     <button
@@ -365,7 +369,7 @@ export default function RatingInsights() {
 
                                 <div className="space-y-2">
                                     <h3 className="font-serif text-lg text-primary">Step 2 — Play a few games</h3>
-                                    <p className="text-sm text-primary/60 font-sans leading-relaxed">
+                                    <p className="text-sm text-primary/70 font-sans leading-relaxed">
                                         After you’ve played a few games, come back here to see what drove changes.
                                     </p>
                                 </div>
@@ -379,13 +383,13 @@ export default function RatingInsights() {
                             {/* Window & Confidence Bar */}
                             <div className="flex flex-wrap items-center gap-3">
                                 {windowDates && (
-                                    <span className="text-xs font-sans text-primary/50">{windowDates}</span>
+                                    <span className="text-xs font-sans text-primary/70">{windowDates}</span>
                                 )}
                                 <span className={`text-[10px] font-sans font-medium px-2 py-0.5 rounded-full ${confidenceBadge.color}`}>
                                     {confidenceBadge.label} ({N} games)
                                 </span>
                                 {data.rating.reference_rating > 0 && (
-                                    <span className="text-xs font-sans text-primary/40">
+                                    <span className="text-xs font-sans text-primary/70">
                                         Ref: {data.rating.reference_rating}{data.rating.reference_is_approx ? ' (est.)' : ''}
                                     </span>
                                 )}
@@ -399,7 +403,7 @@ export default function RatingInsights() {
                             {/* Rating Trend Chart */}
                             {chartData.length >= 2 && (
                                 <section className="p-6 bg-primary/5 rounded-sm border border-primary/10">
-                                    <h2 className="text-sm font-sans uppercase tracking-widest text-primary/40 mb-4">Rating Over Time</h2>
+                                    <h2 className="text-sm font-sans uppercase tracking-widest text-primary/70 mb-4">Rating Over Time</h2>
                                     <ResponsiveContainer width="100%" height={220}>
                                         <LineChart data={chartData}>
                                             <XAxis dataKey="label" tick={{ fontSize: 11 }} stroke="currentColor" strokeOpacity={0.2} />
@@ -484,7 +488,7 @@ export default function RatingInsights() {
                                         {data.drivers.map((driver, i) => {
                                             const dotColor = driver.direction === 'up' ? 'bg-emerald-500' : driver.direction === 'down' ? 'bg-red-500' : 'bg-primary/40';
                                             const severityLabel = driver.severity === 'major' ? 'Major' : driver.severity === 'moderate' ? 'Moderate' : 'Minor';
-                                            const severityColor = driver.severity === 'major' ? 'bg-primary/10 text-primary/70' : driver.severity === 'moderate' ? 'bg-primary/5 text-primary/50' : 'bg-primary/5 text-primary/40';
+                                            const severityColor = driver.severity === 'major' ? 'bg-primary/10 text-primary/70' : driver.severity === 'moderate' ? 'bg-primary/5 text-primary/70' : 'bg-primary/5 text-primary/70';
                                             return (
                                                 <li key={i} className="flex items-start gap-3 text-lg font-sans text-primary/80">
                                                     <span className={`mt-2 w-2 h-2 rounded-full shrink-0 ${dotColor}`} />
@@ -495,11 +499,11 @@ export default function RatingInsights() {
                                         })}
                                     </ul>
                                 ) : (
-                                    <p className="text-primary/50 font-sans italic">
+                                    <p className="text-primary/70 font-sans italic">
                                         Performance matched expectations — no standout drivers in this window.
                                     </p>
                                 )}
-                                <p className="mt-8 text-xs text-primary/40 font-sans italic">
+                                <p className="mt-8 text-xs text-primary/70 font-sans italic">
                                     Based on results vs Elo expectation. Chess.com uses internal factors, so this is directional only.
                                 </p>
                             </section>
@@ -539,7 +543,7 @@ export default function RatingInsights() {
                                 ) : (
                                     <div>
                                         <h3 className="text-xl font-serif text-primary mb-3">Game Highlights</h3>
-                                        <p className="text-primary/50 font-sans italic">
+                                        <p className="text-primary/70 font-sans italic">
                                             All games matched expectations — no significant surprises in this window.
                                         </p>
                                     </div>
@@ -555,32 +559,32 @@ export default function RatingInsights() {
 
 const Card = ({ label, value, sub, helper, highlight, positive, extra }: { label: string, value: string, sub?: string, helper?: string, highlight?: boolean, positive?: boolean, extra?: string }) => (
     <div className="p-6 bg-primary/5 rounded-sm border border-primary/10">
-        <div className="text-xs font-sans uppercase tracking-widest text-primary/40 mb-2">{label}</div>
+        <div className="text-xs font-sans uppercase tracking-widest text-primary/70 mb-2">{label}</div>
         <div className={`text-3xl font-serif mb-1 ${highlight ? (positive ? 'text-positive' : 'text-negative') : 'text-primary'}`}>
             {value}
         </div>
-        {sub && <div className="text-xs font-sans text-primary/50 mb-1">{sub}</div>}
-        {helper && <div className="text-xs font-sans text-primary/40 italic">{helper}</div>}
-        {extra && <div className="text-xs font-sans text-primary/60 mt-2">{extra}</div>}
+        {sub && <div className="text-xs font-sans text-primary/70 mb-1">{sub}</div>}
+        {helper && <div className="text-xs font-sans text-primary/70 italic">{helper}</div>}
+        {extra && <div className="text-xs font-sans text-primary/70 mt-2">{extra}</div>}
     </div>
 );
 
 const GameRow = ({ game, type }: { game: HighlightGame, type: 'good' | 'bad' }) => {
     const playedDate = game.played_at
-        ? new Date(game.played_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+        ? new Date(game.played_at).toLocaleDateString(LOCALE, { month: 'short', day: 'numeric' })
         : null;
     return (
         <a href={game.url} target="_blank" rel="noopener noreferrer" className="block p-4 hover:bg-primary/5 transition-colors border-b border-primary/5 group">
             <div className="flex justify-between items-center mb-1">
                 <div className="font-medium text-primary/80 group-hover:text-primary transition-colors">
                     vs {game.opponent_rating}
-                    {playedDate && <span className="text-xs font-normal text-primary/40 ml-2">{playedDate}</span>}
+                    {playedDate && <span className="text-xs font-normal text-primary/70 ml-2">{playedDate}</span>}
                 </div>
                 <div className={`text-sm font-bold ${type === 'good' ? 'text-positive' : 'text-negative'}`}>
                     {game.result}
                 </div>
             </div>
-            <div className="flex justify-between items-center text-xs text-primary/50 font-sans">
+            <div className="flex justify-between items-center text-xs text-primary/70 font-sans">
                 <div>Expected: {game.expected_score.toFixed(2)}</div>
                 <div>{(Math.abs(game.rating_diff || 0))} pts {(game.rating_diff || 0) > 0 ? 'higher' : 'lower'}</div>
             </div>

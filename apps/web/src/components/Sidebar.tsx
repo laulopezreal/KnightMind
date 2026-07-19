@@ -145,16 +145,27 @@ export default function Sidebar({ mobileOpen = false, onMobileClose }: SidebarPr
                     returnFocusOnDeactivate: true,
                     setReturnFocus: (opener) => {
                         if (opener instanceof HTMLElement && opener.offsetParent !== null) return opener;
-                        const link = document.querySelector('aside[aria-label="Sidebar"] a');
+                        const link = document.querySelector('[aria-label="Sidebar"] a');
                         return link instanceof HTMLElement ? link : false;
                     },
                 }}
             >
-            <aside
-                // Only the *closed* mobile drawer is inert: on desktop the aside is
+            {/* A <div> (not <aside>) so the role can switch: `dialog` is not a
+                permitted role on <aside>, whose implicit role is `complementary`.
+                We set that landmark explicitly for the desktop/closed sidebar and
+                swap to `dialog` only while it's the open mobile drawer. */}
+            <div
+                id="primary-sidebar"
+                // Only the *closed* mobile drawer is inert: on desktop the div is
                 // the visible sidebar and must stay interactive.
                 inert={!mobileOpen && isMobileViewport}
-                className={`fixed left-0 top-0 h-full w-72 md:w-64 flex flex-col justify-between p-6 md:p-12 z-50 bg-primary border-r border-primary/10 transition-transform duration-300 md:translate-x-0 ${
+                // As the mobile drawer it's a modal dialog (the hamburger's
+                // aria-controls target); on desktop it's the static sidebar
+                // complementary landmark. aria-modal signals AT that the backdrop
+                // is inert, complementing the FocusTrap for keyboard.
+                role={mobileOpen ? 'dialog' : 'complementary'}
+                aria-modal={mobileOpen ? true : undefined}
+                className={`fixed left-0 top-0 h-full w-72 md:w-64 flex flex-col justify-between p-6 md:p-12 z-50 bg-bg-primary border-r border-primary/10 transition-transform duration-300 md:translate-x-0 ${
                     mobileOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'
                 }`}
                 aria-label="Sidebar"
@@ -217,10 +228,14 @@ export default function Sidebar({ mobileOpen = false, onMobileClose }: SidebarPr
                 </nav>
             </div>
 
-            <div className="text-xs font-serif opacity-60 tracking-widest">
+            {/* Decorative wordmark — the brand is already conveyed by the document
+                title and header, and at this size/opacity it's a styling flourish,
+                so hide it from assistive tech rather than announce a low-contrast
+                duplicate. */}
+            <div className="text-xs font-serif opacity-60 tracking-widest" aria-hidden="true">
                 KNIGHTMIND
             </div>
-            </aside>
+            </div>
             </FocusTrap>
         </>
     );

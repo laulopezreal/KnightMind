@@ -1,3 +1,4 @@
+import { LOCALE } from '../utils/locale';
 import { useState, useEffect, useCallback } from 'react';
 import { getHealth, getOpsStatus, getStorageReport, getUsers, ApiError, API_TARGET } from '../api';
 import type { HealthResponse, OpsStatusResponse, RecentJob, StorageReportResponse } from '../api';
@@ -112,12 +113,12 @@ export default function Ops() {
             </header>
 
             {backendIssue && (
-                <div className="bg-red-500/10 border border-red-500/20 text-red-500 p-6 rounded-sm font-sans text-sm flex flex-col gap-3">
+                <div className="bg-red-500/10 border border-red-500/20 text-negative p-6 rounded-sm font-sans text-sm flex flex-col gap-3">
                     <span className="font-bold uppercase tracking-widest text-[10px]">Backend Unavailable</span>
                     <span>
                         {error ? error : 'Backend health checks reported degraded services.'}
                     </span>
-                    <div className="text-xs text-red-500/70 space-y-1">
+                    <div className="text-xs text-negative space-y-1">
                         <span className="text-[10px] uppercase tracking-widest block">Attempted endpoints</span>
                         <code className="block font-mono text-[11px]">{API_TARGET}/ops/health</code>
                         <code className="block font-mono text-[11px]">{API_TARGET}/ops/status</code>
@@ -142,7 +143,7 @@ export default function Ops() {
                     <div className="flex items-center justify-between">
                         <div>
                             <h2 className="font-serif text-xl text-primary">User Switcher</h2>
-                            <p className="text-xs text-primary/50">Admin-only: quickly swap the active username.</p>
+                            <p className="text-xs text-primary/70">Admin-only: quickly swap the active username.</p>
                         </div>
                         <button
                             type="button"
@@ -153,7 +154,7 @@ export default function Ops() {
                         </button>
                     </div>
                     <div className="space-y-3">
-                        <label className="text-[10px] uppercase tracking-widest text-primary/50">Active user</label>
+                        <label className="text-[10px] uppercase tracking-widest text-primary/70">Active user</label>
                         <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
                             <select
                                 value={selectedUser}
@@ -178,9 +179,9 @@ export default function Ops() {
                                 Set Active
                             </button>
                         </div>
-                        {usersError && <p className="text-xs text-red-500/70">{usersError}</p>}
+                        {usersError && <p className="text-xs text-negative">{usersError}</p>}
                         {!usersError && users.length === 0 && (
-                            <p className="text-xs text-primary/40">No users found yet.</p>
+                            <p className="text-xs text-primary/70">No users found yet.</p>
                         )}
                     </div>
                 </section>
@@ -189,7 +190,7 @@ export default function Ops() {
                     <div className="flex items-center justify-between">
                         <div>
                             <h2 className="font-serif text-xl text-primary">Data Integrity</h2>
-                            <p className="text-xs text-primary/50">Storage parity between filesystem and database.</p>
+                            <p className="text-xs text-primary/70">Storage parity between filesystem and database.</p>
                         </div>
                         <button
                             type="button"
@@ -199,17 +200,17 @@ export default function Ops() {
                             Refresh
                         </button>
                     </div>
-                    <div className="text-xs text-primary/50">
+                    <div className="text-xs text-primary/70">
                         Showing: {selectedUser ? selectedUser : 'All users'}
                     </div>
                     {storageLoading && (
-                        <div className="text-xs text-primary/40 animate-pulse">Loading report...</div>
+                        <div className="text-xs text-primary/70 animate-pulse">Loading report...</div>
                     )}
                     {storageError && (
-                        <div className="text-xs text-red-500/70">{storageError}</div>
+                        <div className="text-xs text-negative">{storageError}</div>
                     )}
                     {!storageLoading && !storageError && reportEntries.length === 0 && (
-                        <div className="text-xs text-primary/40">No storage report data available.</div>
+                        <div className="text-xs text-primary/70">No storage report data available.</div>
                     )}
                     {!storageLoading && !storageError && reportEntries.length > 0 && (
                         <div className="space-y-3">
@@ -217,11 +218,11 @@ export default function Ops() {
                                 <div key={user} className="border border-primary/10 rounded-sm p-3 text-xs">
                                     <div className="flex items-center justify-between">
                                         <span className="font-serif text-primary">{user}</span>
-                                        <span className="text-[10px] uppercase tracking-widest text-primary/50">
+                                        <span className="text-[10px] uppercase tracking-widest text-primary/70">
                                             Missing {report.missing_games_count + report.missing_puzzles_count}
                                         </span>
                                     </div>
-                                    <div className="mt-2 grid grid-cols-2 gap-4 text-primary/60">
+                                    <div className="mt-2 grid grid-cols-2 gap-4 text-primary/70">
                                         <div>
                                             Games: <span className="font-mono">{report.missing_games_count}</span>
                                         </div>
@@ -237,7 +238,7 @@ export default function Ops() {
             </div>
 
             {(opsStatus?.last_recovery?.recovered_count ?? 0) > 0 && (
-                <div className="bg-amber-500/10 border border-amber-500/20 text-amber-500 p-4 rounded-sm font-sans text-xs flex items-center justify-between">
+                <div className="bg-amber-500/10 border border-amber-500/20 text-warning p-4 rounded-sm font-sans text-xs flex items-center justify-between">
                     <div className="flex items-center gap-3">
                         <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
                         <span>
@@ -245,7 +246,7 @@ export default function Ops() {
                         </span>
                     </div>
                     <span className="opacity-40 text-[10px]">
-                        {opsStatus?.last_recovery?.last_recovery_at != null && new Date(opsStatus.last_recovery.last_recovery_at).toLocaleTimeString()}
+                        {opsStatus?.last_recovery?.last_recovery_at != null && new Date(opsStatus.last_recovery.last_recovery_at).toLocaleTimeString(LOCALE)}
                     </span>
                 </div>
             )}
@@ -261,14 +262,14 @@ export default function Ops() {
             {/* Version Info (Pinned to bottom or side, now more subtle) */}
             <div className="flex gap-8 text-[10px] opacity-40 uppercase tracking-tighter border-t border-primary/10 pt-4">
                 <div>
-                    SHA: <span className="font-mono text-primary/60">{(health?.version?.sha ?? '').substring(0, 7) || 'unknown'}</span>
+                    SHA: <span className="font-mono text-primary/70">{(health?.version?.sha ?? '').substring(0, 7) || 'unknown'}</span>
                 </div>
                 <div>
-                    BUILT: <span className="text-primary/60">{health?.version?.built_at ? new Date(health.version.built_at).toLocaleString() : '-'}</span>
+                    BUILT: <span className="text-primary/70">{health?.version?.built_at ? new Date(health.version.built_at).toLocaleString(LOCALE) : '-'}</span>
                 </div>
                 {opsStatus?.now && (
                     <div>
-                        NOW: <span className="text-primary/60 text-[10px]">{new Date(opsStatus.now).toLocaleTimeString()}</span>
+                        NOW: <span className="text-primary/70 text-[10px]">{new Date(opsStatus.now).toLocaleTimeString(LOCALE)}</span>
                     </div>
                 )}
             </div>
@@ -278,36 +279,36 @@ export default function Ops() {
                 <details className="group bg-primary/5 border border-primary/10 rounded-sm overflow-hidden backdrop-blur-sm">
                     <summary className="list-none flex items-center justify-between gap-4 px-5 py-4 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 rounded-sm [&::-webkit-details-marker]:hidden [&::marker]:hidden">
                         <div className="flex items-center gap-4 min-w-0">
-                            <span className="text-[10px] uppercase tracking-widest text-primary/50 font-sans shrink-0">Process</span>
+                            <span className="text-[10px] uppercase tracking-widest text-primary/70 font-sans shrink-0">Process</span>
                             <span className="font-serif text-lg font-medium text-primary truncate">{activeJob.type}</span>
                             <StatusBadge status={activeJob.status} />
                         </div>
                         <div className="flex items-center gap-3 shrink-0">
-                            <span className="text-[11px] font-mono text-primary/50 tabular-nums">{calculateElapsed(activeJob.created_at)}</span>
+                            <span className="text-[11px] font-mono text-primary/70 tabular-nums">{calculateElapsed(activeJob.created_at)}</span>
                             <span className="inline-block w-0 h-0 border-l-[4px] border-r-[4px] border-t-[5px] border-l-transparent border-r-transparent border-t-primary/40 transition-transform duration-200 group-open:rotate-180" aria-hidden />
                         </div>
                     </summary>
                     <div className="border-t border-primary/10 px-5 pb-5 pt-4 space-y-5">
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3 text-sm">
                             <dl className="flex flex-col gap-0.5">
-                                <dt className="text-[10px] uppercase tracking-widest text-primary/50 font-sans">Job ID</dt>
+                                <dt className="text-[10px] uppercase tracking-widest text-primary/70 font-sans">Job ID</dt>
                                 <dd className="font-mono text-primary/90 text-xs">{activeJob.id}</dd>
                             </dl>
                             <dl className="flex flex-col gap-0.5">
-                                <dt className="text-[10px] uppercase tracking-widest text-primary/50 font-sans">User</dt>
+                                <dt className="text-[10px] uppercase tracking-widest text-primary/70 font-sans">User</dt>
                                 <dd className="font-sans text-primary/90 text-xs">{activeJob.username}</dd>
                             </dl>
                             <dl className="flex flex-col gap-0.5">
-                                <dt className="text-[10px] uppercase tracking-widest text-primary/50 font-sans">Created</dt>
+                                <dt className="text-[10px] uppercase tracking-widest text-primary/70 font-sans">Created</dt>
                                 <dd className="font-mono text-primary/90 text-xs">{formatTime(activeJob.created_at)}</dd>
                             </dl>
                             <dl className="flex flex-col gap-0.5">
-                                <dt className="text-[10px] uppercase tracking-widest text-primary/50 font-sans">Updated</dt>
+                                <dt className="text-[10px] uppercase tracking-widest text-primary/70 font-sans">Updated</dt>
                                 <dd className="font-mono text-primary/90 text-xs">{formatTime(activeJob.updated_at)}</dd>
                             </dl>
                         </div>
                         <div>
-                            <span className="text-[10px] uppercase tracking-widest text-primary/50 font-sans block mb-1">Message</span>
+                            <span className="text-[10px] uppercase tracking-widest text-primary/70 font-sans block mb-1">Message</span>
                             <p className="text-sm font-serif italic text-primary/80">{activeJob.message || 'Processing…'}</p>
                         </div>
                         {(() => {
@@ -317,7 +318,7 @@ export default function Ops() {
                             return (
                                 <div className="space-y-2">
                                     <div className="flex justify-between text-xs">
-                                        <span className="text-[10px] uppercase tracking-widest text-primary/50">Progress</span>
+                                        <span className="text-[10px] uppercase tracking-widest text-primary/70">Progress</span>
                                         <span className="font-sans font-medium text-primary tabular-nums">{pct}%</span>
                                     </div>
                                     <div className="h-2 w-full bg-primary/10 rounded-full overflow-hidden">
@@ -328,8 +329,8 @@ export default function Ops() {
                         })()}
                         {activeJob.error_message && (
                             <div>
-                                <span className="text-[10px] uppercase tracking-widest text-red-500/70 font-sans block mb-1">Error</span>
-                                <p className="text-xs text-red-500/80 font-sans">{activeJob.error_message}</p>
+                                <span className="text-[10px] uppercase tracking-widest text-negative font-sans block mb-1">Error</span>
+                                <p className="text-xs text-negative font-sans">{activeJob.error_message}</p>
                             </div>
                         )}
                     </div>
@@ -337,11 +338,11 @@ export default function Ops() {
             ) : (
                 <details className="group bg-primary/5 border border-primary/10 rounded-sm overflow-hidden backdrop-blur-sm">
                     <summary className="list-none flex items-center justify-between gap-3 px-5 py-3 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 rounded-sm [&::-webkit-details-marker]:hidden [&::marker]:hidden">
-                        <span className="text-[10px] uppercase tracking-widest text-primary/50 font-sans">No background process</span>
+                        <span className="text-[10px] uppercase tracking-widest text-primary/70 font-sans">No background process</span>
                         <span className="inline-block w-0 h-0 border-l-[4px] border-r-[4px] border-t-[5px] border-l-transparent border-r-transparent border-t-primary/40 transition-transform duration-200 group-open:rotate-180" aria-hidden />
                     </summary>
                     <div className="border-t border-primary/10 px-5 pb-4 pt-3">
-                        <p className="text-xs font-sans text-primary/60 leading-relaxed">
+                        <p className="text-xs font-sans text-primary/70 leading-relaxed">
                             No jobs are running. Start puzzle generation from Puzzles or run a sync to queue work.
                         </p>
                     </div>
@@ -420,7 +421,7 @@ export default function Ops() {
                                                     <span className="text-[10px] opacity-40">—</span>
                                                 )}
                                                 {job.error_message && (
-                                                    <span className="text-red-500/60 block mt-1 leading-tight max-w-[180px] truncate text-left" title={job.error_message}>
+                                                    <span className="text-negative block mt-1 leading-tight max-w-[180px] truncate text-left" title={job.error_message}>
                                                         {job.error_message}
                                                     </span>
                                                 )}
@@ -450,10 +451,10 @@ function HealthCard({ label, status, value }: { label: string, status: 'up' | 'd
         <div className="border border-primary/10 rounded-sm p-6 relative group hover:border-primary/20 transition-all">
             <div className={`absolute left-0 top-6 bottom-6 w-[3px] rounded-r-full ${isUp ? 'bg-green-500/40' : 'bg-red-500/40'}`} />
             <div className="text-[9px] uppercase tracking-[0.3em] opacity-40 mb-3 font-bold">{label}</div>
-            <div className={`text-2xl font-serif font-medium ${isUp ? 'text-primary' : 'text-red-500 opacity-80'}`}>
+            <div className={`text-2xl font-serif font-medium ${isUp ? 'text-primary' : 'text-negative'}`}>
                 {value}
             </div>
-            <div className={`text-[9px] uppercase tracking-widest mt-3 flex items-center gap-2 ${isUp ? 'opacity-30' : 'text-red-500 opacity-50'}`}>
+            <div className={`text-[9px] uppercase tracking-widest mt-3 flex items-center gap-2 ${isUp ? 'opacity-30' : 'text-negative'}`}>
                 <span className={`w-1.5 h-1.5 rounded-full ${isUp ? 'bg-green-500/40 animate-pulse' : 'bg-red-500'}`} />
                 {isUp ? 'Operational' : 'Critical Issue'}
             </div>
@@ -465,7 +466,7 @@ function MetricItem({ label, value, trend }: { label: string, value: string | nu
     return (
         <div className="flex flex-col gap-1">
             <span className="text-[10px] uppercase tracking-widest opacity-50 font-sans">{label}</span>
-            <span className={`text-lg font-serif tabular-nums ${trend === 'bad' ? 'text-red-500 opacity-70' : 'text-primary'}`}>
+            <span className={`text-lg font-serif tabular-nums ${trend === 'bad' ? 'text-negative' : 'text-primary'}`}>
                 {value}
             </span>
         </div>
@@ -474,13 +475,13 @@ function MetricItem({ label, value, trend }: { label: string, value: string | nu
 
 function StatusBadge({ status }: { status: RecentJob['status'] }) {
     const colors: Record<RecentJob['status'], string> = {
-        succeeded: 'text-green-500/70 border-green-500/20',
-        failed: 'text-red-500/70 border-red-500/20',
-        running: 'text-amber-500/70 border-amber-500/20',
-        queued: 'text-blue-500/70 border-blue-500/20',
-        canceled: 'text-primary/30 border-primary/10',
+        succeeded: 'text-positive border-green-500/20',
+        failed: 'text-negative border-red-500/20',
+        running: 'text-warning border-amber-500/20',
+        queued: 'text-status-new border-blue-500/20',
+        canceled: 'text-primary/70 border-primary/10',
     };
-    const style = colors[status] ?? 'text-primary/50 border-primary/10';
+    const style = colors[status] ?? 'text-primary/70 border-primary/10';
 
     return (
         <span className={`px-2 py-0.5 border text-[9px] uppercase tracking-widest font-sans font-bold rounded-sm ${style}`}>
@@ -492,7 +493,7 @@ function StatusBadge({ status }: { status: RecentJob['status'] }) {
 // Helpers
 function formatTime(iso: string) {
     const date = new Date(iso);
-    return date.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    return date.toLocaleString(LOCALE, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
 function calculateDuration(start: string, end: string) {

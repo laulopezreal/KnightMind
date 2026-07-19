@@ -1,6 +1,7 @@
+import { LOCALE } from '../utils/locale';
 import { useEffect, useRef, useState } from 'react';
 import { Link, useSearchParams, useNavigate } from 'react-router-dom';
-import { Chessboard } from 'react-chessboard';
+import { AccessibleChessboard } from '../components/AccessibleChessboard';
 import { Chess } from 'chess.js';
 import { generatePuzzles, getDailyPuzzles, cancelJob, ApiError } from '../api';
 import { JobStatusCard } from '../components/JobStatusCard';
@@ -105,8 +106,8 @@ export default function Puzzles() {
         streak, bestStreak, hintsUsed, reviewedCount, performanceHistory,
         puzzles, currentIndex, isLoading, error, lastFeedback,
         setPuzzles, setCurrentIndex, setError, setLastFeedback,
-        setSessionSummary, setSessionState,
-        handleStartSession, handleReviewPuzzle, handleUseHint,
+        setSessionSummary, setSessionState, setReviewedCount,
+        handleStartSession, handleReviewPuzzle, handleCompleteSession, handleUseHint,
         calculateRecentPerformance, getPerformanceTrend,
     } = session;
 
@@ -397,8 +398,14 @@ export default function Puzzles() {
                 await handleReviewPuzzle('fail');
             }
 
+            // One step of progress per puzzle finished — so retries (mark-failed
+            // / reveal) never advance or complete the session early. Complete
+            // only after the last puzzle is done.
+            setReviewedCount(prev => prev + 1);
             if (!isFinalPuzzle) {
                 handleNextPuzzle();
+            } else {
+                await handleCompleteSession();
             }
         } finally {
             isAdvancingPuzzle.current = false;
@@ -408,7 +415,7 @@ export default function Puzzles() {
     return (
         <div className="space-y-12 animate-teedin">
             <section>
-                <Link to="/dashboard" className="text-primary/40 hover:text-primary mb-4 inline-block font-sans text-sm tracking-widest uppercase transition-colors">
+                <Link to="/dashboard" className="text-primary/70 hover:text-primary mb-4 inline-block font-sans text-sm tracking-widest uppercase transition-colors">
                     ← Back to Dashboard
                 </Link>
                 <div className="flex justify-between items-end">
@@ -421,10 +428,10 @@ export default function Puzzles() {
                                 {selectedModeLabel} {modeAvailabilityLabel}
                             </span>
                             {sessionType !== 'standard' && (
-                                <span className="text-xs font-sans text-primary/50">Switch to Standard to start sessions.</span>
+                                <span className="text-xs font-sans text-primary/70">Switch to Standard to start sessions.</span>
                             )}
                         </div>
-                        <p className="text-lg text-primary/60 font-sans">
+                        <p className="text-lg text-primary/70 font-sans">
                             {motifFilter ? `Practice ${motifFilter} tactical patterns` : 'Tactical patterns from your own games.'}
                         </p>
                     </div>
@@ -441,7 +448,7 @@ export default function Puzzles() {
                     <div className="flex-1 relative min-w-[300px]">
                         {!username ? (
                             <div className="h-full flex items-center">
-                                <span className="text-primary/60 font-sans mr-2">Set your Chess.com username to continue.</span>
+                                <span className="text-primary/70 font-sans mr-2">Set your Chess.com username to continue.</span>
                                 <button
                                     type="button"
                                     onClick={() => setEditorOpen(true)}
@@ -463,7 +470,7 @@ export default function Puzzles() {
                                 onClick={handleStartSession}
                                 disabled={controlsDisabled || !userStatus || userStatus.puzzles_count === 0 || userStatus.due_count === 0 || sessionType !== 'standard'}
                                 title={startSessionDisabledReason ?? 'Start a new training session'}
-                                className={`px-6 py-2 bg-accent text-bg-primary rounded-sm font-serif transition-colors km-focus-visible ${(controlsDisabled || !userStatus || userStatus.puzzles_count === 0 || userStatus.due_count === 0 || sessionType !== 'standard') ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'}`}>
+                                className={`px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-opacity km-focus-visible ${(controlsDisabled || !userStatus || userStatus.puzzles_count === 0 || userStatus.due_count === 0 || sessionType !== 'standard') ? 'km-interactive-disabled disabled:opacity-50' : 'hover:opacity-90 cursor-pointer'}`}>
                                 Start Session
                             </button>
                         )}
@@ -479,22 +486,22 @@ export default function Puzzles() {
                 </div>
 
                 {(startSessionDisabledReason || generateDisabledReason) && (
-                    <p className="text-sm text-primary/60 font-sans" role="status" aria-live="polite">
+                    <p className="text-sm text-primary/70 font-sans" role="status" aria-live="polite">
                         {startSessionDisabledReason ?? generateDisabledReason}
                     </p>
                 )}
 
                 {/* User status - full width below buttons */}
                 {username && userStatus && !isLoadingStatus && (
-                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm font-sans text-primary/60">
+                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm font-sans text-primary/70">
                         <span>Games: {userStatus.games_count}</span>
                         <span>Puzzles: {userStatus.puzzles_count}</span>
                         {userStatus.has_new_games ? (
-                            <span className="text-green-600">
+                            <span className="text-positive">
                                 ✓ New games available for puzzles
                             </span>
                         ) : userStatus.games_count > 0 ? (
-                            <span className="text-primary/40">
+                            <span className="text-primary/70">
                                 All games used for puzzles
                             </span>
                         ) : null}
@@ -506,20 +513,20 @@ export default function Puzzles() {
                     <>
                         {sessionType === 'standard' ? (
                             <div className="p-4 bg-primary/5 border border-primary/20 rounded-sm">
-                                <p className="text-sm text-primary/60 font-sans">
+                                <p className="text-sm text-primary/70 font-sans">
                                     <strong className="font-medium">Standard mode</strong> uses spaced repetition to help you master tactical patterns from your own games.
                                     Complete 5 puzzles per session with immediate feedback on each move.
                                 </p>
                             </div>
                         ) : (
                             <div className="p-4 bg-primary/5 border border-primary/20 rounded-sm">
-                                <p className="text-sm text-primary/60 font-sans mb-3">
+                                <p className="text-sm text-primary/70 font-sans mb-3">
                                     🚧 <strong className="font-medium">{sessionType === 'timed' ? 'Timed' : 'Accuracy Goal'} mode</strong> is currently in development.
                                     Try it out by adjusting the settings, but sessions can only be started in Standard mode for now.
                                 </p>
                                 {sessionType === 'timed' && (
                                     <div className="flex items-center gap-2">
-                                        <label htmlFor="duration-input" className="text-sm text-primary/60 font-sans">Duration:</label>
+                                        <label htmlFor="duration-input" className="text-sm text-primary/70 font-sans">Duration:</label>
                                         <input
                                             id="duration-input"
                                             type="number"
@@ -529,12 +536,12 @@ export default function Puzzles() {
                                             onChange={(e) => setTargetTimeMinutes(Number(e.target.value))}
                                             className="px-3 py-2 border border-primary/20 rounded-sm bg-bg-primary text-primary w-20"
                                         />
-                                        <span className="text-sm text-primary/60 font-sans">minutes</span>
+                                        <span className="text-sm text-primary/70 font-sans">minutes</span>
                                     </div>
                                 )}
                                 {sessionType === 'accuracy_goal' && (
                                     <div className="flex items-center gap-2">
-                                        <label htmlFor="accuracy-input" className="text-sm text-primary/60 font-sans">Target accuracy:</label>
+                                        <label htmlFor="accuracy-input" className="text-sm text-primary/70 font-sans">Target accuracy:</label>
                                         <input
                                             id="accuracy-input"
                                             type="number"
@@ -544,7 +551,7 @@ export default function Puzzles() {
                                             onChange={(e) => setTargetAccuracy(Number(e.target.value))}
                                             className="px-3 py-2 border border-primary/20 rounded-sm bg-bg-primary text-primary w-20"
                                         />
-                                        <span className="text-sm text-primary/60 font-sans">%</span>
+                                        <span className="text-sm text-primary/70 font-sans">%</span>
                                     </div>
                                 )}
                             </div>
@@ -559,7 +566,7 @@ export default function Puzzles() {
                             {userStatus.games_count === 0 ? (
                                 <>
                                     <h3 className="font-serif text-xl text-primary">No games imported yet</h3>
-                                    <p className="text-primary/60 font-sans">
+                                    <p className="text-primary/70 font-sans">
                                         Import your Chess.com games to generate personalized puzzles.
                                     </p>
                                     <Link
@@ -572,7 +579,7 @@ export default function Puzzles() {
                             ) : userStatus.puzzles_count === 0 ? (
                                 <>
                                     <h3 className="font-serif text-xl text-primary">Ready to generate puzzles</h3>
-                                    <p className="text-primary/60 font-sans">
+                                    <p className="text-primary/70 font-sans">
                                         We found {userStatus.games_count} games. Let&apos;s create training puzzles.
                                     </p>
                                     <button
@@ -587,9 +594,9 @@ export default function Puzzles() {
                             ) : userStatus.due_count === 0 ? (
                                 <>
                                     <h3 className="font-serif text-xl text-primary">All caught up</h3>
-                                    <p className="text-primary/60 font-sans">
+                                    <p className="text-primary/70 font-sans">
                                         {userStatus.next_due_at
-                                            ? `Next review on ${new Date(userStatus.next_due_at).toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' })}.`
+                                            ? `Next review on ${new Date(userStatus.next_due_at).toLocaleDateString(LOCALE, { weekday: 'long', month: 'short', day: 'numeric' })}.`
                                             : 'No puzzles are due for review yet.'}
                                     </p>
                                     {userStatus.has_new_games && (
@@ -608,7 +615,7 @@ export default function Puzzles() {
                                     <h3 className="font-serif text-xl text-primary">
                                         {userStatus.due_count} puzzle{userStatus.due_count === 1 ? '' : 's'} ready
                                     </h3>
-                                    <p className="text-primary/60 font-sans">
+                                    <p className="text-primary/70 font-sans">
                                         Start a session to review your due puzzles.
                                     </p>
                                 </>
@@ -616,14 +623,14 @@ export default function Puzzles() {
                         </div>
                     )}
                     {shouldShowEmptyState && isLoadingStatus && (
-                        <div className="text-center text-primary/40 py-4">
+                        <div className="text-center text-primary/70 py-4">
                             <span className="animate-pulse">Loading training status...</span>
                         </div>
                     )}
                     {shouldShowEmptyState && !userStatus && !isLoadingStatus && !insightsError && !isRefreshingInsights && (
                         <div className="bg-primary/5 border border-primary/10 rounded-sm p-6 backdrop-blur-sm text-center space-y-4">
                             <h3 className="font-serif text-xl text-primary">Ready to train</h3>
-                            <p className="text-primary/60 font-sans">
+                            <p className="text-primary/70 font-sans">
                                 Click &quot;Start Session&quot; to begin training, or &quot;Generate New&quot; to create fresh puzzles from your games.
                             </p>
                         </div>
@@ -631,7 +638,7 @@ export default function Puzzles() {
                     {statusLoadFailed && (
                         <div className="bg-red-500/5 border border-red-500/20 rounded-sm p-6 text-center space-y-4" role="alert" aria-live="assertive">
                             <h3 className="font-serif text-xl text-primary">Couldn&apos;t load your training data</h3>
-                            <p className="text-primary/60 font-sans">
+                            <p className="text-primary/70 font-sans">
                                 We couldn&apos;t load your puzzles right now. Please try again.
                             </p>
                             <button
@@ -696,7 +703,7 @@ export default function Puzzles() {
                     {shouldShowPartialDataCard && (
                         <div className="bg-primary/5 border border-primary/10 rounded-sm p-6 backdrop-blur-sm text-center space-y-4">
                             <h3 className="font-serif text-xl text-primary">Some insights are unavailable</h3>
-                            <p className="text-primary/60 font-sans">
+                            <p className="text-primary/70 font-sans">
                                 {insightsError || 'We are still syncing your tactical insights. Refresh to try again.'}
                             </p>
                             <button
@@ -725,15 +732,15 @@ export default function Puzzles() {
                                 <div key={motif.name} className="flex justify-between items-center p-3 bg-red-500/10 rounded-sm">
                                     <div>
                                         <span className="font-serif text-primary">{motif.name}</span>
-                                        <span className="text-xs text-primary/60 ml-2">
+                                        <span className="text-xs text-primary/70 ml-2">
                                             {motif.passed}/{motif.total_puzzles} correct
                                         </span>
                                     </div>
                                     <div className="flex items-center gap-2">
-                                        <span className="text-red-500 font-mono text-sm">
+                                        <span className="text-negative font-mono text-sm">
                                             {Math.round(motif.accuracy * 100)}%
                                         </span>
-                                        <span className="text-xs text-primary/40">needs work</span>
+                                        <span className="text-xs text-primary/70">needs work</span>
                                     </div>
                                 </div>
                             ))}
@@ -751,7 +758,7 @@ export default function Puzzles() {
                     <p className="text-primary font-serif">
                         🎯 Warmup Diagnostic Session
                     </p>
-                    <p className="text-primary/60 text-sm font-sans">
+                    <p className="text-primary/70 text-sm font-sans">
                         Complete 5 puzzles to see what stuck while you were away
                     </p>
                 </div>
@@ -762,7 +769,7 @@ export default function Puzzles() {
                     {/* Chessboard */}
                     <div className="order-2 lg:order-1">
                         <div className="aspect-square w-full max-w-[600px] mx-auto shadow-2xl shadow-primary/5 rounded-sm overflow-hidden border border-primary/10">
-                            <Chessboard
+                            <AccessibleChessboard
                                 options={{
                                     position: game.fen(),
                                     onPieceDrop: ({ sourceSquare, targetSquare }) => targetSquare ? onPieceDrop(sourceSquare, targetSquare) : false,
@@ -789,7 +796,7 @@ export default function Puzzles() {
                                                         ? ` (${sessionSummary.session_type.replace('_', ' ')})`
                                                         : ''}
                                                 </span>
-                                                <span className="text-sm font-mono text-primary/60">
+                                                <span className="text-sm font-mono text-primary/70">
                                                     {reviewedCount} / {sessionSummary.requested_n}
                                                 </span>
                                             </div>
@@ -805,14 +812,14 @@ export default function Puzzles() {
                                             {/* Core Session Stats */}
                                             <div className="flex justify-between mt-3 text-xs">
                                                 <div className="flex items-center">
-                                                    <span className="text-primary/60 mr-1">🔥</span>
+                                                    <span className="text-primary/70 mr-1">🔥</span>
                                                     <span className="text-primary/80">Streak: {streak}</span>
-                                                    <span className="text-primary/40 mx-1">|</span>
-                                                    <span className="text-primary/60 mr-1">🏆</span>
+                                                    <span className="text-primary/70 mx-1">|</span>
+                                                    <span className="text-primary/70 mr-1">🏆</span>
                                                     <span className="text-primary/80">Best: {bestStreak}</span>
                                                 </div>
                                                 <div className="flex items-center">
-                                                    <span className="text-primary/60 mr-1">💡</span>
+                                                    <span className="text-primary/70 mr-1">💡</span>
                                                     <span className="text-primary/80">Hints: {hintsUsed}</span>
                                                 </div>
                                             </div>
@@ -842,7 +849,7 @@ export default function Puzzles() {
                                                     {/* Performance Visualization */}
                                                     {performanceHistory.length > 0 && (
                                                         <div>
-                                                            <div className="flex justify-between text-xs text-primary/60 mb-1">
+                                                            <div className="flex justify-between text-xs text-primary/70 mb-1">
                                                                 <span>Recent Performance:</span>
                                                                 <span>{calculateRecentPerformance(performanceHistory)}% accuracy (5min)</span>
                                                             </div>
@@ -851,15 +858,15 @@ export default function Puzzles() {
                                                                     <div
                                                                         key={index}
                                                                         className={`flex-1 ${item.result === 'pass' ? 'bg-green-500' : 'bg-red-500'}`}
-                                                                        title={`${item.result.toUpperCase()} - ${new Date(item.time).toLocaleTimeString()}`}
+                                                                        title={`${item.result.toUpperCase()} - ${new Date(item.time).toLocaleTimeString(LOCALE)}`}
                                                                     />
                                                                 ))}
                                                             </div>
-                                                            <div className="flex justify-between text-xs text-primary/60 mt-1">
+                                                            <div className="flex justify-between text-xs text-primary/70 mt-1">
                                                                 <span>
                                                                     Trend:
-                                                                    <span className={`ml-1 ${getPerformanceTrend(performanceHistory) === 'improving' ? 'text-green-500' :
-                                                                        getPerformanceTrend(performanceHistory) === 'declining' ? 'text-red-500' : 'text-primary/60'
+                                                                    <span className={`ml-1 ${getPerformanceTrend(performanceHistory) === 'improving' ? 'text-positive' :
+                                                                        getPerformanceTrend(performanceHistory) === 'declining' ? 'text-negative' : 'text-primary/70'
                                                                         }`}>
                                                                         {getPerformanceTrend(performanceHistory) === 'improving' ? '↗ Improving' :
                                                                             getPerformanceTrend(performanceHistory) === 'declining' ? '↘ Declining' : '→ Stable'}
@@ -875,7 +882,7 @@ export default function Puzzles() {
                                                     {/* Timed Session Timer */}
                                                     {sessionSummary.session_type === 'timed' && timer.timeRemaining > 0 && (
                                                         <div className="text-center">
-                                                            <span className={`font-mono text-sm ${timer.timeRemaining < 60 ? 'text-red-500' : 'text-primary/80'}`}>
+                                                            <span className={`font-mono text-sm ${timer.timeRemaining < 60 ? 'text-negative' : 'text-primary/80'}`}>
                                                                 Time Remaining: {Math.floor(timer.timeRemaining / 60)}:{(timer.timeRemaining % 60).toString().padStart(2, '0')}
                                                             </span>
                                                         </div>
@@ -884,7 +891,7 @@ export default function Puzzles() {
                                             )}
 
                                             {isResumingSession && (
-                                                <div className="text-xs text-center mt-2 text-primary/60 animate-pulse">
+                                                <div className="text-xs text-center mt-2 text-primary/70 animate-pulse">
                                                     Resuming previous session...
                                                 </div>
                                             )}
@@ -900,14 +907,14 @@ export default function Puzzles() {
                                                 </span>
                                             </span>
                                             {currentPuzzle.primary_motif && (
-                                                <span className="text-sm font-sans text-primary/60 px-2 py-1 bg-primary/10 rounded-sm">
+                                                <span className="text-sm font-sans text-primary/70 px-2 py-1 bg-primary/10 rounded-sm">
                                                     {currentPuzzle.primary_motif}
                                                 </span>
                                             )}
                                         </div>
                                     </div>
                                 </div>
-                                <span className="font-sans text-sm tracking-wide uppercase text-primary/60">
+                                <span className="font-sans text-sm tracking-wide uppercase text-primary/70">
                                     {currentPuzzle.side_to_move === 'white' ? 'White to Move' : 'Black to Move'}
                                 </span>
                             </div>
@@ -915,7 +922,7 @@ export default function Puzzles() {
 
                         {/* Status Area */}
                         <div className="min-h-[100px] flex items-center justify-center text-center p-6 border border-primary/10 rounded-sm relative overflow-hidden">
-                            {status === 'solving' && clue.clueStage === 0 && <p className="text-primary/60 font-serif text-lg italic">Find the best move...</p>}
+                            {status === 'solving' && clue.clueStage === 0 && <p className="text-primary/70 font-serif text-lg italic">Find the best move...</p>}
                             {status === 'solving' && clue.clueStage === 1 && (
                                 <p className="text-primary/80 font-sans text-sm">
                                     {clue.pieceHint || 'Move the correct piece'}
@@ -923,23 +930,23 @@ export default function Puzzles() {
                             )}
                             {status === 'correct' && (
                                 <div className="text-center">
-                                    <p className="text-green-600 font-serif text-2xl animate-teedin">Correct! Excellent.</p>
+                                    <p className="text-positive font-serif text-2xl animate-teedin">Correct! Excellent.</p>
                                     {lastFeedback && (
-                                        <p className="text-green-600 font-sans text-sm mt-2 animate-teedin">{lastFeedback}</p>
+                                        <p className="text-positive font-sans text-sm mt-2 animate-teedin">{lastFeedback}</p>
                                     )}
                                 </div>
                             )}
                             {status === 'incorrect' && (
                                 <div className="text-center">
-                                    <p className="text-red-500 font-serif text-2xl animate-teedin">Incorrect.</p>
+                                    <p className="text-negative font-serif text-2xl animate-teedin">Incorrect.</p>
                                     {lastFeedback && (
-                                        <p className="text-red-500 font-sans text-sm mt-2 animate-teedin">{lastFeedback}</p>
+                                        <p className="text-negative font-sans text-sm mt-2 animate-teedin">{lastFeedback}</p>
                                     )}
                                 </div>
                             )}
                             {status === 'revealed' && (
                                 <div>
-                                    <p className="text-primary/60 font-sans text-xs uppercase tracking-widest mb-1">Solution</p>
+                                    <p className="text-primary/70 font-sans text-xs uppercase tracking-widest mb-1">Solution</p>
                                     <p className="text-primary font-mono text-xl">{currentPuzzle.best_move_uci}</p>
                                 </div>
                             )}
@@ -949,7 +956,7 @@ export default function Puzzles() {
                         <div className="space-y-6">
                             {/* Type Move Toggle */}
                             <div className="flex justify-between items-center px-2">
-                                <span className="text-xs text-primary/40 uppercase tracking-widest font-sans">Input Method</span>
+                                <span className="text-xs text-primary/70 uppercase tracking-widest font-sans">Input Method</span>
                                 <button
                                     type="button"
                                     onClick={() => setShowUciInput(!showUciInput)}
@@ -1006,7 +1013,7 @@ export default function Puzzles() {
                                     {currentPuzzle?.attempts !== undefined && (
                                         <div className="bg-primary/5 p-3 rounded-sm text-sm">
                                             <div className="flex justify-between">
-                                                <span className="text-primary/60">Puzzle Stats:</span>
+                                                <span className="text-primary/70">Puzzle Stats:</span>
                                                 <span className="font-mono">
                                                     {currentPuzzle.pass_count || 0}/{currentPuzzle.attempts || 0}
                                                     {currentPuzzle.attempts ? ` (${Math.round(((currentPuzzle.pass_count || 0) / currentPuzzle.attempts) * 100)}%)` : ''}
@@ -1014,18 +1021,18 @@ export default function Puzzles() {
                                             </div>
                                             {currentPuzzle.next_due_at && (
                                                 <div className="flex justify-between mt-1">
-                                                    <span className="text-primary/60">Next Review:</span>
+                                                    <span className="text-primary/70">Next Review:</span>
                                                     <span className="font-mono">
-                                                        {new Date(currentPuzzle.next_due_at).toLocaleDateString()}
+                                                        {new Date(currentPuzzle.next_due_at).toLocaleDateString(LOCALE)}
                                                     </span>
                                                 </div>
                                             )}
                                         </div>
                                     )}
 
-                                    {isFinalPuzzle && sessionState === 'completed' ? (
+                                    {sessionState === 'completed' ? (
                                         sessionSummary ? (
-                                            <p className="text-center text-primary/60 font-sans text-sm py-4">
+                                            <p className="text-center text-primary/70 font-sans text-sm py-4">
                                                 Session complete — see your summary below.
                                             </p>
                                         ) : (
@@ -1056,7 +1063,7 @@ export default function Puzzles() {
                                     {/* Detailed feedback for incorrect answers */}
                                     {lastFeedback && (
                                         <div className="bg-red-500/10 border border-red-500/20 p-3 rounded-sm text-sm">
-                                            <p className="text-red-500 font-sans">{lastFeedback}</p>
+                                            <p className="text-negative font-sans">{lastFeedback}</p>
                                         </div>
                                     )}
 
@@ -1087,8 +1094,19 @@ export default function Puzzles() {
                                         <button
                                             type="button"
                                             onClick={async () => {
-                                                await handleReviewPuzzle('fail');
-                                                // Session will auto-complete via handleCompleteSession in handleReviewPuzzle
+                                                // Guard re-entry (same as handleAdvancePuzzle) so a fast
+                                                // double-click can't fire two concurrent complete calls
+                                                // before `disabled` catches up with sessionState.
+                                                if (isAdvancingPuzzle.current) return;
+                                                isAdvancingPuzzle.current = true;
+                                                try {
+                                                    await handleReviewPuzzle('fail');
+                                                    // Finishing the final puzzle (as a fail) ends the session.
+                                                    setReviewedCount(prev => prev + 1);
+                                                    await handleCompleteSession();
+                                                } finally {
+                                                    isAdvancingPuzzle.current = false;
+                                                }
                                             }}
                                             disabled={sessionState === 'completing'}
                                             className="w-full px-6 py-4 bg-orange-600 text-white rounded-sm font-serif text-lg transition-all km-focus-visible km-interactive mt-4">
@@ -1158,13 +1176,13 @@ export default function Puzzles() {
                             >
                                 <h4 className="font-serif text-primary mb-1">{motif.name}</h4>
                                 <div className="flex justify-between text-sm">
-                                    <span className="text-primary/60">
+                                    <span className="text-primary/70">
                                         {motif.passed}/{motif.total_puzzles} solved
                                     </span>
                                     <span className={`font-mono ${
-                                        motif.rank === 'mastered' ? 'text-green-600' :
-                                        motif.rank === 'learning' ? 'text-yellow-600' :
-                                        'text-red-500'
+                                        motif.rank === 'mastered' ? 'text-positive' :
+                                        motif.rank === 'learning' ? 'text-warning' :
+                                        'text-negative'
                                     }`}>
                                         {Math.round(motif.accuracy * 100)}%
                                     </span>

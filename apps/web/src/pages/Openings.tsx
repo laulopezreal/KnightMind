@@ -130,7 +130,9 @@ export default function Openings() {
         />
       )}
 
-      {/* Graph */}
+      {/* Graph — omitted when an error card has replaced it (and there's no stale
+          tree to keep showing), so no empty framed box appears under the error. */}
+      {(!error || treeData) && (
       <section className="relative min-h-[300px] md:min-h-[500px] max-h-[70vh] bg-primary/5 border border-primary/10 rounded-sm overflow-hidden">
         {!treeData && !loading && !error && (
           <div className="absolute inset-0 flex items-center justify-center px-6">
@@ -173,7 +175,7 @@ export default function Openings() {
             <button
               type="button"
               onClick={() => graphRef.current?.zoomIn()}
-              className="p-2 bg-bg-primary border border-primary/10 rounded-sm text-primary/60 hover:text-primary km-interactive km-focus-visible transition-colors"
+              className="p-2 bg-bg-primary border border-primary/10 rounded-sm text-primary/70 hover:text-primary km-interactive km-focus-visible transition-colors"
               aria-label="Zoom in"
               title="Zoom in"
             >
@@ -184,7 +186,7 @@ export default function Openings() {
             <button
               type="button"
               onClick={() => graphRef.current?.zoomOut()}
-              className="p-2 bg-bg-primary border border-primary/10 rounded-sm text-primary/60 hover:text-primary km-interactive km-focus-visible transition-colors"
+              className="p-2 bg-bg-primary border border-primary/10 rounded-sm text-primary/70 hover:text-primary km-interactive km-focus-visible transition-colors"
               aria-label="Zoom out"
               title="Zoom out"
             >
@@ -195,7 +197,7 @@ export default function Openings() {
             <button
               type="button"
               onClick={() => graphRef.current?.fitToView()}
-              className="p-2 bg-bg-primary border border-primary/10 rounded-sm text-primary/60 hover:text-primary km-interactive km-focus-visible transition-colors"
+              className="p-2 bg-bg-primary border border-primary/10 rounded-sm text-primary/70 hover:text-primary km-interactive km-focus-visible transition-colors"
               aria-label="Fit to view"
               title="Fit to view"
             >
@@ -209,7 +211,7 @@ export default function Openings() {
         {treeData && !loading && (
           <div className="absolute bottom-3 left-3 group">
             <div
-              className="w-6 h-6 rounded-full border border-primary/20 flex items-center justify-center text-primary/40 hover:text-primary/70 hover:border-primary/40 transition-colors cursor-help"
+              className="w-6 h-6 rounded-full border border-primary/20 flex items-center justify-center text-primary/70 hover:text-primary/70 hover:border-primary/40 transition-colors cursor-help"
               style={{ backgroundColor: 'var(--bg-primary)' }}
             >
               <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -234,9 +236,9 @@ export default function Openings() {
               </div>
               <div className="space-y-1 font-sans text-sm text-primary/80">
                 <div className="flex justify-between"><span>Games</span> <span>{tooltip.data.games_count}</span></div>
-                <div className="flex justify-between text-green-600"><span>Won</span> <span>{tooltip.data.wins}</span></div>
-                <div className="flex justify-between text-gray-500"><span>Draw</span> <span>{tooltip.data.draws}</span></div>
-                <div className="flex justify-between text-red-500"><span>Lost</span> <span>{tooltip.data.losses}</span></div>
+                <div className="flex justify-between text-positive"><span>Won</span> <span>{tooltip.data.wins}</span></div>
+                <div className="flex justify-between text-primary/70"><span>Draw</span> <span>{tooltip.data.draws}</span></div>
+                <div className="flex justify-between text-negative"><span>Lost</span> <span>{tooltip.data.losses}</span></div>
                 <div className="pt-2 border-t border-primary/10 flex justify-between font-medium">
                   <span>Win Rate</span>
                   <span style={{ color: getWinRateColor(tooltip.data.win_rate) }}>{tooltip.data.win_rate}%</span>
@@ -246,9 +248,12 @@ export default function Openings() {
             document.body
           )}
       </section>
+      )}
 
-      {/* Legend + Stats */}
-      <section className="flex flex-wrap gap-6 items-center justify-center text-xs font-sans text-primary/60">
+      {/* Legend + Stats — only meaningful alongside a rendered graph, so hidden
+          in the empty/error states (a colour key for a graph that isn't shown). */}
+      {treeData && (
+      <section className="flex flex-wrap gap-6 items-center justify-center text-xs font-sans text-primary/70">
         <span className="uppercase tracking-widest mr-2">Win Rate:</span>
         <div className="flex items-center gap-1"><div className="w-3 h-3 rounded-full bg-emerald-600"></div> 60%+</div>
         <div className="flex items-center gap-1"><div className="w-3 h-3 rounded-full bg-emerald-500"></div> 50%+</div>
@@ -267,12 +272,13 @@ export default function Openings() {
             ].map(stat => (
               <div className="text-center" key={stat.label}>
                 <div className="text-2xl font-mono text-primary">{stat.value}</div>
-                <div className="text-xs uppercase tracking-widest text-primary/40">{stat.label}</div>
+                <div className="text-xs uppercase tracking-widest text-primary/70">{stat.label}</div>
               </div>
             ))}
           </div>
         )}
       </section>
+      )}
     </div>
   );
 }

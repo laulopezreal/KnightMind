@@ -56,10 +56,14 @@ describe('RecentlyTrickyCard', () => {
     expect(screen.queryByText(/and.*more/)).not.toBeInTheDocument();
   });
 
-  it('should link puzzles to motif-filtered view', () => {
+  it('should link each puzzle to its own library detail view', () => {
     render(<RecentlyTrickyCard puzzles={mockPuzzles} totalCount={2} />);
 
     const links = screen.getAllByRole('link');
-    expect(links[0]).toHaveAttribute('href', '/puzzles?motif=Fork%20Attack');
+    // Link by puzzle_id to the specific puzzle so the user can re-attempt the
+    // exact position they struggled with — NOT by title-as-motif, which filtered
+    // by a motif that doesn't exist and produced an empty, mislabeled session.
+    expect(links[0]).toHaveAttribute('href', '/library/p1');
+    expect(links[1]).toHaveAttribute('href', '/library/p2');
   });
 });

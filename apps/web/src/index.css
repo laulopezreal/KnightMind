@@ -24,6 +24,21 @@
   --animate-teedout: teedout 0.45s ease-out forwards;
 }
 
+/* Register the semantic color tokens so Tailwind actually generates the
+   background, text and border color utilities. `inline` makes the generated CSS
+   reference the runtime vars directly, so the body.night overrides below still
+   cascade.
+   - primary    = the ink/foreground colour (text-primary, bg-primary fill, borders)
+   - bg-primary = the paper/surface colour  (bg-bg-primary surfaces, text-bg-primary)
+   - accent     = ink for now (monochrome palette; distinct accent is a future call)
+   Before this, these utilities emitted no CSS: text survived via body-colour
+   inheritance and fills/tints painted transparent. */
+@theme inline {
+  --color-primary: var(--text-primary);
+  --color-bg-primary: var(--bg-primary);
+  --color-accent: var(--accent);
+}
+
 /* Custom Utilities for the slow vibe */
 @utility transition-slow {
   transition: background-color 250ms ease-out, color 250ms ease-out, border-color 250ms ease-out;
@@ -55,6 +70,7 @@
 @utility text-status-mastered { color: var(--color-status-mastered); }
 @utility text-positive { color: var(--color-positive); }
 @utility text-negative { color: var(--color-negative); }
+@utility text-warning { color: var(--color-warning); }
 
 @utility bg-status-due-soft { background-color: var(--color-status-due-bg); }
 @utility bg-status-new-soft { background-color: var(--color-status-new-bg); }
@@ -67,7 +83,12 @@
   /* Day Mode (White Pieces) */
   --bg-primary: var(--color-chess-cream-100);
   --text-primary: var(--color-chess-brown-900);
-  --border-primary: var(--color-chess-brown-700);
+  /* Borders share the ink foreground so the border-primary utility (--color-primary)
+     and direct var(--border-primary) usages render one consistent colour. */
+  --border-primary: var(--text-primary);
+  /* Warm gold accent — the one non-monochrome hue, for the connect-account pill.
+     Day shade tuned to clear AA (4.5:1) on the cream background. */
+  --accent: #8a5313;
   --color-toggle-bg: var(--color-chess-brown-700);
   --color-toggle-knob: var(--color-chess-cream-100);
 
@@ -75,11 +96,12 @@
      due uses orange-800 (not -700): on its own low-alpha orange pill tint, -700
      measured 3.86:1; -800 clears 4.5. */
   --color-status-due: #9a3412;      /* orange-800 */
-  --color-status-new: #1d4ed8;      /* blue-700 */
+  --color-status-new: #1e40af;      /* blue-800 (blue-700 measured 4.44 on its own blue tint; -800 clears 4.5) */
   --color-status-learning: #92400e; /* amber-800 */
   --color-status-mastered: #166534; /* green-800 */
   --color-positive: #065f46;        /* emerald-800 (emerald-700 measured 4.11 on its pill tint) */
   --color-negative: #991b1b;        /* red-800 (margin over 4.5 on the red pill tint) */
+  --color-warning: #92400e;         /* amber-800 — clears 4.5 on cream and on faint amber tints */
   --color-status-due-bg: color-mix(in srgb, var(--color-status-due) 12%, transparent);
   --color-status-new-bg: color-mix(in srgb, var(--color-status-new) 12%, transparent);
   --color-status-learning-bg: color-mix(in srgb, var(--color-status-learning) 12%, transparent);
@@ -92,7 +114,9 @@ body.night {
   /* Night Mode (Black Pieces) */
   --bg-primary: var(--color-chess-brown-900);
   --text-primary: var(--color-chess-cream-200);
-  --border-primary: var(--color-chess-cream-300);
+  --border-primary: var(--text-primary);
+  /* Lighter warm gold that clears AA on the near-black night background. */
+  --accent: #e0b45c;
   --color-toggle-bg: var(--color-chess-cream-200);
   --color-toggle-knob: var(--color-chess-brown-900);
 
@@ -104,6 +128,7 @@ body.night {
   --color-status-mastered: #34d399; /* emerald-400 */
   --color-positive: #34d399;        /* emerald-400 */
   --color-negative: #f87171;        /* red-400 */
+  --color-warning: #fbbf24;         /* amber-400 — light shade for the near-black night bg */
   --color-status-due-bg: color-mix(in srgb, var(--color-status-due) 8%, transparent);
   --color-status-new-bg: color-mix(in srgb, var(--color-status-new) 8%, transparent);
   --color-status-learning-bg: color-mix(in srgb, var(--color-status-learning) 8%, transparent);

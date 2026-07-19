@@ -6,7 +6,7 @@ interface DataStateLoadingProps {
 export function DataStateLoading({ label, compact = false }: DataStateLoadingProps) {
   if (compact) {
     return (
-      <div className="flex items-center gap-2 text-primary/50 font-sans text-xs" role="status" aria-live="polite">
+      <div className="flex items-center gap-2 text-primary/70 font-sans text-xs" role="status" aria-live="polite">
         <div className="animate-spin h-4 w-4 border-2 border-primary/20 border-t-primary rounded-full" aria-hidden="true" />
         <span>{label}</span>
       </div>
@@ -32,7 +32,7 @@ interface DataStateErrorProps {
 export function DataStateError({ message, onRetry, retryLabel, ariaLabel, compact = false }: DataStateErrorProps) {
   return (
     <div className={`${compact ? "text-left p-4" : "max-w-md mx-auto mt-24 text-center p-8"} bg-red-500/5 border border-red-500/20 rounded-sm`} role="alert" aria-live="assertive">
-      <p className="text-red-500 mb-4">{message}</p>
+      <p className="text-negative mb-4">{message}</p>
       <button
         type="button"
         onClick={onRetry}
@@ -55,12 +55,12 @@ interface DataStateEmptyProps {
 export function DataStateEmpty({ title, description, actionLabel, onAction }: DataStateEmptyProps) {
   return (
     <div className="bg-primary/5 border border-primary/10 rounded-sm p-10 text-center">
-      <p className="text-primary/60 font-sans text-lg mb-3">{title}</p>
-      <p className="text-primary/40 font-sans text-sm mb-6">{description}</p>
+      <p className="text-primary/70 font-sans text-lg mb-3">{title}</p>
+      <p className="text-primary/70 font-sans text-sm mb-6">{description}</p>
       <button
         type="button"
         onClick={onAction}
-        className="px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif km-interactive km-focus-visible"
+        className="px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-opacity hover:opacity-90 cursor-pointer km-focus-visible"
       >
         {actionLabel}
       </button>

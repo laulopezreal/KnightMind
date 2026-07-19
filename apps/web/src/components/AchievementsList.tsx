@@ -1,3 +1,4 @@
+import { LOCALE } from '../utils/locale';
 import { type Achievement } from '../hooks/useAchievements';
 
 interface AchievementsListProps {
@@ -20,13 +21,13 @@ export function AchievementsList({ achievements }: AchievementsListProps) {
                         <div className="flex items-center">
                             <span className="text-2xl mr-3">{achievement.icon}</span>
                             <div>
-                                <h4 className={`font-serif ${achievement.earned ? 'text-green-600' : 'text-primary'}`}>
+                                <h4 className={`font-serif ${achievement.earned ? 'text-positive' : 'text-primary'}`}>
                                     {achievement.name}
                                 </h4>
-                                <p className="text-xs text-primary/60 mt-1">{achievement.description}</p>
+                                <p className="text-xs text-primary/70 mt-1">{achievement.description}</p>
                                 {achievement.earned && achievement.earnedAt && (
-                                    <p className="text-xs text-green-600/80 mt-1">
-                                        Earned: {achievement.earnedAt.toLocaleDateString()}
+                                    <p className="text-xs text-positive mt-1">
+                                        Earned: {achievement.earnedAt.toLocaleDateString(LOCALE)}
                                     </p>
                                 )}
                             </div>

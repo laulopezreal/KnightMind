@@ -129,6 +129,21 @@ describe('LibraryPuzzle', () => {
         });
     });
 
+    it('offers Retry on a transient error', async () => {
+        mockGetLibraryPuzzle.mockRejectedValue(new Error('Server error'));
+        render(<LibraryPuzzle />);
+        // A 500/network error is recoverable, so a Retry affordance appears
+        // (consistent with the list/dashboard/openings error states).
+        expect(await screen.findByRole('button', { name: /retry loading this puzzle/i })).toBeInTheDocument();
+    });
+
+    it('does not offer Retry on a 404 (refetch would miss again)', async () => {
+        mockGetLibraryPuzzle.mockRejectedValue(new MockApiError('Not found', 404));
+        render(<LibraryPuzzle />);
+        expect(await screen.findByText(/Puzzle not found/i)).toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: /retry/i })).not.toBeInTheDocument();
+    });
+
     // --- Successful load ---
 
     it('should display puzzle title', async () => {
