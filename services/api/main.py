@@ -162,6 +162,10 @@ from services.api.dashboard import router as dashboard_router
 
 app.include_router(dashboard_router)
 
+from services.api.auth_routes import router as auth_router
+
+app.include_router(auth_router)
+
 
 def get_allowed_origins() -> list[str]:
     origins = os.environ.get("KNIGHTMIND_CORS_ORIGINS", "")
