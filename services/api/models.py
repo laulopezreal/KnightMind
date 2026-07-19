@@ -291,6 +291,10 @@ class Puzzle(Base):
     side_to_move: Mapped[str] = mapped_column(String, nullable=False)
     played_move_uci: Mapped[str] = mapped_column(String, nullable=False)
     best_move_uci: Mapped[str] = mapped_column(String, nullable=False)
+    # Comma-separated UCI moves that are all accepted as correct solutions
+    # (the multi-PV equivalence set). Nullable for pre-existing rows; solvers
+    # should fall back to best_move_uci when absent.
+    accept_moves_uci: Mapped[str | None] = mapped_column(Text, nullable=True)
     eval_before: Mapped[float] = mapped_column(Float, nullable=False)
     eval_after: Mapped[float] = mapped_column(Float, nullable=False)
     swing: Mapped[float] = mapped_column(Float, nullable=False)

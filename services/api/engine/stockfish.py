@@ -15,6 +15,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Callable, Optional
 
+import chess
+
 try:
     from stockfish import Stockfish as StockfishEngine
 except ImportError:
@@ -55,10 +57,38 @@ class StockfishEngineDeadError(StockfishError):
 
 @dataclass
 class EvalResult:
-    """Result of a position evaluation."""
+    """Result of a position evaluation.
 
-    best_move_uci: str
+    ``eval`` is a centipawn-derived pawn score from the side-to-move
+    perspective. Mate scores are *not* representable as centipawns, so they are
+    clamped to the ``MATE_EVALUATION`` sentinel in ``eval`` **and** carried
+    distinctly in ``mate_in`` so callers can tell "mate in 1" from "mate in 8"
+    and from a merely large centipawn advantage.
+
+    ``mate_in`` semantics (from the side-to-move perspective):
+        - positive N  -> side to move delivers mate in N
+        - negative N  -> side to move gets mated in N
+        - 0           -> side to move is already checkmated (terminal)
+        - None        -> not a forced mate (ordinary centipawn eval)
+
+    ``is_terminal`` is True when the position itself is game-over (checkmate,
+    stalemate, or another draw-by-rule); in that case ``best_move_uci`` is None
+    because there is no move to make.
+    """
+
+    best_move_uci: Optional[str]
     eval: float  # In pawns, from side-to-move perspective
+    mate_in: Optional[int] = None
+    is_terminal: bool = False
+
+
+@dataclass
+class MoveEval:
+    """A single candidate move with its evaluation (for multi-PV analysis)."""
+
+    uci: str
+    eval: float  # In pawns, from side-to-move perspective
+    mate_in: Optional[int] = None
 
 
 def get_stockfish_path() -> str:
@@ -258,7 +288,21 @@ def evaluate_fen(fen: str, engine: Optional["StockfishEngine"] = None) -> EvalRe
 def _evaluate_fen_core(fen: str, engine: "StockfishEngine") -> EvalResult:
     """Run the actual Stockfish evaluation. Assumes ``engine`` is ready."""
     try:
-        # Set position
+        # Parse and validate the FEN with python-chess first. This also lets us
+        # detect terminal positions (checkmate / stalemate / draw-by-rule)
+        # explicitly rather than inferring them from a falsy get_best_move().
+        # Order matters: the stockfish package's is_fen_valid() rejects some
+        # terminal positions (e.g. checkmate), so it must run *after* the
+        # terminal check or the biggest blunders get misreported as invalid.
+        try:
+            board = chess.Board(fen)
+        except ValueError as e:
+            raise StockfishError(f"Invalid FEN: {fen}") from e
+
+        if board.is_game_over():
+            return _terminal_eval_result(board)
+
+        # Non-terminal: let the engine do its own structural validation too.
         if not engine.is_fen_valid(fen):
             raise StockfishError(f"Invalid FEN: {fen}")
 
@@ -276,15 +320,17 @@ def _evaluate_fen_core(fen: str, engine: "StockfishEngine") -> EvalResult:
         # Get best move
         best_move = engine.get_best_move()
         if not best_move:
-            raise StockfishError("No legal moves available")
+            # Non-terminal position with no move means the engine itself
+            # failed -- surface it rather than pretending the game is over.
+            raise StockfishError("Engine returned no move for a non-terminal position")
 
         # Get evaluation
         evaluation = engine.get_evaluation()
 
         # Convert evaluation to pawns from side-to-move perspective
-        eval_pawns = _convert_eval_to_pawns(evaluation)
+        eval_pawns, mate_in = _convert_evaluation(evaluation)
 
-        return EvalResult(best_move_uci=best_move, eval=eval_pawns)
+        return EvalResult(best_move_uci=best_move, eval=eval_pawns, mate_in=mate_in)
 
     except (StockfishNotFoundError, StockfishError):
         raise
@@ -292,37 +338,101 @@ def _evaluate_fen_core(fen: str, engine: "StockfishEngine") -> EvalResult:
         raise StockfishError(f"Evaluation failed: {e}") from e
 
 
-# Arbitrary large value representing a decisive advantage (mate)
+# Arbitrary large value (in pawns) representing a decisive advantage (mate).
+# Distance-to-mate is preserved separately via EvalResult.mate_in.
 MATE_EVALUATION = 100.0
 
 
-def _convert_eval_to_pawns(evaluation: dict) -> float:
+def _convert_evaluation(evaluation: dict) -> tuple[float, Optional[int]]:
     """
-    Convert Stockfish evaluation to pawns.
+    Convert a Stockfish evaluation to (pawns, mate_in).
 
     Stockfish returns evaluation as either:
     - {"type": "cp", "value": centipawns} for normal positions
     - {"type": "mate", "value": moves_to_mate} for mate positions
 
-    Returns value in pawns from side-to-move perspective.
+    Returns:
+        (eval_pawns, mate_in) from the side-to-move perspective, where
+        eval_pawns is the ``MATE_EVALUATION`` sentinel for mates and mate_in is
+        the signed distance to mate (None for ordinary evals). This keeps the
+        centipawn channel backward-compatible while exposing mate distance so
+        callers no longer conflate "mate in 1" with "mate in 20".
     """
     eval_type = evaluation.get("type")
     value = evaluation.get("value", 0)
 
     if eval_type == "cp":
-        # Centipawns to pawns
-        return value / 100.0
+        return value / 100.0, None
     elif eval_type == "mate":
-        # Mate in N moves - use large value with sign
-        # Positive = side to move is winning, negative = losing
-        if value > 0:
-            return MATE_EVALUATION  # Winning
-        elif value < 0:
-            return -MATE_EVALUATION  # Losing
+        mate_in = int(value)
+        if mate_in > 0:
+            return MATE_EVALUATION, mate_in  # Side to move mates
+        elif mate_in < 0:
+            return -MATE_EVALUATION, mate_in  # Side to move gets mated
         else:
-            return 0.0
+            # value == 0 -> side to move is already checkmated
+            return -MATE_EVALUATION, 0
     else:
-        return 0.0
+        return 0.0, None
+
+
+def _convert_eval_to_pawns(evaluation: dict) -> float:
+    """Backward-compatible pawn-only view of :func:`_convert_evaluation`."""
+    return _convert_evaluation(evaluation)[0]
+
+
+def _terminal_eval_result(board: chess.Board) -> EvalResult:
+    """
+    Build an :class:`EvalResult` for a game-over position.
+
+    Checkmate is scored as a loss for the side to move (they have been mated);
+    stalemate and other draws-by-rule are scored as equal. There is no best
+    move in a terminal position, so ``best_move_uci`` is None.
+    """
+    if board.is_checkmate():
+        return EvalResult(
+            best_move_uci=None, eval=-MATE_EVALUATION, mate_in=0, is_terminal=True
+        )
+    # Stalemate, insufficient material, 75-move / fivefold, etc.
+    return EvalResult(best_move_uci=None, eval=0.0, mate_in=None, is_terminal=True)
+
+
+def get_top_moves(fen: str, engine: "StockfishEngine", k: int = 3) -> list["MoveEval"]:
+    """
+    Return the engine's top-K candidate moves (multi-PV) for a position.
+
+    Used to build an acceptance set of near-equivalent best moves so a puzzle
+    solver is not marked wrong for choosing a move that is just as good as the
+    single stored best move.
+
+    Args:
+        fen: FEN string to analyze (must be a non-terminal position).
+        engine: An initialized Stockfish engine instance.
+        k: Number of principal variations to request.
+
+    Returns:
+        A list of MoveEval sorted best-first (as returned by Stockfish), each
+        with eval in pawns and mate distance from the side-to-move perspective.
+        Empty if the engine returns nothing (e.g. terminal position).
+    """
+    engine.set_fen_position(fen)
+    engine.set_depth(get_search_depth())
+
+    raw = engine.get_top_moves(k) or []
+    results: list[MoveEval] = []
+    for entry in raw:
+        uci = entry.get("Move")
+        if not uci:
+            continue
+        mate = entry.get("Mate")
+        if mate is not None:
+            mate_in = int(mate)
+            ev = MATE_EVALUATION if mate_in > 0 else -MATE_EVALUATION
+            results.append(MoveEval(uci=uci, eval=ev, mate_in=mate_in))
+        else:
+            cp = entry.get("Centipawn") or 0
+            results.append(MoveEval(uci=uci, eval=cp / 100.0, mate_in=None))
+    return results
 
 
 def is_stockfish_available() -> bool:
@@ -422,6 +532,11 @@ def get_or_compute_eval(
 
     logger.debug(f"Cache miss for FEN: {fen[:50]}...")
     result = evaluate_fen(fen, engine=engine)
+
+    # Terminal positions have no best move and are cheap to recompute; skip the
+    # cache (best_move_uci is NOT NULL) and return them directly.
+    if result.best_move_uci is None:
+        return result
 
     # Store in cache
     try:

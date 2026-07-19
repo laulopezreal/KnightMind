@@ -12,9 +12,18 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from services.api.db import Base
-from services.api.engine import EvalResult, StockfishEngineDeadError
+from services.api.engine import (
+    EvalResult,
+    MoveEval,
+    StockfishEngineDeadError,
+    StockfishError,
+)
 from services.api.models import Game
-from services.api.puzzles.generator import _is_user_move, generate_puzzles
+from services.api.puzzles.generator import (
+    GenerationStatus,
+    _is_user_move,
+    generate_puzzles,
+)
 from services.api.storage.puzzle_repository import PuzzleRepository
 
 
@@ -245,6 +254,235 @@ def test_generate_puzzles_with_mocked_engine(mock_create_engine, temp_storage):
     assert result.generated == 0
     assert result.skipped == 0
     assert result.analyzed_positions == 0
+
+
+# ---------------------------------------------------------------------------
+# AUDIT GATE 3 reproduction tests (chess/puzzle correctness to SOTA)
+# ---------------------------------------------------------------------------
+
+# White is winning; playing Qf7 stalemates black, throwing away the win.
+# The after-position is terminal, so the pre-fix code called the engine on a
+# game-over FEN, StockfishError was raised and swallowed, and this glaring
+# blunder produced no puzzle. FEN header lets us reproduce it in one ply.
+_STALEMATE_TRAP_FEN = "7k/8/6K1/8/8/8/8/5Q2 w - - 0 1"
+_STALEMATE_TRAP_PGN = f"""[Event "Stalemate trap"]
+[White "testuser"]
+[Black "opponent"]
+[FEN "{_STALEMATE_TRAP_FEN}"]
+[SetUp "1"]
+
+1. Qf7 *"""
+
+
+@patch("services.api.puzzles.generator.get_top_moves")
+@patch("services.api.puzzles.generator.get_ply_range")
+@patch("services.api.puzzles.generator.create_engine")
+def test_walking_into_terminal_is_captured_not_dropped(
+    mock_create_engine, mock_ply, mock_top, temp_storage
+):
+    """A move that ends the game as a blunder (stalemating a won position)
+    must become a puzzle. Before the terminal-detection fix the engine raised
+    on the game-over FEN and the position was silently dropped."""
+    db = temp_storage
+    mock_create_engine.return_value = Mock()
+    mock_ply.return_value = (0, 100)
+    mock_top.return_value = []  # acceptance-set lookup irrelevant here
+    _store_game(db, _STALEMATE_TRAP_PGN)
+
+    def eval_side_effect(fen, engine=None, cache_stats=None):
+        if fen == _STALEMATE_TRAP_FEN:
+            return EvalResult(best_move_uci="f1f6", eval=9.0)  # winning before
+        # Any other FEN here is the terminal after-position; the real engine
+        # raises on it, mimicking the pre-fix drop path.
+        raise StockfishError("No legal moves available")
+
+    with patch(
+        "services.api.puzzles.generator.get_or_compute_eval",
+        side_effect=eval_side_effect,
+    ):
+        result = generate_puzzles("testuser", max_games=1, max_puzzles=10)
+
+    assert result.analyzed_positions == 1
+    assert result.generated == 1  # was 0 before the fix
+    assert result.failed_positions == 0
+    assert result.status == GenerationStatus.SUCCESS.value
+
+    puzzles = PuzzleRepository(db).get_all_puzzles("testuser")
+    assert len(puzzles) == 1
+    # Won game (eval_before +9) thrown away to a draw (eval_after 0).
+    assert puzzles[0].swing >= 2.0
+
+
+@patch("services.api.puzzles.generator.get_ply_range")
+@patch("services.api.puzzles.generator.create_engine")
+def test_engine_unavailable_is_distinct_from_no_mistakes(
+    mock_create_engine, mock_ply, temp_storage
+):
+    """Engine-unavailable and no-blunders-found used to be the identical
+    GenerationResult(0, 0, 0). They must now carry distinct statuses so a job
+    does not report engine failure as a successful zero-puzzle run."""
+    db = temp_storage
+    mock_ply.return_value = (0, 100)
+    pgn = """[Event "Test Game"]
+[White "testuser"]
+[Black "opponent"]
+
+1. e4 e5 2. Nf3 Nc6 3. Bc4 Bc5 4. c3 Nf6 5. d3 d6"""
+    _store_game(db, pgn)
+
+    # 1. Engine cannot be created at all.
+    mock_create_engine.side_effect = RuntimeError("Engine unavailable")
+    unavailable = generate_puzzles("testuser", max_games=1, max_puzzles=10)
+
+    # 2. Engine fine, but no move swings past the threshold.
+    mock_create_engine.side_effect = None
+    mock_create_engine.return_value = Mock()
+    with patch(
+        "services.api.puzzles.generator.get_or_compute_eval",
+        return_value=EvalResult(best_move_uci="e2e4", eval=0.1),
+    ):
+        no_mistakes = generate_puzzles("testuser", max_games=1, max_puzzles=10)
+
+    assert unavailable.status == GenerationStatus.ENGINE_UNAVAILABLE.value
+    assert no_mistakes.status == GenerationStatus.NO_MISTAKES.value
+    assert unavailable.status != no_mistakes.status
+    # Both still report zero puzzles, but they are no longer indistinguishable.
+    assert unavailable.generated == no_mistakes.generated == 0
+    assert no_mistakes.analyzed_positions > 0
+    assert unavailable.analyzed_positions == 0
+
+
+@patch("services.api.puzzles.generator.get_top_moves")
+@patch("services.api.puzzles.generator.get_ply_range")
+@patch("services.api.puzzles.generator.create_engine")
+def test_save_error_skips_one_puzzle_not_whole_batch(
+    mock_create_engine, mock_ply, mock_top, temp_storage
+):
+    """A DB error while saving one puzzle must skip that puzzle and let the
+    batch continue, rather than aborting the entire generation run."""
+    from sqlalchemy.exc import OperationalError
+
+    db = temp_storage
+    mock_create_engine.return_value = Mock()
+    mock_ply.return_value = (0, 100)
+    mock_top.return_value = []
+    pgn = """[Event "Test Game"]
+[White "testuser"]
+[Black "opponent"]
+
+1. e4 e5 2. Nf3 Nc6 3. Bc4 Bc5 4. c3 Nf6"""
+    _store_game(db, pgn)
+
+    real_save = PuzzleRepository.save_puzzle
+    save_calls = {"n": 0}
+
+    def flaky_save(self, *args, **kwargs):
+        save_calls["n"] += 1
+        if save_calls["n"] == 1:
+            raise OperationalError("save failed", None, Exception("db"))
+        return real_save(self, *args, **kwargs)
+
+    with (
+        patch("services.api.puzzles.generator.get_or_compute_eval") as mock_eval,
+        patch.object(PuzzleRepository, "save_puzzle", flaky_save),
+    ):
+        mock_eval.side_effect = [
+            EvalResult(best_move_uci="d2d4", eval=2.0),
+            EvalResult(best_move_uci="e7e5", eval=2.0),
+        ] * 20
+
+        # Must not raise despite the first save failing.
+        result = generate_puzzles("testuser", max_games=1, max_puzzles=10)
+
+    assert save_calls["n"] >= 2  # kept going past the failed save
+    assert result.generated >= 1  # later puzzles were still saved
+
+
+@patch("services.api.puzzles.generator.get_ply_range")
+@patch("services.api.puzzles.generator.create_engine")
+def test_partial_failure_is_not_reported_as_no_mistakes(
+    mock_create_engine, mock_ply, temp_storage
+):
+    """When some positions fail to evaluate but none of the survivors were
+    blunders, the run is degraded (PARTIAL), not a clean NO_MISTAKES."""
+    db = temp_storage
+    mock_create_engine.return_value = Mock()
+    mock_ply.return_value = (0, 100)
+    pgn = """[Event "Test Game"]
+[White "testuser"]
+[Black "opponent"]
+
+1. e4 e5 2. Nf3 Nc6 3. Bc4 Bc5 4. c3 Nf6 5. d3 d6"""
+    _store_game(db, pgn)
+
+    calls = {"n": 0}
+
+    def eval_side_effect(fen, engine=None, cache_stats=None):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            # First analyzed position fails to evaluate.
+            raise StockfishError("boom")
+        # Everything else evaluates flat -> no blunder.
+        return EvalResult(best_move_uci="e2e4", eval=0.1)
+
+    with patch(
+        "services.api.puzzles.generator.get_or_compute_eval",
+        side_effect=eval_side_effect,
+    ):
+        result = generate_puzzles("testuser", max_games=1, max_puzzles=10)
+
+    assert result.analyzed_positions > 1
+    assert 0 < result.failed_positions < result.analyzed_positions
+    assert result.generated == 0
+    assert result.status == GenerationStatus.PARTIAL.value  # not NO_MISTAKES
+
+
+@patch("services.api.puzzles.generator.get_top_moves")
+@patch("services.api.puzzles.generator.get_ply_range")
+@patch("services.api.puzzles.generator.create_engine")
+def test_equivalent_best_moves_are_all_accepted(
+    mock_create_engine, mock_ply, mock_top, temp_storage
+):
+    """When two moves are within the equivalence tolerance of the best, both
+    must be stored in the acceptance set. Previously only a single best move
+    was kept, so an equally-good alternative was judged wrong."""
+    db = temp_storage
+    mock_create_engine.return_value = Mock()
+    mock_ply.return_value = (0, 100)
+    # d1d5 and d1d8 are equal (within 0.3 pawns); a2a3 is not close.
+    mock_top.return_value = [
+        MoveEval(uci="d1d5", eval=9.0),
+        MoveEval(uci="d1d8", eval=8.9),
+        MoveEval(uci="a2a3", eval=0.1),
+    ]
+
+    fen = "3q3k/6pp/8/8/8/8/PP4PP/3Q2K1 w - - 0 1"
+    pgn = f"""[Event "Equiv"]
+[White "testuser"]
+[Black "opponent"]
+[FEN "{fen}"]
+[SetUp "1"]
+
+1. a3 *"""
+    _store_game(db, pgn)
+
+    def eval_side_effect(f, engine=None, cache_stats=None):
+        if f == fen:
+            return EvalResult(best_move_uci="d1d5", eval=9.0)  # winning capture avail
+        return EvalResult(best_move_uci="a2a4", eval=0.0)  # after the weak a3
+
+    with patch(
+        "services.api.puzzles.generator.get_or_compute_eval",
+        side_effect=eval_side_effect,
+    ):
+        result = generate_puzzles("testuser", max_games=1, max_puzzles=10)
+
+    assert result.generated == 1
+    puzzle = PuzzleRepository(db).get_all_puzzles("testuser")[0]
+    accepted = set(puzzle.accept_moves_uci.split(","))
+    assert "d1d5" in accepted
+    assert "d1d8" in accepted  # the equally-good alternative is accepted
+    assert "a2a3" not in accepted  # clearly-worse move is not
 
 
 @patch("services.api.puzzles.generator.create_engine")

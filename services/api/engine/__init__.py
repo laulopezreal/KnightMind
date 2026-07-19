@@ -5,7 +5,9 @@ Provides position evaluation using Stockfish chess engine.
 """
 
 from .stockfish import (
+    MATE_EVALUATION,
     EvalResult,
+    MoveEval,
     StockfishEngineDeadError,
     StockfishError,
     StockfishNotFoundError,
@@ -13,6 +15,7 @@ from .stockfish import (
     create_engine,
     evaluate_fen,
     get_or_compute_eval,
+    get_top_moves,
     is_stockfish_available,
 )
 
@@ -35,11 +38,13 @@ def is_engine_available() -> tuple[bool, str]:
 
 
 __all__ = [
+    "MATE_EVALUATION",
     "evaluate_position",
     "is_engine_available",
     "EngineNotAvailableError",
     "InvalidFenError",
     "EvalResult",
+    "MoveEval",
     "StockfishNotFoundError",
     "StockfishError",
     "StockfishEngineDeadError",
@@ -48,4 +53,5 @@ __all__ = [
     "create_engine",
     "close_engine",
     "get_or_compute_eval",
+    "get_top_moves",
 ]

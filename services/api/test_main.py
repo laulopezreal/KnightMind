@@ -841,6 +841,28 @@ def test_engine_eval_rejects_when_at_capacity():
     assert "capacity" in response.json()["detail"].lower()
 
 
+@patch("services.api.main.get_or_compute_eval")
+def test_engine_eval_terminal_position_is_not_500(mock_eval):
+    """A terminal FEN yields an EvalResult with best_move_uci=None. The
+    response model must accept that (200 terminal shape) rather than raising a
+    Pydantic ValidationError that escapes the handlers as a 500."""
+    from services.api.engine import EvalResult
+
+    mock_eval.return_value = EvalResult(
+        best_move_uci=None, eval=-100.0, mate_in=0, is_terminal=True
+    )
+    response = client.post(
+        "/engine/eval",
+        json={"fen": "rnb1kbnr/pppp1ppp/8/4p3/6Pq/5P2/PPPPP2P/RNBQKBNR w KQkq - 1 3"},
+    )
+    assert response.status_code != 500
+    assert response.status_code == 200
+    body = response.json()
+    assert body["is_terminal"] is True
+    assert body["best_move_uci"] is None
+    assert body["mate_in"] == 0
+
+
 # --- Tricky Puzzles Endpoint Tests ---
 
 

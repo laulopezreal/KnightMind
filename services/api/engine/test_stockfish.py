@@ -11,14 +11,17 @@ from . import stockfish as sf_module
 from .stockfish import (
     MATE_EVALUATION,
     EvalResult,
+    MoveEval,
     StockfishEngineDeadError,
     StockfishError,
     StockfishNotFoundError,
     _convert_eval_to_pawns,
+    _convert_evaluation,
     close_engine,
     evaluate_fen,
     get_analysis_params,
     get_stockfish_path,
+    get_top_moves,
     is_stockfish_available,
 )
 
@@ -55,6 +58,91 @@ class TestConvertEvalToPawns:
         """Unknown evaluation type returns 0."""
         result = _convert_eval_to_pawns({"type": "unknown", "value": 100})
         assert result == 0.0
+
+
+class TestMateDistanceSemantics:
+    """Mate scores must preserve distance-to-mate, not just a clamped sentinel."""
+
+    def test_mate_in_one_and_eight_are_distinguishable(self):
+        """mate_in must differ for mate-in-1 vs mate-in-8 even though the pawn
+        sentinel is identical (the pre-fix bug clamped both to +100)."""
+        eval_1, mate_1 = _convert_evaluation({"type": "mate", "value": 1})
+        eval_8, mate_8 = _convert_evaluation({"type": "mate", "value": 8})
+
+        assert eval_1 == eval_8 == MATE_EVALUATION  # sentinel unchanged
+        assert mate_1 == 1
+        assert mate_8 == 8
+        assert mate_1 != mate_8  # distance preserved
+
+    def test_getting_mated_carries_negative_distance(self):
+        eval_pawns, mate_in = _convert_evaluation({"type": "mate", "value": -3})
+        assert eval_pawns == -MATE_EVALUATION
+        assert mate_in == -3
+
+    def test_cp_has_no_mate_distance(self):
+        eval_pawns, mate_in = _convert_evaluation({"type": "cp", "value": 250})
+        assert eval_pawns == 2.5
+        assert mate_in is None
+
+
+class TestTerminalPositions:
+    """Terminal positions must be reported explicitly, not raised & swallowed."""
+
+    @patch("services.api.engine.stockfish.StockfishEngine")
+    def test_checkmate_position_returns_terminal_result(self, mock_engine_class):
+        """A checkmated side-to-move yields a distinct terminal EvalResult
+        instead of raising StockfishError (which callers dropped)."""
+        mock_engine = MagicMock()
+        mock_engine.is_fen_valid.return_value = True
+        # Fool's-mate final position, white (side to move) is checkmated.
+        fen = "rnb1kbnr/pppp1ppp/8/4p3/6Pq/5P2/PPPPP2P/RNBQKBNR w KQkq - 1 3"
+        mock_engine_class.return_value = mock_engine
+
+        result = evaluate_fen(fen)
+
+        assert result.is_terminal is True
+        assert result.best_move_uci is None
+        assert result.eval == -MATE_EVALUATION
+        assert result.mate_in == 0
+        # Engine should never have been asked for a move on a terminal position.
+        mock_engine.get_best_move.assert_not_called()
+
+    @patch("services.api.engine.stockfish.StockfishEngine")
+    def test_stalemate_position_returns_draw_terminal_result(self, mock_engine_class):
+        """A stalemated position is a draw (0.0), reported as terminal."""
+        mock_engine = MagicMock()
+        mock_engine.is_fen_valid.return_value = True
+        # Black to move, stalemated (classic K+Q vs K stalemate).
+        fen = "7k/5Q2/6K1/8/8/8/8/8 b - - 0 1"
+        mock_engine_class.return_value = mock_engine
+
+        result = evaluate_fen(fen)
+
+        assert result.is_terminal is True
+        assert result.best_move_uci is None
+        assert result.eval == 0.0
+        mock_engine.get_best_move.assert_not_called()
+
+
+class TestGetTopMoves:
+    """Multi-PV acceptance-set support."""
+
+    @patch("services.api.engine.stockfish.StockfishEngine")
+    def test_returns_ranked_move_evals(self, mock_engine_class):
+        mock_engine = MagicMock()
+        mock_engine.get_top_moves.return_value = [
+            {"Move": "d2d4", "Centipawn": 30, "Mate": None},
+            {"Move": "e2e4", "Centipawn": 25, "Mate": None},
+            {"Move": "g1f3", "Centipawn": None, "Mate": 5},
+        ]
+        mock_engine_class.return_value = mock_engine
+
+        moves = get_top_moves("startpos-fen", engine=mock_engine, k=3)
+
+        assert [m.uci for m in moves] == ["d2d4", "e2e4", "g1f3"]
+        assert moves[0] == MoveEval(uci="d2d4", eval=0.3, mate_in=None)
+        assert moves[2].mate_in == 5
+        assert moves[2].eval == MATE_EVALUATION
 
 
 class TestGetStockfishPath:
