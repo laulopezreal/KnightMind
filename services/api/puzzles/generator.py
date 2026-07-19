@@ -14,7 +14,12 @@ import chess
 import chess.pgn
 
 from services.api.db import SessionLocal
-from services.api.engine import close_engine, create_engine, get_or_compute_eval
+from services.api.engine import (
+    StockfishEngineDeadError,
+    close_engine,
+    create_engine,
+    get_or_compute_eval,
+)
 from services.api.storage import GameRepository, PuzzleRepository
 
 logger = logging.getLogger(__name__)
@@ -243,6 +248,25 @@ def generate_puzzles(
                             else:
                                 skipped += 1
 
+                    except StockfishEngineDeadError:
+                        # A position timed out and its subprocess was killed.
+                        # The shared batch engine is now dead, so recreate it
+                        # before continuing; otherwise every remaining position
+                        # would run against a corpse (each stalling until the
+                        # timeout fires again).
+                        logger.warning(
+                            "Stockfish engine died mid-batch (timeout); "
+                            "recreating before continuing"
+                        )
+                        try:
+                            engine = create_engine()
+                        except Exception:
+                            logger.error(
+                                "Failed to recreate Stockfish engine; "
+                                "aborting remaining puzzle generation"
+                            )
+                            break
+                        continue
                     except Exception as e:
                         # Skip positions that fail to evaluate
                         # (e.g., checkmate, stalemate, engine errors)

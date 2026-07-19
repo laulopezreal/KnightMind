@@ -40,6 +40,19 @@ class StockfishError(Exception):
     pass
 
 
+class StockfishEngineDeadError(StockfishError):
+    """
+    Raised when an evaluation timed out and its engine subprocess was killed.
+
+    Subclasses StockfishError so existing broad handlers still catch it, but
+    lets a caller that owns a long-lived engine (e.g. the puzzle-generator
+    batch) detect that the shared subprocess is now dead and recreate it
+    instead of running every subsequent eval against a corpse.
+    """
+
+    pass
+
+
 @dataclass
 class EvalResult:
     """Result of a position evaluation."""
@@ -181,14 +194,23 @@ def _run_with_timeout(
     """
     Run ``func`` with a wall-clock timeout so a wedged engine call cannot block
     forever. On timeout the underlying subprocess is killed (which unblocks the
-    worker thread) and a StockfishError is raised.
+    worker thread) and a StockfishEngineDeadError is raised so the caller knows
+    the engine is dead.
+
+    Note: future.result(timeout=...) cannot cancel an already-running task, so
+    the worker thread only unwinds once the killed subprocess makes its pending
+    read return. If proc.kill() ever fails to unblock the read, that worker can
+    linger; _EVAL_EXECUTOR is sized with headroom above the concurrency bound so
+    a stray lingering worker does not starve healthy evaluations.
     """
     future = _EVAL_EXECUTOR.submit(func)
     try:
         return future.result(timeout=timeout_s)
     except FutureTimeoutError as e:
         _kill_engine_process(engine)
-        raise StockfishError(f"Engine evaluation timed out after {timeout_s}s") from e
+        raise StockfishEngineDeadError(
+            f"Engine evaluation timed out after {timeout_s}s"
+        ) from e
 
 
 def evaluate_fen(fen: str, engine: Optional["StockfishEngine"] = None) -> EvalResult:

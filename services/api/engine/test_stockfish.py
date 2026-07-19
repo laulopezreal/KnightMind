@@ -11,6 +11,7 @@ from . import stockfish as sf_module
 from .stockfish import (
     MATE_EVALUATION,
     EvalResult,
+    StockfishEngineDeadError,
     StockfishError,
     StockfishNotFoundError,
     _convert_eval_to_pawns,
@@ -240,7 +241,9 @@ class TestEngineTimeout:
         engine.get_best_move.side_effect = lambda: time.sleep(5)
         mock_engine_class.return_value = engine
 
-        with pytest.raises(StockfishError, match="timed out"):
+        # Timeout signals engine death (subclass of StockfishError) so a batch
+        # caller can recreate the shared engine.
+        with pytest.raises(StockfishEngineDeadError, match="timed out"):
             evaluate_fen(_START_FEN)
 
         # The wedged subprocess is killed so the worker thread can unblock.
