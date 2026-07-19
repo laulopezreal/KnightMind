@@ -78,7 +78,8 @@ describe('AccessibleChessboard keyboard interaction', () => {
 
         // No move yet — a promotion choice is required first.
         expect(onKeyboardMove).not.toHaveBeenCalled();
-        const chooser = screen.getByRole('group', { name: /promote pawn to/i });
+        const chooser = screen.getByRole('dialog', { name: /promote pawn to/i });
+        expect(chooser).toHaveAttribute('aria-modal', 'true');
         fireEvent.click(within(chooser).getByRole('button', { name: 'Knight' }));
 
         expect(onKeyboardMove).toHaveBeenCalledWith({
@@ -86,6 +87,38 @@ describe('AccessibleChessboard keyboard interaction', () => {
             targetSquare: 'a8',
             promotion: 'n',
         });
+    });
+
+    it('traps focus within the promotion chooser (Tab cycles, does not escape)', () => {
+        const onKeyboardMove = vi.fn().mockReturnValue(true);
+        render(
+            <AccessibleChessboard
+                onKeyboardMove={onKeyboardMove}
+                options={{ position: '8/P7/8/8/8/8/8/8 w - - 0 1' }}
+            />,
+        );
+
+        const a7 = screen.getByRole('gridcell', { name: 'a7, white pawn' });
+        act(() => a7.focus());
+        fireEvent.keyDown(a7, { key: 'Enter' });
+        const a8 = screen.getByRole('gridcell', { name: 'a8, empty' });
+        act(() => a8.focus());
+        fireEvent.keyDown(a8, { key: 'Enter' });
+
+        const chooser = screen.getByRole('dialog', { name: /promote pawn to/i });
+        const first = within(chooser).getByRole('button', { name: 'Queen' });
+        const last = within(chooser).getByRole('button', { name: 'Knight' });
+
+        // Focus is moved into the chooser (first option) when it opens.
+        expect(first).toHaveFocus();
+
+        // Shift+Tab from the first option wraps to the last — focus stays inside.
+        fireEvent.keyDown(first, { key: 'Tab', shiftKey: true });
+        expect(last).toHaveFocus();
+
+        // Tab from the last option wraps back to the first — never escapes.
+        fireEvent.keyDown(last, { key: 'Tab' });
+        expect(first).toHaveFocus();
     });
 
     it('falls back to onPieceDrop (auto-queen) when no onKeyboardMove is provided', () => {
@@ -102,7 +135,7 @@ describe('AccessibleChessboard keyboard interaction', () => {
         act(() => a8.focus());
         fireEvent.keyDown(a8, { key: 'Enter' });
         // No chooser (fallback can't carry a promotion); move goes straight through.
-        expect(screen.queryByRole('group', { name: /promote/i })).not.toBeInTheDocument();
+        expect(screen.queryByRole('dialog', { name: /promote/i })).not.toBeInTheDocument();
         expect(onPieceDrop).toHaveBeenCalledWith(
             expect.objectContaining({ sourceSquare: 'a7', targetSquare: 'a8' }),
         );

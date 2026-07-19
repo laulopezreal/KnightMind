@@ -108,6 +108,7 @@ export function AccessibleChessboard({ onKeyboardMove, ...props }: Props) {
 
     const cellRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
     const promotionRef = useRef<HTMLButtonElement>(null);
+    const promotionDialogRef = useRef<HTMLDivElement>(null);
 
     // Keep the visual draggables out of the tab order so the aria-hidden board
     // wrapper has no focusable descendants (which would be an a11y violation).
@@ -322,13 +323,41 @@ export function AccessibleChessboard({ onKeyboardMove, ...props }: Props) {
 
             {pendingPromotion && (
                 <div
-                    role="group"
+                    ref={promotionDialogRef}
+                    role="dialog"
+                    aria-modal="true"
                     aria-label="Promote pawn to"
                     className="absolute inset-x-0 bottom-0 z-10 flex flex-wrap justify-center gap-2 bg-bg-primary/95 border-t border-primary/20 p-3 pointer-events-auto"
                     onKeyDown={(e) => {
                         if (e.key === 'Escape') {
                             e.preventDefault();
                             cancelPromotion();
+                            return;
+                        }
+                        // A promotion choice is required, so trap focus among the
+                        // Q/R/B/N options: wrap at the ends and pull stray focus
+                        // back in. (focus-trap-react isn't usable under jsdom, so
+                        // this is a minimal, testable manual cycle.)
+                        if (e.key === 'Tab') {
+                            const dialog = promotionDialogRef.current;
+                            if (!dialog) return;
+                            const focusables = Array.from(
+                                dialog.querySelectorAll<HTMLElement>('button'),
+                            );
+                            if (focusables.length === 0) return;
+                            const first = focusables[0];
+                            const last = focusables[focusables.length - 1];
+                            const active = document.activeElement;
+                            const inside = active instanceof Node && dialog.contains(active);
+                            if (e.shiftKey) {
+                                if (!inside || active === first) {
+                                    e.preventDefault();
+                                    last.focus();
+                                }
+                            } else if (!inside || active === last) {
+                                e.preventDefault();
+                                first.focus();
+                            }
                         }
                     }}
                 >
