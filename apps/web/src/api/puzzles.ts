@@ -217,7 +217,8 @@ export async function reviewPuzzle(
     username: string,
     result: 'pass' | 'fail',
     timeSpentMs?: number,
-    sessionId?: string
+    sessionId?: string,
+    clientReviewId?: string
 ): Promise<ReviewPuzzleResponse> {
     return await request<ReviewPuzzleResponse>(`/puzzles/${puzzleId}/review`, {
         method: 'POST',
@@ -227,6 +228,9 @@ export async function reviewPuzzle(
             result,
             time_spent_ms: timeSpentMs,
             session_id: sessionId,
+            // Idempotency key: lets the server dedupe a retried/double-submitted
+            // review so a double-click or network retry can't double-count.
+            client_review_id: clientReviewId,
         }),
     });
 }

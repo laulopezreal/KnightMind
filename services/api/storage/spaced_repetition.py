@@ -88,6 +88,7 @@ def insert_puzzle_review(
     time_spent_ms: int | None = None,
     reviewed_at: datetime | None = None,
     session_id: str | None = None,
+    client_review_id: str | None = None,
 ) -> PuzzleReview:
     """
     Record a puzzle review in the database.
@@ -100,6 +101,9 @@ def insert_puzzle_review(
         time_spent_ms: Time spent on the puzzle in milliseconds
         reviewed_at: Timestamp of the review (defaults to current time)
         session_id: Optional training session ID
+        client_review_id: Optional client-supplied idempotency key. When set, a
+            unique index over (puzzle_id, username, session_id, client_review_id)
+            prevents a retried/double-submitted review from being recorded twice.
 
     Returns:
         The created PuzzleReview object
@@ -122,6 +126,7 @@ def insert_puzzle_review(
         result=result_val,
         time_spent_ms=time_spent_ms,
         session_id=session_id,
+        client_review_id=client_review_id,
     )
     db.add(review)
     db.flush()

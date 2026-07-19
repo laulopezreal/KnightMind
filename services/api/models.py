@@ -124,7 +124,22 @@ class PuzzleStats(Base):
 
 class PuzzleReview(Base):
     __tablename__ = "puzzle_reviews"
-    __table_args__ = {"extend_existing": True}
+    __table_args__ = (
+        # Idempotency: a client-supplied review key must be unique per
+        # (puzzle, user, session) so a retried/double-submitted POST cannot be
+        # recorded (and re-scheduled/re-counted) twice. Rows with a NULL
+        # client_review_id are exempt (NULLs are distinct in a unique index),
+        # preserving the legacy no-key behaviour.
+        Index(
+            "uq_puzzle_reviews_client_key",
+            "puzzle_id",
+            "username",
+            "session_id",
+            "client_review_id",
+            unique=True,
+        ),
+        {"extend_existing": True},
+    )
 
     id: Mapped[str] = mapped_column(
         String, primary_key=True, default=lambda: str(uuid.uuid4())
@@ -137,6 +152,7 @@ class PuzzleReview(Base):
     result: Mapped[PuzzleResult] = mapped_column(String)
     time_spent_ms: Mapped[int] = mapped_column(Integer, nullable=True)
     session_id: Mapped[str] = mapped_column(String, nullable=True, index=True)
+    client_review_id: Mapped[str] = mapped_column(String, nullable=True)
 
 
 class TrainingSession(Base):
