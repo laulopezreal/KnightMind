@@ -13,6 +13,7 @@ from enum import Enum
 
 import chess
 import chess.pgn
+from sqlalchemy.exc import SQLAlchemyError
 
 from services.api.db import SessionLocal
 from services.api.engine import (
@@ -67,7 +68,8 @@ class GenerationStatus(str, Enum):
         - NO_MISTAKES: engine ran fine, no qualifying blunders were found.
         - ENGINE_UNAVAILABLE: the engine could not be created at all.
         - ALL_FAILED: every analyzed position failed to evaluate.
-        - PARTIAL: some puzzles produced, but some positions failed.
+        - PARTIAL: some positions failed to evaluate (degraded run), whether or
+          not any puzzles were produced.
     """
 
     SUCCESS = "success"
@@ -385,19 +387,29 @@ def generate_puzzles(
                         accept_moves = _build_accept_set(
                             fen_before, engine, best_move_uci
                         )
-                        is_new, _ = puzzle_repository.save_puzzle(
-                            username=username,
-                            source_game_id=game_meta.game_id,
-                            ply=ply,
-                            fen=fen_before,
-                            side_to_move=side_to_move,
-                            played_move_uci=played_move_uci,
-                            best_move_uci=best_move_uci,
-                            eval_before=eval_before,
-                            eval_after=-eval_after,  # From original player's POV
-                            swing=swing,
-                            accept_moves_uci=",".join(accept_moves),
-                        )
+                        # A DB error here must skip this one puzzle, not abort
+                        # the whole batch (save_puzzle handles duplicate rows).
+                        try:
+                            is_new, _ = puzzle_repository.save_puzzle(
+                                username=username,
+                                source_game_id=game_meta.game_id,
+                                ply=ply,
+                                fen=fen_before,
+                                side_to_move=side_to_move,
+                                played_move_uci=played_move_uci,
+                                best_move_uci=best_move_uci,
+                                eval_before=eval_before,
+                                eval_after=-eval_after,  # From original player's POV
+                                swing=swing,
+                                accept_moves_uci=",".join(accept_moves),
+                            )
+                        except SQLAlchemyError as e:
+                            logger.warning(
+                                "Failed to save puzzle for FEN %s",
+                                fen_before,
+                                exc_info=e,
+                            )
+                            continue
 
                         if is_new:
                             generated += 1
@@ -406,10 +418,14 @@ def generate_puzzles(
                         else:
                             skipped += 1
 
-            # Derive a machine-readable outcome from the counters.
+            # Derive a machine-readable outcome from the counters. Any
+            # evaluation failure is surfaced (ALL_FAILED / PARTIAL) so a
+            # degraded run is never silently reported as a clean NO_MISTAKES.
             if analyzed_positions > 0 and failed_positions == analyzed_positions:
                 status = GenerationStatus.ALL_FAILED
-            elif failed_positions > 0 and generated > 0:
+            elif failed_positions > 0:
+                # Some positions failed (whether or not any puzzles were
+                # produced); the run is degraded, not a clean pass.
                 status = GenerationStatus.PARTIAL
             elif generated > 0:
                 status = GenerationStatus.SUCCESS

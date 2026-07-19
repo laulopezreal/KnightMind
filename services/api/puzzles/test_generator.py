@@ -355,6 +355,91 @@ def test_engine_unavailable_is_distinct_from_no_mistakes(
 @patch("services.api.puzzles.generator.get_top_moves")
 @patch("services.api.puzzles.generator.get_ply_range")
 @patch("services.api.puzzles.generator.create_engine")
+def test_save_error_skips_one_puzzle_not_whole_batch(
+    mock_create_engine, mock_ply, mock_top, temp_storage
+):
+    """A DB error while saving one puzzle must skip that puzzle and let the
+    batch continue, rather than aborting the entire generation run."""
+    from sqlalchemy.exc import OperationalError
+
+    db = temp_storage
+    mock_create_engine.return_value = Mock()
+    mock_ply.return_value = (0, 100)
+    mock_top.return_value = []
+    pgn = """[Event "Test Game"]
+[White "testuser"]
+[Black "opponent"]
+
+1. e4 e5 2. Nf3 Nc6 3. Bc4 Bc5 4. c3 Nf6"""
+    _store_game(db, pgn)
+
+    real_save = PuzzleRepository.save_puzzle
+    save_calls = {"n": 0}
+
+    def flaky_save(self, *args, **kwargs):
+        save_calls["n"] += 1
+        if save_calls["n"] == 1:
+            raise OperationalError("save failed", None, Exception("db"))
+        return real_save(self, *args, **kwargs)
+
+    with (
+        patch("services.api.puzzles.generator.get_or_compute_eval") as mock_eval,
+        patch.object(PuzzleRepository, "save_puzzle", flaky_save),
+    ):
+        mock_eval.side_effect = [
+            EvalResult(best_move_uci="d2d4", eval=2.0),
+            EvalResult(best_move_uci="e7e5", eval=2.0),
+        ] * 20
+
+        # Must not raise despite the first save failing.
+        result = generate_puzzles("testuser", max_games=1, max_puzzles=10)
+
+    assert save_calls["n"] >= 2  # kept going past the failed save
+    assert result.generated >= 1  # later puzzles were still saved
+
+
+@patch("services.api.puzzles.generator.get_ply_range")
+@patch("services.api.puzzles.generator.create_engine")
+def test_partial_failure_is_not_reported_as_no_mistakes(
+    mock_create_engine, mock_ply, temp_storage
+):
+    """When some positions fail to evaluate but none of the survivors were
+    blunders, the run is degraded (PARTIAL), not a clean NO_MISTAKES."""
+    db = temp_storage
+    mock_create_engine.return_value = Mock()
+    mock_ply.return_value = (0, 100)
+    pgn = """[Event "Test Game"]
+[White "testuser"]
+[Black "opponent"]
+
+1. e4 e5 2. Nf3 Nc6 3. Bc4 Bc5 4. c3 Nf6 5. d3 d6"""
+    _store_game(db, pgn)
+
+    calls = {"n": 0}
+
+    def eval_side_effect(fen, engine=None, cache_stats=None):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            # First analyzed position fails to evaluate.
+            raise StockfishError("boom")
+        # Everything else evaluates flat -> no blunder.
+        return EvalResult(best_move_uci="e2e4", eval=0.1)
+
+    with patch(
+        "services.api.puzzles.generator.get_or_compute_eval",
+        side_effect=eval_side_effect,
+    ):
+        result = generate_puzzles("testuser", max_games=1, max_puzzles=10)
+
+    assert result.analyzed_positions > 1
+    assert 0 < result.failed_positions < result.analyzed_positions
+    assert result.generated == 0
+    assert result.status == GenerationStatus.PARTIAL.value  # not NO_MISTAKES
+
+
+@patch("services.api.puzzles.generator.get_top_moves")
+@patch("services.api.puzzles.generator.get_ply_range")
+@patch("services.api.puzzles.generator.create_engine")
 def test_equivalent_best_moves_are_all_accepted(
     mock_create_engine, mock_ply, mock_top, temp_storage
 ):
