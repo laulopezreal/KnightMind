@@ -26,6 +26,10 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")
 
 import asyncio
 
+from services.api.analytics_confidence import (
+    MIN_GAMES_FOR_RATING_DRIVERS,
+    rating_confidence,
+)
 from services.api.auth import require_operator
 from services.api.db import SessionLocal, get_db
 from services.api.engine import (
@@ -1522,6 +1526,11 @@ class ExplainResponse(BaseModel):
     stats: DriverStats
     drivers: list[Driver]
     highlights: Highlights
+    # Canonical uncertainty signal (rated games in window). Drivers are
+    # descriptive, not causal; below MIN_GAMES_FOR_RATING_DRIVERS no directional
+    # driver is emitted and insufficient_data is True.
+    confidence: Literal["low", "medium", "high"]
+    insufficient_data: bool
 
 
 @app.get("/ratings/explain", response_model=ExplainResponse)
@@ -1729,10 +1738,30 @@ async def explain_rating_changes(
 
     avg_opp = int(total_opp_rating / opp_rating_count) if opp_rating_count > 0 else None
 
+    # Canonical uncertainty signal from the rated-game sample. Below the driver
+    # threshold we must not present a small delta as a confident, causal trend.
+    confidence = rating_confidence(opp_rating_count)
+    insufficient_data = opp_rating_count < MIN_GAMES_FOR_RATING_DRIVERS
+
     drivers: list[Driver] = []
     diff = actual_total_rated - expected_total
 
-    if diff > PERFORMANCE_DIFF_THRESHOLD:
+    if insufficient_data:
+        # Too few rated games to attribute drivers; stay descriptive + neutral.
+        if opp_rating_count > 0:
+            drivers.append(
+                Driver(
+                    text=(
+                        f"Only {opp_rating_count} rated "
+                        f"{time_control.lower()} game"
+                        f"{'s' if opp_rating_count != 1 else ''} in this window — "
+                        "not enough to explain rating changes confidently."
+                    ),
+                    severity="minor",
+                    direction="neutral",
+                )
+            )
+    elif diff > PERFORMANCE_DIFF_THRESHOLD:
         severity = (
             "major" if abs(diff) > 2.0 else "moderate" if abs(diff) > 1.0 else "minor"
         )
@@ -1755,49 +1784,51 @@ async def explain_rating_changes(
             )
         )
 
-    wins_vs_higher = sum(
-        1
-        for g in game_details
-        if g["opp_rating"]
-        and g["opp_rating"] >= reference_rating + RATING_DIFFERENCE_THRESHOLD
-        and g["actual"] == 1.0
-    )
-    if wins_vs_higher >= SIGNIFICANT_WINS_VS_HIGHER_THRESHOLD:
-        drivers.append(
-            Driver(
-                text=f"{wins_vs_higher} wins against higher-rated opponents likely offset losses.",
-                severity="moderate" if wins_vs_higher >= 4 else "minor",
-                direction="up",
-            )
+    # Attribution drivers below require a sufficient rated sample.
+    if not insufficient_data:
+        wins_vs_higher = sum(
+            1
+            for g in game_details
+            if g["opp_rating"]
+            and g["opp_rating"] >= reference_rating + RATING_DIFFERENCE_THRESHOLD
+            and g["actual"] == 1.0
         )
-
-    losses_vs_lower = sum(
-        1
-        for g in game_details
-        if g["opp_rating"]
-        and g["opp_rating"] <= reference_rating - RATING_DIFFERENCE_THRESHOLD
-        and g["actual"] == 0.0
-    )
-    if losses_vs_lower >= SIGNIFICANT_LOSSES_VS_LOWER_THRESHOLD:
-        drivers.append(
-            Driver(
-                text=f"{losses_vs_lower} losses against lower-rated opponents likely drove most of the drop.",
-                severity="moderate" if losses_vs_lower >= 4 else "minor",
-                direction="down",
-            )
-        )
-
-    if len(opp_ratings) >= 5:
-        variance = sum((x - avg_opp) ** 2 for x in opp_ratings) / len(opp_ratings)
-        std_dev = variance**0.5
-        if std_dev > OPPONENT_RATING_STD_DEV_THRESHOLD:
+        if wins_vs_higher >= SIGNIFICANT_WINS_VS_HIGHER_THRESHOLD:
             drivers.append(
                 Driver(
-                    text="Wide opponent rating range increased volatility.",
-                    severity="minor",
-                    direction="neutral",
+                    text=f"{wins_vs_higher} wins against higher-rated opponents likely offset losses.",
+                    severity="moderate" if wins_vs_higher >= 4 else "minor",
+                    direction="up",
                 )
             )
+
+        losses_vs_lower = sum(
+            1
+            for g in game_details
+            if g["opp_rating"]
+            and g["opp_rating"] <= reference_rating - RATING_DIFFERENCE_THRESHOLD
+            and g["actual"] == 0.0
+        )
+        if losses_vs_lower >= SIGNIFICANT_LOSSES_VS_LOWER_THRESHOLD:
+            drivers.append(
+                Driver(
+                    text=f"{losses_vs_lower} losses against lower-rated opponents likely drove most of the drop.",
+                    severity="moderate" if losses_vs_lower >= 4 else "minor",
+                    direction="down",
+                )
+            )
+
+        if len(opp_ratings) >= 5:
+            variance = sum((x - avg_opp) ** 2 for x in opp_ratings) / len(opp_ratings)
+            std_dev = variance**0.5
+            if std_dev > OPPONENT_RATING_STD_DEV_THRESHOLD:
+                drivers.append(
+                    Driver(
+                        text="Wide opponent rating range increased volatility.",
+                        severity="minor",
+                        direction="neutral",
+                    )
+                )
 
     # Sort drivers by severity (major first)
     severity_order = {"major": 0, "moderate": 1, "minor": 2}
@@ -1861,4 +1892,6 @@ async def explain_rating_changes(
         highlights=Highlights(
             best_surprises=best_surprises, worst_surprises=worst_surprises
         ),
+        confidence=confidence,
+        insufficient_data=insufficient_data,
     )
