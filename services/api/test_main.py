@@ -833,6 +833,14 @@ def test_engine_eval_unavailable(mock_eval):
     assert "Engine not available" in response.json()["detail"]
 
 
+@patch("services.api.main._ENGINE_EVAL_MAX_INFLIGHT", 0)
+def test_engine_eval_rejects_when_at_capacity():
+    """The unauthenticated /engine/eval guard returns 429 when saturated."""
+    response = client.post("/engine/eval", json={"fen": "any"})
+    assert response.status_code == 429
+    assert "capacity" in response.json()["detail"].lower()
+
+
 # --- Tricky Puzzles Endpoint Tests ---
 
 

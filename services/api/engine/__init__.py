@@ -8,6 +8,7 @@ from .stockfish import (
     EvalResult,
     StockfishError,
     StockfishNotFoundError,
+    close_engine,
     create_engine,
     evaluate_fen,
     get_or_compute_eval,
@@ -43,5 +44,6 @@ __all__ = [
     "evaluate_fen",
     "is_stockfish_available",
     "create_engine",
+    "close_engine",
     "get_or_compute_eval",
 ]
