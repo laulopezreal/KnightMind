@@ -48,6 +48,7 @@ from services.api.openings import build_opening_tree
 from services.api.puzzles.identity import backfill_puzzle_identity
 from services.api.storage import GameRepository, PuzzleRepository
 from services.api.storage.spaced_repetition import (
+    _utcnow_naive,
     get_adaptive_puzzles,
     get_all_puzzle_stats,
     get_due_puzzle_count,
@@ -883,7 +884,10 @@ async def list_puzzles(
     """
     from services.api.models import Puzzle as PuzzleModel
 
-    now = datetime.now(timezone.utc)
+    # naive-UTC bound for SQL comparisons against naive next_due_at columns
+    # (see spaced_repetition module note); an aware now would misclassify on
+    # Postgres with a non-UTC session TimeZone.
+    now = _utcnow_naive()
     username_lower = username.lower()
 
     join_cond = (PuzzleModel.id == PuzzleStats.puzzle_id) & (
@@ -1080,7 +1084,9 @@ async def get_puzzle_detail(
     from services.api.models import Puzzle as PuzzleModel
 
     username_lower = username.lower()
-    now = datetime.now(timezone.utc)
+    # naive-UTC bound for SQL comparison against naive next_due_at (see
+    # spaced_repetition module note).
+    now = _utcnow_naive()
 
     detail_status_case = case(
         (
