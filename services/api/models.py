@@ -59,7 +59,10 @@ class AccountChessUsername(Base):
         String, primary_key=True, default=lambda: str(uuid.uuid4())
     )
     account_id: Mapped[str] = mapped_column(
-        String, ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True
+        String,
+        ForeignKey("accounts.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
     )
     # Lowercased, matches games.username / puzzles.username / etc.
     username: Mapped[str] = mapped_column(

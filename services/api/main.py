@@ -32,16 +32,16 @@ from services.api.analytics_confidence import (
 )
 from services.api.auth import require_operator
 from services.api.db import SessionLocal, get_db
-from services.api.identity import (
-    assert_owns_username,
-    claim_username_if_unowned,
-    require_account,
-)
 from services.api.engine import (
     EngineNotAvailableError,
     InvalidFenError,
     get_or_compute_eval,
     is_engine_available,
+)
+from services.api.identity import (
+    assert_owns_username,
+    claim_username_if_unowned,
+    require_account,
 )
 from services.api.jobs.cleanup_sessions import cleanup_abandoned_sessions
 from services.api.models import (

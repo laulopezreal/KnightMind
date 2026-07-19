@@ -188,9 +188,7 @@ def claim_username_if_unowned(
 
     normalized = normalize_username(username)
     existing = db.scalar(
-        select(AccountChessUsername).where(
-            AccountChessUsername.username == normalized
-        )
+        select(AccountChessUsername).where(AccountChessUsername.username == normalized)
     )
     if existing is not None:
         if existing.account_id != account.id:

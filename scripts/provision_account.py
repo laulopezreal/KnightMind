@@ -108,9 +108,7 @@ def provision(
                     db.rollback()
                     return 1
             else:
-                db.add(
-                    AccountChessUsername(account_id=account.id, username=handle)
-                )
+                db.add(AccountChessUsername(account_id=account.id, username=handle))
                 db.flush()
                 print(f"  claimed '{handle}'")
 
