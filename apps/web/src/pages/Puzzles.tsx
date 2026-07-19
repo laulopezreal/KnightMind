@@ -359,10 +359,10 @@ export default function Puzzles() {
         }
     }, [currentPuzzle, clueReset, startPuzzleTimer]);
 
-    const onPieceDrop = (sourceSquare: string, targetSquare: string) => {
+    const onPieceDrop = (sourceSquare: string, targetSquare: string, promotion: string = 'q') => {
         if (!currentPuzzle || status === 'correct' || status === 'revealed') return false;
         try {
-            const move = game.move({ from: sourceSquare, to: targetSquare, promotion: 'q' });
+            const move = game.move({ from: sourceSquare, to: targetSquare, promotion: promotion || 'q' });
             if (move === null) return false;
             clue.reset();
             setGame(new Chess(game.fen()));
@@ -770,6 +770,9 @@ export default function Puzzles() {
                     <div className="order-2 lg:order-1">
                         <div className="aspect-square w-full max-w-[600px] mx-auto shadow-2xl shadow-primary/5 rounded-sm overflow-hidden border border-primary/10">
                             <AccessibleChessboard
+                                onKeyboardMove={({ sourceSquare, targetSquare, promotion }) =>
+                                    onPieceDrop(sourceSquare, targetSquare, promotion ?? 'q')
+                                }
                                 options={{
                                     position: game.fen(),
                                     onPieceDrop: ({ sourceSquare, targetSquare }) => targetSquare ? onPieceDrop(sourceSquare, targetSquare) : false,
@@ -921,7 +924,7 @@ export default function Puzzles() {
                         </div>
 
                         {/* Status Area */}
-                        <div className="min-h-[100px] flex items-center justify-center text-center p-6 border border-primary/10 rounded-sm relative overflow-hidden">
+                        <div className="min-h-[100px] flex items-center justify-center text-center p-6 border border-primary/10 rounded-sm relative overflow-hidden" role="status" aria-live="polite">
                             {status === 'solving' && clue.clueStage === 0 && <p className="text-primary/70 font-serif text-lg italic">Find the best move...</p>}
                             {status === 'solving' && clue.clueStage === 1 && (
                                 <p className="text-primary/80 font-sans text-sm">
