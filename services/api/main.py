@@ -38,8 +38,14 @@ from services.api.engine import (
     get_or_compute_eval,
     is_engine_available,
 )
+from services.api.identity import (
+    assert_owns_username,
+    claim_username_if_unowned,
+    require_account,
+)
 from services.api.jobs.cleanup_sessions import cleanup_abandoned_sessions
 from services.api.models import (
+    Account,
     Job,
     JobStatus,
     PuzzleResult,
@@ -162,6 +168,10 @@ from services.api.dashboard import router as dashboard_router
 
 app.include_router(dashboard_router)
 
+from services.api.auth_routes import router as auth_router
+
+app.include_router(auth_router)
+
 
 def get_allowed_origins() -> list[str]:
     origins = os.environ.get("KNIGHTMIND_CORS_ORIGINS", "")
@@ -212,8 +222,13 @@ async def get_users(db: Session = Depends(get_db)):
 
 
 @app.get("/users/{username}/status", response_model=UserStatusResponse)
-async def get_user_status(username: str, db: Session = Depends(get_db)):
+async def get_user_status(
+    username: str,
+    db: Session = Depends(get_db),
+    account: Account | None = Depends(require_account),
+):
     """Get training status for a user to support empty states."""
+    assert_owns_username(account, username, db)
     game_repository = GameRepository(db)
     puzzle_repository = PuzzleRepository(db)
 
@@ -265,8 +280,13 @@ async def get_user_status(username: str, db: Session = Depends(get_db)):
 @app.get(
     "/users/{username}/motifs/performance", response_model=MotifPerformanceResponse
 )
-async def get_motif_performance(username: str, db: Session = Depends(get_db)):
+async def get_motif_performance(
+    username: str,
+    db: Session = Depends(get_db),
+    account: Account | None = Depends(require_account),
+):
     """Get user's performance breakdown across all chess tactical patterns/motifs."""
+    assert_owns_username(account, username, db)
     return get_user_motif_performance(db, username)
 
 
@@ -299,10 +319,17 @@ async def validate_user(username: str):
 
 
 @app.post("/import/chesscom", response_model=ImportResponse)
-async def import_chesscom_games(username: str, db: Session = Depends(get_db)):
+async def import_chesscom_games(
+    username: str,
+    db: Session = Depends(get_db),
+    account: Account | None = Depends(require_account),
+):
     """
     Import games from Chess.com for a specific user.
     """
+    # First-importer-wins: claim the handle for this account if unowned, else
+    # 403 if another account already owns it. No-op when auth is disabled.
+    claim_username_if_unowned(account, username, db)
     try:
         count = 0
         new_games = 0
@@ -386,10 +413,15 @@ async def import_chesscom_games(username: str, db: Session = Depends(get_db)):
 
 
 @app.get("/import/status", response_model=ImportStatusResponse)
-async def get_import_status(username: str, db: Session = Depends(get_db)):
+async def get_import_status(
+    username: str,
+    db: Session = Depends(get_db),
+    account: Account | None = Depends(require_account),
+):
     """Get the last import summary for a user."""
     if not username:
         raise HTTPException(status_code=400, detail="Username is required")
+    assert_owns_username(account, username, db)
     game_repository = GameRepository(db)
     summary = game_repository.get_last_import_summary(username)
     if not summary:
@@ -509,6 +541,7 @@ async def get_openings(
         12, ge=1, le=40, description="Maximum number of half-moves to include"
     ),
     db: Session = Depends(get_db),
+    account: Account | None = Depends(require_account),
 ):
     """
     Get the opening tree for a user's games.
@@ -529,6 +562,7 @@ async def get_openings(
     Returns:
         Opening tree as nested JSON structure
     """
+    assert_owns_username(account, username, db)
     game_repository = GameRepository(db)
 
     # Check if user has any games
@@ -586,8 +620,15 @@ _engine_eval_lock = asyncio.Lock()
 
 
 @app.post("/engine/eval", response_model=EvalResponse)
-async def evaluate_fen(request: EvalRequest):
-    """Evaluate a chess position using Stockfish with caching."""
+async def evaluate_fen(
+    request: EvalRequest,
+    account: Account | None = Depends(require_account),
+):
+    """Evaluate a chess position using Stockfish with caching.
+
+    Gated behind an authenticated account (when auth is enabled) purely to keep
+    unauthenticated callers from spending Stockfish CPU. No per-user data.
+    """
     global _engine_eval_inflight
     async with _engine_eval_lock:
         if _engine_eval_inflight >= _ENGINE_EVAL_MAX_INFLIGHT:
@@ -624,8 +665,10 @@ async def generate_puzzles_endpoint(
         30, ge=1, le=2000, description="Maximum number of puzzles to generate"
     ),
     db: Session = Depends(get_db),
+    account: Account | None = Depends(require_account),
 ):
     """Start a background job to generate puzzles."""
+    assert_owns_username(account, username, db)
     try:
         new_job = Job(
             username=username,
@@ -677,11 +720,18 @@ async def generate_puzzles_endpoint(
 
 
 @app.get("/jobs/{job_id}", response_model=JobStatusResponse)
-async def get_job_status(job_id: str, db: Session = Depends(get_db)):
+async def get_job_status(
+    job_id: str,
+    db: Session = Depends(get_db),
+    account: Account | None = Depends(require_account),
+):
     """Get status of a specific job."""
     job = db.get(Job, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+
+    # Object-level ownership: 404 (not 403) so foreign job ids aren't confirmed.
+    assert_owns_username(account, job.username, db, status_code=404)
 
     return JobStatusResponse(
         job_id=job.id,
@@ -694,11 +744,18 @@ async def get_job_status(job_id: str, db: Session = Depends(get_db)):
 
 
 @app.post("/jobs/{job_id}/cancel", response_model=JobStatusResponse)
-async def cancel_job(job_id: str, db: Session = Depends(get_db)):
+async def cancel_job(
+    job_id: str,
+    db: Session = Depends(get_db),
+    account: Account | None = Depends(require_account),
+):
     """Cancel a running or queued job."""
     job = db.get(Job, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+
+    # Object-level ownership: 404 (not 403) so foreign job ids aren't confirmed.
+    assert_owns_username(account, job.username, db, status_code=404)
 
     # Only allow cancellation of queued or running jobs
     if job.status not in [JobStatus.QUEUED, JobStatus.RUNNING]:
@@ -724,11 +781,15 @@ async def cancel_job(job_id: str, db: Session = Depends(get_db)):
 
 @app.post("/daily-puzzle-sessions", response_model=DailyPuzzlesResponse)
 async def create_daily_puzzle_session(
-    request: DailyPuzzleSessionRequest, db: Session = Depends(get_db)
+    request: DailyPuzzleSessionRequest,
+    db: Session = Depends(get_db),
+    account: Account | None = Depends(require_account),
 ):
     """Create a new daily puzzle session for a user."""
     username = request.username
     n = request.n
+
+    assert_owns_username(account, username, db)
 
     # Validate n parameter
     if n < 1 or n > 20:
@@ -790,12 +851,14 @@ async def get_due_puzzles_endpoint(
         None, description="Filter puzzles by specific motif (e.g., 'Fork', 'Pin')"
     ),
     db: Session = Depends(get_db),
+    account: Account | None = Depends(require_account),
 ):
     """
     Get puzzles due for review, followed by new puzzles.
     Supports adaptive selection based on session type and target accuracy.
     Optionally filter by specific chess motif.
     """
+    assert_owns_username(account, username, db)
     puzzle_repository = PuzzleRepository(db)
 
     # 1. Load index to get all candidate IDs
@@ -928,6 +991,7 @@ async def list_puzzles(
     limit: int = Query(50, ge=1, le=100, description="Page size"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
     db: Session = Depends(get_db),
+    account: Account | None = Depends(require_account),
 ):
     """
     List all puzzles for a user with filtering, search, sorting, and pagination.
@@ -935,6 +999,7 @@ async def list_puzzles(
     """
     from services.api.models import Puzzle as PuzzleModel
 
+    assert_owns_username(account, username, db)
     # naive-UTC bound for SQL comparisons against naive next_due_at columns
     # (see spaced_repetition module note); an aware now would misclassify on
     # Postgres with a non-UTC session TimeZone.
@@ -1131,10 +1196,12 @@ async def get_puzzle_detail(
     puzzle_id: str,
     username: str = Query(..., description="Username to look up puzzle for"),
     db: Session = Depends(get_db),
+    account: Account | None = Depends(require_account),
 ):
     """Get a single puzzle by ID with user stats."""
     from services.api.models import Puzzle as PuzzleModel
 
+    assert_owns_username(account, username, db)
     username_lower = username.lower()
     # naive-UTC bound for SQL comparison against naive next_due_at (see
     # spaced_repetition module note).
@@ -1250,7 +1317,10 @@ def _build_review_response(stats, puzzle_stats, result) -> dict:
 
 @app.post("/puzzles/{puzzle_id}/review")
 async def review_puzzle(
-    puzzle_id: str, request: ReviewRequest, db: Session = Depends(get_db)
+    puzzle_id: str,
+    request: ReviewRequest,
+    db: Session = Depends(get_db),
+    account: Account | None = Depends(require_account),
 ):
     """
     Record a puzzle review and update scheduling.
@@ -1264,6 +1334,7 @@ async def review_puzzle(
     counters, or advancing scheduling. This makes double-clicks and network
     retries safe.
     """
+    assert_owns_username(account, request.username, db)
     puzzle_repository = PuzzleRepository(db)
     puzzle = puzzle_repository.get_puzzle(request.username, puzzle_id)
     if not puzzle:
@@ -1402,9 +1473,12 @@ class SnapshotResponse(BaseModel):
 
 @app.post("/ratings/snapshot", response_model=SnapshotResponse)
 async def create_rating_snapshot(
-    request: SnapshotRequest, db: Session = Depends(get_db)
+    request: SnapshotRequest,
+    db: Session = Depends(get_db),
+    account: Account | None = Depends(require_account),
 ):
     """Fetch current rating from Chess.com and store a snapshot."""
+    assert_owns_username(account, request.username, db)
     try:
         stats = await get_player_stats(request.username)
 
@@ -1450,12 +1524,14 @@ async def get_rating_history(
     time_control: str = "rapid",
     limit: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
+    account: Account | None = Depends(require_account),
 ):
     """Return chronological rating snapshot history for charting.
 
     Fetches the most recent `limit` snapshots (desc) then reverses to
     chronological order so the frontend chart always shows the latest window.
     """
+    assert_owns_username(account, username, db)
     stmt = (
         select(RatingSnapshot)
         .where(
@@ -1541,9 +1617,12 @@ async def explain_rating_changes(
     since: datetime | None = None,
     limit_games: int = Query(200, ge=1, le=2000),
     db: Session = Depends(get_db),
+    account: Account | None = Depends(require_account),
 ):
     """Explain rating drivers based on recent games."""
     from services.api.models import TrainingSession
+
+    assert_owns_username(account, username, db)
 
     # 1. Determine Window
     now = datetime.now(timezone.utc)
@@ -1554,6 +1633,8 @@ async def explain_rating_changes(
         session = db.get(TrainingSession, since_session_id)
         if not session:
             raise HTTPException(status_code=404, detail="Session not found")
+        # Don't leak another tenant's session window via a guessed id: 404.
+        assert_owns_username(account, session.username, db, status_code=404)
         window_start = session.created_at.replace(tzinfo=timezone.utc)
         source_type = "session"
     elif since:

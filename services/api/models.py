@@ -21,6 +21,58 @@ from sqlalchemy.orm import Mapped, mapped_column
 from services.api.db import Base
 
 
+class Account(Base):
+    """A KnightMind end-user identity (the authentication principal).
+
+    Authenticates with email + password (argon2 hash) and receives a signed JWT
+    bearer token. Distinct from a Chess.com username, which is the *data* tenancy
+    key: an account claims one or more Chess.com usernames via
+    ``account_chess_usernames``.
+    """
+
+    __tablename__ = "accounts"
+    __table_args__ = {"extend_existing": True}
+
+    id: Mapped[str] = mapped_column(
+        String, primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    email: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
+    password_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    disabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc), nullable=False
+    )
+
+
+class AccountChessUsername(Base):
+    """Ownership link: which Chess.com usernames an account may access.
+
+    ``UNIQUE(username)`` is the load-bearing invariant — it makes
+    "first-importer-wins" a database guarantee: a Chess.com handle is owned by at
+    most one account. An account may own several handles.
+    """
+
+    __tablename__ = "account_chess_usernames"
+    __table_args__ = {"extend_existing": True}
+
+    id: Mapped[str] = mapped_column(
+        String, primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    account_id: Mapped[str] = mapped_column(
+        String,
+        ForeignKey("accounts.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    # Lowercased, matches games.username / puzzles.username / etc.
+    username: Mapped[str] = mapped_column(
+        String, unique=True, nullable=False, index=True
+    )
+    claimed_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc), nullable=False
+    )
+
+
 class JobStatus(str, Enum):
     QUEUED = "queued"
     RUNNING = "running"

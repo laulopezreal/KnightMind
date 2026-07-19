@@ -14,7 +14,8 @@ from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
 from services.api.db import get_db
-from services.api.models import RatingSnapshot, TrainingSession
+from services.api.identity import assert_owns_username, require_account
+from services.api.models import Account, RatingSnapshot, TrainingSession
 from services.ingest import get_player_stats
 
 logger = logging.getLogger(__name__)
@@ -71,12 +72,17 @@ class UseHintRequest(BaseModel):
 
 
 @router.post("/start", response_model=StartSessionResponse)
-async def start_session(request: StartSessionRequest, db: Session = Depends(get_db)):
+async def start_session(
+    request: StartSessionRequest,
+    db: Session = Depends(get_db),
+    account: Account | None = Depends(require_account),
+):
     """
     Start a new training session.
 
     Creates a session record and returns the session_id for tracking reviews.
     """
+    assert_owns_username(account, request.username, db)
     session_id = str(uuid.uuid4())
 
     session = TrainingSession(
@@ -109,7 +115,10 @@ async def start_session(request: StartSessionRequest, db: Session = Depends(get_
 
 @router.get("/recent", response_model=list[SessionSummary])
 async def get_recent_sessions(
-    username: str, limit: int = 10, db: Session = Depends(get_db)
+    username: str,
+    limit: int = 10,
+    db: Session = Depends(get_db),
+    account: Account | None = Depends(require_account),
 ):
     """
     Get recent training sessions for a user.
@@ -117,6 +126,7 @@ async def get_recent_sessions(
     Returns sessions ordered by created_at descending.
     Limit: default 10, max 50.
     """
+    assert_owns_username(account, username, db)
     # Enforce max limit
     limit = min(limit, 50)
 
@@ -150,7 +160,11 @@ async def get_recent_sessions(
 
 
 @router.get("/{session_id}", response_model=SessionSummary)
-async def get_session(session_id: str, db: Session = Depends(get_db)):
+async def get_session(
+    session_id: str,
+    db: Session = Depends(get_db),
+    account: Account | None = Depends(require_account),
+):
     """
     Get session details by ID.
 
@@ -161,6 +175,9 @@ async def get_session(session_id: str, db: Session = Depends(get_db)):
 
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
+
+    # Object-level ownership: 404 (not 403) so foreign session ids aren't confirmed.
+    assert_owns_username(account, session.username, db, status_code=404)
 
     return SessionSummary(
         session_id=session.id,
@@ -237,7 +254,10 @@ async def _auto_snapshot(username: str, session_id: str, db: Session) -> None:
 
 @router.post("/{session_id}/complete", response_model=SessionSummary)
 async def complete_session(
-    session_id: str, request: CompleteSessionRequest, db: Session = Depends(get_db)
+    session_id: str,
+    request: CompleteSessionRequest,
+    db: Session = Depends(get_db),
+    account: Account | None = Depends(require_account),
 ):
     """
     Mark a session as complete.
@@ -251,6 +271,11 @@ async def complete_session(
 
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
+
+    # Real object-ownership against the authenticated account (404 hides
+    # foreign session ids). The self-referential username check below is only
+    # meaningful once request.username is trusted, which it now is under auth.
+    assert_owns_username(account, session.username, db, status_code=404)
 
     if session.username != request.username:
         raise HTTPException(status_code=403, detail="Session belongs to different user")
@@ -290,7 +315,10 @@ async def complete_session(
 
 @router.post("/{session_id}/use_hint", response_model=SessionSummary)
 async def use_hint(
-    session_id: str, request: UseHintRequest, db: Session = Depends(get_db)
+    session_id: str,
+    request: UseHintRequest,
+    db: Session = Depends(get_db),
+    account: Account | None = Depends(require_account),
 ):
     """
     Use a hint during a training session.
@@ -303,6 +331,9 @@ async def use_hint(
 
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
+
+    # Object-ownership against the account (404 hides foreign session ids).
+    assert_owns_username(account, session.username, db, status_code=404)
 
     if session.username != request.username:
         raise HTTPException(status_code=403, detail="Session belongs to different user")
