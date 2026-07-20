@@ -227,11 +227,24 @@ export async function getLibraryPuzzles(
 export interface CheckPuzzleResponse {
     correct: boolean;
     result: 'pass' | 'fail';
+    // For a full-PV puzzle, the opponent's forced reply to a correct move (the
+    // next line ply). Safe to auto-play — it is the forced response, never the
+    // solver's upcoming answer, which the server never sends. null for a wrong
+    // move, a legacy single-move puzzle, or the final ply of the line.
+    reply?: string | null;
+    // True once the whole line is solved (or, for a legacy puzzle, on the one
+    // correct move) — record the verified pass at this point.
+    complete?: boolean;
+    // The solver's next move index in the line (this ply + 2). null when done.
+    next_ply_index?: number | null;
 }
 
 export interface RevealPuzzleResponse {
     best_move_uci: string;
     accept_moves_uci: string[];
+    // The full solution line (UCI). Empty for legacy single-move puzzles; the
+    // first move always equals best_move_uci.
+    solution_pv?: string[];
 }
 
 /**
@@ -242,14 +255,17 @@ export interface RevealPuzzleResponse {
 export async function checkPuzzle(
     puzzleId: string,
     username: string,
-    attemptedMove: string
+    attemptedMove: string,
+    // Index of this move within the solution line (an even ply). Defaults to 0
+    // so single-move puzzles keep working with a bare call.
+    plyIndex: number = 0
 ): Promise<CheckPuzzleResponse> {
     return await request<CheckPuzzleResponse>(
         `/puzzles/${encodeURIComponent(puzzleId)}/check`,
         {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ username, attempted_move: attemptedMove }),
+            body: JSON.stringify({ username, attempted_move: attemptedMove, ply_index: plyIndex }),
         }
     );
 }

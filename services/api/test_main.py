@@ -98,8 +98,14 @@ def _create_puzzle(
     swing: float = 2.0,
     created_at: datetime | None = None,
     used_on: date | None = None,
+    solution_pv: str | None = None,
 ):
-    """Helper: create a Puzzle row (and parent Game if needed)."""
+    """Helper: create a Puzzle row (and parent Game if needed).
+
+    ``solution_pv`` optionally stores a full solution line (space-separated UCI)
+    so multi-move training can be exercised. Its first move is d2d4, matching the
+    seeded ``best_move_uci`` so single- and multi-move paths stay consistent.
+    """
     game_id = source_game_id or f"game-{puzzle_id}"
     _create_game(db, game_id, username)
     db.add(
@@ -117,6 +123,7 @@ def _create_puzzle(
             swing=swing,
             created_at=created_at or datetime.now(timezone.utc),
             used_on=used_on,
+            solution_pv=solution_pv,
         )
     )
     db.flush()
@@ -969,7 +976,13 @@ def test_check_endpoint_correct_move(client_with_db, db_session):
     )
     assert response.status_code == 200
     body = response.json()
-    assert body == {"correct": True, "result": "pass"}
+    # Legacy single-move puzzle (no stored line): correct move completes it, with
+    # no forced reply to play out.
+    assert body["correct"] is True
+    assert body["result"] == "pass"
+    assert body["complete"] is True
+    assert body["reply"] is None
+    assert body["next_ply_index"] is None
     # The solution never appears in the response body.
     assert "d2d4" not in {v for v in body.values() if isinstance(v, str)}
     assert "best_move_uci" not in body
@@ -985,7 +998,11 @@ def test_check_endpoint_wrong_move(client_with_db, db_session):
         json={"username": "testuser", "attempted_move": "e2e4"},
     )
     assert response.status_code == 200
-    assert response.json() == {"correct": False, "result": "fail"}
+    body = response.json()
+    assert body["correct"] is False
+    assert body["result"] == "fail"
+    assert body["complete"] is False
+    assert body["reply"] is None
 
 
 def test_check_endpoint_illegal_move_is_incorrect(client_with_db, db_session):
@@ -1042,6 +1059,166 @@ def test_reveal_endpoint_puzzle_not_found(client_with_db):
         "/puzzles/nope/reveal", json={"username": "testuser"}
     )
     assert response.status_code == 404
+
+
+# --- Full principal-variation (multi-move) puzzles (SCORECARD dim 12 -> 9) ---
+
+# A Queen's-Gambit line legal from the seeded start position: the solver plays
+# the even plies (d2d4, c2c4); the opponent's forced replies are the odd plies
+# (g8f6, e7e6). "c2c4" is the solver's SECOND move — it must never leak from a
+# ply-0 /check.
+_PV_LINE = "d2d4 g8f6 c2c4 e7e6"
+
+
+def test_check_pv_first_move_returns_forced_reply_not_next_answer(
+    client_with_db, db_session
+):
+    """A correct first move returns the opponent's forced reply and marks the
+    line incomplete — WITHOUT leaking the solver's next move."""
+    _create_puzzle(db_session, "p-pv-1", "testuser", solution_pv=_PV_LINE)
+    db_session.commit()
+
+    response = client_with_db.post(
+        "/puzzles/p-pv-1/check",
+        json={"username": "testuser", "attempted_move": "d2d4", "ply_index": 0},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["correct"] is True
+    assert body["result"] == "pass"
+    assert body["reply"] == "g8f6"  # opponent's forced reply is safe to reveal
+    assert body["complete"] is False
+    assert body["next_ply_index"] == 2
+    # The solver's UPCOMING answer (ply 2) must never appear in the payload.
+    leaked = {v for v in body.values() if isinstance(v, str)}
+    assert "c2c4" not in leaked
+    assert "e7e6" not in leaked
+
+
+def test_check_pv_completes_on_last_user_move(client_with_db, db_session):
+    """The final correct user move completes the line (records the pass)."""
+    _create_puzzle(db_session, "p-pv-2", "testuser", solution_pv=_PV_LINE)
+    db_session.commit()
+
+    response = client_with_db.post(
+        "/puzzles/p-pv-2/check",
+        json={"username": "testuser", "attempted_move": "c2c4", "ply_index": 2},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["correct"] is True
+    assert body["complete"] is True
+    assert body["reply"] == "e7e6"  # last forced reply is still played out
+    assert body["next_ply_index"] is None
+
+
+def test_check_pv_wrong_mid_line_move_fails(client_with_db, db_session):
+    """A wrong move at a later ply fails the line with no reply."""
+    _create_puzzle(db_session, "p-pv-3", "testuser", solution_pv=_PV_LINE)
+    db_session.commit()
+
+    response = client_with_db.post(
+        "/puzzles/p-pv-3/check",
+        # b1c3 is legal but not the PV move (c2c4) at ply 2.
+        json={"username": "testuser", "attempted_move": "b1c3", "ply_index": 2},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["correct"] is False
+    assert body["complete"] is False
+    assert body["reply"] is None
+
+
+def test_check_pv_rejects_odd_or_out_of_range_ply(client_with_db, db_session):
+    """A ply index that is not one of the solver's moves is rejected outright."""
+    _create_puzzle(db_session, "p-pv-4", "testuser", solution_pv=_PV_LINE)
+    db_session.commit()
+
+    for bad_ply in (1, 4, -2):
+        response = client_with_db.post(
+            "/puzzles/p-pv-4/check",
+            json={
+                "username": "testuser",
+                "attempted_move": "d2d4",
+                "ply_index": bad_ply,
+            },
+        )
+        assert response.status_code == 200
+        assert response.json()["correct"] is False
+
+
+def test_check_legacy_puzzle_ignores_ply_index(client_with_db, db_session):
+    """A legacy (null-PV) puzzle trains single-move regardless of ply_index."""
+    _create_puzzle(db_session, "p-pv-legacy", "testuser")  # no solution_pv
+    db_session.commit()
+
+    response = client_with_db.post(
+        "/puzzles/p-pv-legacy/check",
+        json={"username": "testuser", "attempted_move": "d2d4", "ply_index": 0},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["correct"] is True
+    assert body["complete"] is True  # single correct move completes it
+    assert body["reply"] is None
+
+
+def test_reveal_returns_full_pv(client_with_db, db_session):
+    """Reveal hands back the whole line on demand."""
+    _create_puzzle(db_session, "p-pv-reveal", "testuser", solution_pv=_PV_LINE)
+    db_session.commit()
+
+    response = client_with_db.post(
+        "/puzzles/p-pv-reveal/reveal", json={"username": "testuser"}
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["best_move_uci"] == "d2d4"
+    assert body["solution_pv"] == ["d2d4", "g8f6", "c2c4", "e7e6"]
+
+
+def test_due_puzzles_do_not_leak_solution_pv(client_with_db, db_session):
+    """The scored training payload must never carry the stored line."""
+    _create_puzzle(db_session, "p-pv-noleak", "testuser", solution_pv=_PV_LINE)
+    db_session.commit()
+
+    response = client_with_db.get("/puzzles/due?username=testuser&n=5")
+    assert response.status_code == 200
+    for p in response.json()["puzzles"]:
+        assert "solution_pv" not in p
+
+
+def test_review_records_pass_only_on_full_line(client_with_db, db_session):
+    """A verified pass requires the WHOLE line; a partial or wrong line fails."""
+    _create_puzzle(db_session, "p-pv-review", "testuser", solution_pv=_PV_LINE)
+    db_session.commit()
+
+    # Full, correct line -> server-verified PASS.
+    ok = client_with_db.post(
+        "/puzzles/p-pv-review/review",
+        json={"username": "testuser", "result": "pass", "attempted_move": "d2d4 c2c4"},
+    )
+    assert ok.status_code == 200
+    ok_body = ok.json()
+    assert ok_body["result"] == "pass"
+    assert ok_body["verified"] is True
+
+    # Only the first move played -> the line is not complete -> FAIL, even though
+    # the client self-reports a pass.
+    partial = client_with_db.post(
+        "/puzzles/p-pv-review/review",
+        json={"username": "testuser", "result": "pass", "attempted_move": "d2d4"},
+    )
+    assert partial.status_code == 200
+    assert partial.json()["result"] == "fail"
+
+    # Right first move, wrong second move -> FAIL.
+    wrong = client_with_db.post(
+        "/puzzles/p-pv-review/review",
+        json={"username": "testuser", "result": "pass", "attempted_move": "d2d4 b1c3"},
+    )
+    assert wrong.status_code == 200
+    assert wrong.json()["result"] == "fail"
 
 
 # --- Engine tests ---

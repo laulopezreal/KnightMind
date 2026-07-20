@@ -564,6 +564,10 @@ class CheckRequest(BaseModel):
     # The UCI move the user played on the board. Verified server-side; the
     # solution is never echoed back (audit gate 13).
     attempted_move: str
+    # Index of this move within the solution line (an even ply: 0 for the first
+    # move, 2 for the solver's second move, ...). Defaults to 0 so legacy
+    # single-move clients keep working unchanged.
+    ply_index: int = 0
 
 
 class CheckResponse(BaseModel):
@@ -571,6 +575,17 @@ class CheckResponse(BaseModel):
     # whether the played move solves the puzzle — NOT what the solution is.
     correct: bool
     result: str  # "pass" | "fail"
+    # For a full-PV puzzle, the opponent's forced reply to a correct move (the
+    # next PV ply). Safe to reveal — it is the forced response, not the solver's
+    # upcoming answer, which is never sent. None for a wrong move, a legacy
+    # single-move puzzle, or when the correct move was the last ply of the line.
+    reply: str | None = None
+    # True once the whole line is solved (or, for a legacy puzzle, on the one
+    # correct move) — the client records the verified pass at this point.
+    complete: bool = False
+    # The solver's next move index in the line (ply_index + 2), so the client
+    # knows which ply to check next. None when the line is complete.
+    next_ply_index: int | None = None
 
 
 class RevealRequest(BaseModel):
@@ -582,6 +597,10 @@ class RevealResponse(BaseModel):
     # owner asks for it directly — the scored training payload never carries it.
     best_move_uci: str
     accept_moves_uci: list[str] = []
+    # The full solution line (principal variation) as UCI moves, when the puzzle
+    # has one. Empty for legacy single-move puzzles; the first move always equals
+    # best_move_uci so a client can render either a single move or the whole line.
+    solution_pv: list[str] = []
 
 
 @app.get("/")
@@ -1047,7 +1066,15 @@ async def get_due_puzzles_endpoint(
 # solution only from POST /puzzles/{id}/reveal or a server-verified solve.
 # played_move_uci (the original blunder) is included because it narrows the
 # solution and the training client never needs it.
-_SOLUTION_FIELDS = ("best_move_uci", "accept_moves_uci", "played_move_uci")
+_SOLUTION_FIELDS = (
+    "best_move_uci",
+    "accept_moves_uci",
+    "played_move_uci",
+    # The full solution line is the answer too — never pre-ship it. The training
+    # board learns the line one forced reply at a time via POST /check, and the
+    # whole line only from POST /reveal or a server-verified full solve.
+    "solution_pv",
+)
 
 
 def _strip_solution(p_dict: dict) -> dict:
@@ -1103,6 +1130,106 @@ def _verify_attempt(puzzle, attempted_move: str) -> PuzzleResult:
 
     accepted = {m.strip().lower() for m in _accept_moves(puzzle) if m}
     return PuzzleResult.PASS if candidate in accepted else PuzzleResult.FAIL
+
+
+def _normalize_uci(move: str | None) -> str:
+    """Lower-case, whitespace-trim a UCI move for comparison."""
+    return (move or "").strip().lower()
+
+
+def _solution_pv(puzzle) -> list[str]:
+    """Parse a puzzle's persisted solution line into an ordered UCI list.
+
+    The stored form is space-separated (comma tolerated) UCI moves starting with
+    the solution move. Legacy puzzles have no line (NULL) and yield [], which the
+    callers treat as single-move training. Even plies (0, 2, ...) are the solver's
+    moves; odd plies are the opponent's forced replies.
+    """
+    raw = getattr(puzzle, "solution_pv", None)
+    if not raw:
+        return []
+    return [m for m in raw.replace(",", " ").split() if m]
+
+
+def _verify_line(puzzle, attempted_line: list[str]) -> PuzzleResult:
+    """Server-authoritative pass/fail for a WHOLE solved line (full-PV puzzles).
+
+    The line is solved only when the solver played every one of their plies
+    (the even indices of the stored PV) correctly and in order — a wrong move at
+    any ply fails the whole puzzle. Comparison is exact against the canonical PV
+    (the forcing line is defined by its exact moves; the multi-PV equivalence set
+    only applies to legacy single-move puzzles). Never trusts the client's claim.
+    """
+    pv = _solution_pv(puzzle)
+    if len(pv) < 2:
+        # No real line to verify — fall back to single-move semantics on the
+        # first supplied move (keeps a mis-routed call safe rather than crashing).
+        first = attempted_line[0] if attempted_line else ""
+        return _verify_attempt(puzzle, first)
+
+    user_plies = [pv[i] for i in range(0, len(pv), 2)]
+    if not attempted_line or len(attempted_line) != len(user_plies):
+        return PuzzleResult.FAIL
+    for played, expected in zip(attempted_line, user_plies, strict=True):
+        if _normalize_uci(played) != _normalize_uci(expected):
+            return PuzzleResult.FAIL
+    return PuzzleResult.PASS
+
+
+def _check_solution_move(
+    puzzle, attempted_move: str, ply_index: int
+) -> "CheckResponse":
+    """Server-authoritative live feedback for one ply of a (possibly multi-move)
+    solve, WITHOUT ever revealing the solver's upcoming answer.
+
+    Legacy / single-move puzzles (no stored line) keep today's behaviour: verify
+    against the accepted-solution set and report only correct/incorrect.
+
+    Full-PV puzzles are validated ply-by-ply. ``ply_index`` is the solver's move
+    index in the line (an even index). On a correct move the response carries the
+    opponent's forced REPLY — the very next PV ply, which is safe to reveal
+    because it is the forced response, not the solver's next answer — and whether
+    the line is now complete. The solver's next move (ply_index + 2) is NEVER
+    included, so the client cannot read ahead. A wrong move fails with no reply.
+    """
+    pv = _solution_pv(puzzle)
+
+    # Legacy / single-move puzzle: accepted set, complete on the one correct move.
+    if len(pv) < 2:
+        result = _verify_attempt(puzzle, attempted_move)
+        correct = result == PuzzleResult.PASS
+        return CheckResponse(
+            correct=correct,
+            result=result.value,
+            reply=None,
+            complete=correct,
+            next_ply_index=None,
+        )
+
+    # Full-PV puzzle: the solver only ever plays the even plies. Reject an
+    # out-of-range or odd (opponent) index outright rather than trust it.
+    if ply_index < 0 or ply_index >= len(pv) or ply_index % 2 != 0:
+        return CheckResponse(
+            correct=False, result=PuzzleResult.FAIL.value, reply=None, complete=False
+        )
+
+    correct = _normalize_uci(attempted_move) == _normalize_uci(pv[ply_index])
+    if not correct:
+        return CheckResponse(
+            correct=False, result=PuzzleResult.FAIL.value, reply=None, complete=False
+        )
+
+    reply_index = ply_index + 1
+    reply = pv[reply_index] if reply_index < len(pv) else None
+    next_ply_index = ply_index + 2
+    complete = next_ply_index >= len(pv)
+    return CheckResponse(
+        correct=True,
+        result=PuzzleResult.PASS.value,
+        reply=reply,
+        complete=complete,
+        next_ply_index=None if complete else next_ply_index,
+    )
 
 
 @app.get("/puzzles/list", response_model=PuzzleListResponse)
@@ -1511,7 +1638,15 @@ async def review_puzzle(
     # and mark it unverified so analytics can tell skill from self-report.
     client_result = request.result
     if request.attempted_move is not None:
-        effective_result = _verify_attempt(puzzle, request.attempted_move)
+        # For a full-PV puzzle the client sends the WHOLE solved line as a
+        # space-separated UCI string here; the server re-verifies every ply so a
+        # puzzle counts as solved only when the entire line was played correctly.
+        # A single move (legacy puzzle, or a puzzle with no stored line) verifies
+        # against the accepted-solution set exactly as before.
+        if len(_solution_pv(puzzle)) >= 2:
+            effective_result = _verify_line(puzzle, request.attempted_move.split())
+        else:
+            effective_result = _verify_attempt(puzzle, request.attempted_move)
         verified = True
         review_source = "server_verified"
     else:
@@ -1642,11 +1777,14 @@ async def check_puzzle(
 ):
     """Server-authoritative live feedback for the training board (audit gate 13).
 
-    Verifies the played move against the puzzle's accepted-solution set and
-    returns only correct/incorrect — never the solution itself. This lets the
-    Train board tell the user whether their move was right WITHOUT the client
-    ever holding the answer. It records nothing; scheduling/stats still flow
-    through POST /puzzles/{id}/review. Ownership is enforced exactly as review.
+    Verifies the played move against the puzzle's accepted-solution set (or, for
+    a full-PV puzzle, the move expected at ``ply_index`` of the line) and returns
+    only correct/incorrect plus — on a correct move of a multi-move line — the
+    opponent's forced reply and whether the line is complete. It never returns the
+    solver's upcoming answer, so the client can train the whole line WITHOUT ever
+    holding the part it has yet to find. Records nothing; scheduling/stats still
+    flow through POST /puzzles/{id}/review. Ownership is enforced exactly as
+    review.
     """
     assert_owns_username(account, request.username, db)
     puzzle_repository = PuzzleRepository(db)
@@ -1654,8 +1792,7 @@ async def check_puzzle(
     if not puzzle:
         raise HTTPException(status_code=404, detail="Puzzle not found")
 
-    result = _verify_attempt(puzzle, request.attempted_move)
-    return CheckResponse(correct=result == PuzzleResult.PASS, result=result.value)
+    return _check_solution_move(puzzle, request.attempted_move, request.ply_index)
 
 
 @app.post("/puzzles/{puzzle_id}/reveal", response_model=RevealResponse)
@@ -1681,6 +1818,7 @@ async def reveal_puzzle(
     return RevealResponse(
         best_move_uci=puzzle.best_move_uci,
         accept_moves_uci=_accept_moves(puzzle),
+        solution_pv=_solution_pv(puzzle),
     )
 
 
