@@ -113,7 +113,10 @@ def test_health_endpoint(client, monkeypatch):
     assert data["stockfish"] == "ok"
 
 
-def test_health_returns_version(client, monkeypatch):
+def test_health_omits_version_metadata(client, monkeypatch):
+    """Public /health must NOT leak deployment metadata (git sha / build time).
+    It is unauthed, so the exact deployed commit would be exposed to anonymous
+    callers. Version info lives only on the operator-gated /status now."""
     from services.api import ops as ops_module
 
     # Mock stockfish as available so health check passes
@@ -121,8 +124,22 @@ def test_health_returns_version(client, monkeypatch):
 
     response = client.get("/ops/health")
     data = response.json()
+    assert "version" not in data
+    assert "sha" not in data
+    assert "built_at" not in data
+
+
+def test_status_still_exposes_version_metadata(client, monkeypatch):
+    """The operator-gated /status may still carry deployment metadata."""
+    monkeypatch.setenv("GIT_SHA", "abc1234")
+    monkeypatch.setenv("BUILD_TIME", "2026-01-01T00:00:00+00:00")
+
+    response = client.get("/ops/status")
+    assert response.status_code == 200
+    data = response.json()
     assert "version" in data
-    assert "sha" in data["version"]
+    assert data["version"]["sha"] == "abc1234"
+    assert data["version"]["built_at"] == "2026-01-01T00:00:00+00:00"
 
 
 def test_ready_endpoint(client):
