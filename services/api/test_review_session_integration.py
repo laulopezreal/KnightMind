@@ -51,8 +51,20 @@ def client(test_db):
     app.dependency_overrides.clear()
 
 
-def _create_puzzle(db, puzzle_id: str, username: str, source_game_id: str, ply: int):
-    """Helper: create a Game + Puzzle in the DB."""
+def _create_puzzle(
+    db,
+    puzzle_id: str,
+    username: str,
+    source_game_id: str,
+    ply: int,
+    accept_moves_uci: str | None = None,
+):
+    """Helper: create a Game + Puzzle in the DB.
+
+    The puzzle FEN is the initial position and best_move_uci is "d2d4", so in
+    tests: "d2d4" is legal+correct, "e2e4" is legal-but-wrong, and "e2e5" is
+    illegal. Pass ``accept_moves_uci`` to widen the accepted-solution set.
+    """
     existing_game = db.get(Game, (source_game_id, username))
     if not existing_game:
         db.add(
@@ -79,6 +91,7 @@ def _create_puzzle(db, puzzle_id: str, username: str, source_game_id: str, ply: 
             side_to_move="white",
             played_move_uci="e2e4",
             best_move_uci="d2d4",
+            accept_moves_uci=accept_moves_uci,
             eval_before=0.5,
             eval_after=-1.5,
             swing=2.0,
@@ -462,3 +475,175 @@ def test_review_endpoint_session_completed(client, test_db):
 
     assert response.status_code == 400
     assert "already completed" in response.json()["detail"].lower()
+
+
+# ─── Server-verified training integrity (audit gate 7) ──────────────────────
+#
+# Before this gate the endpoint recorded the client's self-reported pass/fail
+# verbatim, so a modified client could POST {"result": "pass"} with no (or a
+# wrong) move and manufacture a perfect solve. These tests pin the server as the
+# authority: when the played move is supplied, the SERVER decides the outcome.
+
+
+def _get_review(db, puzzle_id, username):
+    return db.scalars(
+        select(PuzzleReview).where(
+            PuzzleReview.puzzle_id == puzzle_id,
+            PuzzleReview.username == username,
+        )
+    ).first()
+
+
+def test_server_verifies_correct_move_as_pass(client, test_db):
+    """Legal + correct move → server-verified pass."""
+    puzzle_id = str(uuid.uuid4())
+    _create_puzzle(test_db, puzzle_id, "testuser", "game-verify-1", 10)
+
+    response = client.post(
+        f"/puzzles/{puzzle_id}/review",
+        json={"username": "testuser", "result": "pass", "attempted_move": "d2d4"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["result"] == "pass"
+    assert body["verified"] is True
+    assert body["source"] == "server_verified"
+
+    review = _get_review(test_db, puzzle_id, "testuser")
+    assert review.result == "pass"
+    assert review.attempted_move == "d2d4"
+    assert review.client_result == "pass"
+    assert review.verified is True
+    assert review.source == "server_verified"
+
+    stats = test_db.get(PuzzleStats, puzzle_id)
+    assert stats.pass_count == 1
+    assert stats.fail_count == 0
+
+
+def test_equivalent_accepted_move_is_a_pass(client, test_db):
+    """A move in the multi-PV equivalence set (not the single best move) passes."""
+    puzzle_id = str(uuid.uuid4())
+    # best is d2d4; g1f3 is an accepted equivalent.
+    _create_puzzle(
+        test_db,
+        puzzle_id,
+        "testuser",
+        "game-verify-2",
+        10,
+        accept_moves_uci="d2d4,g1f3",
+    )
+
+    response = client.post(
+        f"/puzzles/{puzzle_id}/review",
+        json={"username": "testuser", "result": "pass", "attempted_move": "g1f3"},
+    )
+    assert response.status_code == 200
+    assert response.json()["result"] == "pass"
+
+    review = _get_review(test_db, puzzle_id, "testuser")
+    assert review.result == "pass"
+    assert review.verified is True
+
+
+def test_wrong_move_is_a_fail_even_when_client_claims_pass(client, test_db):
+    """Reproduction + fix: a spoofed 'pass' with a wrong move is recorded FAIL.
+
+    e2e4 is legal but not the solution. The client claims pass; the server
+    overrides to fail and preserves the client's bogus claim for audit.
+    """
+    puzzle_id = str(uuid.uuid4())
+    _create_puzzle(test_db, puzzle_id, "testuser", "game-verify-3", 10)
+
+    response = client.post(
+        f"/puzzles/{puzzle_id}/review",
+        json={"username": "testuser", "result": "pass", "attempted_move": "e2e4"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["result"] == "fail"
+    assert body["verified"] is True
+
+    review = _get_review(test_db, puzzle_id, "testuser")
+    assert review.result == "fail"
+    assert review.client_result == "pass"  # the spoofed claim is retained
+    assert review.attempted_move == "e2e4"
+
+    stats = test_db.get(PuzzleStats, puzzle_id)
+    assert stats.pass_count == 0
+    assert stats.fail_count == 1
+
+
+def test_illegal_move_is_a_fail(client, test_db):
+    """An illegal/malformed move can never be a solve."""
+    puzzle_id = str(uuid.uuid4())
+    _create_puzzle(test_db, puzzle_id, "testuser", "game-verify-4", 10)
+
+    response = client.post(
+        f"/puzzles/{puzzle_id}/review",
+        # e2e5 is not a legal move from the initial position.
+        json={"username": "testuser", "result": "pass", "attempted_move": "e2e5"},
+    )
+    assert response.status_code == 200
+    assert response.json()["result"] == "fail"
+
+    review = _get_review(test_db, puzzle_id, "testuser")
+    assert review.result == "fail"
+    assert review.verified is True
+
+
+def test_missing_attempted_move_is_recorded_client_reported(client, test_db):
+    """Legacy client (no move) → unverified, client-reported, outcome trusted."""
+    puzzle_id = str(uuid.uuid4())
+    _create_puzzle(test_db, puzzle_id, "testuser", "game-verify-5", 10)
+
+    response = client.post(
+        f"/puzzles/{puzzle_id}/review",
+        json={"username": "testuser", "result": "pass"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["result"] == "pass"
+    assert body["verified"] is False
+    assert body["source"] == "client_reported"
+
+    review = _get_review(test_db, puzzle_id, "testuser")
+    assert review.result == "pass"
+    assert review.attempted_move is None
+    assert review.verified is False
+    assert review.source == "client_reported"
+
+
+def test_wrong_move_resets_session_streak(client, test_db):
+    """A server-detected fail must not inflate session pass_count/streak."""
+    session_id = str(uuid.uuid4())
+    test_db.add(
+        TrainingSession(
+            id=session_id,
+            username="testuser",
+            requested_n=5,
+            pass_count=0,
+            fail_count=0,
+            total_time_ms=0,
+        )
+    )
+    test_db.commit()
+    puzzle_id = str(uuid.uuid4())
+    _create_puzzle(test_db, puzzle_id, "testuser", "game-verify-6", 10)
+
+    # Client claims pass, but the move is wrong.
+    response = client.post(
+        f"/puzzles/{puzzle_id}/review",
+        json={
+            "username": "testuser",
+            "result": "pass",
+            "attempted_move": "e2e4",
+            "session_id": session_id,
+        },
+    )
+    assert response.status_code == 200
+
+    session = test_db.get(TrainingSession, session_id)
+    assert session.pass_count == 0
+    assert session.fail_count == 1
+    assert session.current_streak == 0

@@ -89,6 +89,10 @@ def insert_puzzle_review(
     reviewed_at: datetime | None = None,
     session_id: str | None = None,
     client_review_id: str | None = None,
+    attempted_move: str | None = None,
+    client_result: PuzzleResult | str | None = None,
+    verified: bool = False,
+    source: str | None = None,
 ) -> PuzzleReview:
     """
     Record a puzzle review in the database.
@@ -104,6 +108,13 @@ def insert_puzzle_review(
         client_review_id: Optional client-supplied idempotency key. When set, a
             unique index over (puzzle_id, username, session_id, client_review_id)
             prevents a retried/double-submitted review from being recorded twice.
+        attempted_move: The UCI move the user played (None for no-move flows).
+        client_result: The raw pass/fail the client claimed, preserved even when
+            the server overrides ``result`` after verifying the move.
+        verified: True only when the server checked the attempted move against
+            the puzzle's accepted-solution set.
+        source: How the outcome was decided ("server_verified" or
+            "client_reported"); None for legacy rows.
 
     Returns:
         The created PuzzleReview object
@@ -118,6 +129,11 @@ def insert_puzzle_review(
 
     # Ensure result is a string if Enum is passed
     result_val = result.value if isinstance(result, PuzzleResult) else result
+    client_result_val = (
+        client_result.value
+        if isinstance(client_result, PuzzleResult)
+        else client_result
+    )
 
     review = PuzzleReview(
         puzzle_id=puzzle_id,
@@ -127,6 +143,10 @@ def insert_puzzle_review(
         time_spent_ms=time_spent_ms,
         session_id=session_id,
         client_review_id=client_review_id,
+        attempted_move=attempted_move,
+        client_result=client_result_val,
+        verified=verified,
+        source=source,
     )
     db.add(review)
     db.flush()

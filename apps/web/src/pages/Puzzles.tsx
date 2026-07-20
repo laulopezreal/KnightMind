@@ -392,9 +392,11 @@ export default function Puzzles() {
         isAdvancingPuzzle.current = true;
         try {
             if (status === 'correct') {
-                await handleReviewPuzzle('pass');
+                // Send the played move so the SERVER verifies the solve rather
+                // than trusting the client's self-graded 'pass'.
+                await handleReviewPuzzle('pass', undefined, userMove.trim().toLowerCase() || undefined);
             } else if (status === 'revealed') {
-                // If solution was revealed, mark as fail before completing
+                // Revealed solution: a self-reported fail, no move to verify.
                 await handleReviewPuzzle('fail');
             }
 

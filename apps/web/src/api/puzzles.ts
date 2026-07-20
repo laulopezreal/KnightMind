@@ -45,6 +45,12 @@ export interface ReviewPuzzleResponse {
     interval_days: number;
     ease_factor: number;
     feedback: string;
+    // Server-decided outcome and whether it was independently verified from the
+    // played move. `source` is "server_verified" or "client_reported"; a
+    // self-reported pass (verified === false) must not be shown as verified.
+    result?: 'pass' | 'fail';
+    verified?: boolean;
+    source?: 'server_verified' | 'client_reported' | null;
     puzzle_info: {
         fen: string;
         best_move: string;
@@ -218,7 +224,8 @@ export async function reviewPuzzle(
     result: 'pass' | 'fail',
     timeSpentMs?: number,
     sessionId?: string,
-    clientReviewId?: string
+    clientReviewId?: string,
+    attemptedMove?: string
 ): Promise<ReviewPuzzleResponse> {
     return await request<ReviewPuzzleResponse>(`/puzzles/${puzzleId}/review`, {
         method: 'POST',
@@ -231,6 +238,10 @@ export async function reviewPuzzle(
             // Idempotency key: lets the server dedupe a retried/double-submitted
             // review so a double-click or network retry can't double-count.
             client_review_id: clientReviewId,
+            // The UCI move actually played. When present, the SERVER verifies it
+            // and decides pass/fail — the client no longer self-grades. Omitted
+            // for no-move outcomes (timeout, "mark failed", revealed solution).
+            attempted_move: attemptedMove,
         }),
     });
 }

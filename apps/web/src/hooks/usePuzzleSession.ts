@@ -60,7 +60,7 @@ export interface UsePuzzleSessionReturn {
     setIsLoading: Dispatch<SetStateAction<boolean>>;
     handleStartSession: () => Promise<void>;
     handleCompleteSession: () => Promise<void>;
-    handleReviewPuzzle: (result: 'pass' | 'fail', timeMs?: number) => Promise<void>;
+    handleReviewPuzzle: (result: 'pass' | 'fail', timeMs?: number, attemptedMove?: string) => Promise<void>;
     handleUseHint: () => Promise<void>;
     calculateRecentPerformance: (history: Array<{ time: number; result: 'pass' | 'fail' }>, minutes?: number) => number;
     getPerformanceTrend: (history: Array<{ time: number; result: 'pass' | 'fail' }>) => 'improving' | 'declining' | 'stable';
@@ -312,7 +312,7 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
     // cleared after success so the next distinct submission gets a fresh key.
     const reviewKeyRef = useRef<string | null>(null);
     const currentPuzzle = puzzles[currentIndex];
-    const handleReviewPuzzle = useCallback(async (result: 'pass' | 'fail', timeMs?: number) => {
+    const handleReviewPuzzle = useCallback(async (result: 'pass' | 'fail', timeMs?: number, attemptedMove?: string) => {
         if (!currentPuzzle || !username.trim()) return;
         if (isReviewingRef.current) return; // block concurrent double-submit
         isReviewingRef.current = true;
@@ -335,17 +335,23 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
                 timeSpent,
                 activeSessionId || undefined,
                 clientReviewId,
+                attemptedMove,
             );
 
             // Success: rotate the key so the next distinct review gets a new one.
             reviewKeyRef.current = null;
+
+            // Trust the SERVER's decision when it verified the played move — the
+            // client no longer self-grades. Fall back to the local `result` only
+            // for legacy/no-move flows where the server echoes the client claim.
+            const effectiveResult = response.result ?? result;
 
             if (response.feedback) {
                 setLastFeedback(response.feedback);
                 setTimeout(() => setLastFeedback(''), 5000);
             }
 
-            if (result === 'pass') {
+            if (effectiveResult === 'pass') {
                 const newStreak = streak + 1;
                 setStreak(newStreak);
                 if (newStreak > bestStreak) {
@@ -355,9 +361,9 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
                 setStreak(0);
             }
 
-            setPerformanceHistory(prev => [...prev, { time: Date.now(), result }]);
+            setPerformanceHistory(prev => [...prev, { time: Date.now(), result: effectiveResult }]);
 
-            const effectiveStreak = result === 'pass' ? streak + 1 : 0;
+            const effectiveStreak = effectiveResult === 'pass' ? streak + 1 : 0;
             checkAchievements({ streak: effectiveStreak, currentPuzzleTime: timer.currentPuzzleTime });
 
             // Session progress (reviewedCount) and completion are advanced in
