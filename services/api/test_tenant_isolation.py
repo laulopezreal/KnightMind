@@ -460,7 +460,7 @@ def test_account_token_cannot_hit_ops_status(iso):
 def test_first_import_claims_then_conflicts(iso, monkeypatch):
     from services.api import main as main_module
 
-    async def _empty_import(username):
+    async def _empty_import(username, since=None):
         # An async generator that yields no games.
         return
         yield  # pragma: no cover
