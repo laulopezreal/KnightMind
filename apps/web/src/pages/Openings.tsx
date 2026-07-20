@@ -7,7 +7,9 @@ import { OpeningGraph, type OpeningGraphHandle } from '../components/OpeningGrap
 import { getWinRateColor } from '../utils/openings';
 import { useLocalStorage } from '../hooks/useLocalStorage';
 import { PageHeader } from '../components/PageHeader';
-import { DataStateEmpty, DataStateError, DataStateLoading } from '../components/DataState';
+import { DataStateEmpty, DataStateError, DataStateLoading, DataStateOffline } from '../components/DataState';
+import { useOnlineStatus } from '../hooks/useOnlineStatus';
+import { useLatestRequest } from '../hooks/useLatestRequest';
 
 function countAllNodes(node: OpeningNode): number {
   let count = 1;
@@ -29,6 +31,8 @@ export default function Openings() {
   );
   const [treeData, setTreeData] = useState<OpeningNode | null>(null);
   const [tooltip, setTooltip] = useState<{ x: number; y: number; data: OpeningNode } | null>(null);
+  const online = useOnlineStatus();
+  const request = useLatestRequest();
 
   // Redirect if no username (username is set during onboarding)
   useEffect(() => {
@@ -51,13 +55,18 @@ export default function Openings() {
       return;
     }
 
+    // Guard against stale-response races: a username/color change begins a newer
+    // request; the older, slower response must not clobber the newer one.
+    const token = request.begin();
     setLoading(true);
     setError(null);
 
     try {
       const data = await getOpenings(user, color);
+      if (token.isStale()) return;
       setTreeData(data);
     } catch (err) {
+      if (token.isStale()) return;
       if (err instanceof ApiError) {
         // `message` is the user-facing text; `detail` is technical and logged only.
         if (err.detail) console.error('[openings]', err.detail);
@@ -67,9 +76,9 @@ export default function Openings() {
       }
       setTreeData(null);
     } finally {
-      setLoading(false);
+      if (!token.isStale()) setLoading(false);
     }
-  }, []);
+  }, [request]);
 
   const handleFetchClick = () => {
     fetchOpenings(username, colorFilter);
@@ -121,13 +130,19 @@ export default function Openings() {
 
       {/* Error */}
       {error && (
-        <DataStateError
-          message={error}
-          onRetry={handleFetchClick}
-          retryLabel="Retry"
-          ariaLabel="Retry loading openings"
-          compact
-        />
+        !online ? (
+          // A failed load while the browser is offline is a connectivity problem,
+          // not a server error — say so instead of a bare error message.
+          <DataStateOffline onRetry={handleFetchClick} compact />
+        ) : (
+          <DataStateError
+            message={error}
+            onRetry={handleFetchClick}
+            retryLabel="Retry"
+            ariaLabel="Retry loading openings"
+            compact
+          />
+        )
       )}
 
       {/* Graph — omitted when an error card has replaced it (and there's no stale

@@ -115,10 +115,10 @@ export default function Engine() {
     }
   };
 
-  const onDrop = (sourceSquare: string, targetSquare: string) => {
+  const onDrop = (sourceSquare: string, targetSquare: string, promotion: string = 'q') => {
     const gameCopy = new Chess(fen);
     try {
-      const move = gameCopy.move({ from: sourceSquare, to: targetSquare, promotion: 'q' });
+      const move = gameCopy.move({ from: sourceSquare, to: targetSquare, promotion: promotion || 'q' });
       if (move === null) return false;
       const newFen = gameCopy.fen();
       setFen(newFen);
@@ -213,6 +213,9 @@ export default function Engine() {
         <div className="order-2 lg:order-1">
           <div className="aspect-square w-full max-w-[600px] mx-auto shadow-2xl shadow-primary/5 rounded-sm overflow-hidden border border-primary/10">
             <AccessibleChessboard
+              onKeyboardMove={({ sourceSquare, targetSquare, promotion }) =>
+                onDrop(sourceSquare, targetSquare, promotion ?? 'q')
+              }
               options={{
                 position: fen,
                 onPieceDrop: ({ sourceSquare, targetSquare }) => targetSquare ? onDrop(sourceSquare, targetSquare) : false,
