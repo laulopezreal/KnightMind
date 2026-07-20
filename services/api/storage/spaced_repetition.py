@@ -66,11 +66,21 @@ def calculate_next_interval(
     return new_interval, new_ease
 
 
-def get_puzzle_stats(db: Session, puzzle_id: str, username: str) -> PuzzleStats | None:
-    """Get statistics for a specific puzzle and user."""
+def get_puzzle_stats(
+    db: Session, puzzle_id: str, username: str, *, for_update: bool = False
+) -> PuzzleStats | None:
+    """Get statistics for a specific puzzle and user.
+
+    ``for_update`` takes a row lock (Postgres ``SELECT ... FOR UPDATE``) so a
+    caller doing a read-modify-write on the counters is race-safe against
+    concurrent reviews of the same puzzle. The lock is a no-op on SQLite (which
+    doesn't support ``FOR UPDATE`` and serializes writers anyway).
+    """
     stmt = select(PuzzleStats).where(
         PuzzleStats.puzzle_id == puzzle_id, PuzzleStats.username == username
     )
+    if for_update and db.get_bind().dialect.name == "postgresql":
+        stmt = stmt.with_for_update()
     return db.scalars(stmt).first()
 
 
@@ -182,7 +192,13 @@ def update_puzzle_stats(
     if reviewed_at is None:
         reviewed_at = datetime.now(timezone.utc)
 
-    stats = get_puzzle_stats(db, puzzle_id, username)
+    # Lock the stats row so the counter read-modify-write and the scheduling
+    # computed from the post-increment counts are race-safe: concurrent reviews
+    # of the SAME puzzle serialize here instead of losing an increment. On the
+    # first-ever review the row doesn't exist yet, so there is nothing to lock —
+    # the INSERT's primary key then serializes the two racers (one raises
+    # IntegrityError, which the review endpoint's replay path handles).
+    stats = get_puzzle_stats(db, puzzle_id, username, for_update=True)
     res_enum = result if isinstance(result, PuzzleResult) else PuzzleResult(result)
 
     if not stats:
