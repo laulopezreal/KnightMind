@@ -99,12 +99,15 @@ def _create_puzzle(
     created_at: datetime | None = None,
     used_on: date | None = None,
     solution_pv: str | None = None,
+    accept_moves_uci: str | None = None,
 ):
     """Helper: create a Puzzle row (and parent Game if needed).
 
     ``solution_pv`` optionally stores a full solution line (space-separated UCI)
     so multi-move training can be exercised. Its first move is d2d4, matching the
     seeded ``best_move_uci`` so single- and multi-move paths stay consistent.
+    ``accept_moves_uci`` optionally widens the first-move equivalence set
+    (comma-separated UCI).
     """
     game_id = source_game_id or f"game-{puzzle_id}"
     _create_game(db, game_id, username)
@@ -124,6 +127,7 @@ def _create_puzzle(
             created_at=created_at or datetime.now(timezone.utc),
             used_on=used_on,
             solution_pv=solution_pv,
+            accept_moves_uci=accept_moves_uci,
         )
     )
     db.flush()
@@ -1322,6 +1326,105 @@ def test_review_records_pass_only_on_full_line(client_with_db, db_session):
     )
     assert wrong.status_code == 200
     assert wrong.json()["result"] == "fail"
+
+
+# The seeded start position accepts g1f3 (Nf3) as an equal-value alternative
+# first move to the PV's d2d4; stored in accept_moves_uci. Subsequent plies of a
+# full-PV puzzle stay the exact forcing line.
+
+
+def test_verify_line_accepts_equivalent_first_move(client_with_db, db_session):
+    """dim 11: at ply 0 a full-PV puzzle accepts a first move from the accept set
+    (multi-PV equivalent), while later plies remain exact."""
+    _create_puzzle(
+        db_session,
+        "p-pv-equiv",
+        "testuser",
+        solution_pv=_PV_LINE,
+        accept_moves_uci="g1f3",
+    )
+    db_session.commit()
+
+    # Equivalent first move (g1f3) + exact second move (c2c4) -> verified PASS.
+    ok = client_with_db.post(
+        "/puzzles/p-pv-equiv/review",
+        json={"username": "testuser", "result": "pass", "attempted_move": "g1f3 c2c4"},
+    )
+    assert ok.status_code == 200
+    assert ok.json()["result"] == "pass"
+    assert ok.json()["verified"] is True
+
+
+def test_verify_line_still_rejects_wrong_first_move(client_with_db, db_session):
+    """A first move NOT in the accept set still fails, even for a full-PV puzzle."""
+    _create_puzzle(
+        db_session,
+        "p-pv-equiv-wrong",
+        "testuser",
+        solution_pv=_PV_LINE,
+        accept_moves_uci="g1f3",
+    )
+    db_session.commit()
+
+    # e2e4 is legal but not in the accept set {d2d4, g1f3}.
+    wrong = client_with_db.post(
+        "/puzzles/p-pv-equiv-wrong/review",
+        json={"username": "testuser", "result": "pass", "attempted_move": "e2e4 c2c4"},
+    )
+    assert wrong.status_code == 200
+    assert wrong.json()["result"] == "fail"
+
+
+def test_verify_line_equivalent_first_still_requires_exact_rest(
+    client_with_db, db_session
+):
+    """Accepting an equivalent first move does not relax the later plies."""
+    _create_puzzle(
+        db_session,
+        "p-pv-equiv-rest",
+        "testuser",
+        solution_pv=_PV_LINE,
+        accept_moves_uci="g1f3",
+    )
+    db_session.commit()
+
+    # Equivalent first move but a wrong second move (b1c3 != c2c4) -> FAIL.
+    wrong = client_with_db.post(
+        "/puzzles/p-pv-equiv-rest/review",
+        json={"username": "testuser", "result": "pass", "attempted_move": "g1f3 b1c3"},
+    )
+    assert wrong.status_code == 200
+    assert wrong.json()["result"] == "fail"
+
+
+def test_check_pv_accepts_equivalent_first_move(client_with_db, db_session):
+    """The live /check endpoint accepts an equivalent first move at ply 0."""
+    _create_puzzle(
+        db_session,
+        "p-pv-equiv-check",
+        "testuser",
+        solution_pv=_PV_LINE,
+        accept_moves_uci="g1f3",
+    )
+    db_session.commit()
+
+    ok = client_with_db.post(
+        "/puzzles/p-pv-equiv-check/check",
+        json={"username": "testuser", "attempted_move": "g1f3", "ply_index": 0},
+    )
+    assert ok.status_code == 200
+    body = ok.json()
+    assert body["correct"] is True
+    assert body["complete"] is False
+    assert body["next_ply_index"] == 2
+
+    # A first move outside the accept set is still wrong.
+    bad = client_with_db.post(
+        "/puzzles/p-pv-equiv-check/check",
+        json={"username": "testuser", "attempted_move": "e2e4", "ply_index": 0},
+    )
+    assert bad.status_code == 200
+    assert bad.json()["correct"] is False
 
 
 # --- Engine tests ---

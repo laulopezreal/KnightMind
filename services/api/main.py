@@ -1169,9 +1169,10 @@ def _verify_line(puzzle, attempted_line: list[str]) -> PuzzleResult:
 
     The line is solved only when the solver played every one of their plies
     (the even indices of the stored PV) correctly and in order — a wrong move at
-    any ply fails the whole puzzle. Comparison is exact against the canonical PV
-    (the forcing line is defined by its exact moves; the multi-PV equivalence set
-    only applies to legacy single-move puzzles). Never trusts the client's claim.
+    any ply fails the whole puzzle. The FIRST solver move (ply 0) accepts any
+    move in the multi-PV equivalence set (best move + accept_moves_uci), since an
+    equally-good opening move is a valid solve; every later ply must match the
+    canonical forcing line exactly. Never trusts the client's claim (dim 11).
     """
     pv = _solution_pv(puzzle)
     if len(pv) < 2:
@@ -1183,8 +1184,16 @@ def _verify_line(puzzle, attempted_line: list[str]) -> PuzzleResult:
     user_plies = [pv[i] for i in range(0, len(pv), 2)]
     if not attempted_line or len(attempted_line) != len(user_plies):
         return PuzzleResult.FAIL
-    for played, expected in zip(attempted_line, user_plies, strict=True):
-        if _normalize_uci(played) != _normalize_uci(expected):
+    accepted_first = {m.strip().lower() for m in _accept_moves(puzzle) if m}
+    for idx, (played, expected) in enumerate(
+        zip(attempted_line, user_plies, strict=True)
+    ):
+        played_n = _normalize_uci(played)
+        if idx == 0:
+            # First move: any multi-PV equivalent is accepted.
+            if played_n not in accepted_first:
+                return PuzzleResult.FAIL
+        elif played_n != _normalize_uci(expected):
             return PuzzleResult.FAIL
     return PuzzleResult.PASS
 
@@ -1226,7 +1235,13 @@ def _check_solution_move(
             correct=False, result=PuzzleResult.FAIL.value, reply=None, complete=False
         )
 
-    correct = _normalize_uci(attempted_move) == _normalize_uci(pv[ply_index])
+    if ply_index == 0:
+        # First move: accept any multi-PV equivalent (best move + accept set);
+        # later plies must match the exact forcing line (dim 11).
+        accepted_first = {m.strip().lower() for m in _accept_moves(puzzle) if m}
+        correct = _normalize_uci(attempted_move) in accepted_first
+    else:
+        correct = _normalize_uci(attempted_move) == _normalize_uci(pv[ply_index])
     if not correct:
         return CheckResponse(
             correct=False, result=PuzzleResult.FAIL.value, reply=None, complete=False
