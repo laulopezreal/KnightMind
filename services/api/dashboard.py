@@ -28,6 +28,7 @@ from services.api.storage.spaced_repetition import (
     get_due_puzzle_count,
     get_next_due_date,
 )
+from services.api.usernames import Username
 
 router = APIRouter(prefix="/users", tags=["dashboard"])
 
@@ -246,7 +247,7 @@ def calculate_training_streak(db: Session, username: str) -> int:
 
 @router.get("/{username}/dashboard", response_model=DashboardSummary)
 async def get_dashboard_summary(
-    username: str,
+    username: Username,
     db: Session = Depends(get_db),
     account: Account | None = Depends(require_account),
 ):
@@ -337,7 +338,7 @@ async def get_dashboard_summary(
 
 @router.get("/{username}/trends", response_model=TrendsResponse)
 async def get_motif_trends(
-    username: str,
+    username: Username,
     window: int = Query(30, ge=7, le=90, description="Number of days to analyze"),
     db: Session = Depends(get_db),
     account: Account | None = Depends(require_account),
@@ -450,7 +451,7 @@ async def get_motif_trends(
 
 @router.get("/{username}/puzzles/tricky", response_model=TrickyPuzzlesResponse)
 async def get_tricky_puzzles(
-    username: str,
+    username: Username,
     limit: int = Query(
         5, ge=1, le=20, description="Maximum number of puzzles to return"
     ),
