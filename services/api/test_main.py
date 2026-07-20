@@ -981,8 +981,9 @@ def test_get_daily_puzzles_idempotent(client_with_db, db_session):
 # illegal.
 
 
-def test_due_puzzles_do_not_leak_solution(client_with_db, db_session):
-    """SCORED training payload must NOT ship the answer before an attempt."""
+def test_due_puzzles_do_not_leak_solution(client_with_db, db_session, monkeypatch):
+    """SCORED training payload must NOT ship the answer before an attempt (strip flag ON)."""
+    monkeypatch.setenv("KNIGHTMIND_STRIP_PUZZLE_SOLUTIONS", "true")
     _create_puzzle(db_session, "p-due-leak", "testuser")
     db_session.commit()
 
@@ -999,8 +1000,9 @@ def test_due_puzzles_do_not_leak_solution(client_with_db, db_session):
         assert "fen" in p and "side_to_move" in p
 
 
-def test_daily_puzzles_do_not_leak_solution(client_with_db, db_session):
-    """Post-generation warm-up payload must not carry the solution either."""
+def test_daily_puzzles_do_not_leak_solution(client_with_db, db_session, monkeypatch):
+    """Post-generation warm-up payload must not carry the solution either (strip flag ON)."""
+    monkeypatch.setenv("KNIGHTMIND_STRIP_PUZZLE_SOLUTIONS", "true")
     _create_puzzle(db_session, "p-daily-leak", "testuser")
     db_session.commit()
 
@@ -1116,8 +1118,11 @@ def test_reveal_endpoint_puzzle_not_found(client_with_db):
 # best_move_uci/accept_moves_uci are omitted unless ?reveal=true is set.
 
 
-def test_puzzles_list_omits_solution_by_default(client_with_db, db_session):
-    """Default /puzzles/list must not carry the solution."""
+def test_puzzles_list_omits_solution_when_strip_enabled(
+    client_with_db, db_session, monkeypatch
+):
+    """With the strip flag ON, /puzzles/list must not carry the solution."""
+    monkeypatch.setenv("KNIGHTMIND_STRIP_PUZZLE_SOLUTIONS", "true")
     _create_puzzle(db_session, "p-list-hide", "testuser")
     db_session.commit()
 
@@ -1142,8 +1147,11 @@ def test_puzzles_list_reveals_solution_on_demand(client_with_db, db_session):
     assert "d2d4" in p["accept_moves_uci"]
 
 
-def test_puzzle_detail_omits_solution_by_default(client_with_db, db_session):
-    """Default /puzzles/{id} must not carry the solution."""
+def test_puzzle_detail_omits_solution_when_strip_enabled(
+    client_with_db, db_session, monkeypatch
+):
+    """With the strip flag ON, /puzzles/{id} must not carry the solution."""
+    monkeypatch.setenv("KNIGHTMIND_STRIP_PUZZLE_SOLUTIONS", "true")
     _create_puzzle(db_session, "p-detail-hide", "testuser")
     db_session.commit()
 
@@ -1166,6 +1174,44 @@ def test_puzzle_detail_reveals_solution_on_demand(client_with_db, db_session):
     body = response.json()
     assert body["best_move_uci"] == "d2d4"
     assert "d2d4" in body["accept_moves_uci"]
+
+
+# --- Additive rollout: strip flag OFF (default) keeps solutions for the old
+#     client-grading frontend (KNIGHTMIND_STRIP_PUZZLE_SOLUTIONS default false) ---
+
+
+def test_puzzles_list_includes_solution_by_default(client_with_db, db_session):
+    """Default (strip flag OFF): /puzzles/list ships the solution (old-frontend compat)."""
+    _create_puzzle(db_session, "p-list-default", "testuser")
+    db_session.commit()
+    response = client_with_db.get("/puzzles/list?username=testuser")
+    assert response.status_code == 200
+    p = response.json()["puzzles"][0]
+    assert p["best_move_uci"] == "d2d4"
+    assert "d2d4" in p["accept_moves_uci"]
+
+
+def test_puzzle_detail_includes_solution_by_default(client_with_db, db_session):
+    """Default (strip flag OFF): /puzzles/{id} ships the solution (old-frontend compat)."""
+    _create_puzzle(db_session, "p-detail-default", "testuser")
+    db_session.commit()
+    response = client_with_db.get("/puzzles/p-detail-default?username=testuser")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["best_move_uci"] == "d2d4"
+    assert "d2d4" in body["accept_moves_uci"]
+
+
+def test_due_puzzles_include_solution_by_default(client_with_db, db_session):
+    """Default (strip flag OFF): scored training payload keeps the solution so the
+    old client-side-grading frontend still works during the deploy transition."""
+    _create_puzzle(db_session, "p-due-default", "testuser")
+    db_session.commit()
+    response = client_with_db.get("/puzzles/due?username=testuser&n=5")
+    assert response.status_code == 200
+    puzzles = response.json()["puzzles"]
+    assert puzzles
+    assert any(p.get("best_move_uci") == "d2d4" for p in puzzles)
 
 
 # --- Full principal-variation (multi-move) puzzles (SCORECARD dim 12 -> 9) ---
@@ -1284,8 +1330,9 @@ def test_reveal_returns_full_pv(client_with_db, db_session):
     assert body["solution_pv"] == ["d2d4", "g8f6", "c2c4", "e7e6"]
 
 
-def test_due_puzzles_do_not_leak_solution_pv(client_with_db, db_session):
-    """The scored training payload must never carry the stored line."""
+def test_due_puzzles_do_not_leak_solution_pv(client_with_db, db_session, monkeypatch):
+    """The scored training payload must never carry the stored line (strip flag ON)."""
+    monkeypatch.setenv("KNIGHTMIND_STRIP_PUZZLE_SOLUTIONS", "true")
     _create_puzzle(db_session, "p-pv-noleak", "testuser", solution_pv=_PV_LINE)
     db_session.commit()
 
