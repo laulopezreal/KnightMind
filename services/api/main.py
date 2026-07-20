@@ -1090,8 +1090,43 @@ _SOLUTION_FIELDS = (
 )
 
 
+_TRUTHY = {"1", "true", "yes", "on"}
+
+
+def _strip_puzzle_solutions_enabled() -> bool:
+    """Whether the anti-cheat solution gate is turned on.
+
+    Rollout flag — ``KNIGHTMIND_STRIP_PUZZLE_SOLUTIONS`` (default OFF). Mirrors
+    the ``KNIGHTMIND_REQUIRE_AUTH`` flag-reading pattern in ``identity.py``.
+
+    OFF (default): solutions are INCLUDED in browse/training payloads —
+    ``/puzzles/due`` & ``/daily-puzzle-sessions`` do NOT strip, and
+    ``/puzzles/list`` & ``/puzzles/{id}`` include the solution regardless of
+    ``?reveal``. This is the pre-audit behavior, backward-compatible with the
+    old client-grading frontend and harmless to the new frontend (which grades
+    via ``/check`` and ignores the extra fields). It lets the new API deploy
+    before the new frontend is live, order-independently.
+
+    ON: the strict anti-cheat behavior — strip on ``/due`` & ``/daily`` and gate
+    ``/list`` & ``/{id}`` behind ``?reveal=true``. Flip it (no redeploy needed)
+    once the new frontend is confirmed live.
+
+    Server-side verification (``/check``, ``/reveal``, ``/review``) is unaffected
+    by this flag either way.
+    """
+    return (
+        os.environ.get("KNIGHTMIND_STRIP_PUZZLE_SOLUTIONS", "").strip().lower()
+        in _TRUTHY
+    )
+
+
 def _strip_solution(p_dict: dict) -> dict:
-    """Remove solution-revealing fields from a training puzzle dict, in place."""
+    """Remove solution-revealing fields from a training puzzle dict, in place.
+
+    No-op unless ``KNIGHTMIND_STRIP_PUZZLE_SOLUTIONS`` is enabled.
+    """
+    if not _strip_puzzle_solutions_enabled():
+        return p_dict
     for field in _SOLUTION_FIELDS:
         p_dict.pop(field, None)
     return p_dict
@@ -1290,6 +1325,11 @@ async def list_puzzles(
     from services.api.models import Puzzle as PuzzleModel
 
     assert_owns_username(account, username, db)
+
+    # When the strip flag is OFF (default) the solution is always included so the
+    # old client-grading frontend keeps working; ?reveal only matters when the
+    # strict gate is ON.
+    reveal_solution = reveal or not _strip_puzzle_solutions_enabled()
     # naive-UTC bound for SQL comparisons against naive next_due_at columns
     # (see spaced_repetition module note); an aware now would misclassify on
     # Postgres with a non-UTC session TimeZone.
@@ -1452,9 +1492,11 @@ async def list_puzzles(
                 swing=puzzle.swing,
                 fen=puzzle.fen,
                 side_to_move=puzzle.side_to_move,
-                # Gated on ?reveal=true (dim 13): omit the solution by default.
-                best_move_uci=puzzle.best_move_uci if reveal else None,
-                accept_moves_uci=_accept_moves(puzzle) if reveal else [],
+                # Gated on ?reveal=true (dim 13) only when the strip flag is ON.
+                # When OFF (default) the solution is always included so the old
+                # client-grading frontend keeps working.
+                best_move_uci=puzzle.best_move_uci if reveal_solution else None,
+                accept_moves_uci=_accept_moves(puzzle) if reveal_solution else [],
                 status=row_status,
                 attempts=stats.attempts if stats else 0,
                 pass_count=stats.pass_count if stats else 0,
@@ -1498,6 +1540,11 @@ async def get_puzzle_detail(
     from services.api.models import Puzzle as PuzzleModel
 
     assert_owns_username(account, username, db)
+
+    # When the strip flag is OFF (default) the solution is always included so the
+    # old client-grading frontend keeps working; ?reveal only matters when the
+    # strict gate is ON.
+    reveal_solution = reveal or not _strip_puzzle_solutions_enabled()
     username_lower = username.lower()
     # naive-UTC bound for SQL comparison against naive next_due_at (see
     # spaced_repetition module note).
@@ -1544,9 +1591,11 @@ async def get_puzzle_detail(
         swing=puzzle.swing,
         fen=puzzle.fen,
         side_to_move=puzzle.side_to_move,
-        # Gated on ?reveal=true (dim 13): omit the solution by default.
-        best_move_uci=puzzle.best_move_uci if reveal else None,
-        accept_moves_uci=_accept_moves(puzzle) if reveal else [],
+        # Gated on ?reveal=true (dim 13) only when the strip flag is ON. When OFF
+        # (default) the solution is always included so the old client-grading
+        # frontend keeps working.
+        best_move_uci=puzzle.best_move_uci if reveal_solution else None,
+        accept_moves_uci=_accept_moves(puzzle) if reveal_solution else [],
         status=computed_status,
         attempts=stats.attempts if stats else 0,
         pass_count=stats.pass_count if stats else 0,
