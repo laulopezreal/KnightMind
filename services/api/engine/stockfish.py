@@ -663,6 +663,22 @@ def _compute_cache_key(
     return hashlib.sha256(key_string.encode()).hexdigest()
 
 
+def _eval_result_from_cache(cached: "FenEvalCache") -> EvalResult:
+    """Rebuild the full EvalResult from a cache row.
+
+    Restores ``mate_in`` and ``is_terminal`` alongside the pawn score so a cache
+    HIT returns the same shape as a fresh compute. Older rows written before
+    those columns existed store NULL ``mate_in`` (already the ordinary-eval
+    default) and NULL ``is_terminal``, which we coerce to False.
+    """
+    return EvalResult(
+        best_move_uci=cached.best_move_uci,
+        eval=cached.eval_pawns,
+        mate_in=cached.mate_in,
+        is_terminal=bool(cached.is_terminal),
+    )
+
+
 def get_or_compute_eval(
     fen: str,
     engine: Optional["StockfishEngine"] = None,
@@ -726,9 +742,7 @@ def get_or_compute_eval(
                 if cache_stats is not None:
                     cache_stats["hits"] = cache_stats.get("hits", 0) + 1
                 logger.debug(f"Cache hit for FEN: {fen[:50]}...")
-                return EvalResult(
-                    best_move_uci=cached.best_move_uci, eval=cached.eval_pawns
-                )
+                return _eval_result_from_cache(cached)
     except Exception as e:
         # Cache lookup failed, log but continue to compute
         logger.warning(f"Cache lookup failed: {e}")
@@ -753,6 +767,8 @@ def get_or_compute_eval(
                 fen=fen,
                 best_move_uci=result.best_move_uci,
                 eval_pawns=result.eval,
+                mate_in=result.mate_in,
+                is_terminal=result.is_terminal,
                 depth=depth,
                 movetime_ms=movetime_ms,
                 engine_name=engine_name,
@@ -775,9 +791,7 @@ def get_or_compute_eval(
                     logger.debug(
                         "Concurrent insert detected, using existing cache entry"
                     )
-                    return EvalResult(
-                        best_move_uci=cached.best_move_uci, eval=cached.eval_pawns
-                    )
+                    return _eval_result_from_cache(cached)
                 # If still not found, something else went wrong
                 logger.error(
                     f"Failed to cache evaluation after integrity error: {commit_error}"

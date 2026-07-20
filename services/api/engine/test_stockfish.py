@@ -602,6 +602,66 @@ class TestVersionAwareCache:
             with Session() as db:
                 assert db.get(FenEvalCache, _live_key("16.1")) is None
 
+    def test_cached_mate_preserves_mate_in_on_hit(self):
+        """Regression (dim 6): a mate-scored (non-terminal) position must return
+        the same mate_in on a cache HIT as it did on the fresh compute. The
+        pre-fix read path rebuilt EvalResult without mate_in/is_terminal, so a
+        cached mate silently lost its distance-to-mate (mate_in -> None)."""
+        with _cache_db() as Session:
+            mate_result = EvalResult(
+                best_move_uci="d8h4", eval=MATE_EVALUATION, mate_in=3
+            )
+
+            with (
+                patch.object(sf_module, "get_engine_version", return_value="16.1"),
+                patch.object(
+                    sf_module,
+                    "evaluate_fen",
+                    side_effect=lambda fen, engine=None, depth=None: mate_result,
+                ),
+            ):
+                # First call: cache miss -> compute -> store.
+                first = get_or_compute_eval(_START_FEN)
+                assert first.mate_in == 3
+
+                # Second call: cache HIT -> must carry mate_in through unchanged.
+                second = get_or_compute_eval(_START_FEN)
+
+            assert second.mate_in == 3  # pre-fix: None (distance lost on read)
+            assert second.eval == MATE_EVALUATION
+            assert second.is_terminal is False
+
+            # The stored row itself carries the mate distance.
+            with Session() as db:
+                row = db.get(FenEvalCache, _live_key("16.1"))
+            assert row is not None
+            assert row.mate_in == 3
+            assert row.is_terminal is False
+
+    def test_cached_non_mate_eval_has_no_mate_distance(self):
+        """A plain centipawn eval round-trips through the cache with mate_in
+        None and is_terminal False (mate columns must not leak onto it)."""
+        with _cache_db() as Session:
+            cp_result = EvalResult(best_move_uci="e2e4", eval=0.3)
+            with (
+                patch.object(sf_module, "get_engine_version", return_value="16.1"),
+                patch.object(
+                    sf_module,
+                    "evaluate_fen",
+                    side_effect=lambda fen, engine=None, depth=None: cp_result,
+                ),
+            ):
+                get_or_compute_eval(_START_FEN)
+                hit = get_or_compute_eval(_START_FEN)
+
+            assert hit.eval == 0.3
+            assert hit.mate_in is None
+            assert hit.is_terminal is False
+            with Session() as db:
+                row = db.get(FenEvalCache, _live_key("16.1"))
+            assert row.mate_in is None
+            assert row.is_terminal is False
+
     def test_concurrent_insert_returns_existing_entry(self):
         """If a concurrent writer inserts the same key between our miss-read and
         our commit, the IntegrityError path re-selects and returns that row

@@ -137,6 +137,16 @@ class FenEvalCache(Base):
     fen: Mapped[str] = mapped_column(Text, nullable=False)
     best_move_uci: Mapped[str] = mapped_column(Text, nullable=False)
     eval_pawns: Mapped[float] = mapped_column(Float, nullable=False)
+    # Signed distance-to-mate from the side-to-move perspective (see
+    # EvalResult.mate_in). NULL for ordinary centipawn evals. Persisted so a
+    # cache HIT returns the same shape as a fresh compute -- previously a cached
+    # mate lost its distance-to-mate on read (it defaulted back to None).
+    mate_in: Mapped[int] = mapped_column(Integer, nullable=True)
+    # True when the stored position is itself game-over. Terminal positions are
+    # intentionally NOT cached today (best_move_uci is NOT NULL), so in practice
+    # this is always False for stored rows; it is persisted for shape parity so
+    # a cache read reconstructs the full EvalResult.
+    is_terminal: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     depth: Mapped[int] = mapped_column(Integer, nullable=True)
     movetime_ms: Mapped[int] = mapped_column(Integer, nullable=True)
     engine_name: Mapped[str] = mapped_column(Text, nullable=True)
