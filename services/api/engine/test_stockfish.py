@@ -506,7 +506,7 @@ class TestVersionAwareCache:
                 db.commit()
 
             # Engine is now version B and would compute a different eval.
-            def fake_eval(fen, engine=None):
+            def fake_eval(fen, engine=None, depth=None):
                 return EvalResult(best_move_uci="e2e4", eval=2.0)
 
             stats: dict = {}
@@ -543,7 +543,7 @@ class TestVersionAwareCache:
                 )
                 db.commit()
 
-            def boom(fen, engine=None):  # pragma: no cover - must not run
+            def boom(fen, engine=None, depth=None):  # pragma: no cover - must not run
                 raise AssertionError("cache hit must not call evaluate_fen")
 
             stats: dict = {}
@@ -565,7 +565,9 @@ class TestVersionAwareCache:
                 patch.object(
                     sf_module,
                     "evaluate_fen",
-                    side_effect=lambda fen, engine=None: EvalResult("e2e4", 0.2),
+                    side_effect=lambda fen, engine=None, depth=None: EvalResult(
+                        "e2e4", 0.2
+                    ),
                 ),
             ):
                 get_or_compute_eval(_START_FEN)
@@ -591,7 +593,7 @@ class TestVersionAwareCache:
                 patch.object(
                     sf_module,
                     "evaluate_fen",
-                    side_effect=lambda fen, engine=None: terminal,
+                    side_effect=lambda fen, engine=None, depth=None: terminal,
                 ),
             ):
                 result = get_or_compute_eval(_START_FEN)
@@ -636,7 +638,9 @@ class TestVersionAwareCache:
                 patch.object(
                     sf_module,
                     "evaluate_fen",
-                    side_effect=lambda fen, engine=None: EvalResult("e2e4", 2.0),
+                    side_effect=lambda fen, engine=None, depth=None: EvalResult(
+                        "e2e4", 2.0
+                    ),
                 ),
             ):
                 result = get_or_compute_eval(_START_FEN)

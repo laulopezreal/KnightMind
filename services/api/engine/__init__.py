@@ -15,6 +15,7 @@ from .stockfish import (
     create_engine,
     evaluate_fen,
     get_or_compute_eval,
+    get_search_depth,
     get_top_moves,
     is_stockfish_available,
 )
@@ -53,5 +54,6 @@ __all__ = [
     "create_engine",
     "close_engine",
     "get_or_compute_eval",
+    "get_search_depth",
     "get_top_moves",
 ]
