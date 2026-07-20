@@ -10,7 +10,7 @@ load_dotenv(Path(__file__).resolve().parent / ".env")
 import re
 from contextlib import asynccontextmanager
 from dataclasses import asdict
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Literal
 
 import anyio
@@ -909,9 +909,12 @@ async def create_daily_puzzle_session(
             detail=f"No puzzles found for user '{username}'. Generate puzzles first using POST /puzzles/generate",
         )
 
-    # Mark puzzles as used today
+    # Mark puzzles as used today. Defer to the repository's UTC day default so
+    # the write matches get_daily_puzzles' UTC read (dim 17): a server-local
+    # date.today() here would disagree near the UTC/local midnight boundary and
+    # break the used-today dedup/re-serve.
     puzzle_ids = [p.id for p in puzzles]
-    puzzle_repository.mark_puzzles_used(username, puzzle_ids, date.today())
+    puzzle_repository.mark_puzzles_used(username, puzzle_ids)
 
     # Reload specific puzzles to get updated used_on field
     updated_puzzles = [

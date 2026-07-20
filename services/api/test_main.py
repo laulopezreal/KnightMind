@@ -869,6 +869,51 @@ def test_daily_puzzles_use_utc_day_boundary(db_session, monkeypatch):
     assert {p.id for p in selected} == {"utc-puz-0", "utc-puz-1"}
 
 
+def test_create_daily_session_endpoint_stamps_utc_day(
+    client_with_db, db_session, monkeypatch
+):
+    """The /daily-puzzle-sessions endpoint stamps used_on with the UTC day.
+
+    Regression for dim 17: the endpoint used a server-local ``date.today()`` for
+    the write while ``get_daily_puzzles`` reads with the UTC day boundary. Near
+    the UTC/local midnight boundary the just-served set is written under one date
+    and read under another, breaking the used-today dedup. Simulate a fixed UTC
+    day that differs from the real server-local date and assert the write agrees
+    with the UTC read.
+    """
+    fixed_utc_day = date(2000, 1, 1)  # deliberately != real date.today()
+    monkeypatch.setattr(
+        "services.api.storage.puzzle_repository.utc_today", lambda: fixed_utc_day
+    )
+
+    for i in range(3):
+        _create_puzzle(
+            db_session,
+            f"utc-ep-{i}",
+            "utcep",
+            source_game_id=f"utc-ep-game-{i}",
+            ply=10 + i,
+        )
+    db_session.commit()
+
+    response = client_with_db.post(
+        "/daily-puzzle-sessions", json={"username": "utcep", "n": 2}
+    )
+    assert response.status_code == 200
+    served = {p["id"] for p in response.json()["puzzles"]}
+    for p in response.json()["puzzles"]:
+        # Written under the UTC day, not the server-local date.
+        assert p["used_on"] == fixed_utc_day.isoformat()
+
+    # And a re-request on the same UTC day re-serves exactly that set (the
+    # used-today read matches the write).
+    response2 = client_with_db.post(
+        "/daily-puzzle-sessions", json={"username": "utcep", "n": 2}
+    )
+    assert response2.status_code == 200
+    assert {p["id"] for p in response2.json()["puzzles"]} == served
+
+
 def test_get_daily_puzzles_no_puzzles(client_with_db):
     """Test 404 when user has no puzzles."""
     response = client_with_db.post(
