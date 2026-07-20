@@ -1,3 +1,4 @@
+import logging
 import os
 import sys
 from pathlib import Path
@@ -10,7 +11,7 @@ load_dotenv(Path(__file__).resolve().parent / ".env")
 import re
 from contextlib import asynccontextmanager
 from dataclasses import asdict
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Literal
 
 import anyio
@@ -170,6 +171,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="KnightMind API", version="0.1.0", lifespan=lifespan)
+
+logger = logging.getLogger("knightmind.api")
 
 from services.api.ops import router as ops_router
 
@@ -433,10 +436,13 @@ async def import_chesscom_games(
         raise HTTPException(status_code=502, detail=str(e)) from e
     except ChessComImportError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(
-            status_code=500, detail=f"Internal server error: {str(e)}"
-        ) from e
+        # Log the real error server-side; return a generic message so raw
+        # exception/DB text never reaches the caller (dim 23).
+        logger.exception("Unexpected error importing Chess.com games")
+        raise HTTPException(status_code=500, detail="Internal server error") from e
 
 
 @app.get("/import/status", response_model=ImportStatusResponse)
@@ -511,7 +517,11 @@ class PuzzleListItem(BaseModel):
     swing: float
     fen: str
     side_to_move: str
-    best_move_uci: str
+    # Solution fields are gated: they are populated only when the caller opts in
+    # with ?reveal=true (owner asking to see the answer). Otherwise they are None
+    # / empty so the Library browse surface can't passively echo the solution
+    # into a scored /due session (dim 13).
+    best_move_uci: str | None = None
     # Full set of accepted solutions (multi-PV equivalence set). Falls back to
     # [best_move_uci] for puzzles generated before this was persisted.
     accept_moves_uci: list[str] = []
@@ -909,9 +919,12 @@ async def create_daily_puzzle_session(
             detail=f"No puzzles found for user '{username}'. Generate puzzles first using POST /puzzles/generate",
         )
 
-    # Mark puzzles as used today
+    # Mark puzzles as used today. Defer to the repository's UTC day default so
+    # the write matches get_daily_puzzles' UTC read (dim 17): a server-local
+    # date.today() here would disagree near the UTC/local midnight boundary and
+    # break the used-today dedup/re-serve.
     puzzle_ids = [p.id for p in puzzles]
-    puzzle_repository.mark_puzzles_used(username, puzzle_ids, date.today())
+    puzzle_repository.mark_puzzles_used(username, puzzle_ids)
 
     # Reload specific puzzles to get updated used_on field
     updated_puzzles = [
@@ -1156,9 +1169,10 @@ def _verify_line(puzzle, attempted_line: list[str]) -> PuzzleResult:
 
     The line is solved only when the solver played every one of their plies
     (the even indices of the stored PV) correctly and in order — a wrong move at
-    any ply fails the whole puzzle. Comparison is exact against the canonical PV
-    (the forcing line is defined by its exact moves; the multi-PV equivalence set
-    only applies to legacy single-move puzzles). Never trusts the client's claim.
+    any ply fails the whole puzzle. The FIRST solver move (ply 0) accepts any
+    move in the multi-PV equivalence set (best move + accept_moves_uci), since an
+    equally-good opening move is a valid solve; every later ply must match the
+    canonical forcing line exactly. Never trusts the client's claim (dim 11).
     """
     pv = _solution_pv(puzzle)
     if len(pv) < 2:
@@ -1170,8 +1184,16 @@ def _verify_line(puzzle, attempted_line: list[str]) -> PuzzleResult:
     user_plies = [pv[i] for i in range(0, len(pv), 2)]
     if not attempted_line or len(attempted_line) != len(user_plies):
         return PuzzleResult.FAIL
-    for played, expected in zip(attempted_line, user_plies, strict=True):
-        if _normalize_uci(played) != _normalize_uci(expected):
+    accepted_first = {m.strip().lower() for m in _accept_moves(puzzle) if m}
+    for idx, (played, expected) in enumerate(
+        zip(attempted_line, user_plies, strict=True)
+    ):
+        played_n = _normalize_uci(played)
+        if idx == 0:
+            # First move: any multi-PV equivalent is accepted.
+            if played_n not in accepted_first:
+                return PuzzleResult.FAIL
+        elif played_n != _normalize_uci(expected):
             return PuzzleResult.FAIL
     return PuzzleResult.PASS
 
@@ -1213,7 +1235,13 @@ def _check_solution_move(
             correct=False, result=PuzzleResult.FAIL.value, reply=None, complete=False
         )
 
-    correct = _normalize_uci(attempted_move) == _normalize_uci(pv[ply_index])
+    if ply_index == 0:
+        # First move: accept any multi-PV equivalent (best move + accept set);
+        # later plies must match the exact forcing line (dim 11).
+        accepted_first = {m.strip().lower() for m in _accept_moves(puzzle) if m}
+        correct = _normalize_uci(attempted_move) in accepted_first
+    else:
+        correct = _normalize_uci(attempted_move) == _normalize_uci(pv[ply_index])
     if not correct:
         return CheckResponse(
             correct=False, result=PuzzleResult.FAIL.value, reply=None, complete=False
@@ -1247,6 +1275,11 @@ async def list_puzzles(
     ),
     limit: int = Query(50, ge=1, le=100, description="Page size"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
+    reveal: bool = Query(
+        False,
+        description="Include the solution (best_move_uci/accept_moves_uci). "
+        "Off by default so the browse surface can't echo the answer.",
+    ),
     db: Session = Depends(get_db),
     account: Account | None = Depends(require_account),
 ):
@@ -1419,8 +1452,9 @@ async def list_puzzles(
                 swing=puzzle.swing,
                 fen=puzzle.fen,
                 side_to_move=puzzle.side_to_move,
-                best_move_uci=puzzle.best_move_uci,
-                accept_moves_uci=_accept_moves(puzzle),
+                # Gated on ?reveal=true (dim 13): omit the solution by default.
+                best_move_uci=puzzle.best_move_uci if reveal else None,
+                accept_moves_uci=_accept_moves(puzzle) if reveal else [],
                 status=row_status,
                 attempts=stats.attempts if stats else 0,
                 pass_count=stats.pass_count if stats else 0,
@@ -1452,6 +1486,11 @@ async def list_puzzles(
 async def get_puzzle_detail(
     puzzle_id: str,
     username: str = Query(..., description="Username to look up puzzle for"),
+    reveal: bool = Query(
+        False,
+        description="Include the solution (best_move_uci/accept_moves_uci). "
+        "Off by default so the browse surface can't echo the answer.",
+    ),
     db: Session = Depends(get_db),
     account: Account | None = Depends(require_account),
 ):
@@ -1505,8 +1544,9 @@ async def get_puzzle_detail(
         swing=puzzle.swing,
         fen=puzzle.fen,
         side_to_move=puzzle.side_to_move,
-        best_move_uci=puzzle.best_move_uci,
-        accept_moves_uci=_accept_moves(puzzle),
+        # Gated on ?reveal=true (dim 13): omit the solution by default.
+        best_move_uci=puzzle.best_move_uci if reveal else None,
+        accept_moves_uci=_accept_moves(puzzle) if reveal else [],
         status=computed_status,
         attempts=stats.attempts if stats else 0,
         pass_count=stats.pass_count if stats else 0,
@@ -1608,6 +1648,14 @@ async def review_puzzle(
     if not puzzle:
         raise HTTPException(status_code=404, detail="Puzzle not found")
 
+    # Normalize an empty session_id to NULL (dim 14). The unique index keys on
+    # COALESCE(session_id, ''), so "" and None collapse to the same value; the
+    # idempotency lookup, the write, and the index must all agree on one
+    # representation. Otherwise a first submit with session_id="" then a NULL
+    # retry (same client_review_id) misses both the fast-path replay and the
+    # IntegrityError-replay lookup and 500s. All uses below go through this local.
+    session_id = request.session_id or None
+
     # Idempotent replay: short-circuit before any mutation if this exact
     # client_review_id was already recorded for this (puzzle, user, session).
     if request.client_review_id:
@@ -1615,7 +1663,7 @@ async def review_puzzle(
             db,
             puzzle_id,
             request.username,
-            request.session_id,
+            session_id,
             request.client_review_id,
         )
         if existing:
@@ -1655,7 +1703,7 @@ async def review_puzzle(
         review_source = "client_reported"
 
     # If session_id provided, validate session and update counters
-    if request.session_id:
+    if session_id:
         from services.api.models import PuzzleResult as PR
         from services.api.models import TrainingSession
 
@@ -1666,7 +1714,7 @@ async def review_puzzle(
         # row lock but serializes writers, so the plain SELECT is safe there.
         # Locking the session BEFORE the puzzle-stats row (below) gives a single
         # consistent lock order, so concurrent same-session reviews can't deadlock.
-        stmt = select(TrainingSession).where(TrainingSession.id == request.session_id)
+        stmt = select(TrainingSession).where(TrainingSession.id == session_id)
         if db.get_bind().dialect.name == "postgresql":
             stmt = stmt.with_for_update()
         session = db.scalars(stmt).first()
@@ -1710,7 +1758,7 @@ async def review_puzzle(
             request.username,
             effective_result,
             request.time_spent_ms,
-            session_id=request.session_id,
+            session_id=session_id,
             client_review_id=request.client_review_id,
             attempted_move=request.attempted_move,
             client_result=client_result,
@@ -1740,7 +1788,7 @@ async def review_puzzle(
                 db,
                 puzzle_id,
                 request.username,
-                request.session_id,
+                session_id,
                 request.client_review_id,
             )
             if existing:
@@ -1896,10 +1944,15 @@ async def create_rating_snapshot(
 
     except (UserNotFoundError, NetworkError) as e:
         raise HTTPException(status_code=502, detail=str(e)) from e
+    except HTTPException:
+        # Domain-specific HTTPExceptions (e.g. the 502 above) are already safe.
+        raise
     except Exception as e:
-        if isinstance(e, HTTPException):
-            raise e
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        # Unexpected failure: log the real error server-side but return a generic
+        # message so raw exception/DB text (connection strings, SQL, etc.) never
+        # reaches the caller (dim 23).
+        logger.exception("Unexpected error creating rating snapshot")
+        raise HTTPException(status_code=500, detail="Internal server error") from e
 
 
 class SnapshotHistoryItem(BaseModel):
