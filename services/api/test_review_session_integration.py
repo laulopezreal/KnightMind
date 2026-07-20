@@ -578,14 +578,27 @@ def test_check_endpoint_accepts_equivalent_best_move(client, test_db):
             json={"username": "testuser", "attempted_move": move},
         )
 
+    # A legacy (NULL solution_pv) puzzle still grades against the accepted-solution
+    # set, and its single correct move completes the puzzle. (The multi-move
+    # response also carries reply/complete/next_ply_index; for a legacy puzzle a
+    # correct move has no forced reply and completes immediately.)
+    def _assert(move, *, correct):
+        body = _check(move).json()
+        assert body["correct"] is correct
+        assert body["result"] == ("pass" if correct else "fail")
+        # A single-move puzzle never streams a forced reply or a follow-up ply.
+        assert body["reply"] is None
+        assert body["next_ply_index"] is None
+        assert body["complete"] is correct
+
     # Single best move -> correct.
-    assert _check("d2d4").json() == {"correct": True, "result": "pass"}
+    _assert("d2d4", correct=True)
     # Equivalent from the accept set (NOT the single best move) -> correct.
-    assert _check("g1f3").json() == {"correct": True, "result": "pass"}
+    _assert("g1f3", correct=True)
     # Legal but not in the accept set -> incorrect.
-    assert _check("e2e4").json() == {"correct": False, "result": "fail"}
+    _assert("e2e4", correct=False)
     # Illegal move -> incorrect.
-    assert _check("e2e5").json() == {"correct": False, "result": "fail"}
+    _assert("e2e5", correct=False)
 
 
 def test_wrong_move_is_a_fail_even_when_client_claims_pass(client, test_db):
