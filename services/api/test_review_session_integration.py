@@ -241,6 +241,43 @@ def test_review_endpoint_distinct_client_keys_both_count(client, test_db):
     assert stats.attempts == 2
 
 
+def test_review_endpoint_empty_then_null_session_id_is_idempotent(client, test_db):
+    """dim 14: an empty-string session_id then a NULL retry must replay, not 500.
+
+    The unique index keys on COALESCE(session_id, ''), so "" and None collapse to
+    the same value. Before the fix, _find_existing_review matched session_id with
+    plain equality (IS NULL for None), so a first submit with session_id="" then a
+    retry with session_id=null (same client_review_id) missed the replay fast path
+    AND the IntegrityError-replay lookup, surfacing a 500 and never counting once.
+    """
+    puzzle_id = str(uuid.uuid4())
+    _create_puzzle(test_db, puzzle_id, "testuser", "game-empty-null", 10)
+
+    base = {
+        "username": "testuser",
+        "result": "pass",
+        "time_spent_ms": 1000,
+        "client_review_id": "empty-null-key",
+    }
+
+    # First submit carries an empty-string session_id.
+    r1 = client.post(f"/puzzles/{puzzle_id}/review", json={**base, "session_id": ""})
+    # Retry (same key) carries a NULL session_id.
+    r2 = client.post(f"/puzzles/{puzzle_id}/review", json={**base, "session_id": None})
+
+    assert r1.status_code == 200
+    assert r2.status_code == 200  # not a 500
+
+    # Counted exactly once across the two representations of "no session".
+    review_count = test_db.scalar(select(func.count()).select_from(PuzzleReview))
+    assert review_count == 1
+    stats = test_db.scalars(
+        select(PuzzleStats).where(PuzzleStats.puzzle_id == puzzle_id)
+    ).first()
+    assert stats.attempts == 1
+    assert stats.pass_count == 1
+
+
 def _make_race_find(monkeypatch):
     """Force the endpoint's *initial* replay SELECT to miss exactly once.
 

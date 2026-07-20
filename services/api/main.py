@@ -1627,6 +1627,14 @@ async def review_puzzle(
     if not puzzle:
         raise HTTPException(status_code=404, detail="Puzzle not found")
 
+    # Normalize an empty session_id to NULL (dim 14). The unique index keys on
+    # COALESCE(session_id, ''), so "" and None collapse to the same value; the
+    # idempotency lookup, the write, and the index must all agree on one
+    # representation. Otherwise a first submit with session_id="" then a NULL
+    # retry (same client_review_id) misses both the fast-path replay and the
+    # IntegrityError-replay lookup and 500s. All uses below go through this local.
+    session_id = request.session_id or None
+
     # Idempotent replay: short-circuit before any mutation if this exact
     # client_review_id was already recorded for this (puzzle, user, session).
     if request.client_review_id:
@@ -1634,7 +1642,7 @@ async def review_puzzle(
             db,
             puzzle_id,
             request.username,
-            request.session_id,
+            session_id,
             request.client_review_id,
         )
         if existing:
@@ -1674,7 +1682,7 @@ async def review_puzzle(
         review_source = "client_reported"
 
     # If session_id provided, validate session and update counters
-    if request.session_id:
+    if session_id:
         from services.api.models import PuzzleResult as PR
         from services.api.models import TrainingSession
 
@@ -1685,7 +1693,7 @@ async def review_puzzle(
         # row lock but serializes writers, so the plain SELECT is safe there.
         # Locking the session BEFORE the puzzle-stats row (below) gives a single
         # consistent lock order, so concurrent same-session reviews can't deadlock.
-        stmt = select(TrainingSession).where(TrainingSession.id == request.session_id)
+        stmt = select(TrainingSession).where(TrainingSession.id == session_id)
         if db.get_bind().dialect.name == "postgresql":
             stmt = stmt.with_for_update()
         session = db.scalars(stmt).first()
@@ -1729,7 +1737,7 @@ async def review_puzzle(
             request.username,
             effective_result,
             request.time_spent_ms,
-            session_id=request.session_id,
+            session_id=session_id,
             client_review_id=request.client_review_id,
             attempted_move=request.attempted_move,
             client_result=client_result,
@@ -1759,7 +1767,7 @@ async def review_puzzle(
                 db,
                 puzzle_id,
                 request.username,
-                request.session_id,
+                session_id,
                 request.client_review_id,
             )
             if existing:
