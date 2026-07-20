@@ -161,6 +161,58 @@ async def test_worker_execute_job(mock_to_thread, mock_generate, db_session):
     assert updated_job.result_json["generated"] == 5
 
 
+@patch("asyncio.to_thread", side_effect=run_sync_in_thread)
+@pytest.mark.asyncio
+async def test_cancel_in_success_window_is_not_overwritten(mock_to_thread, db_session):
+    """Audit invariant: a canceled job must NEVER become succeeded.
+
+    Reproduces the two-transaction success-path race in ``execute_job``:
+    generation returns, then a ``POST /jobs/{id}/cancel`` commits BEFORE the
+    worker writes SUCCEEDED. The completion write is now a guarded UPDATE
+    (``WHERE status = RUNNING``), so the cancel wins and the job stays CANCELED.
+
+    We land the cancel exactly in that window by having ``asdict`` (called only
+    while the worker builds its completion write, after generation returned)
+    commit the cancel as a side effect. On the old unconditional write this
+    flips the job to SUCCEEDED and the test FAILS; with the guard it stays
+    CANCELED and the result is discarded.
+    """
+    from dataclasses import asdict as real_asdict
+
+    from services.api.puzzles.generator import GenerationResult
+    from services.api.worker import worker
+
+    job = Job(username="cancel-window", status=JobStatus.RUNNING)
+    db_session.add(job)
+    db_session.commit()
+    db_session.refresh(job)
+    job_id = job.id
+
+    def cancel_then_serialize(result):
+        # Simulate the cancel endpoint committing in the success window.
+        db_session.execute(
+            update(Job).where(Job.id == job_id).values(status=JobStatus.CANCELED)
+        )
+        db_session.commit()
+        return real_asdict(result)
+
+    with (
+        patch("services.api.worker.generate_puzzles") as mock_generate,
+        patch("services.api.worker.asdict", side_effect=cancel_then_serialize),
+        patch("services.api.worker.SessionLocal") as mock_sl,
+    ):
+        mock_generate.return_value = GenerationResult(5, 0, 100)
+        mock_sl.return_value.__enter__.return_value = db_session
+        mock_sl.return_value.__exit__.return_value = None
+
+        await worker.execute_job(job_id)
+
+    db_session.expire_all()
+    final = db_session.get(Job, job_id)
+    assert final.status == JobStatus.CANCELED  # NOT succeeded
+    assert final.result_json is None  # completion result discarded
+
+
 # ---------------------------------------------------------------------------
 # AUDIT GATE 5: atomic job claim (QUEUED -> RUNNING)
 # ---------------------------------------------------------------------------

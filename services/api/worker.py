@@ -216,43 +216,64 @@ class JobWorker:
                 ),
             )
 
-            # Check if job was canceled during execution
+            # Mark success — but ONLY if the job is still RUNNING. A cancel
+            # (POST /jobs/{id}/cancel) can land after generation returns and
+            # before this write; that cancel must win, because CANCELED is
+            # terminal and an audited job must never go canceled -> succeeded.
+            # A single guarded UPDATE (WHERE status = RUNNING) closes that race
+            # atomically on both Postgres and SQLite: rowcount == 0 means the
+            # job left RUNNING (canceled, or otherwise no longer ours), so we
+            # discard the completion instead of overwriting its terminal state.
+            now = datetime.now(timezone.utc)
             with SessionLocal() as db:
-                stmt = select(Job).where(Job.id == job_id)
-                job = db.scalars(stmt).first()
-                if job and job.status == JobStatus.CANCELED:
-                    logger.info(f"Job {job_id} was canceled during execution")
-                    # Job already marked as canceled, just return
-                    return
+                success_stmt = (
+                    update(Job)
+                    .where(Job.id == job_id, Job.status == JobStatus.RUNNING)
+                    .values(
+                        status=JobStatus.SUCCEEDED,
+                        progress_current=100,
+                        progress_total=100,
+                        result_json=asdict(result),
+                        message="Analysis complete",
+                        updated_at=now,
+                    )
+                )
+                rowcount = db.execute(success_stmt).rowcount
+                db.commit()
 
-            # Update success
-            with SessionLocal() as db:
-                stmt = select(Job).where(Job.id == job_id)
-                job = db.scalars(stmt).first()
-                if job:
-                    job.status = JobStatus.SUCCEEDED
-                    job.progress_current = 100
-                    job.progress_total = 100
-                    job.result_json = asdict(result)
-                    job.message = "Analysis complete"
-                    job.updated_at = datetime.now(timezone.utc)
-                    db.commit()
-
-            logger.info(f"Job {job_id} succeeded")
+            if rowcount == 0:
+                logger.info(
+                    f"Job {job_id} completion discarded: job is no longer "
+                    "RUNNING (likely canceled); terminal status left intact"
+                )
+            else:
+                logger.info(f"Job {job_id} succeeded")
 
         except Exception as e:
             logger.error(f"Job {job_id} failed: {e}")
             traceback.print_exc()
+            # Same guard as the success path: only a still-RUNNING job may be
+            # transitioned to FAILED. A cancel that landed during a failing run
+            # is terminal too — a canceled job must never become FAILED either.
+            now = datetime.now(timezone.utc)
             with SessionLocal() as db:
-                stmt = select(Job).where(Job.id == job_id)
-                job = db.scalars(stmt).first()
-                if job:
-                    # Don't overwrite canceled status
-                    if job.status != JobStatus.CANCELED:
-                        job.status = JobStatus.FAILED
-                        job.error_message = str(e)
-                        job.updated_at = datetime.now(timezone.utc)
-                    db.commit()
+                failure_stmt = (
+                    update(Job)
+                    .where(Job.id == job_id, Job.status == JobStatus.RUNNING)
+                    .values(
+                        status=JobStatus.FAILED,
+                        error_message=str(e),
+                        updated_at=now,
+                    )
+                )
+                fail_rowcount = db.execute(failure_stmt).rowcount
+                db.commit()
+
+            if fail_rowcount == 0:
+                logger.info(
+                    f"Job {job_id} failure discarded: job is no longer "
+                    "RUNNING (likely canceled); terminal status left intact"
+                )
 
 
 worker = JobWorker()
