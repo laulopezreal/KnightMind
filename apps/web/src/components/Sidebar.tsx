@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { FocusTrap } from 'focus-trap-react';
 import { usePuzzleMode } from '../context/PuzzleModeContext';
+import AuthControl from './AuthControl';
 
 interface SidebarProps {
     mobileOpen?: boolean;
@@ -228,12 +229,17 @@ export default function Sidebar({ mobileOpen = false, onMobileClose }: SidebarPr
                 </nav>
             </div>
 
-            {/* Decorative wordmark — the brand is already conveyed by the document
-                title and header, and at this size/opacity it's a styling flourish,
-                so hide it from assistive tech rather than announce a low-contrast
-                duplicate. */}
-            <div className="text-xs font-serif opacity-60 tracking-widest" aria-hidden="true">
-                KNIGHTMIND
+            <div className="space-y-4">
+                {/* Account / logout — only rendered when authenticated. */}
+                <AuthControl />
+
+                {/* Decorative wordmark — the brand is already conveyed by the document
+                    title and header, and at this size/opacity it's a styling flourish,
+                    so hide it from assistive tech rather than announce a low-contrast
+                    duplicate. */}
+                <div className="text-xs font-serif opacity-60 tracking-widest" aria-hidden="true">
+                    KNIGHTMIND
+                </div>
             </div>
             </div>
             </FocusTrap>
