@@ -27,15 +27,18 @@ A platform for analyzing chess games, tracking progress, and gaining insights us
 ## Infrastructure & Deployment
 
 ### Current State
-- **Database**: Migrated from SQLite to Supabase (PostgreSQL). Migration complete (~65k games).
-- **RLS**: Enabled on all tables, no policies (FastAPI connects as DB owner, bypasses RLS).
-- **API**: FastAPI connects to Postgres via `DATABASE_URL` (direct connection string, not Supabase client SDK).
+- **Database**: Self-hosted Postgres (`postgres:16-alpine`) running under Docker Compose alongside the API on the production VPS (claw-home). Supabase was an earlier migration step and has been retired — it is no longer part of the running stack.
+- **API**: FastAPI connects to Postgres via `DATABASE_URL` (direct connection string). The API fails fast at startup when `DATABASE_URL` is unset; `KNIGHTMIND_DEV_SQLITE=1` is a local-dev-only opt-in for a throwaway SQLite file.
 - **Stockfish**: Local binary (`STOCKFISH_PATH`), not a separate service.
+- **Auth / multi-tenancy**: Multi-user auth (JWT bearer + per-username ownership checks) lives behind `KNIGHTMIND_REQUIRE_AUTH` (default OFF — single-user behaviour). See `services/api/identity.py`.
+- **Abuse resistance**: Per-principal rate limits + payload size caps on expensive routes (`/engine/eval`, `/puzzles/generate`, `/import/chesscom`, `/ratings/snapshot`). See `services/api/ratelimit.py`.
+- **Engine cache**: The FEN eval cache is version-aware — cache keys fold in the scheme, eval-conversion, and engine versions so stale entries self-invalidate. See `services/api/engine/stockfish.py`.
+- **Puzzle reviews**: Review outcomes are server-verified (the solution is checked server-side, not trusted from the client).
 
-### Target Architecture (planned)
-- **Hetzner VPS (64GB RAM)**: FastAPI + Stockfish + Postgres — all on one machine.
-- **Frontend**: React/Vite static site deployed to Vercel or Cloudflare Pages.
-- **Supabase**: To be replaced by self-hosted Postgres on Hetzner.
+### Deployment topology
+- **VPS (claw-home)**: FastAPI + Stockfish + Postgres on one machine via Docker Compose (project `knightmind`). Operational SSOT is `OPERATIONS.md`.
+- **Frontend**: React/Vite static site on Cloudflare Pages, serving the canonical domain `https://guessme.world` (API at `https://api.guessme.world`).
+- **Future**: Optional Neo4j for graph analysis.
 
 ## Development Rules
 

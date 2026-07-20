@@ -346,7 +346,9 @@ Alembic migrations load `services/api/.env` (the same file the API reads) and us
 | GET | `/jobs/{job_id}` | Get job status (queued, running, succeeded, failed) |
 | GET | `/puzzles/daily?username=...&n=5` | Get daily puzzle set (legacy selection) |
 | GET | `/puzzles/due?username=...&n=5` | Get puzzles prioritized by SR (due first, then new) |
-| POST | `/puzzles/{puzzle_id}/review` | Record review result and update SR scheduling |
+| POST | `/puzzles/{puzzle_id}/review` | Record a review; the outcome is verified server-side before SR scheduling |
+
+**Auth, ownership, and rate limits:** Multi-user auth is gated by `KNIGHTMIND_REQUIRE_AUTH` (default OFF — the API stays single-user and the current frontend sends no token). When enabled, expensive routes require a valid bearer token and enforce per-user ownership of the target username (`services/api/identity.py`). Regardless of auth, the expensive routes (`/engine/eval`, `/puzzles/generate`, `/import/chesscom`, `/ratings/snapshot`) carry per-principal rate limits and request-size caps (`services/api/ratelimit.py`). Puzzle solutions are not sent to the client with the training payload; `/puzzles/{puzzle_id}/review` re-checks the submitted move server-side.
 
 ## Tech Stack
 
