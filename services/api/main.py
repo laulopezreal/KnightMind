@@ -14,6 +14,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Literal
 
 import anyio
+import chess
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -524,6 +525,12 @@ class ReviewRequest(BaseModel):
     # A retried/double-submitted review with the same key is replayed without
     # re-counting stats/session or advancing scheduling.
     client_review_id: str | None = None
+    # Optional UCI move the user actually played. When supplied, the SERVER
+    # verifies it against the puzzle's accepted-solution set and computes the
+    # authoritative pass/fail, ignoring the client's self-reported ``result``.
+    # When omitted (legacy clients, timeouts, reveals) the review is recorded as
+    # client-reported and NOT labelled verified.
+    attempted_move: str | None = None
 
 
 @app.get("/")
@@ -975,6 +982,33 @@ def _accept_moves(puzzle) -> list[str]:
     return moves
 
 
+def _verify_attempt(puzzle, attempted_move: str) -> PuzzleResult:
+    """Server-authoritative pass/fail for a played move (audit gate 7).
+
+    The move is parsed and checked for legality in the puzzle's FEN, then
+    compared against the accepted-solution set (best move + multi-PV
+    equivalents). A move that is illegal, malformed, or simply not in the
+    accepted set is a FAIL — the server never trusts the client's claim here.
+    Comparison is on normalised (lower-cased) UCI so casing can't smuggle a
+    false pass.
+    """
+    candidate = (attempted_move or "").strip().lower()
+    if not candidate:
+        return PuzzleResult.FAIL
+
+    # Legality: reject malformed or illegal moves outright.
+    try:
+        board = chess.Board(puzzle.fen)
+        move = chess.Move.from_uci(candidate)
+    except (ValueError, IndexError):
+        return PuzzleResult.FAIL
+    if move not in board.legal_moves:
+        return PuzzleResult.FAIL
+
+    accepted = {m.strip().lower() for m in _accept_moves(puzzle) if m}
+    return PuzzleResult.PASS if candidate in accepted else PuzzleResult.FAIL
+
+
 @app.get("/puzzles/list", response_model=PuzzleListResponse)
 async def list_puzzles(
     username: str = Query(..., description="Username to list puzzles for"),
@@ -1278,11 +1312,18 @@ def _find_existing_review(db, puzzle_id, username, session_id, client_review_id)
     ).first()
 
 
-def _build_review_response(stats, puzzle_stats, result) -> dict:
+def _build_review_response(
+    stats, puzzle_stats, result, verified: bool = False, source: str | None = None
+) -> dict:
     """Build the review endpoint payload for a given (stats, result).
 
     Shared by the normal path and the idempotent-replay path so a replayed
     review returns the same shape without re-running any scheduling logic.
+
+    ``result`` here is the authoritative (server-decided) outcome. ``verified``
+    and ``source`` tell the client whether that outcome was independently
+    checked by the server or merely echoes the client's self-report — so the UI
+    and analytics never present a self-reported pass as verified skill.
     """
     result_val = result.value if isinstance(result, PuzzleResult) else result
     feedback_message = ""
@@ -1305,6 +1346,10 @@ def _build_review_response(stats, puzzle_stats, result) -> dict:
         "ease_factor": stats.ease_factor,
         "feedback": feedback_message,
         "puzzle_info": puzzle_stats,
+        # Server-decided outcome and whether it was independently verified.
+        "result": result_val,
+        "verified": verified,
+        "source": source,
         "stats": {
             "attempts": stats.attempts,
             "pass_count": stats.pass_count,
@@ -1355,7 +1400,28 @@ async def review_puzzle(
             puzzle_stats = puzzle_repository.get_puzzle_stats(
                 request.username, puzzle_id
             )
-            return _build_review_response(stats, puzzle_stats, existing.result)
+            return _build_review_response(
+                stats,
+                puzzle_stats,
+                existing.result,
+                verified=existing.verified,
+                source=existing.source,
+            )
+
+    # Server-verified training integrity (audit gate 7): when the client sends
+    # the move it played, the SERVER decides pass/fail from the board — the
+    # client's self-reported ``result`` is recorded (client_result) but never
+    # trusted for the outcome. Absent a move, fall back to the client's claim
+    # and mark it unverified so analytics can tell skill from self-report.
+    client_result = request.result
+    if request.attempted_move is not None:
+        effective_result = _verify_attempt(puzzle, request.attempted_move)
+        verified = True
+        review_source = "server_verified"
+    else:
+        effective_result = request.result
+        verified = False
+        review_source = "client_reported"
 
     # If session_id provided, validate session and update counters
     if request.session_id:
@@ -1376,8 +1442,10 @@ async def review_puzzle(
         if session.completed_at is not None:
             raise HTTPException(status_code=400, detail="Session already completed")
 
-        # Increment session counters (will be committed with review)
-        if request.result == PR.PASS:
+        # Increment session counters (will be committed with review). Use the
+        # SERVER-decided outcome so a spoofed "pass" with a wrong move can't
+        # inflate session pass_count / streak.
+        if effective_result == PR.PASS:
             session.pass_count += 1
             # Update streak
             session.current_streak += 1
@@ -1393,19 +1461,25 @@ async def review_puzzle(
             session.total_time_ms += request.time_spent_ms
 
     try:
-        # 1. Record individual review (with optional session_id + idempotency key)
+        # 1. Record individual review (with optional session_id + idempotency
+        #    key). ``result`` is the authoritative outcome; the client's raw
+        #    claim and how it was decided are recorded alongside it.
         insert_puzzle_review(
             db,
             puzzle_id,
             request.username,
-            request.result,
+            effective_result,
             request.time_spent_ms,
             session_id=request.session_id,
             client_review_id=request.client_review_id,
+            attempted_move=request.attempted_move,
+            client_result=client_result,
+            verified=verified,
+            source=review_source,
         )
 
         # 2. Update aggregate stats (triggers scheduling logic)
-        stats = update_puzzle_stats(db, puzzle_id, request.username, request.result)
+        stats = update_puzzle_stats(db, puzzle_id, request.username, effective_result)
 
         # 3. Get puzzle details for feedback
         puzzle_stats = puzzle_repository.get_puzzle_stats(request.username, puzzle_id)
@@ -1434,11 +1508,24 @@ async def review_puzzle(
                 puzzle_stats = puzzle_repository.get_puzzle_stats(
                     request.username, puzzle_id
                 )
-                return _build_review_response(stats, puzzle_stats, existing.result)
+                return _build_review_response(
+                    stats,
+                    puzzle_stats,
+                    existing.result,
+                    verified=existing.verified,
+                    source=existing.source,
+                )
         raise
 
-    # 5. Build the response (feedback + scheduling + stats)
-    return _build_review_response(stats, puzzle_stats, request.result)
+    # 5. Build the response (feedback + scheduling + stats). Feedback reflects
+    #    the server-decided outcome, not the client's self-reported claim.
+    return _build_review_response(
+        stats,
+        puzzle_stats,
+        effective_result,
+        verified=verified,
+        source=review_source,
+    )
 
 
 # --- Rating Drivers Explainer Support ---
