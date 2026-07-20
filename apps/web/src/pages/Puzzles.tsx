@@ -36,6 +36,15 @@ export default function Puzzles() {
     // fetched on demand (reveal / full clue) and held only for the current
     // puzzle, so the client never holds the answer before the user asks.
     const [revealedMove, setRevealedMove] = useState<string | null>(null);
+    // Full solution line (fetched on reveal / full clue), for puzzles that store
+    // a multi-move principal variation. Legacy single-move puzzles leave this empty.
+    const [revealedPv, setRevealedPv] = useState<string[]>([]);
+    // Multi-move solve progress. `linePlyIndex` is the index of the solver's NEXT
+    // move within the line (0, 2, 4, ...); `attemptedLine` accumulates the moves
+    // the user has played so the whole line can be server-verified on completion.
+    // Legacy single-move puzzles simply solve at ply 0 and complete immediately.
+    const [linePlyIndex, setLinePlyIndex] = useState(0);
+    const [attemptedLine, setAttemptedLine] = useState<string[]>([]);
 
     // Get motif filter and warmup mode from URL query params
     const [searchParams] = useSearchParams();
@@ -326,9 +335,12 @@ export default function Puzzles() {
         if (revealedMove) return revealedMove;
         if (!currentPuzzle || !username) return null;
         try {
-            const { best_move_uci } = await revealPuzzle(currentPuzzle.id, username);
+            const { best_move_uci, solution_pv } = await revealPuzzle(currentPuzzle.id, username);
             const move = best_move_uci.toLowerCase();
             setRevealedMove(move);
+            // Keep the whole line so Reveal can show the full combination, not
+            // only the first move.
+            setRevealedPv((solution_pv ?? []).map((m) => m.toLowerCase()));
             return move;
         } catch (err) {
             console.error('Failed to reveal solution:', err);
@@ -336,18 +348,78 @@ export default function Puzzles() {
         }
     };
 
-    const handleCheckAnswer = async () => {
+    // Verify one played move server-side and, for a multi-move line, auto-play
+    // the opponent's forced reply and advance to the next ply — without the
+    // client ever holding the solver's upcoming answer (audit gate 13). The
+    // whole line is recorded (attemptedLine) so a completed solve is verified
+    // end-to-end on review. `boardAfterMove` already has the user's move applied.
+    const processUserMove = async (boardAfterMove: Chess, uciMove: string) => {
         if (!currentPuzzle) return;
-        const normalizedUserMove = userMove.trim().toLowerCase();
-        if (!normalizedUserMove) return;
+        const normalized = uciMove.toLowerCase();
+        // Reflect the user's move immediately.
+        setGame(new Chess(boardAfterMove.fen()));
+        setUserMove(normalized);
         try {
-            // Server decides correct/incorrect — the client never holds the answer.
-            const { correct } = await checkPuzzle(currentPuzzle.id, username, normalizedUserMove);
-            setStatus(correct ? 'correct' : 'incorrect');
+            const res = await checkPuzzle(currentPuzzle.id, username, normalized, linePlyIndex);
+            if (!res.correct) {
+                setStatus('incorrect');
+                return;
+            }
+            setAttemptedLine((prev) => [...prev, normalized]);
+            // Play the opponent's forced reply — safe to show; it's the forced
+            // response, not the solver's next answer (which the server withholds).
+            if (res.reply) {
+                try {
+                    boardAfterMove.move({
+                        from: res.reply.slice(0, 2),
+                        to: res.reply.slice(2, 4),
+                        promotion: res.reply.slice(4, 5) || undefined,
+                    });
+                    setGame(new Chess(boardAfterMove.fen()));
+                } catch (replyErr) {
+                    console.error('Failed to apply opponent reply:', replyErr);
+                }
+            }
+            // The line continues only when the server hands back the next ply to
+            // play; otherwise the puzzle is solved (a completed line, or a legacy
+            // single-move puzzle whose response carries no next ply). Driving off
+            // next_ply_index keeps a response that omits `complete` working too.
+            if (typeof res.next_ply_index === 'number') {
+                setLinePlyIndex(res.next_ply_index);
+                setUserMove('');
+                // status stays 'solving' — prompt the next move.
+            } else {
+                setStatus('correct');
+            }
         } catch (err) {
             console.error('Failed to check move:', err);
             setStatus('incorrect');
         }
+    };
+
+    const handleCheckAnswer = async () => {
+        if (!currentPuzzle) return;
+        const normalizedUserMove = userMove.trim().toLowerCase();
+        if (!normalizedUserMove) return;
+        // Apply the typed move to a working board so a multi-move line can play
+        // out its replies just like the drag path does.
+        const board = new Chess(game.fen());
+        let move;
+        try {
+            move = board.move({
+                from: normalizedUserMove.slice(0, 2),
+                to: normalizedUserMove.slice(2, 4),
+                promotion: normalizedUserMove.slice(4, 5) || undefined,
+            });
+        } catch { move = null; }
+        if (!move) {
+            // Illegal/malformed typed move — an incorrect attempt, never a crash.
+            setStatus('incorrect');
+            return;
+        }
+        clue.reset();
+        const uciMove = `${move.from}${move.to}${move.promotion || ''}`;
+        await processUserMove(board, uciMove);
     };
 
     const handleRevealSolution = async () => {
@@ -383,6 +455,10 @@ export default function Puzzles() {
         setGame(new Chess(currentPuzzle.fen));
         // Drop any solution held for the previous puzzle.
         setRevealedMove(null);
+        setRevealedPv([]);
+        // Restart the multi-move line for the new puzzle.
+        setLinePlyIndex(0);
+        setAttemptedLine([]);
     }
 
     // Reset clue and start timer when puzzle changes (side effects in effect)
@@ -399,18 +475,12 @@ export default function Puzzles() {
             const move = game.move({ from: sourceSquare, to: targetSquare, promotion: promotion || 'q' });
             if (move === null) return false;
             clue.reset();
-            setGame(new Chess(game.fen()));
             const uciMove = `${move.from}${move.to}${move.promotion || ''}`;
-            setUserMove(uciMove);
             // The board applies the move locally (chess.js validates legality),
-            // but whether it SOLVES the puzzle is decided server-side so the
-            // client never holds the answer (audit gate 13).
-            void checkPuzzle(currentPuzzle.id, username, uciMove)
-                .then(({ correct }) => setStatus(correct ? 'correct' : 'incorrect'))
-                .catch((err) => {
-                    console.error('Failed to check move:', err);
-                    setStatus('incorrect');
-                });
+            // but whether it SOLVES the puzzle — and, for a multi-move line, the
+            // opponent's forced reply — is decided server-side so the client
+            // never holds the answer ahead of time (audit gate 13).
+            void processUserMove(game, uciMove);
             return true;
         } catch { return false; }
     };
@@ -421,6 +491,8 @@ export default function Puzzles() {
             setStatus('solving');
             setUserMove('');
             setLastFeedback('');
+            setLinePlyIndex(0);
+            setAttemptedLine([]);
             clue.reset();
         }
     };
@@ -432,9 +504,14 @@ export default function Puzzles() {
         isAdvancingPuzzle.current = true;
         try {
             if (status === 'correct') {
-                // Send the played move so the SERVER verifies the solve rather
-                // than trusting the client's self-graded 'pass'.
-                await handleReviewPuzzle('pass', undefined, userMove.trim().toLowerCase() || undefined);
+                // Send the WHOLE solved line (space-separated UCI) so the SERVER
+                // re-verifies every ply — a puzzle counts as solved only when the
+                // full line was played correctly. Falls back to the single move
+                // for legacy single-move puzzles.
+                const solvedLine = attemptedLine.length > 0
+                    ? attemptedLine.join(' ')
+                    : (userMove.trim().toLowerCase() || undefined);
+                await handleReviewPuzzle('pass', undefined, solvedLine);
             } else if (status === 'revealed') {
                 // Revealed solution: a self-reported fail, no move to verify.
                 await handleReviewPuzzle('fail');
@@ -967,7 +1044,11 @@ export default function Puzzles() {
 
                         {/* Status Area */}
                         <div className="min-h-[100px] flex items-center justify-center text-center p-6 border border-primary/10 rounded-sm relative overflow-hidden" role="status" aria-live="polite">
-                            {status === 'solving' && clue.clueStage === 0 && <p className="text-primary/70 font-serif text-lg italic">Find the best move...</p>}
+                            {status === 'solving' && clue.clueStage === 0 && (
+                                linePlyIndex > 0
+                                    ? <p className="text-positive font-serif text-lg italic">Good move — now find the next move in the line.</p>
+                                    : <p className="text-primary/70 font-serif text-lg italic">Find the best move...</p>
+                            )}
                             {status === 'solving' && clue.clueStage === 1 && (
                                 <p className="text-primary/80 font-sans text-sm">
                                     {clue.pieceHint || 'Move the correct piece'}
@@ -991,8 +1072,12 @@ export default function Puzzles() {
                             )}
                             {status === 'revealed' && (
                                 <div>
-                                    <p className="text-primary/70 font-sans text-xs uppercase tracking-widest mb-1">Solution</p>
-                                    <p className="text-primary font-mono text-xl">{revealedMove ?? '…'}</p>
+                                    <p className="text-primary/70 font-sans text-xs uppercase tracking-widest mb-1">
+                                        {revealedPv.length > 1 ? 'Solution line' : 'Solution'}
+                                    </p>
+                                    <p className="text-primary font-mono text-xl">
+                                        {revealedPv.length > 1 ? revealedPv.join(' ') : (revealedMove ?? '…')}
+                                    </p>
                                 </div>
                             )}
                         </div>
@@ -1120,6 +1205,9 @@ export default function Puzzles() {
                                                 setStatus('solving');
                                                 setUserMove('');
                                                 setGame(new Chess(currentPuzzle.fen));
+                                                // Restart the line from the top for the retry.
+                                                setLinePlyIndex(0);
+                                                setAttemptedLine([]);
                                                 clue.reset();
                                             }}
                                             className="px-6 py-4 border border-primary/20 text-primary rounded-sm font-serif text-lg transition-all km-interactive km-focus-visible">
