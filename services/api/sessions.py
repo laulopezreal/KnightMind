@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from services.api.db import get_db
 from services.api.identity import assert_owns_username, require_account
 from services.api.models import Account, RatingSnapshot, TrainingSession
+from services.api.usernames import Username
 from services.ingest import get_player_stats
 
 logger = logging.getLogger(__name__)
@@ -28,7 +29,7 @@ router = APIRouter(prefix="/sessions", tags=["sessions"])
 
 # Request/Response Models
 class StartSessionRequest(BaseModel):
-    username: str
+    username: Username
     n: int
     session_type: str = "standard"  # "standard", "timed", "accuracy_goal"
     target_accuracy: float | None = None  # Target accuracy percentage (0.0-100.0)
@@ -47,7 +48,7 @@ class StartSessionResponse(BaseModel):
 
 
 class CompleteSessionRequest(BaseModel):
-    username: str
+    username: Username
 
 
 class SessionSummary(BaseModel):
@@ -68,7 +69,7 @@ class SessionSummary(BaseModel):
 
 
 class UseHintRequest(BaseModel):
-    username: str
+    username: Username
 
 
 @router.post("/start", response_model=StartSessionResponse)
@@ -115,7 +116,7 @@ async def start_session(
 
 @router.get("/recent", response_model=list[SessionSummary])
 async def get_recent_sessions(
-    username: str,
+    username: Username,
     limit: int = 10,
     db: Session = Depends(get_db),
     account: Account | None = Depends(require_account),

@@ -392,12 +392,15 @@ def test_owner_access_is_case_and_whitespace_insensitive(iso, handle):
     assert resp.status_code == 200
 
 
-def test_cyrillic_homoglyph_is_a_different_username(iso):
-    # 'аlice' with a Cyrillic 'а' must NOT match A's Latin 'alice' claim.
+def test_cyrillic_homoglyph_is_rejected(iso):
+    # 'аlice' with a Cyrillic 'а' must NOT match A's Latin 'alice' claim. It is
+    # now rejected at the canonicalization boundary (422, non-ASCII handle)
+    # before ownership is even evaluated, so it can neither borrow A's data nor
+    # silently spin up a distinct empty user.
     resp = iso["client"].get(
         "/puzzles/list", params={"username": "аlice"}, headers=_auth(iso["token_a"])
     )
-    assert resp.status_code == 403
+    assert resp.status_code == 422
 
 
 # --- 7. Missing / invalid credentials → 401 ---------------------------------
