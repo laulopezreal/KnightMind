@@ -29,8 +29,13 @@ services:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    # Bind Postgres to loopback only: publishing bare "5432:5432" binds
+    # 0.0.0.0 (publicly reachable, and Docker's DNAT rules bypass UFW), which
+    # exposed the DB to the internet guarded only by the password. The API
+    # reaches Postgres over the compose network at db:5432, so the host publish
+    # is only needed for host-local psql/backups — 127.0.0.1 covers those.
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
