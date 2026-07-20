@@ -77,7 +77,21 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    """Downgrade schema: games PK -> (game_id,)."""
+    """Downgrade schema: games PK -> (game_id,).
+
+    PRECONDITION: safe only while no game is dual-owned. This downgrade
+    collapses the composite ``(game_id, username)`` primary key back to a
+    single ``game_id`` column. If both participants of a physical game have
+    imported it, two rows share the same ``game_id`` (differing only by
+    ``username``); dropping ``username`` from the key makes those rows violate
+    the single-column uniqueness and the downgrade FAILS (Postgres: duplicate
+    key / cannot create PRIMARY KEY; SQLite: UNIQUE constraint on the recreated
+    table). There is no automatic, non-destructive fix -- choosing a winning row
+    would silently discard the other owner's copy. Before downgrading, ensure no
+    ``game_id`` appears more than once in ``games`` (e.g.
+    ``SELECT game_id FROM games GROUP BY game_id HAVING COUNT(*) > 1``) and
+    resolve any duplicates by hand first.
+    """
     bind = op.get_bind()
     inspector = sa.inspect(bind)
     if not inspector.has_table("games"):

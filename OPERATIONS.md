@@ -232,6 +232,15 @@ docker compose --env-file .env.docker exec api alembic -c services/api/alembic.i
 docker volume rm knightmind_pgdata
 ```
 
+## Migration downgrade preconditions
+
+Some migrations are not freely reversible. Check here before running `alembic downgrade`.
+
+- **`b2c3d4e5f6a7` (per-user game ownership)** — the downgrade collapses the composite `games` primary key `(game_id, username)` back to `game_id` alone. It is safe **only while no game is dual-owned**. Once both participants of a physical game have imported it, two rows share one `game_id` and the downgrade fails on the single-column uniqueness (Postgres: duplicate key; SQLite: UNIQUE constraint on the recreated table). Before downgrading, confirm there are no duplicates and resolve any by hand — dropping one is destructive:
+  ```sql
+  SELECT game_id, COUNT(*) FROM games GROUP BY game_id HAVING COUNT(*) > 1;
+  ```
+
 ## Current open follow-up
 
 No public API ingress repair remains after 2026-07-10. Useful follow-ups are operational hardening, not emergency repair:
