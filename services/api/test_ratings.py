@@ -151,6 +151,28 @@ def test_create_rating_snapshot_success(mock_get_stats, client_with_db, db_sessi
 
 
 @patch("services.api.main.get_player_stats")
+def test_create_rating_snapshot_hides_internal_error(mock_get_stats, client_with_db):
+    """dim 23: an unexpected exception must not leak its raw text to the caller.
+
+    The catch-all returns a generic 500 detail; the real error is only logged
+    server-side. Domain exceptions (UserNotFound/Network) keep their safe 502
+    messages — this test only covers the unexpected path.
+    """
+    secret = "psql://user:hunter2@db.internal/knightmind connection refused"
+    mock_get_stats.side_effect = RuntimeError(secret)
+
+    response = client_with_db.post(
+        "/ratings/snapshot", json={"username": "testuser", "time_control": "rapid"}
+    )
+
+    assert response.status_code == 500
+    detail = response.json()["detail"]
+    assert secret not in detail
+    assert "hunter2" not in detail
+    assert detail == "Internal server error"
+
+
+@patch("services.api.main.get_player_stats")
 def test_create_rating_snapshot_missing_rating(mock_get_stats, client_with_db):
     mock_get_stats.return_value = {"chess_rapid": {"last": {}}}
 

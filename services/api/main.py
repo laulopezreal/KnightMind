@@ -1,3 +1,4 @@
+import logging
 import os
 import sys
 from pathlib import Path
@@ -170,6 +171,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="KnightMind API", version="0.1.0", lifespan=lifespan)
+
+logger = logging.getLogger("knightmind.api")
 
 from services.api.ops import router as ops_router
 
@@ -433,10 +436,13 @@ async def import_chesscom_games(
         raise HTTPException(status_code=502, detail=str(e)) from e
     except ChessComImportError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(
-            status_code=500, detail=f"Internal server error: {str(e)}"
-        ) from e
+        # Log the real error server-side; return a generic message so raw
+        # exception/DB text never reaches the caller (dim 23).
+        logger.exception("Unexpected error importing Chess.com games")
+        raise HTTPException(status_code=500, detail="Internal server error") from e
 
 
 @app.get("/import/status", response_model=ImportStatusResponse)
@@ -1923,10 +1929,15 @@ async def create_rating_snapshot(
 
     except (UserNotFoundError, NetworkError) as e:
         raise HTTPException(status_code=502, detail=str(e)) from e
+    except HTTPException:
+        # Domain-specific HTTPExceptions (e.g. the 502 above) are already safe.
+        raise
     except Exception as e:
-        if isinstance(e, HTTPException):
-            raise e
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        # Unexpected failure: log the real error server-side but return a generic
+        # message so raw exception/DB text (connection strings, SQL, etc.) never
+        # reaches the caller (dim 23).
+        logger.exception("Unexpected error creating rating snapshot")
+        raise HTTPException(status_code=500, detail="Internal server error") from e
 
 
 class SnapshotHistoryItem(BaseModel):
