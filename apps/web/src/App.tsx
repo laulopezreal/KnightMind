@@ -5,6 +5,8 @@ import { DataStateLoading } from './components/DataState';
 import { ChessUsernameProvider } from './context/ChessUsernameContext';
 import { PuzzleModeProvider } from './context/PuzzleModeContext';
 import { ThemeProvider } from './context/ThemeContext';
+import { AuthProvider } from './context/AuthContext';
+import { RequireAuth } from './components/RequireAuth';
 import { ErrorBoundary } from './components/ErrorBoundary';
 
 // Route-based code splitting: each page is loaded on demand so heavy
@@ -44,6 +46,7 @@ const LibraryPuzzle = lazyPage(() => import('./pages/LibraryPuzzle'));
 const Insights = lazyPage(() => import('./pages/Insights'));
 const RatingInsights = lazyPage(() => import('./pages/RatingInsights'));
 const HowItWorks = lazyPage(() => import('./pages/HowItWorks'));
+const Login = lazyPage(() => import('./pages/Login'));
 
 // Operator board. Gated behind a build-time flag so it is tree-shaken out of the
 // public (Cloudflare) bundle entirely — the chunk is only emitted when
@@ -60,23 +63,31 @@ function App() {
         <ChessUsernameProvider>
           <PuzzleModeProvider>
             <BrowserRouter>
-              <Layout>
-                <Suspense fallback={<DataStateLoading label="Loading page…" />}>
-                  <Routes>
-                    <Route path="/" element={<Home />} />
-                    <Route path="/dashboard" element={<Dashboard />} />
-                    <Route path="/openings" element={<Openings />} />
-                    <Route path="/engine" element={<Engine />} />
-                    <Route path="/library" element={<Library />} />
-                    <Route path="/library/:puzzleId" element={<LibraryPuzzle />} />
-                    <Route path="/puzzles" element={<Puzzles />} />
-                    <Route path="/insights" element={<Insights />} />
-                    <Route path="/rating-insights" element={<RatingInsights />} />
-                    <Route path="/ops" element={OPS_ENABLED && Ops ? <Ops /> : <Navigate to="/" replace />} />
-                    <Route path="/how-it-works" element={<HowItWorks />} />
-                  </Routes>
-                </Suspense>
-              </Layout>
+              <AuthProvider>
+                <Layout>
+                  <Suspense fallback={<DataStateLoading label="Loading page…" />}>
+                    <Routes>
+                      {/* Always reachable, never gated. */}
+                      <Route path="/login" element={<Login />} />
+                      {/* Everything else is optionally gated by VITE_REQUIRE_AUTH
+                          (default off — RequireAuth is a passthrough then). */}
+                      <Route element={<RequireAuth />}>
+                        <Route path="/" element={<Home />} />
+                        <Route path="/dashboard" element={<Dashboard />} />
+                        <Route path="/openings" element={<Openings />} />
+                        <Route path="/engine" element={<Engine />} />
+                        <Route path="/library" element={<Library />} />
+                        <Route path="/library/:puzzleId" element={<LibraryPuzzle />} />
+                        <Route path="/puzzles" element={<Puzzles />} />
+                        <Route path="/insights" element={<Insights />} />
+                        <Route path="/rating-insights" element={<RatingInsights />} />
+                        <Route path="/ops" element={OPS_ENABLED && Ops ? <Ops /> : <Navigate to="/" replace />} />
+                        <Route path="/how-it-works" element={<HowItWorks />} />
+                      </Route>
+                    </Routes>
+                  </Suspense>
+                </Layout>
+              </AuthProvider>
             </BrowserRouter>
           </PuzzleModeProvider>
         </ChessUsernameProvider>
