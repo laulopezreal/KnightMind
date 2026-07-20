@@ -1,14 +1,16 @@
 import os
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, update
 from sqlalchemy.orm import sessionmaker
 
 from services.api.db import Base, get_db
 from services.api.main import app
 from services.api.models import Job, JobStatus
+from services.api.worker import JobWorker
 
 # Use a file-based DB for tests to ensure threading works if needed,
 # but :memory: is usually fine for single thread tests.
@@ -157,3 +159,273 @@ async def test_worker_execute_job(mock_to_thread, mock_generate, db_session):
     updated_job = db_session.get(Job, job.id)
     assert updated_job.status == JobStatus.SUCCEEDED
     assert updated_job.result_json["generated"] == 5
+
+
+@patch("asyncio.to_thread", side_effect=run_sync_in_thread)
+@pytest.mark.asyncio
+async def test_cancel_in_success_window_is_not_overwritten(mock_to_thread, db_session):
+    """Audit invariant: a canceled job must NEVER become succeeded.
+
+    Reproduces the two-transaction success-path race in ``execute_job``:
+    generation returns, then a ``POST /jobs/{id}/cancel`` commits BEFORE the
+    worker writes SUCCEEDED. The completion write is now a guarded UPDATE
+    (``WHERE status = RUNNING``), so the cancel wins and the job stays CANCELED.
+
+    We land the cancel exactly in that window by having ``asdict`` (called only
+    while the worker builds its completion write, after generation returned)
+    commit the cancel as a side effect. On the old unconditional write this
+    flips the job to SUCCEEDED and the test FAILS; with the guard it stays
+    CANCELED and the result is discarded.
+    """
+    from dataclasses import asdict as real_asdict
+
+    from services.api.puzzles.generator import GenerationResult
+    from services.api.worker import worker
+
+    job = Job(username="cancel-window", status=JobStatus.RUNNING)
+    db_session.add(job)
+    db_session.commit()
+    db_session.refresh(job)
+    job_id = job.id
+
+    def cancel_then_serialize(result):
+        # Simulate the cancel endpoint committing in the success window.
+        db_session.execute(
+            update(Job).where(Job.id == job_id).values(status=JobStatus.CANCELED)
+        )
+        db_session.commit()
+        return real_asdict(result)
+
+    with (
+        patch("services.api.worker.generate_puzzles") as mock_generate,
+        patch("services.api.worker.asdict", side_effect=cancel_then_serialize),
+        patch("services.api.worker.SessionLocal") as mock_sl,
+    ):
+        mock_generate.return_value = GenerationResult(5, 0, 100)
+        mock_sl.return_value.__enter__.return_value = db_session
+        mock_sl.return_value.__exit__.return_value = None
+
+        await worker.execute_job(job_id)
+
+    db_session.expire_all()
+    final = db_session.get(Job, job_id)
+    assert final.status == JobStatus.CANCELED  # NOT succeeded
+    assert final.result_json is None  # completion result discarded
+
+
+# ---------------------------------------------------------------------------
+# AUDIT GATE 5: atomic job claim (QUEUED -> RUNNING)
+# ---------------------------------------------------------------------------
+
+
+def _reset_jobs(db_session):
+    """Clear the shared module-scoped jobs table for claim isolation."""
+    db_session.query(Job).delete()
+    db_session.commit()
+
+
+def test_claim_job_transitions_queued_to_running(db_session):
+    """A single claim flips exactly the oldest QUEUED job to RUNNING."""
+    _reset_jobs(db_session)
+    older = Job(
+        username="claim-older",
+        status=JobStatus.QUEUED,
+        created_at=datetime.now(timezone.utc) - timedelta(minutes=5),
+    )
+    newer = Job(
+        username="claim-newer",
+        status=JobStatus.QUEUED,
+        created_at=datetime.now(timezone.utc),
+    )
+    db_session.add_all([older, newer])
+    db_session.commit()
+
+    claimed_id = JobWorker._claim_job(db_session)
+
+    assert claimed_id == older.id  # oldest-first ordering preserved
+    db_session.expire_all()
+    claimed = db_session.get(Job, older.id)
+    assert claimed.status == JobStatus.RUNNING
+    # The claim sets the liveness lease atomically in the same UPDATE.
+    assert claimed.heartbeat_at is not None
+    assert db_session.get(Job, newer.id).status == JobStatus.QUEUED
+
+
+def test_claim_job_is_atomic_no_double_claim(db_session):
+    """The guarded UPDATE has rowcount==1 semantics: once a job leaves QUEUED,
+    a second claim attempt on the same row transitions nothing.
+
+    This is the regression guard for the double-claim window. The old
+    select-then-commit claim had no `WHERE status='queued'` guard on the
+    write, so two workers that both SELECTed the same QUEUED row would both
+    commit status=RUNNING and run the job twice. With the guarded UPDATE, the
+    second writer's rowcount is 0.
+    """
+    _reset_jobs(db_session)
+    job = Job(username="race-target", status=JobStatus.QUEUED)
+    db_session.add(job)
+    db_session.commit()
+
+    # First claimer wins.
+    first = JobWorker._claim_job(db_session)
+    assert first == job.id
+
+    # Second claimer finds nothing QUEUED -> returns None (no re-claim).
+    second = JobWorker._claim_job(db_session)
+    assert second is None
+
+    # Directly exercise the guarded UPDATE against the now-RUNNING row to prove
+    # the rowcount==0 semantics that make the claim safe under a real race.
+    guarded = (
+        update(Job)
+        .where(Job.id == job.id, Job.status == JobStatus.QUEUED)
+        .values(status=JobStatus.RUNNING)
+    )
+    result = db_session.execute(guarded)
+    db_session.commit()
+    assert result.rowcount == 0  # already claimed; guard blocks the transition
+
+
+def test_claim_job_returns_none_when_empty(db_session):
+    """No QUEUED jobs -> claim returns None."""
+    _reset_jobs(db_session)
+    assert JobWorker._claim_job(db_session) is None
+
+
+@pytest.mark.skipif(
+    not os.getenv("KNIGHTMIND_TEST_POSTGRES_URL"),
+    reason="requires a disposable Postgres (set KNIGHTMIND_TEST_POSTGRES_URL)",
+)
+def test_claim_job_concurrent_postgres():
+    """Integration: two concurrent workers claiming from a shared Postgres must
+    never claim the same job. Skipped unless a disposable Postgres is provided
+    via KNIGHTMIND_TEST_POSTGRES_URL.
+    """
+    import threading
+
+    pg_url = os.environ["KNIGHTMIND_TEST_POSTGRES_URL"]
+    pg_engine = create_engine(pg_url)
+    PgSession = sessionmaker(bind=pg_engine)
+    Base.metadata.create_all(bind=pg_engine)
+
+    # Seed N queued jobs, each for a distinct username (active-username index).
+    n = 10
+    with PgSession() as s:
+        s.query(Job).delete()
+        for i in range(n):
+            s.add(Job(username=f"pg-race-{i}", status=JobStatus.QUEUED))
+        s.commit()
+
+    claimed: list[str] = []
+    lock = threading.Lock()
+
+    def worker_claim():
+        while True:
+            with PgSession() as s:
+                jid = JobWorker._claim_job(s)
+            if jid is None:
+                return
+            with lock:
+                claimed.append(jid)
+
+    threads = [threading.Thread(target=worker_claim) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    # Every job claimed exactly once (no duplicates), all jobs claimed.
+    assert len(claimed) == n
+    assert len(set(claimed)) == n
+    # Each claimed row got its liveness lease set atomically.
+    with PgSession() as s:
+        for jid in claimed:
+            assert s.get(Job, jid).heartbeat_at is not None
+
+
+@pytest.mark.skipif(
+    not os.getenv("KNIGHTMIND_TEST_POSTGRES_URL"),
+    reason="requires a disposable Postgres (set KNIGHTMIND_TEST_POSTGRES_URL)",
+)
+def test_migration_applied_heartbeat_column_postgres():
+    """Migration smoke: after `alembic upgrade head` (run by CI before pytest),
+    the real Postgres jobs table has the heartbeat_at lease column. Proves the
+    migration chain including the new revision applies on Postgres from zero.
+    """
+    from sqlalchemy import inspect
+
+    pg_engine = create_engine(os.environ["KNIGHTMIND_TEST_POSTGRES_URL"])
+    cols = {c["name"] for c in inspect(pg_engine).get_columns("jobs")}
+    assert "heartbeat_at" in cols
+
+
+@pytest.mark.skipif(
+    not os.getenv("KNIGHTMIND_TEST_POSTGRES_URL"),
+    reason="requires a disposable Postgres (set KNIGHTMIND_TEST_POSTGRES_URL)",
+)
+def test_active_job_unique_under_concurrency_postgres():
+    """Integration (dim 19): two workers inserting a QUEUED job for the SAME
+    username over separate Postgres connections must yield exactly ONE active
+    job.
+
+    Real two-connection race on the partial unique index ``ix_jobs_active_username``
+    (``postgresql_where status IN ('queued','running')``): one INSERT commits,
+    the other raises IntegrityError — which the /puzzles/generate endpoint turns
+    into an "already in progress" replay (see test_generate_puzzles_idempotency).
+    SQLite serializes writers and can't truly race, so this is PG-gated.
+
+    Deterministic (no sleeps): a 2-party barrier crossed BEFORE either commits
+    guarantees both INSERTs overlap; the database then arbitrates.
+    """
+    import threading
+
+    from sqlalchemy import func, select
+    from sqlalchemy.exc import IntegrityError
+
+    pg_engine = create_engine(os.environ["KNIGHTMIND_TEST_POSTGRES_URL"])
+    PgSession = sessionmaker(bind=pg_engine)
+    Base.metadata.create_all(bind=pg_engine)
+
+    with PgSession() as s:
+        s.query(Job).delete()
+        s.commit()
+
+    barrier = threading.Barrier(2, timeout=30)
+    outcomes: dict[int, str] = {}
+
+    def insert(idx):
+        try:
+            with PgSession() as s:
+                s.add(
+                    Job(
+                        username="dim19-race",
+                        status=JobStatus.QUEUED,
+                        message="queued",
+                    )
+                )
+                # Both threads reach here (nothing flushed yet), then commit at
+                # once so the two INSERTs contend on the partial unique index.
+                try:
+                    barrier.wait()
+                except threading.BrokenBarrierError:
+                    pass
+                s.commit()
+                outcomes[idx] = "committed"
+        except IntegrityError:
+            outcomes[idx] = "rejected"
+
+    threads = [threading.Thread(target=insert, args=(i,)) for i in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    # Exactly one INSERT wins; the other is rejected by the partial unique index.
+    assert sorted(outcomes.values()) == ["committed", "rejected"]
+    with PgSession() as s:
+        active = s.scalar(
+            select(func.count())
+            .select_from(Job)
+            .where(Job.status.in_([JobStatus.QUEUED, JobStatus.RUNNING]))
+        )
+        assert active == 1

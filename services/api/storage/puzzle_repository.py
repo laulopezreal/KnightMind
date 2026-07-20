@@ -6,6 +6,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from services.api.day_boundary import utc_today
 from services.api.models import Puzzle as PuzzleModel
 
 
@@ -26,6 +27,11 @@ class Puzzle:
     swing: float  # eval_before - eval_after (magnitude of blunder)
     created_at: str  # ISO timestamp
     used_on: str | None  # Date when puzzle was used (YYYY-MM-DD), None if unused
+    accept_moves_uci: str | None = None  # Comma-separated equivalence set
+    confirmed_depth: int | None = None  # Depth of the stability confirmation pass
+    # Full solution line (principal variation) as space-separated UCI moves,
+    # starting with the solution move. None for legacy single-move puzzles.
+    solution_pv: str | None = None
 
 
 class PuzzleRepository:
@@ -47,6 +53,9 @@ class PuzzleRepository:
             swing=puzzle.swing,
             created_at=puzzle.created_at.replace(tzinfo=timezone.utc).isoformat(),
             used_on=puzzle.used_on.isoformat() if puzzle.used_on else None,
+            accept_moves_uci=puzzle.accept_moves_uci,
+            confirmed_depth=puzzle.confirmed_depth,
+            solution_pv=puzzle.solution_pv,
         )
 
     def save_puzzle(
@@ -66,6 +75,9 @@ class PuzzleRepository:
         used_on: date | None = None,
         imported_at: datetime | None = None,
         source_path: str | None = None,
+        accept_moves_uci: str | None = None,
+        confirmed_depth: int | None = None,
+        solution_pv: str | None = None,
     ) -> tuple[bool, str]:
         username_lower = username.lower()
         puzzle_id = puzzle_id or str(uuid.uuid4())
@@ -79,9 +91,12 @@ class PuzzleRepository:
             side_to_move=side_to_move,
             played_move_uci=played_move_uci,
             best_move_uci=best_move_uci,
+            accept_moves_uci=accept_moves_uci,
             eval_before=eval_before,
             eval_after=eval_after,
             swing=swing,
+            confirmed_depth=confirmed_depth,
+            solution_pv=solution_pv,
             created_at=created_at or datetime.now(timezone.utc),
             used_on=used_on,
             imported_at=imported_at or datetime.now(timezone.utc),
@@ -131,7 +146,10 @@ class PuzzleRepository:
 
     def get_daily_puzzles(self, username: str, n: int = 5) -> list[Puzzle]:
         all_puzzles = self.get_all_puzzles(username)
-        today_str = date.today().isoformat()
+        # Daily rotation uses the one documented UTC day boundary (see
+        # services.api.day_boundary) so the "used today" read matches the UTC
+        # write in mark_puzzles_used on non-UTC servers.
+        today_str = utc_today().isoformat()
 
         used_today = [p for p in all_puzzles if p.used_on == today_str]
         unused = [p for p in all_puzzles if p.used_on is None]
@@ -154,7 +172,8 @@ class PuzzleRepository:
         self, username: str, puzzle_ids: list[str], used_date: date | None = None
     ) -> int:
         if used_date is None:
-            used_date = date.today()
+            # UTC day boundary — consistent with get_daily_puzzles' read.
+            used_date = utc_today()
 
         username_lower = username.lower()
         stmt = (

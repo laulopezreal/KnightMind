@@ -46,6 +46,8 @@ vi.mock('../api', () => ({
   startSession: vi.fn(),
   completeSession: vi.fn(),
   reviewPuzzle: vi.fn(),
+  checkPuzzle: vi.fn().mockResolvedValue({ correct: true, result: 'pass' }),
+  revealPuzzle: vi.fn().mockResolvedValue({ best_move_uci: 'e2e4', accept_moves_uci: ['e2e4'] }),
   getSession: (...args: unknown[]) => mockGetSession(...args),
   useHint: vi.fn(),
   getUserStatus: (...args: unknown[]) => mockGetUserStatus(...args),

@@ -9,7 +9,9 @@ import { MomentumCard } from '../components/MomentumCard';
 import { StreakCard } from '../components/StreakCard';
 import { RecentSessionsCard } from '../components/RecentSessionsCard';
 import { PageHeader } from '../components/PageHeader';
-import { DataStateError, DataStateLoading } from '../components/DataState';
+import { DataStateError, DataStateLoading, DataStateOffline } from '../components/DataState';
+import { useOnlineStatus } from '../hooks/useOnlineStatus';
+import { useLatestRequest } from '../hooks/useLatestRequest';
 
 export default function Dashboard() {
     const { username } = useChessUsername();
@@ -20,17 +22,10 @@ export default function Dashboard() {
     const [recentSessions, setRecentSessions] = useState<SessionSummary[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
-    const isFetchingRef = useRef(false);
-    const isMountedRef = useRef(true);
     const hasLoadedRef = useRef(false);
 
-    // Track mounted status to prevent state updates after unmount
-    useEffect(() => {
-        isMountedRef.current = true;
-        return () => {
-            isMountedRef.current = false;
-        };
-    }, []);
+    const online = useOnlineStatus();
+    const request = useLatestRequest();
 
     // Redirect if no username
     useEffect(() => {
@@ -41,10 +36,12 @@ export default function Dashboard() {
 
     // Load all dashboard data - extracted for reusability
     const loadDashboardData = useCallback(async () => {
-        // Guard against concurrent fetches
-        if (!username || isFetchingRef.current) return;
+        if (!username) return;
 
-        isFetchingRef.current = true;
+        // Guard against stale-response races: a username change (or a focus
+        // refresh) begins a newer request; the older, slower response must not
+        // clobber the newer one.
+        const token = request.begin();
         try {
             // Only show full-page spinner on initial load, not on background refreshes
             if (!hasLoadedRef.current) {
@@ -58,24 +55,19 @@ export default function Dashboard() {
                 getTrickyPuzzles(username, 5)
             ]);
 
-            if (isMountedRef.current) {
-                setDashboardData(dashboard);
-                setRecentSessions(sessions);
-                setTrickyPuzzles(tricky);
-                hasLoadedRef.current = true;
-            }
+            if (token.isStale()) return;
+            setDashboardData(dashboard);
+            setRecentSessions(sessions);
+            setTrickyPuzzles(tricky);
+            hasLoadedRef.current = true;
         } catch (err) {
+            if (token.isStale()) return;
             console.error('Failed to load dashboard:', err);
-            if (isMountedRef.current) {
-                setError(err instanceof Error ? err.message : 'Failed to load dashboard data');
-            }
+            setError(err instanceof Error ? err.message : 'Failed to load dashboard data');
         } finally {
-            if (isMountedRef.current) {
-                setLoading(false);
-            }
-            isFetchingRef.current = false;
+            if (!token.isStale()) setLoading(false);
         }
-    }, [username]);
+    }, [username, request]);
 
     // Initial load
     useEffect(() => {
@@ -99,7 +91,11 @@ export default function Dashboard() {
     }
 
     if (error || !dashboardData) {
-        return (
+        // A failed load while the browser is offline is a connectivity problem,
+        // not a server error — say so instead of a bare error message.
+        return !online ? (
+            <DataStateOffline onRetry={loadDashboardData} />
+        ) : (
             <DataStateError
                 message={error || 'Failed to load dashboard data'}
                 onRetry={loadDashboardData}

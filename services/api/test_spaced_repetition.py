@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import create_engine
@@ -6,7 +6,10 @@ from sqlalchemy.orm import sessionmaker
 
 from services.api.models import Base
 from services.api.storage.spaced_repetition import (
+    _utcnow_naive,
     get_adaptive_puzzles,
+    get_due_puzzle_count,
+    get_next_due_date,
     get_puzzle_stats,
     insert_puzzle_review,
     update_puzzle_stats,
@@ -91,6 +94,91 @@ def test_sequential_reviews(db_session):
 def test_get_puzzle_stats_none(db_session):
     stats = get_puzzle_stats(db_session, "non-existent", "testuser")
     assert stats is None
+
+
+def test_utcnow_naive_is_naive_utc():
+    """SQL 'due' comparisons must use a naive-UTC bound (see module note).
+
+    Guards the timezone-consistency fix: get_due_puzzle_count / get_next_due_date
+    compare against naive-UTC columns, so the bound must be naive (no tzinfo).
+    A tz-aware bound is fine on SQLite but reinterprets naive columns on Postgres
+    when the session TimeZone != UTC, shifting the due boundary.
+    """
+    now = _utcnow_naive()
+    assert now.tzinfo is None
+    # Sane: within a minute of the aware UTC wall clock
+    aware = datetime.now(timezone.utc).replace(tzinfo=None)
+    assert abs((aware - now).total_seconds()) < 60
+
+
+def test_due_paths_agree_with_adaptive_classification(db_session):
+    """The three due-paths must agree on which puzzles are due.
+
+    Seeds naive-UTC next_due_at values (as read back from the DB) spanning
+    clearly-due, clearly-future, and just-past-boundary, and asserts that
+    get_due_puzzle_count and get_next_due_date are consistent with
+    get_adaptive_puzzles' due/future classification.
+    """
+    from services.api.models import PuzzleStats
+
+    now = datetime.now(timezone.utc)
+    naive = lambda dt: dt.replace(tzinfo=None)  # noqa: E731 - stored form
+
+    db_session.add_all(
+        [
+            PuzzleStats(  # clearly due
+                puzzle_id="due-old",
+                username="u",
+                attempts=1,
+                pass_count=1,
+                ease_factor=2.0,
+                interval_days=1,
+                next_due_at=naive(now - timedelta(days=2)),
+            ),
+            PuzzleStats(  # just past boundary (due)
+                puzzle_id="due-edge",
+                username="u",
+                attempts=1,
+                pass_count=1,
+                ease_factor=2.0,
+                interval_days=1,
+                next_due_at=naive(now - timedelta(seconds=5)),
+            ),
+            PuzzleStats(  # clearly future (not due)
+                puzzle_id="future",
+                username="u",
+                attempts=1,
+                pass_count=1,
+                ease_factor=2.0,
+                interval_days=1,
+                next_due_at=naive(now + timedelta(days=3)),
+            ),
+        ]
+    )
+    db_session.commit()
+
+    # Python path: classify due (base_priority == 0) via the sort key
+    ordered, all_stats = get_adaptive_puzzles(
+        db_session, "u", ["due-old", "due-edge", "future"], n=10
+    )
+    py_due = set()
+    check_now = datetime.now(timezone.utc)
+    for pid, st in all_stats.items():
+        nd = st.next_due_at
+        nd = nd if nd.tzinfo else nd.replace(tzinfo=timezone.utc)
+        if nd <= check_now:
+            py_due.add(pid)
+
+    assert py_due == {"due-old", "due-edge"}
+
+    # SQL count agrees with the Python due set
+    assert get_due_puzzle_count(db_session, "u") == len(py_due)
+
+    # Next due date is the earliest *future* row, and it is not in the due set
+    next_due = get_next_due_date(db_session, "u")
+    assert next_due is not None
+    nd_aware = next_due if next_due.tzinfo else next_due.replace(tzinfo=timezone.utc)
+    assert nd_aware > check_now
 
 
 def test_get_adaptive_puzzles_accuracy_goal_sorting(db_session):

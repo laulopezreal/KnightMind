@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Link, useSearchParams, useNavigate } from 'react-router-dom';
 import { AccessibleChessboard } from '../components/AccessibleChessboard';
 import { Chess } from 'chess.js';
-import { generatePuzzles, getDailyPuzzles, cancelJob, ApiError } from '../api';
+import { generatePuzzles, getDailyPuzzles, cancelJob, checkPuzzle, revealPuzzle, ApiError } from '../api';
 import { JobStatusCard } from '../components/JobStatusCard';
 import { SessionSummaryCard } from '../components/SessionSummaryCard';
 import { WarmupSummary } from '../components/WarmupSummary';
@@ -32,6 +32,19 @@ export default function Puzzles() {
     });
     const [prevUsername, setPrevUsername] = useState(username);
     const [game, setGame] = useState(new Chess());
+    // The solution is NOT pre-sent with the puzzle (audit gate 13). It is
+    // fetched on demand (reveal / full clue) and held only for the current
+    // puzzle, so the client never holds the answer before the user asks.
+    const [revealedMove, setRevealedMove] = useState<string | null>(null);
+    // Full solution line (fetched on reveal / full clue), for puzzles that store
+    // a multi-move principal variation. Legacy single-move puzzles leave this empty.
+    const [revealedPv, setRevealedPv] = useState<string[]>([]);
+    // Multi-move solve progress. `linePlyIndex` is the index of the solver's NEXT
+    // move within the line (0, 2, 4, ...); `attemptedLine` accumulates the moves
+    // the user has played so the whole line can be server-verified on completion.
+    // Legacy single-move puzzles simply solve at ply 0 and complete immediately.
+    const [linePlyIndex, setLinePlyIndex] = useState(0);
+    const [attemptedLine, setAttemptedLine] = useState<string[]>([]);
 
     // Get motif filter and warmup mode from URL query params
     const [searchParams] = useSearchParams();
@@ -113,7 +126,9 @@ export default function Puzzles() {
 
     const startPuzzleTimer = timer.startPuzzleTimer;
     const currentPuzzle = puzzles[currentIndex];
-    const clue = useClue(currentPuzzle?.best_move_uci ?? '', currentPuzzle?.fen ?? '');
+    // The clue/board work off the on-demand-fetched solution, never a pre-sent
+    // one — so the hint machinery only has the answer once the user asks for it.
+    const clue = useClue(revealedMove ?? '', currentPuzzle?.fen ?? '');
     const clueReset = clue.reset;
     const puzzlesAvailable = puzzles.length > 0;
     const isFinalPuzzle = puzzlesAvailable && currentIndex >= puzzles.length - 1;
@@ -313,17 +328,103 @@ export default function Puzzles() {
         !shouldShowJobStatusCard &&
         !shouldShowErrorCard;
 
-    const handleCheckAnswer = () => {
-        if (!currentPuzzle) return;
-        const normalizedUserMove = userMove.trim().toLowerCase();
-        const normalizedBestMove = currentPuzzle.best_move_uci.toLowerCase();
-        if (normalizedUserMove === normalizedBestMove) setStatus('correct');
-        else setStatus('incorrect');
+    // Ensure we have the solution for the current puzzle, fetching it once from
+    // the server on demand (reveal / full clue). Returns the lowercased UCI move,
+    // or null if unavailable.
+    const ensureRevealedMove = async (): Promise<string | null> => {
+        if (revealedMove) return revealedMove;
+        if (!currentPuzzle || !username) return null;
+        try {
+            const { best_move_uci, solution_pv } = await revealPuzzle(currentPuzzle.id, username);
+            const move = best_move_uci.toLowerCase();
+            setRevealedMove(move);
+            // Keep the whole line so Reveal can show the full combination, not
+            // only the first move.
+            setRevealedPv((solution_pv ?? []).map((m) => m.toLowerCase()));
+            return move;
+        } catch (err) {
+            console.error('Failed to reveal solution:', err);
+            return null;
+        }
     };
 
-    const handleRevealSolution = () => {
+    // Verify one played move server-side and, for a multi-move line, auto-play
+    // the opponent's forced reply and advance to the next ply — without the
+    // client ever holding the solver's upcoming answer (audit gate 13). The
+    // whole line is recorded (attemptedLine) so a completed solve is verified
+    // end-to-end on review. `boardAfterMove` already has the user's move applied.
+    const processUserMove = async (boardAfterMove: Chess, uciMove: string) => {
+        if (!currentPuzzle) return;
+        const normalized = uciMove.toLowerCase();
+        // Reflect the user's move immediately.
+        setGame(new Chess(boardAfterMove.fen()));
+        setUserMove(normalized);
+        try {
+            const res = await checkPuzzle(currentPuzzle.id, username, normalized, linePlyIndex);
+            if (!res.correct) {
+                setStatus('incorrect');
+                return;
+            }
+            setAttemptedLine((prev) => [...prev, normalized]);
+            // Play the opponent's forced reply — safe to show; it's the forced
+            // response, not the solver's next answer (which the server withholds).
+            if (res.reply) {
+                try {
+                    boardAfterMove.move({
+                        from: res.reply.slice(0, 2),
+                        to: res.reply.slice(2, 4),
+                        promotion: res.reply.slice(4, 5) || undefined,
+                    });
+                    setGame(new Chess(boardAfterMove.fen()));
+                } catch (replyErr) {
+                    console.error('Failed to apply opponent reply:', replyErr);
+                }
+            }
+            // The line continues only when the server hands back the next ply to
+            // play; otherwise the puzzle is solved (a completed line, or a legacy
+            // single-move puzzle whose response carries no next ply). Driving off
+            // next_ply_index keeps a response that omits `complete` working too.
+            if (typeof res.next_ply_index === 'number') {
+                setLinePlyIndex(res.next_ply_index);
+                setUserMove('');
+                // status stays 'solving' — prompt the next move.
+            } else {
+                setStatus('correct');
+            }
+        } catch (err) {
+            console.error('Failed to check move:', err);
+            setStatus('incorrect');
+        }
+    };
+
+    const handleCheckAnswer = async () => {
+        if (!currentPuzzle) return;
+        const normalizedUserMove = userMove.trim().toLowerCase();
+        if (!normalizedUserMove) return;
+        // Apply the typed move to a working board so a multi-move line can play
+        // out its replies just like the drag path does.
+        const board = new Chess(game.fen());
+        let move;
+        try {
+            move = board.move({
+                from: normalizedUserMove.slice(0, 2),
+                to: normalizedUserMove.slice(2, 4),
+                promotion: normalizedUserMove.slice(4, 5) || undefined,
+            });
+        } catch { move = null; }
+        if (!move) {
+            // Illegal/malformed typed move — an incorrect attempt, never a crash.
+            setStatus('incorrect');
+            return;
+        }
+        clue.reset();
+        const uciMove = `${move.from}${move.to}${move.promotion || ''}`;
+        await processUserMove(board, uciMove);
+    };
+
+    const handleRevealSolution = async () => {
+        const bestMove = await ensureRevealedMove();
         setStatus('revealed');
-        const bestMove = currentPuzzle?.best_move_uci?.toLowerCase();
         setUserMove(bestMove || '');
         if (currentPuzzle && bestMove) {
             const solutionGame = new Chess(currentPuzzle.fen);
@@ -335,11 +436,14 @@ export default function Puzzles() {
         }
     };
 
-    const handleClue = () => {
+    const handleClue = async () => {
         if (clue.clueStage === 1) {
             clue.advance();
-            handleRevealSolution();
+            await handleRevealSolution();
         } else {
+            // Fetch the solution before advancing so the piece-hint highlight has
+            // something to derive its square from.
+            await ensureRevealedMove();
             clue.advance();
         }
     };
@@ -349,6 +453,12 @@ export default function Puzzles() {
     if (currentPuzzle && currentPuzzle !== prevPuzzle) {
         setPrevPuzzle(currentPuzzle);
         setGame(new Chess(currentPuzzle.fen));
+        // Drop any solution held for the previous puzzle.
+        setRevealedMove(null);
+        setRevealedPv([]);
+        // Restart the multi-move line for the new puzzle.
+        setLinePlyIndex(0);
+        setAttemptedLine([]);
     }
 
     // Reset clue and start timer when puzzle changes (side effects in effect)
@@ -359,18 +469,18 @@ export default function Puzzles() {
         }
     }, [currentPuzzle, clueReset, startPuzzleTimer]);
 
-    const onPieceDrop = (sourceSquare: string, targetSquare: string) => {
+    const onPieceDrop = (sourceSquare: string, targetSquare: string, promotion: string = 'q') => {
         if (!currentPuzzle || status === 'correct' || status === 'revealed') return false;
         try {
-            const move = game.move({ from: sourceSquare, to: targetSquare, promotion: 'q' });
+            const move = game.move({ from: sourceSquare, to: targetSquare, promotion: promotion || 'q' });
             if (move === null) return false;
             clue.reset();
-            setGame(new Chess(game.fen()));
             const uciMove = `${move.from}${move.to}${move.promotion || ''}`;
-            setUserMove(uciMove);
-            const normalizedBestMove = currentPuzzle.best_move_uci.toLowerCase();
-            if (uciMove === normalizedBestMove) setStatus('correct');
-            else setStatus('incorrect');
+            // The board applies the move locally (chess.js validates legality),
+            // but whether it SOLVES the puzzle — and, for a multi-move line, the
+            // opponent's forced reply — is decided server-side so the client
+            // never holds the answer ahead of time (audit gate 13).
+            void processUserMove(game, uciMove);
             return true;
         } catch { return false; }
     };
@@ -381,6 +491,8 @@ export default function Puzzles() {
             setStatus('solving');
             setUserMove('');
             setLastFeedback('');
+            setLinePlyIndex(0);
+            setAttemptedLine([]);
             clue.reset();
         }
     };
@@ -392,9 +504,16 @@ export default function Puzzles() {
         isAdvancingPuzzle.current = true;
         try {
             if (status === 'correct') {
-                await handleReviewPuzzle('pass');
+                // Send the WHOLE solved line (space-separated UCI) so the SERVER
+                // re-verifies every ply — a puzzle counts as solved only when the
+                // full line was played correctly. Falls back to the single move
+                // for legacy single-move puzzles.
+                const solvedLine = attemptedLine.length > 0
+                    ? attemptedLine.join(' ')
+                    : (userMove.trim().toLowerCase() || undefined);
+                await handleReviewPuzzle('pass', undefined, solvedLine);
             } else if (status === 'revealed') {
-                // If solution was revealed, mark as fail before completing
+                // Revealed solution: a self-reported fail, no move to verify.
                 await handleReviewPuzzle('fail');
             }
 
@@ -770,6 +889,9 @@ export default function Puzzles() {
                     <div className="order-2 lg:order-1">
                         <div className="aspect-square w-full max-w-[600px] mx-auto shadow-2xl shadow-primary/5 rounded-sm overflow-hidden border border-primary/10">
                             <AccessibleChessboard
+                                onKeyboardMove={({ sourceSquare, targetSquare, promotion }) =>
+                                    onPieceDrop(sourceSquare, targetSquare, promotion ?? 'q')
+                                }
                                 options={{
                                     position: game.fen(),
                                     onPieceDrop: ({ sourceSquare, targetSquare }) => targetSquare ? onPieceDrop(sourceSquare, targetSquare) : false,
@@ -921,8 +1043,12 @@ export default function Puzzles() {
                         </div>
 
                         {/* Status Area */}
-                        <div className="min-h-[100px] flex items-center justify-center text-center p-6 border border-primary/10 rounded-sm relative overflow-hidden">
-                            {status === 'solving' && clue.clueStage === 0 && <p className="text-primary/70 font-serif text-lg italic">Find the best move...</p>}
+                        <div className="min-h-[100px] flex items-center justify-center text-center p-6 border border-primary/10 rounded-sm relative overflow-hidden" role="status" aria-live="polite">
+                            {status === 'solving' && clue.clueStage === 0 && (
+                                linePlyIndex > 0
+                                    ? <p className="text-positive font-serif text-lg italic">Good move — now find the next move in the line.</p>
+                                    : <p className="text-primary/70 font-serif text-lg italic">Find the best move...</p>
+                            )}
                             {status === 'solving' && clue.clueStage === 1 && (
                                 <p className="text-primary/80 font-sans text-sm">
                                     {clue.pieceHint || 'Move the correct piece'}
@@ -946,8 +1072,12 @@ export default function Puzzles() {
                             )}
                             {status === 'revealed' && (
                                 <div>
-                                    <p className="text-primary/70 font-sans text-xs uppercase tracking-widest mb-1">Solution</p>
-                                    <p className="text-primary font-mono text-xl">{currentPuzzle.best_move_uci}</p>
+                                    <p className="text-primary/70 font-sans text-xs uppercase tracking-widest mb-1">
+                                        {revealedPv.length > 1 ? 'Solution line' : 'Solution'}
+                                    </p>
+                                    <p className="text-primary font-mono text-xl">
+                                        {revealedPv.length > 1 ? revealedPv.join(' ') : (revealedMove ?? '…')}
+                                    </p>
                                 </div>
                             )}
                         </div>
@@ -992,8 +1122,8 @@ export default function Puzzles() {
                                         type="button"
                                         onClick={activeSessionId ? handleUseHint : handleClue}
                                         disabled={activeSessionId
-                                            ? (!currentPuzzle?.best_move_uci || hintsUsed >= 3)
-                                            : clue.isDisabled}
+                                            ? hintsUsed >= 3
+                                            : (!currentPuzzle || (clue.clueStage === 2))}
                                         aria-label={puzzleActionA11yCopy.hintLabel}
                                         className="px-6 py-4 border border-primary/20 text-primary rounded-sm font-serif text-lg transition-all km-interactive km-focus-visible disabled:opacity-50 disabled:cursor-default">
                                         {activeSessionId ? `Hint (${hintsUsed}/3)` : 'Clue'}
@@ -1075,6 +1205,9 @@ export default function Puzzles() {
                                                 setStatus('solving');
                                                 setUserMove('');
                                                 setGame(new Chess(currentPuzzle.fen));
+                                                // Restart the line from the top for the retry.
+                                                setLinePlyIndex(0);
+                                                setAttemptedLine([]);
                                                 clue.reset();
                                             }}
                                             className="px-6 py-4 border border-primary/20 text-primary rounded-sm font-serif text-lg transition-all km-interactive km-focus-visible">

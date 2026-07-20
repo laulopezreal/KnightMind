@@ -4,7 +4,7 @@ import traceback
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from services.api.db import SessionLocal
@@ -57,18 +57,23 @@ class JobWorker:
         """Reset jobs that have been 'running' for too long (e.g. crash recovery)."""
 
         def _cleanup(db: Session):
-            # Cleanup jobs that have been RUNNING for more than 15 minutes.
-            # This is a safe threshold for crash recovery.
-            limit = datetime.now(timezone.utc) - timedelta(minutes=15)
-            stmt = select(Job).where(
-                Job.status == JobStatus.RUNNING, Job.updated_at < limit
-            )
+            # Reset jobs whose liveness lease has gone stale (crash recovery).
+            # Staleness is measured against heartbeat_at (the lease the running
+            # worker keeps bumping), NOT updated_at — a live long job keeps its
+            # heartbeat fresh and is left alone, while a crashed worker stops
+            # heartbeating and gets recovered. COALESCE falls back to
+            # updated_at then created_at for pre-migration rows whose
+            # heartbeat_at is still NULL, so no in-flight job is stranded.
+            now = datetime.now(timezone.utc)
+            limit = now - timedelta(minutes=15)
+            liveness = func.coalesce(Job.heartbeat_at, Job.updated_at, Job.created_at)
+            stmt = select(Job).where(Job.status == JobStatus.RUNNING, liveness < limit)
             stuck_jobs = db.scalars(stmt).all()
             count = 0
             for job in stuck_jobs:
                 job.status = JobStatus.QUEUED
                 job.message = "Recovered from crash"
-                job.updated_at = datetime.now(timezone.utc)
+                job.updated_at = now
                 count += 1
             db.commit()
             return count
@@ -85,34 +90,56 @@ class JobWorker:
         except Exception as e:
             logger.error(f"Failed to cleanup stuck jobs: {e}")
 
+    @staticmethod
+    def _claim_job(db: Session):
+        """Atomically claim the oldest QUEUED job, transitioning it to RUNNING.
+
+        Picks the oldest QUEUED job and flips it to RUNNING with a single
+        guarded UPDATE. The ``status == QUEUED`` guard means only one claimer's
+        UPDATE can affect the row (rowcount == 1); a racing claimer sees
+        rowcount == 0 and moves on, so two workers can never run the same job.
+        On Postgres we also take a SKIP LOCKED row lock so concurrent workers
+        select *different* rows instead of colliding on the same one. SQLite
+        serializes writers, so the guarded UPDATE alone is sufficient there.
+
+        Returns the claimed job id, or None if there was nothing to claim (or a
+        racing worker won the claim first).
+        """
+        now = datetime.now(timezone.utc)
+        select_stmt = (
+            select(Job.id)
+            .where(Job.status == JobStatus.QUEUED)
+            .order_by(Job.created_at.asc())
+            .limit(1)
+        )
+        if db.get_bind().dialect.name == "postgresql":
+            select_stmt = select_stmt.with_for_update(skip_locked=True)
+
+        candidate_id = db.execute(select_stmt).scalar_one_or_none()
+        if candidate_id is None:
+            db.commit()
+            return None
+
+        update_stmt = (
+            update(Job)
+            .where(Job.id == candidate_id, Job.status == JobStatus.QUEUED)
+            .values(status=JobStatus.RUNNING, updated_at=now, heartbeat_at=now)
+        )
+        result = db.execute(update_stmt)
+        db.commit()
+        # rowcount == 1: we won the claim. rowcount == 0: another worker
+        # claimed it between our SELECT and UPDATE; leave it to them.
+        return candidate_id if result.rowcount == 1 else None
+
     async def process_next_job(self) -> bool:
         """
         Fetch and process the next queued job.
         Returns True if a job was processed, False otherwise.
         """
-
-        def _claim_job(db: Session):
-            # Simple atomic claim: select for update (if supported) or just basic transaction
-            # SQLite doesn't strictly support FOR UPDATE the same way, but single writer wins.
-            stmt = (
-                select(Job)
-                .where(Job.status == JobStatus.QUEUED)
-                .order_by(Job.created_at.asc())
-                .limit(1)
-            )
-            job = db.scalars(stmt).first()
-            if job:
-                job.status = JobStatus.RUNNING
-                job.updated_at = datetime.now(timezone.utc)
-                db.commit()
-                db.refresh(job)
-                return job.id
-            return None
-
         # 1. Claim Job
         job_id = None
         with SessionLocal() as db:
-            job_id = await asyncio.to_thread(_claim_job, db)
+            job_id = await asyncio.to_thread(self._claim_job, db)
 
         if not job_id:
             return False
@@ -121,6 +148,39 @@ class JobWorker:
         logger.info(f"Processing job {job_id}")
         await self.execute_job(job_id)
         return True
+
+    def _heartbeat_and_check_cancellation(self, job_id: str) -> bool:
+        """Liveness heartbeat + cancellation check, invoked by the generator as
+        it makes progress on each game.
+
+        Returns True if the job has been canceled (so the generator should
+        stop). As a side effect, bumps the `heartbeat_at` lease on a
+        still-running job so `cleanup_stuck_jobs` can distinguish a live
+        long-running job (fresh heartbeat) from a crashed one (stale heartbeat)
+        instead of resetting purely on wall-clock time since the claim.
+
+        We update `heartbeat_at` via a Core UPDATE and explicitly re-set
+        `updated_at` to its current value: `updated_at` has a column-level
+        `onupdate` that would otherwise fire on ANY UPDATE, so pinning it in the
+        SET clause suppresses that and keeps liveness decoupled from
+        status-write timestamps.
+        """
+        with SessionLocal() as db:
+            job = db.get(Job, job_id)
+            if not job:
+                return False
+            if job.status == JobStatus.CANCELED:
+                return True
+            db.execute(
+                update(Job)
+                .where(Job.id == job_id)
+                .values(
+                    heartbeat_at=datetime.now(timezone.utc),
+                    updated_at=job.updated_at,  # pin: suppress onupdate
+                )
+            )
+            db.commit()
+        return False
 
     async def execute_job(self, job_id: str):
         """Execute the actual job logic."""
@@ -141,62 +201,79 @@ class JobWorker:
                 max_games = min(max(int(params.get("max_games", 30)), 1), 2000)
                 max_puzzles = min(max(int(params.get("max_puzzles", 30)), 1), 2000)
 
-            # Create a cancellation check function
-            def check_cancellation() -> bool:
-                """Check if the job has been canceled."""
-                with SessionLocal() as db:
-                    stmt = select(Job).where(Job.id == job_id)
-                    job = db.scalars(stmt).first()
-                    if job and job.status == JobStatus.CANCELED:
-                        return True
-                return False
-
-            # Run generation (CPU bound) with cancellation check
+            # Run generation (CPU bound). The generator calls the callback as it
+            # makes progress (between games AND every N plies within a game); we
+            # use it both to check for cancellation AND to bump the heartbeat_at
+            # lease, so crash recovery can tell a live long job (fresh lease)
+            # apart from a crashed one (stale lease).
             result = await asyncio.to_thread(
                 generate_puzzles,
                 username=username,
                 max_games=max_games,
                 max_puzzles=max_puzzles,
-                cancellation_check=check_cancellation,
+                cancellation_check=lambda: self._heartbeat_and_check_cancellation(
+                    job_id
+                ),
             )
 
-            # Check if job was canceled during execution
+            # Mark success — but ONLY if the job is still RUNNING. A cancel
+            # (POST /jobs/{id}/cancel) can land after generation returns and
+            # before this write; that cancel must win, because CANCELED is
+            # terminal and an audited job must never go canceled -> succeeded.
+            # A single guarded UPDATE (WHERE status = RUNNING) closes that race
+            # atomically on both Postgres and SQLite: rowcount == 0 means the
+            # job left RUNNING (canceled, or otherwise no longer ours), so we
+            # discard the completion instead of overwriting its terminal state.
+            now = datetime.now(timezone.utc)
             with SessionLocal() as db:
-                stmt = select(Job).where(Job.id == job_id)
-                job = db.scalars(stmt).first()
-                if job and job.status == JobStatus.CANCELED:
-                    logger.info(f"Job {job_id} was canceled during execution")
-                    # Job already marked as canceled, just return
-                    return
+                success_stmt = (
+                    update(Job)
+                    .where(Job.id == job_id, Job.status == JobStatus.RUNNING)
+                    .values(
+                        status=JobStatus.SUCCEEDED,
+                        progress_current=100,
+                        progress_total=100,
+                        result_json=asdict(result),
+                        message="Analysis complete",
+                        updated_at=now,
+                    )
+                )
+                rowcount = db.execute(success_stmt).rowcount
+                db.commit()
 
-            # Update success
-            with SessionLocal() as db:
-                stmt = select(Job).where(Job.id == job_id)
-                job = db.scalars(stmt).first()
-                if job:
-                    job.status = JobStatus.SUCCEEDED
-                    job.progress_current = 100
-                    job.progress_total = 100
-                    job.result_json = asdict(result)
-                    job.message = "Analysis complete"
-                    job.updated_at = datetime.now(timezone.utc)
-                    db.commit()
-
-            logger.info(f"Job {job_id} succeeded")
+            if rowcount == 0:
+                logger.info(
+                    f"Job {job_id} completion discarded: job is no longer "
+                    "RUNNING (likely canceled); terminal status left intact"
+                )
+            else:
+                logger.info(f"Job {job_id} succeeded")
 
         except Exception as e:
             logger.error(f"Job {job_id} failed: {e}")
             traceback.print_exc()
+            # Same guard as the success path: only a still-RUNNING job may be
+            # transitioned to FAILED. A cancel that landed during a failing run
+            # is terminal too — a canceled job must never become FAILED either.
+            now = datetime.now(timezone.utc)
             with SessionLocal() as db:
-                stmt = select(Job).where(Job.id == job_id)
-                job = db.scalars(stmt).first()
-                if job:
-                    # Don't overwrite canceled status
-                    if job.status != JobStatus.CANCELED:
-                        job.status = JobStatus.FAILED
-                        job.error_message = str(e)
-                        job.updated_at = datetime.now(timezone.utc)
-                    db.commit()
+                failure_stmt = (
+                    update(Job)
+                    .where(Job.id == job_id, Job.status == JobStatus.RUNNING)
+                    .values(
+                        status=JobStatus.FAILED,
+                        error_message=str(e),
+                        updated_at=now,
+                    )
+                )
+                fail_rowcount = db.execute(failure_stmt).rowcount
+                db.commit()
+
+            if fail_rowcount == 0:
+                logger.info(
+                    f"Job {job_id} failure discarded: job is no longer "
+                    "RUNNING (likely canceled); terminal status left intact"
+                )
 
 
 worker = JobWorker()

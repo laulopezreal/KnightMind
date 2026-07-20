@@ -6,6 +6,39 @@ export const API_TARGET: string = typeof __API_TARGET__ !== 'undefined' ? __API_
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 
+// --- Auth wiring -------------------------------------------------------------
+// The bearer token is held in a module-level variable set by the AuthProvider
+// (see src/context/AuthContext.tsx). Keeping it here — rather than importing the
+// auth module — avoids a circular dependency and lets every request pick up the
+// current token without threading it through call sites.
+//
+// Backwards compatibility contract: when no token is set (the flag-off / logged-
+// out state, which is today's behaviour), requests are sent EXACTLY as before —
+// `fetchOptions.headers` is passed through untouched and no Authorization header
+// is added. The token is only ever attached when one is present.
+let authToken: string | null = null;
+
+/** Set (or clear, with `null`) the bearer token attached to subsequent requests. */
+export function setAuthToken(token: string | null): void {
+    authToken = token;
+}
+
+/** Read the currently-attached bearer token (mainly for tests/diagnostics). */
+export function getAuthToken(): string | null {
+    return authToken;
+}
+
+// Called when a protected request comes back 401 (flag-on, missing/expired
+// token). The AuthProvider registers a handler that clears the stale token and
+// routes the user to /login. The failing request still rejects with an ApiError
+// so the calling code can react too.
+let unauthorizedHandler: (() => void) | null = null;
+
+/** Register (or clear, with `null`) the handler invoked on a 401 response. */
+export function setUnauthorizedHandler(handler: (() => void) | null): void {
+    unauthorizedHandler = handler;
+}
+
 export class ApiError extends Error {
     statusCode: number;
     detail?: string;
@@ -37,14 +70,32 @@ export async function request<T>(endpoint: string, options: RequestOptions = {})
 
     try {
         const url = `${API_BASE}${endpoint}`;
+        // Only touch headers when a token is present, so the no-token path stays
+        // byte-for-byte identical to today's requests (preserves callers that
+        // pass a plain-object `headers` and the backwards-compat contract).
+        let headers = fetchOptions.headers;
+        if (authToken) {
+            const merged = new Headers(fetchOptions.headers as HeadersInit | undefined);
+            merged.set('Authorization', `Bearer ${authToken}`);
+            headers = merged;
+        }
         const response = await fetch(url, {
             ...fetchOptions,
+            headers,
             signal: controller.signal,
         });
 
         const contentType = response.headers.get('content-type') ?? '';
 
         if (!response.ok) {
+            // A 401 on any endpoint other than the login exchange itself means the
+            // token is missing/expired while auth enforcement is ON. Hand off to the
+            // registered handler (clears the stale token, routes to /login) before
+            // rejecting. The login endpoint returns its own 401 for bad credentials,
+            // which the Login page shows inline — it must not trigger a global logout.
+            if (response.status === 401 && !endpoint.startsWith('/auth/login')) {
+                unauthorizedHandler?.();
+            }
             // `message` is user-facing and must stay friendly; the technical cause
             // (endpoint, status, content-type) goes into `detail` for debugging.
             if (!contentType.includes('application/json')) {

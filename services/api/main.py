@@ -1,3 +1,4 @@
+import logging
 import os
 import sys
 from pathlib import Path
@@ -10,13 +11,14 @@ load_dotenv(Path(__file__).resolve().parent / ".env")
 import re
 from contextlib import asynccontextmanager
 from dataclasses import asdict
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Literal
 
 import anyio
+import chess
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import and_, case, func, literal, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -26,6 +28,10 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")
 
 import asyncio
 
+from services.api.analytics_confidence import (
+    MIN_GAMES_FOR_RATING_DRIVERS,
+    rating_confidence,
+)
 from services.api.auth import require_operator
 from services.api.db import SessionLocal, get_db
 from services.api.engine import (
@@ -34,23 +40,33 @@ from services.api.engine import (
     get_or_compute_eval,
     is_engine_available,
 )
+from services.api.identity import (
+    assert_owns_username,
+    claim_username_if_unowned,
+    require_account,
+)
 from services.api.jobs.cleanup_sessions import cleanup_abandoned_sessions
 from services.api.models import (
+    Account,
     Job,
     JobStatus,
     PuzzleResult,
+    PuzzleReview,
     PuzzleStats,
     RatingSnapshot,
 )
 from services.api.motifs import MotifPerformanceResponse, get_user_motif_performance
 from services.api.openings import build_opening_tree
 from services.api.puzzles.identity import backfill_puzzle_identity
+from services.api.ratelimit import rate_limit
 from services.api.storage import GameRepository, PuzzleRepository
 from services.api.storage.spaced_repetition import (
+    _utcnow_naive,
     get_adaptive_puzzles,
     get_all_puzzle_stats,
     get_due_puzzle_count,
     get_next_due_date,
+    get_puzzle_stats,
     insert_puzzle_review,
     update_puzzle_stats,
 )
@@ -74,6 +90,19 @@ CLEANUP_INTERVAL_SECONDS = 3600
 # Commit imported games in batches instead of once per game: a full import can
 # span tens of thousands of games, and per-game commits hammer Postgres.
 IMPORT_COMMIT_BATCH_SIZE = 200
+
+# Per-principal rate limits (audit gate 10). Defaults are per 60s window and can
+# be overridden per route via RATE_LIMIT_<NAME>[ _WINDOW] env vars (0 disables).
+# See services/api/ratelimit.py for the algorithm and the multi-worker caveat.
+RATE_LIMIT_ENGINE_EVAL = 30  # Stockfish CPU; also has a per-process in-flight cap
+RATE_LIMIT_IMPORT_CHESSCOM = 5  # heavy Chess.com fetch + bulk DB writes
+RATE_LIMIT_PUZZLES_GENERATE = 5  # enqueues a heavy analysis job
+RATE_LIMIT_RATINGS_SNAPSHOT = 10  # outbound Chess.com call per request
+
+# A FEN is bounded in length (piece placement + 5 short fields); anything much
+# longer than a legal position is junk. Reject oversized input with 400 before
+# it reaches the engine, so a caller can't ship a giant body to /engine/eval.
+MAX_FEN_LENGTH = 120
 
 # Rating explain thresholds
 PERFORMANCE_DIFF_THRESHOLD = 0.5
@@ -143,6 +172,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="KnightMind API", version="0.1.0", lifespan=lifespan)
 
+logger = logging.getLogger("knightmind.api")
+
 from services.api.ops import router as ops_router
 
 app.include_router(ops_router)
@@ -154,6 +185,10 @@ app.include_router(sessions_router)
 from services.api.dashboard import router as dashboard_router
 
 app.include_router(dashboard_router)
+
+from services.api.auth_routes import router as auth_router
+
+app.include_router(auth_router)
 
 
 def get_allowed_origins() -> list[str]:
@@ -205,8 +240,13 @@ async def get_users(db: Session = Depends(get_db)):
 
 
 @app.get("/users/{username}/status", response_model=UserStatusResponse)
-async def get_user_status(username: str, db: Session = Depends(get_db)):
+async def get_user_status(
+    username: str,
+    db: Session = Depends(get_db),
+    account: Account | None = Depends(require_account),
+):
     """Get training status for a user to support empty states."""
+    assert_owns_username(account, username, db)
     game_repository = GameRepository(db)
     puzzle_repository = PuzzleRepository(db)
 
@@ -258,8 +298,13 @@ async def get_user_status(username: str, db: Session = Depends(get_db)):
 @app.get(
     "/users/{username}/motifs/performance", response_model=MotifPerformanceResponse
 )
-async def get_motif_performance(username: str, db: Session = Depends(get_db)):
+async def get_motif_performance(
+    username: str,
+    db: Session = Depends(get_db),
+    account: Account | None = Depends(require_account),
+):
     """Get user's performance breakdown across all chess tactical patterns/motifs."""
+    assert_owns_username(account, username, db)
     return get_user_motif_performance(db, username)
 
 
@@ -291,11 +336,24 @@ async def validate_user(username: str):
     return {"valid": True, "username": profile.get("username", username)}
 
 
-@app.post("/import/chesscom", response_model=ImportResponse)
-async def import_chesscom_games(username: str, db: Session = Depends(get_db)):
+@app.post(
+    "/import/chesscom",
+    response_model=ImportResponse,
+    dependencies=[
+        Depends(rate_limit("import_chesscom", default_limit=RATE_LIMIT_IMPORT_CHESSCOM))
+    ],
+)
+async def import_chesscom_games(
+    username: str = Query(..., max_length=64),
+    db: Session = Depends(get_db),
+    account: Account | None = Depends(require_account),
+):
     """
     Import games from Chess.com for a specific user.
     """
+    # First-importer-wins: claim the handle for this account if unowned, else
+    # 403 if another account already owns it. No-op when auth is disabled.
+    claim_username_if_unowned(account, username, db)
     try:
         count = 0
         new_games = 0
@@ -312,27 +370,40 @@ async def import_chesscom_games(username: str, db: Session = Depends(get_db)):
             """
             nonlocal new_games, skipped
             for game in games:
-                is_new, _ = game_repository.store_game(
-                    username=username,
-                    url=game.url,
-                    pgn=game.pgn,
-                    white_username=game.white_username,
-                    black_username=game.black_username,
-                    white_result=game.white_result,
-                    black_result=game.black_result,
-                    time_control=game.time_control,
-                    end_time=game.end_time,
-                    rated=game.rated,
-                    commit=False,
-                )
+                try:
+                    is_new, _ = game_repository.store_game(
+                        username=username,
+                        url=game.url,
+                        pgn=game.pgn,
+                        white_username=game.white_username,
+                        black_username=game.black_username,
+                        white_result=game.white_result,
+                        black_result=game.black_result,
+                        time_control=game.time_control,
+                        end_time=game.end_time,
+                        rated=game.rated,
+                        commit=False,
+                    )
+                except ValueError:
+                    # A single malformed game (e.g. empty/missing url, which
+                    # store_game rejects to avoid identity collapse) must not
+                    # abort the whole import: skip it and keep the rest.
+                    skipped += 1
+                    continue
                 if is_new:
                     new_games += 1
                 else:
                     skipped += 1
             db.commit()
 
+        # Incremental sync: fetch only monthly archives that could contain new
+        # games. Derive the cutoff from the newest stored game's end time (not
+        # the last-sync timestamp) so an interrupted prior sync resumes safely.
+        # First sync (no stored games) → since=None → full history.
+        since = await asyncio.to_thread(game_repository.get_latest_game_time, username)
+
         batch: list[ChessGame] = []
-        async for game in import_all_games(username):
+        async for game in import_all_games(username, since=since):
             count += 1
             batch.append(game)
             if len(batch) >= IMPORT_COMMIT_BATCH_SIZE:
@@ -365,17 +436,25 @@ async def import_chesscom_games(username: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=502, detail=str(e)) from e
     except ChessComImportError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(
-            status_code=500, detail=f"Internal server error: {str(e)}"
-        ) from e
+        # Log the real error server-side; return a generic message so raw
+        # exception/DB text never reaches the caller (dim 23).
+        logger.exception("Unexpected error importing Chess.com games")
+        raise HTTPException(status_code=500, detail="Internal server error") from e
 
 
 @app.get("/import/status", response_model=ImportStatusResponse)
-async def get_import_status(username: str, db: Session = Depends(get_db)):
+async def get_import_status(
+    username: str,
+    db: Session = Depends(get_db),
+    account: Account | None = Depends(require_account),
+):
     """Get the last import summary for a user."""
     if not username:
         raise HTTPException(status_code=400, detail="Username is required")
+    assert_owns_username(account, username, db)
     game_repository = GameRepository(db)
     summary = game_repository.get_last_import_summary(username)
     if not summary:
@@ -391,8 +470,12 @@ class EvalRequest(BaseModel):
 
 
 class EvalResponse(BaseModel):
-    best_move_uci: str
+    # None when the position is terminal (checkmate/stalemate): there is no
+    # move to make. Clients should branch on is_terminal.
+    best_move_uci: str | None
     eval: float  # In pawns, from side-to-move perspective
+    mate_in: int | None = None  # Signed distance to mate, None for cp evals
+    is_terminal: bool = False  # Position is game-over (no best move)
 
 
 class EngineStatusResponse(BaseModel):
@@ -434,7 +517,14 @@ class PuzzleListItem(BaseModel):
     swing: float
     fen: str
     side_to_move: str
-    best_move_uci: str
+    # Solution fields are gated: they are populated only when the caller opts in
+    # with ?reveal=true (owner asking to see the answer). Otherwise they are None
+    # / empty so the Library browse surface can't passively echo the solution
+    # into a scored /due session (dim 13).
+    best_move_uci: str | None = None
+    # Full set of accepted solutions (multi-PV equivalence set). Falls back to
+    # [best_move_uci] for puzzles generated before this was persisted.
+    accept_moves_uci: list[str] = []
     status: str  # "new" | "due" | "learning" | "mastered"
     attempts: int
     pass_count: int
@@ -467,6 +557,60 @@ class ReviewRequest(BaseModel):
     result: PuzzleResult
     time_spent_ms: int | None = None
     session_id: str | None = None
+    # Optional client-supplied idempotency key (stable per puzzle presentation).
+    # A retried/double-submitted review with the same key is replayed without
+    # re-counting stats/session or advancing scheduling.
+    client_review_id: str | None = None
+    # Optional UCI move the user actually played. When supplied, the SERVER
+    # verifies it against the puzzle's accepted-solution set and computes the
+    # authoritative pass/fail, ignoring the client's self-reported ``result``.
+    # When omitted (legacy clients, timeouts, reveals) the review is recorded as
+    # client-reported and NOT labelled verified.
+    attempted_move: str | None = None
+
+
+class CheckRequest(BaseModel):
+    username: str
+    # The UCI move the user played on the board. Verified server-side; the
+    # solution is never echoed back (audit gate 13).
+    attempted_move: str
+    # Index of this move within the solution line (an even ply: 0 for the first
+    # move, 2 for the solver's second move, ...). Defaults to 0 so legacy
+    # single-move clients keep working unchanged.
+    ply_index: int = 0
+
+
+class CheckResponse(BaseModel):
+    # Server-authoritative live feedback for the training board. Reveals only
+    # whether the played move solves the puzzle — NOT what the solution is.
+    correct: bool
+    result: str  # "pass" | "fail"
+    # For a full-PV puzzle, the opponent's forced reply to a correct move (the
+    # next PV ply). Safe to reveal — it is the forced response, not the solver's
+    # upcoming answer, which is never sent. None for a wrong move, a legacy
+    # single-move puzzle, or when the correct move was the last ply of the line.
+    reply: str | None = None
+    # True once the whole line is solved (or, for a legacy puzzle, on the one
+    # correct move) — the client records the verified pass at this point.
+    complete: bool = False
+    # The solver's next move index in the line (ply_index + 2), so the client
+    # knows which ply to check next. None when the line is complete.
+    next_ply_index: int | None = None
+
+
+class RevealRequest(BaseModel):
+    username: str
+
+
+class RevealResponse(BaseModel):
+    # Explicit "give up / show me" path. Returns the solution only when the
+    # owner asks for it directly — the scored training payload never carries it.
+    best_move_uci: str
+    accept_moves_uci: list[str] = []
+    # The full solution line (principal variation) as UCI moves, when the puzzle
+    # has one. Empty for legacy single-move puzzles; the first move always equals
+    # best_move_uci so a client can render either a single move or the whole line.
+    solution_pv: list[str] = []
 
 
 @app.get("/")
@@ -484,6 +628,7 @@ async def get_openings(
         12, ge=1, le=40, description="Maximum number of half-moves to include"
     ),
     db: Session = Depends(get_db),
+    account: Account | None = Depends(require_account),
 ):
     """
     Get the opening tree for a user's games.
@@ -504,6 +649,7 @@ async def get_openings(
     Returns:
         Opening tree as nested JSON structure
     """
+    assert_owns_username(account, username, db)
     game_repository = GameRepository(db)
 
     # Check if user has any games
@@ -550,21 +696,79 @@ async def get_engine_status():
     return EngineStatusResponse(available=available, message=message)
 
 
-@app.post("/engine/eval", response_model=EvalResponse)
-async def evaluate_fen(request: EvalRequest):
-    """Evaluate a chess position using Stockfish with caching."""
+# /engine/eval is unauthenticated, so bound how many evaluations may be in
+# flight per process. Excess requests are rejected with 429 rather than queued,
+# so a caller cannot pile up unbounded Stockfish work. NOTE: this is a
+# per-process guard only; it is NOT a substitute for auth / per-client rate
+# limiting at the ingress, which must still be added to prevent abuse.
+_ENGINE_EVAL_MAX_INFLIGHT = int(os.environ.get("ENGINE_EVAL_MAX_CONCURRENCY", "4"))
+_engine_eval_inflight = 0
+_engine_eval_lock = asyncio.Lock()
+
+
+@app.post(
+    "/engine/eval",
+    response_model=EvalResponse,
+    dependencies=[
+        Depends(rate_limit("engine_eval", default_limit=RATE_LIMIT_ENGINE_EVAL))
+    ],
+)
+async def evaluate_fen(
+    request: EvalRequest,
+    account: Account | None = Depends(require_account),
+):
+    """Evaluate a chess position using Stockfish with caching.
+
+    Gated behind an authenticated account (when auth is enabled) purely to keep
+    unauthenticated callers from spending Stockfish CPU. No per-user data.
+    """
+    # Size cap: reject an oversized FEN before touching the engine or the
+    # in-flight guard, so a caller can't force expensive parsing with junk.
+    if len(request.fen) > MAX_FEN_LENGTH:
+        raise HTTPException(
+            status_code=400,
+            detail=f"FEN too long (max {MAX_FEN_LENGTH} characters)",
+        )
+
+    global _engine_eval_inflight
+    async with _engine_eval_lock:
+        if _engine_eval_inflight >= _ENGINE_EVAL_MAX_INFLIGHT:
+            raise HTTPException(
+                status_code=429,
+                detail="Engine evaluation capacity reached; retry later.",
+            )
+        _engine_eval_inflight += 1
+
     try:
         result = await asyncio.to_thread(get_or_compute_eval, request.fen)
-        return EvalResponse(best_move_uci=result.best_move_uci, eval=result.eval)
+        return EvalResponse(
+            best_move_uci=result.best_move_uci,
+            eval=result.eval,
+            mate_in=result.mate_in,
+            is_terminal=result.is_terminal,
+        )
     except EngineNotAvailableError as e:
         raise HTTPException(status_code=503, detail=str(e)) from e
     except InvalidFenError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+    finally:
+        async with _engine_eval_lock:
+            _engine_eval_inflight -= 1
 
 
-@app.post("/puzzles/generate", response_model=JobStatusResponse)
+@app.post(
+    "/puzzles/generate",
+    response_model=JobStatusResponse,
+    dependencies=[
+        Depends(
+            rate_limit("puzzles_generate", default_limit=RATE_LIMIT_PUZZLES_GENERATE)
+        )
+    ],
+)
 async def generate_puzzles_endpoint(
-    username: str = Query(..., description="Username to generate puzzles for"),
+    username: str = Query(
+        ..., max_length=64, description="Username to generate puzzles for"
+    ),
     max_games: int = Query(
         30, ge=1, le=2000, description="Maximum number of recent games to analyze"
     ),
@@ -572,8 +776,10 @@ async def generate_puzzles_endpoint(
         30, ge=1, le=2000, description="Maximum number of puzzles to generate"
     ),
     db: Session = Depends(get_db),
+    account: Account | None = Depends(require_account),
 ):
     """Start a background job to generate puzzles."""
+    assert_owns_username(account, username, db)
     try:
         new_job = Job(
             username=username,
@@ -625,11 +831,18 @@ async def generate_puzzles_endpoint(
 
 
 @app.get("/jobs/{job_id}", response_model=JobStatusResponse)
-async def get_job_status(job_id: str, db: Session = Depends(get_db)):
+async def get_job_status(
+    job_id: str,
+    db: Session = Depends(get_db),
+    account: Account | None = Depends(require_account),
+):
     """Get status of a specific job."""
     job = db.get(Job, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+
+    # Object-level ownership: 404 (not 403) so foreign job ids aren't confirmed.
+    assert_owns_username(account, job.username, db, status_code=404)
 
     return JobStatusResponse(
         job_id=job.id,
@@ -642,11 +855,18 @@ async def get_job_status(job_id: str, db: Session = Depends(get_db)):
 
 
 @app.post("/jobs/{job_id}/cancel", response_model=JobStatusResponse)
-async def cancel_job(job_id: str, db: Session = Depends(get_db)):
+async def cancel_job(
+    job_id: str,
+    db: Session = Depends(get_db),
+    account: Account | None = Depends(require_account),
+):
     """Cancel a running or queued job."""
     job = db.get(Job, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+
+    # Object-level ownership: 404 (not 403) so foreign job ids aren't confirmed.
+    assert_owns_username(account, job.username, db, status_code=404)
 
     # Only allow cancellation of queued or running jobs
     if job.status not in [JobStatus.QUEUED, JobStatus.RUNNING]:
@@ -672,11 +892,15 @@ async def cancel_job(job_id: str, db: Session = Depends(get_db)):
 
 @app.post("/daily-puzzle-sessions", response_model=DailyPuzzlesResponse)
 async def create_daily_puzzle_session(
-    request: DailyPuzzleSessionRequest, db: Session = Depends(get_db)
+    request: DailyPuzzleSessionRequest,
+    db: Session = Depends(get_db),
+    account: Account | None = Depends(require_account),
 ):
     """Create a new daily puzzle session for a user."""
     username = request.username
     n = request.n
+
+    assert_owns_username(account, username, db)
 
     # Validate n parameter
     if n < 1 or n > 20:
@@ -695,9 +919,12 @@ async def create_daily_puzzle_session(
             detail=f"No puzzles found for user '{username}'. Generate puzzles first using POST /puzzles/generate",
         )
 
-    # Mark puzzles as used today
+    # Mark puzzles as used today. Defer to the repository's UTC day default so
+    # the write matches get_daily_puzzles' UTC read (dim 17): a server-local
+    # date.today() here would disagree near the UTC/local midnight boundary and
+    # break the used-today dedup/re-serve.
     puzzle_ids = [p.id for p in puzzles]
-    puzzle_repository.mark_puzzles_used(username, puzzle_ids, date.today())
+    puzzle_repository.mark_puzzles_used(username, puzzle_ids)
 
     # Reload specific puzzles to get updated used_on field
     updated_puzzles = [
@@ -719,7 +946,9 @@ async def create_daily_puzzle_session(
         else:
             p_dict["primary_motif"] = None
             p_dict["title"] = None
-        puzzles_dict.append(p_dict)
+        # SCORED training path (post-generation warm-up): strip the solution so
+        # it can't be pre-read before an attempt (audit gate 13).
+        puzzles_dict.append(_strip_solution(p_dict))
 
     return DailyPuzzlesResponse(puzzles=puzzles_dict, count=len(puzzles_dict))
 
@@ -738,12 +967,14 @@ async def get_due_puzzles_endpoint(
         None, description="Filter puzzles by specific motif (e.g., 'Fork', 'Pin')"
     ),
     db: Session = Depends(get_db),
+    account: Account | None = Depends(require_account),
 ):
     """
     Get puzzles due for review, followed by new puzzles.
     Supports adaptive selection based on session type and target accuracy.
     Optionally filter by specific chess motif.
     """
+    assert_owns_username(account, username, db)
     puzzle_repository = PuzzleRepository(db)
 
     # 1. Load index to get all candidate IDs
@@ -819,7 +1050,8 @@ async def get_due_puzzles_endpoint(
                     "primary_motif": None,
                 }
             )
-        result_puzzles.append(p_dict)
+        # SCORED training path: never ship the solution up front.
+        result_puzzles.append(_strip_solution(p_dict))
 
     # 4. Total due count for metadata
     # 4. Total due count for metadata
@@ -839,12 +1071,228 @@ async def get_due_puzzles_endpoint(
     }
 
 
+# Fields that reveal (or strongly hint at) a puzzle's solution. They are
+# stripped from every SCORED TRAINING payload so a client cannot pre-read the
+# answer before making an attempt (audit gate 13 — closes the pre-exposure cheat
+# vector left after gate 7's server-verified reviews). The training board gets
+# live correct/incorrect feedback from POST /puzzles/{id}/check, and the
+# solution only from POST /puzzles/{id}/reveal or a server-verified solve.
+# played_move_uci (the original blunder) is included because it narrows the
+# solution and the training client never needs it.
+_SOLUTION_FIELDS = (
+    "best_move_uci",
+    "accept_moves_uci",
+    "played_move_uci",
+    # The full solution line is the answer too — never pre-ship it. The training
+    # board learns the line one forced reply at a time via POST /check, and the
+    # whole line only from POST /reveal or a server-verified full solve.
+    "solution_pv",
+)
+
+
+_TRUTHY = {"1", "true", "yes", "on"}
+
+
+def _strip_puzzle_solutions_enabled() -> bool:
+    """Whether the anti-cheat solution gate is turned on.
+
+    Rollout flag — ``KNIGHTMIND_STRIP_PUZZLE_SOLUTIONS`` (default OFF). Mirrors
+    the ``KNIGHTMIND_REQUIRE_AUTH`` flag-reading pattern in ``identity.py``.
+
+    OFF (default): solutions are INCLUDED in browse/training payloads —
+    ``/puzzles/due`` & ``/daily-puzzle-sessions`` do NOT strip, and
+    ``/puzzles/list`` & ``/puzzles/{id}`` include the solution regardless of
+    ``?reveal``. This is the pre-audit behavior, backward-compatible with the
+    old client-grading frontend and harmless to the new frontend (which grades
+    via ``/check`` and ignores the extra fields). It lets the new API deploy
+    before the new frontend is live, order-independently.
+
+    ON: the strict anti-cheat behavior — strip on ``/due`` & ``/daily`` and gate
+    ``/list`` & ``/{id}`` behind ``?reveal=true``. Flip it (no redeploy needed)
+    once the new frontend is confirmed live.
+
+    Server-side verification (``/check``, ``/reveal``, ``/review``) is unaffected
+    by this flag either way.
+    """
+    return (
+        os.environ.get("KNIGHTMIND_STRIP_PUZZLE_SOLUTIONS", "").strip().lower()
+        in _TRUTHY
+    )
+
+
+def _strip_solution(p_dict: dict) -> dict:
+    """Remove solution-revealing fields from a training puzzle dict, in place.
+
+    No-op unless ``KNIGHTMIND_STRIP_PUZZLE_SOLUTIONS`` is enabled.
+    """
+    if not _strip_puzzle_solutions_enabled():
+        return p_dict
+    for field in _SOLUTION_FIELDS:
+        p_dict.pop(field, None)
+    return p_dict
+
+
 def _swing_to_difficulty(swing: float) -> str:
     if swing < 2.0:
         return "easy"
     if swing < 5.0:
         return "medium"
     return "hard"
+
+
+def _accept_moves(puzzle) -> list[str]:
+    """Parse a puzzle's stored equivalence set, falling back to the best move.
+
+    Older puzzles predate the accept_moves_uci column, so we always guarantee
+    at least the single best move is accepted.
+    """
+    raw = getattr(puzzle, "accept_moves_uci", None)
+    moves = [m for m in (raw or "").split(",") if m] if raw else []
+    if puzzle.best_move_uci and puzzle.best_move_uci not in moves:
+        moves.insert(0, puzzle.best_move_uci)
+    return moves
+
+
+def _verify_attempt(puzzle, attempted_move: str) -> PuzzleResult:
+    """Server-authoritative pass/fail for a played move (audit gate 7).
+
+    The move is parsed and checked for legality in the puzzle's FEN, then
+    compared against the accepted-solution set (best move + multi-PV
+    equivalents). A move that is illegal, malformed, or simply not in the
+    accepted set is a FAIL — the server never trusts the client's claim here.
+    Comparison is on normalised (lower-cased) UCI so casing can't smuggle a
+    false pass.
+    """
+    candidate = (attempted_move or "").strip().lower()
+    if not candidate:
+        return PuzzleResult.FAIL
+
+    # Legality: reject malformed or illegal moves outright.
+    try:
+        board = chess.Board(puzzle.fen)
+        move = chess.Move.from_uci(candidate)
+    except (ValueError, IndexError):
+        return PuzzleResult.FAIL
+    if move not in board.legal_moves:
+        return PuzzleResult.FAIL
+
+    accepted = {m.strip().lower() for m in _accept_moves(puzzle) if m}
+    return PuzzleResult.PASS if candidate in accepted else PuzzleResult.FAIL
+
+
+def _normalize_uci(move: str | None) -> str:
+    """Lower-case, whitespace-trim a UCI move for comparison."""
+    return (move or "").strip().lower()
+
+
+def _solution_pv(puzzle) -> list[str]:
+    """Parse a puzzle's persisted solution line into an ordered UCI list.
+
+    The stored form is space-separated (comma tolerated) UCI moves starting with
+    the solution move. Legacy puzzles have no line (NULL) and yield [], which the
+    callers treat as single-move training. Even plies (0, 2, ...) are the solver's
+    moves; odd plies are the opponent's forced replies.
+    """
+    raw = getattr(puzzle, "solution_pv", None)
+    if not raw:
+        return []
+    return [m for m in raw.replace(",", " ").split() if m]
+
+
+def _verify_line(puzzle, attempted_line: list[str]) -> PuzzleResult:
+    """Server-authoritative pass/fail for a WHOLE solved line (full-PV puzzles).
+
+    The line is solved only when the solver played every one of their plies
+    (the even indices of the stored PV) correctly and in order — a wrong move at
+    any ply fails the whole puzzle. The FIRST solver move (ply 0) accepts any
+    move in the multi-PV equivalence set (best move + accept_moves_uci), since an
+    equally-good opening move is a valid solve; every later ply must match the
+    canonical forcing line exactly. Never trusts the client's claim (dim 11).
+    """
+    pv = _solution_pv(puzzle)
+    if len(pv) < 2:
+        # No real line to verify — fall back to single-move semantics on the
+        # first supplied move (keeps a mis-routed call safe rather than crashing).
+        first = attempted_line[0] if attempted_line else ""
+        return _verify_attempt(puzzle, first)
+
+    user_plies = [pv[i] for i in range(0, len(pv), 2)]
+    if not attempted_line or len(attempted_line) != len(user_plies):
+        return PuzzleResult.FAIL
+    accepted_first = {m.strip().lower() for m in _accept_moves(puzzle) if m}
+    for idx, (played, expected) in enumerate(
+        zip(attempted_line, user_plies, strict=True)
+    ):
+        played_n = _normalize_uci(played)
+        if idx == 0:
+            # First move: any multi-PV equivalent is accepted.
+            if played_n not in accepted_first:
+                return PuzzleResult.FAIL
+        elif played_n != _normalize_uci(expected):
+            return PuzzleResult.FAIL
+    return PuzzleResult.PASS
+
+
+def _check_solution_move(
+    puzzle, attempted_move: str, ply_index: int
+) -> "CheckResponse":
+    """Server-authoritative live feedback for one ply of a (possibly multi-move)
+    solve, WITHOUT ever revealing the solver's upcoming answer.
+
+    Legacy / single-move puzzles (no stored line) keep today's behaviour: verify
+    against the accepted-solution set and report only correct/incorrect.
+
+    Full-PV puzzles are validated ply-by-ply. ``ply_index`` is the solver's move
+    index in the line (an even index). On a correct move the response carries the
+    opponent's forced REPLY — the very next PV ply, which is safe to reveal
+    because it is the forced response, not the solver's next answer — and whether
+    the line is now complete. The solver's next move (ply_index + 2) is NEVER
+    included, so the client cannot read ahead. A wrong move fails with no reply.
+    """
+    pv = _solution_pv(puzzle)
+
+    # Legacy / single-move puzzle: accepted set, complete on the one correct move.
+    if len(pv) < 2:
+        result = _verify_attempt(puzzle, attempted_move)
+        correct = result == PuzzleResult.PASS
+        return CheckResponse(
+            correct=correct,
+            result=result.value,
+            reply=None,
+            complete=correct,
+            next_ply_index=None,
+        )
+
+    # Full-PV puzzle: the solver only ever plays the even plies. Reject an
+    # out-of-range or odd (opponent) index outright rather than trust it.
+    if ply_index < 0 or ply_index >= len(pv) or ply_index % 2 != 0:
+        return CheckResponse(
+            correct=False, result=PuzzleResult.FAIL.value, reply=None, complete=False
+        )
+
+    if ply_index == 0:
+        # First move: accept any multi-PV equivalent (best move + accept set);
+        # later plies must match the exact forcing line (dim 11).
+        accepted_first = {m.strip().lower() for m in _accept_moves(puzzle) if m}
+        correct = _normalize_uci(attempted_move) in accepted_first
+    else:
+        correct = _normalize_uci(attempted_move) == _normalize_uci(pv[ply_index])
+    if not correct:
+        return CheckResponse(
+            correct=False, result=PuzzleResult.FAIL.value, reply=None, complete=False
+        )
+
+    reply_index = ply_index + 1
+    reply = pv[reply_index] if reply_index < len(pv) else None
+    next_ply_index = ply_index + 2
+    complete = next_ply_index >= len(pv)
+    return CheckResponse(
+        correct=True,
+        result=PuzzleResult.PASS.value,
+        reply=reply,
+        complete=complete,
+        next_ply_index=None if complete else next_ply_index,
+    )
 
 
 @app.get("/puzzles/list", response_model=PuzzleListResponse)
@@ -862,7 +1310,13 @@ async def list_puzzles(
     ),
     limit: int = Query(50, ge=1, le=100, description="Page size"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
+    reveal: bool = Query(
+        False,
+        description="Include the solution (best_move_uci/accept_moves_uci). "
+        "Off by default so the browse surface can't echo the answer.",
+    ),
     db: Session = Depends(get_db),
+    account: Account | None = Depends(require_account),
 ):
     """
     List all puzzles for a user with filtering, search, sorting, and pagination.
@@ -870,7 +1324,16 @@ async def list_puzzles(
     """
     from services.api.models import Puzzle as PuzzleModel
 
-    now = datetime.now(timezone.utc)
+    assert_owns_username(account, username, db)
+
+    # When the strip flag is OFF (default) the solution is always included so the
+    # old client-grading frontend keeps working; ?reveal only matters when the
+    # strict gate is ON.
+    reveal_solution = reveal or not _strip_puzzle_solutions_enabled()
+    # naive-UTC bound for SQL comparisons against naive next_due_at columns
+    # (see spaced_repetition module note); an aware now would misclassify on
+    # Postgres with a non-UTC session TimeZone.
+    now = _utcnow_naive()
     username_lower = username.lower()
 
     join_cond = (PuzzleModel.id == PuzzleStats.puzzle_id) & (
@@ -1029,7 +1492,11 @@ async def list_puzzles(
                 swing=puzzle.swing,
                 fen=puzzle.fen,
                 side_to_move=puzzle.side_to_move,
-                best_move_uci=puzzle.best_move_uci,
+                # Gated on ?reveal=true (dim 13) only when the strip flag is ON.
+                # When OFF (default) the solution is always included so the old
+                # client-grading frontend keeps working.
+                best_move_uci=puzzle.best_move_uci if reveal_solution else None,
+                accept_moves_uci=_accept_moves(puzzle) if reveal_solution else [],
                 status=row_status,
                 attempts=stats.attempts if stats else 0,
                 pass_count=stats.pass_count if stats else 0,
@@ -1061,13 +1528,27 @@ async def list_puzzles(
 async def get_puzzle_detail(
     puzzle_id: str,
     username: str = Query(..., description="Username to look up puzzle for"),
+    reveal: bool = Query(
+        False,
+        description="Include the solution (best_move_uci/accept_moves_uci). "
+        "Off by default so the browse surface can't echo the answer.",
+    ),
     db: Session = Depends(get_db),
+    account: Account | None = Depends(require_account),
 ):
     """Get a single puzzle by ID with user stats."""
     from services.api.models import Puzzle as PuzzleModel
 
+    assert_owns_username(account, username, db)
+
+    # When the strip flag is OFF (default) the solution is always included so the
+    # old client-grading frontend keeps working; ?reveal only matters when the
+    # strict gate is ON.
+    reveal_solution = reveal or not _strip_puzzle_solutions_enabled()
     username_lower = username.lower()
-    now = datetime.now(timezone.utc)
+    # naive-UTC bound for SQL comparison against naive next_due_at (see
+    # spaced_repetition module note).
+    now = _utcnow_naive()
 
     detail_status_case = case(
         (
@@ -1110,7 +1591,11 @@ async def get_puzzle_detail(
         swing=puzzle.swing,
         fen=puzzle.fen,
         side_to_move=puzzle.side_to_move,
-        best_move_uci=puzzle.best_move_uci,
+        # Gated on ?reveal=true (dim 13) only when the strip flag is ON. When OFF
+        # (default) the solution is always included so the old client-grading
+        # frontend keeps working.
+        best_move_uci=puzzle.best_move_uci if reveal_solution else None,
+        accept_moves_uci=_accept_moves(puzzle) if reveal_solution else [],
         status=computed_status,
         attempts=stats.attempts if stats else 0,
         pass_count=stats.pass_count if stats else 0,
@@ -1122,79 +1607,39 @@ async def get_puzzle_detail(
     )
 
 
-@app.post("/puzzles/{puzzle_id}/review")
-async def review_puzzle(
-    puzzle_id: str, request: ReviewRequest, db: Session = Depends(get_db)
-):
+def _find_existing_review(db, puzzle_id, username, session_id, client_review_id):
+    """Return the prior review for this idempotency key, or None.
+
+    Matches the uniqueness tuple (puzzle_id, username, session_id,
+    client_review_id); a NULL session_id is compared with IS NULL, mirroring the
+    COALESCE(session_id, '') unique index.
     """
-    Record a puzzle review and update scheduling.
+    return db.scalars(
+        select(PuzzleReview).where(
+            PuzzleReview.puzzle_id == puzzle_id,
+            PuzzleReview.username == username,
+            PuzzleReview.session_id == session_id,
+            PuzzleReview.client_review_id == client_review_id,
+        )
+    ).first()
 
-    Optionally tracks the review in a training session.
-    Provides enhanced feedback including puzzle statistics.
+
+def _build_review_response(
+    stats, puzzle_stats, result, verified: bool = False, source: str | None = None
+) -> dict:
+    """Build the review endpoint payload for a given (stats, result).
+
+    Shared by the normal path and the idempotent-replay path so a replayed
+    review returns the same shape without re-running any scheduling logic.
+
+    ``result`` here is the authoritative (server-decided) outcome. ``verified``
+    and ``source`` tell the client whether that outcome was independently
+    checked by the server or merely echoes the client's self-report — so the UI
+    and analytics never present a self-reported pass as verified skill.
     """
-    puzzle_repository = PuzzleRepository(db)
-    puzzle = puzzle_repository.get_puzzle(request.username, puzzle_id)
-    if not puzzle:
-        raise HTTPException(status_code=404, detail="Puzzle not found")
-
-    # If session_id provided, validate session and update counters
-    if request.session_id:
-        from services.api.models import PuzzleResult as PR
-        from services.api.models import TrainingSession
-
-        stmt = select(TrainingSession).where(TrainingSession.id == request.session_id)
-        session = db.scalars(stmt).first()
-
-        if not session:
-            raise HTTPException(status_code=404, detail="Session not found")
-
-        if session.username != request.username:
-            raise HTTPException(
-                status_code=403, detail="Session belongs to different user"
-            )
-
-        if session.completed_at is not None:
-            raise HTTPException(status_code=400, detail="Session already completed")
-
-        # Increment session counters (will be committed with review)
-        if request.result == PR.PASS:
-            session.pass_count += 1
-            # Update streak
-            session.current_streak += 1
-            if session.current_streak > session.best_streak:
-                session.best_streak = session.current_streak
-        else:
-            session.fail_count += 1
-            # Reset streak on fail
-            session.current_streak = 0
-
-        # Add time if provided
-        if request.time_spent_ms:
-            session.total_time_ms += request.time_spent_ms
-
-    # 1. Record individual review (with optional session_id)
-    insert_puzzle_review(
-        db,
-        puzzle_id,
-        request.username,
-        request.result,
-        request.time_spent_ms,
-        session_id=request.session_id,
-    )
-
-    # 2. Update aggregate stats (triggers scheduling logic)
-    stats = update_puzzle_stats(db, puzzle_id, request.username, request.result)
-
-    # 3. Get puzzle details for feedback
-    puzzle_stats = puzzle_repository.get_puzzle_stats(request.username, puzzle_id)
-
-    # 4. Commit all changes atomically (single transaction boundary;
-    #    the storage helpers above only flush, they never commit)
-    db.commit()
-
-    # 5. Generate feedback message
+    result_val = result.value if isinstance(result, PuzzleResult) else result
     feedback_message = ""
-    if request.result == "pass":
+    if result_val == "pass":
         if stats.attempts == 1:
             feedback_message = "Perfect! First try!"
         elif stats.attempts > 0 and stats.pass_count / stats.attempts > 0.8:
@@ -1213,6 +1658,10 @@ async def review_puzzle(
         "ease_factor": stats.ease_factor,
         "feedback": feedback_message,
         "puzzle_info": puzzle_stats,
+        # Server-decided outcome and whether it was independently verified.
+        "result": result_val,
+        "verified": verified,
+        "source": source,
         "stats": {
             "attempts": stats.attempts,
             "pass_count": stats.pass_count,
@@ -1221,6 +1670,253 @@ async def review_puzzle(
             "last_result": stats.last_result,
         },
     }
+
+
+@app.post("/puzzles/{puzzle_id}/review")
+async def review_puzzle(
+    puzzle_id: str,
+    request: ReviewRequest,
+    db: Session = Depends(get_db),
+    account: Account | None = Depends(require_account),
+):
+    """
+    Record a puzzle review and update scheduling.
+
+    Optionally tracks the review in a training session.
+    Provides enhanced feedback including puzzle statistics.
+
+    Idempotent replay: when ``client_review_id`` is supplied and a review with
+    that key already exists for this (puzzle, user, session), the prior outcome
+    is returned WITHOUT re-recording the review, re-incrementing session
+    counters, or advancing scheduling. This makes double-clicks and network
+    retries safe.
+    """
+    assert_owns_username(account, request.username, db)
+    puzzle_repository = PuzzleRepository(db)
+    puzzle = puzzle_repository.get_puzzle(request.username, puzzle_id)
+    if not puzzle:
+        raise HTTPException(status_code=404, detail="Puzzle not found")
+
+    # Normalize an empty session_id to NULL (dim 14). The unique index keys on
+    # COALESCE(session_id, ''), so "" and None collapse to the same value; the
+    # idempotency lookup, the write, and the index must all agree on one
+    # representation. Otherwise a first submit with session_id="" then a NULL
+    # retry (same client_review_id) misses both the fast-path replay and the
+    # IntegrityError-replay lookup and 500s. All uses below go through this local.
+    session_id = request.session_id or None
+
+    # Idempotent replay: short-circuit before any mutation if this exact
+    # client_review_id was already recorded for this (puzzle, user, session).
+    if request.client_review_id:
+        existing = _find_existing_review(
+            db,
+            puzzle_id,
+            request.username,
+            session_id,
+            request.client_review_id,
+        )
+        if existing:
+            stats = get_puzzle_stats(db, puzzle_id, request.username)
+            puzzle_stats = puzzle_repository.get_puzzle_stats(
+                request.username, puzzle_id
+            )
+            return _build_review_response(
+                stats,
+                puzzle_stats,
+                existing.result,
+                verified=existing.verified,
+                source=existing.source,
+            )
+
+    # Server-verified training integrity (audit gate 7): when the client sends
+    # the move it played, the SERVER decides pass/fail from the board — the
+    # client's self-reported ``result`` is recorded (client_result) but never
+    # trusted for the outcome. Absent a move, fall back to the client's claim
+    # and mark it unverified so analytics can tell skill from self-report.
+    client_result = request.result
+    if request.attempted_move is not None:
+        # For a full-PV puzzle the client sends the WHOLE solved line as a
+        # space-separated UCI string here; the server re-verifies every ply so a
+        # puzzle counts as solved only when the entire line was played correctly.
+        # A single move (legacy puzzle, or a puzzle with no stored line) verifies
+        # against the accepted-solution set exactly as before.
+        if len(_solution_pv(puzzle)) >= 2:
+            effective_result = _verify_line(puzzle, request.attempted_move.split())
+        else:
+            effective_result = _verify_attempt(puzzle, request.attempted_move)
+        verified = True
+        review_source = "server_verified"
+    else:
+        effective_result = request.result
+        verified = False
+        review_source = "client_reported"
+
+    # If session_id provided, validate session and update counters
+    if session_id:
+        from services.api.models import PuzzleResult as PR
+        from services.api.models import TrainingSession
+
+        # Lock the session row for the duration of this transaction so the
+        # counter read-modify-write below is race-safe: concurrent reviews in the
+        # SAME session serialize on this lock instead of both reading the stale
+        # count and losing an increment (Postgres READ COMMITTED). SQLite has no
+        # row lock but serializes writers, so the plain SELECT is safe there.
+        # Locking the session BEFORE the puzzle-stats row (below) gives a single
+        # consistent lock order, so concurrent same-session reviews can't deadlock.
+        stmt = select(TrainingSession).where(TrainingSession.id == session_id)
+        if db.get_bind().dialect.name == "postgresql":
+            stmt = stmt.with_for_update()
+        session = db.scalars(stmt).first()
+
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        if session.username != request.username:
+            raise HTTPException(
+                status_code=403, detail="Session belongs to different user"
+            )
+
+        if session.completed_at is not None:
+            raise HTTPException(status_code=400, detail="Session already completed")
+
+        # Increment session counters (will be committed with review). Use the
+        # SERVER-decided outcome so a spoofed "pass" with a wrong move can't
+        # inflate session pass_count / streak.
+        if effective_result == PR.PASS:
+            session.pass_count += 1
+            # Update streak
+            session.current_streak += 1
+            if session.current_streak > session.best_streak:
+                session.best_streak = session.current_streak
+        else:
+            session.fail_count += 1
+            # Reset streak on fail
+            session.current_streak = 0
+
+        # Add time if provided
+        if request.time_spent_ms:
+            session.total_time_ms += request.time_spent_ms
+
+    try:
+        # 1. Record individual review (with optional session_id + idempotency
+        #    key). ``result`` is the authoritative outcome; the client's raw
+        #    claim and how it was decided are recorded alongside it.
+        insert_puzzle_review(
+            db,
+            puzzle_id,
+            request.username,
+            effective_result,
+            request.time_spent_ms,
+            session_id=session_id,
+            client_review_id=request.client_review_id,
+            attempted_move=request.attempted_move,
+            client_result=client_result,
+            verified=verified,
+            source=review_source,
+        )
+
+        # 2. Update aggregate stats (triggers scheduling logic)
+        stats = update_puzzle_stats(db, puzzle_id, request.username, effective_result)
+
+        # 3. Get puzzle details for feedback
+        puzzle_stats = puzzle_repository.get_puzzle_stats(request.username, puzzle_id)
+
+        # 4. Commit all changes atomically (single transaction boundary;
+        #    the storage helpers above only flush, they never commit)
+        db.commit()
+    except IntegrityError:
+        # A concurrent same-key submit slipped past the replay SELECT above and
+        # committed first; the unique index rejects this duplicate. Roll back our
+        # (uncommitted) mutations — including the session counter increments —
+        # and replay the winner's outcome instead of surfacing a 500 or double
+        # counting. This is the concurrency backstop for the replay-before-mutate
+        # fast path.
+        db.rollback()
+        if request.client_review_id:
+            existing = _find_existing_review(
+                db,
+                puzzle_id,
+                request.username,
+                session_id,
+                request.client_review_id,
+            )
+            if existing:
+                stats = get_puzzle_stats(db, puzzle_id, request.username)
+                puzzle_stats = puzzle_repository.get_puzzle_stats(
+                    request.username, puzzle_id
+                )
+                return _build_review_response(
+                    stats,
+                    puzzle_stats,
+                    existing.result,
+                    verified=existing.verified,
+                    source=existing.source,
+                )
+        raise
+
+    # 5. Build the response (feedback + scheduling + stats). Feedback reflects
+    #    the server-decided outcome, not the client's self-reported claim.
+    return _build_review_response(
+        stats,
+        puzzle_stats,
+        effective_result,
+        verified=verified,
+        source=review_source,
+    )
+
+
+@app.post("/puzzles/{puzzle_id}/check", response_model=CheckResponse)
+async def check_puzzle(
+    puzzle_id: str,
+    request: CheckRequest,
+    db: Session = Depends(get_db),
+    account: Account | None = Depends(require_account),
+):
+    """Server-authoritative live feedback for the training board (audit gate 13).
+
+    Verifies the played move against the puzzle's accepted-solution set (or, for
+    a full-PV puzzle, the move expected at ``ply_index`` of the line) and returns
+    only correct/incorrect plus — on a correct move of a multi-move line — the
+    opponent's forced reply and whether the line is complete. It never returns the
+    solver's upcoming answer, so the client can train the whole line WITHOUT ever
+    holding the part it has yet to find. Records nothing; scheduling/stats still
+    flow through POST /puzzles/{id}/review. Ownership is enforced exactly as
+    review.
+    """
+    assert_owns_username(account, request.username, db)
+    puzzle_repository = PuzzleRepository(db)
+    puzzle = puzzle_repository.get_puzzle(request.username, puzzle_id)
+    if not puzzle:
+        raise HTTPException(status_code=404, detail="Puzzle not found")
+
+    return _check_solution_move(puzzle, request.attempted_move, request.ply_index)
+
+
+@app.post("/puzzles/{puzzle_id}/reveal", response_model=RevealResponse)
+async def reveal_puzzle(
+    puzzle_id: str,
+    request: RevealRequest,
+    db: Session = Depends(get_db),
+    account: Account | None = Depends(require_account),
+):
+    """Explicit "show me the solution" path for the training board.
+
+    The scored training payload (list/due/daily) no longer carries the answer,
+    so a user who gives up (or asks for a full clue) fetches it here on demand.
+    Returns nothing but the solution; recording the resulting fail still happens
+    via POST /puzzles/{id}/review when the user moves on. Ownership enforced.
+    """
+    assert_owns_username(account, request.username, db)
+    puzzle_repository = PuzzleRepository(db)
+    puzzle = puzzle_repository.get_puzzle(request.username, puzzle_id)
+    if not puzzle:
+        raise HTTPException(status_code=404, detail="Puzzle not found")
+
+    return RevealResponse(
+        best_move_uci=puzzle.best_move_uci,
+        accept_moves_uci=_accept_moves(puzzle),
+        solution_pv=_solution_pv(puzzle),
+    )
 
 
 # --- Rating Drivers Explainer Support ---
@@ -1244,7 +1940,7 @@ def calculate_expected_score(player_rating: int, opponent_rating: int) -> float:
 
 
 class SnapshotRequest(BaseModel):
-    username: str
+    username: str = Field(max_length=64)
     time_control: Literal["rapid", "blitz", "bullet"]
 
 
@@ -1253,11 +1949,22 @@ class SnapshotResponse(BaseModel):
     recorded_at: datetime
 
 
-@app.post("/ratings/snapshot", response_model=SnapshotResponse)
+@app.post(
+    "/ratings/snapshot",
+    response_model=SnapshotResponse,
+    dependencies=[
+        Depends(
+            rate_limit("ratings_snapshot", default_limit=RATE_LIMIT_RATINGS_SNAPSHOT)
+        )
+    ],
+)
 async def create_rating_snapshot(
-    request: SnapshotRequest, db: Session = Depends(get_db)
+    request: SnapshotRequest,
+    db: Session = Depends(get_db),
+    account: Account | None = Depends(require_account),
 ):
     """Fetch current rating from Chess.com and store a snapshot."""
+    assert_owns_username(account, request.username, db)
     try:
         stats = await get_player_stats(request.username)
 
@@ -1286,10 +1993,15 @@ async def create_rating_snapshot(
 
     except (UserNotFoundError, NetworkError) as e:
         raise HTTPException(status_code=502, detail=str(e)) from e
+    except HTTPException:
+        # Domain-specific HTTPExceptions (e.g. the 502 above) are already safe.
+        raise
     except Exception as e:
-        if isinstance(e, HTTPException):
-            raise e
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        # Unexpected failure: log the real error server-side but return a generic
+        # message so raw exception/DB text (connection strings, SQL, etc.) never
+        # reaches the caller (dim 23).
+        logger.exception("Unexpected error creating rating snapshot")
+        raise HTTPException(status_code=500, detail="Internal server error") from e
 
 
 class SnapshotHistoryItem(BaseModel):
@@ -1303,12 +2015,14 @@ async def get_rating_history(
     time_control: str = "rapid",
     limit: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
+    account: Account | None = Depends(require_account),
 ):
     """Return chronological rating snapshot history for charting.
 
     Fetches the most recent `limit` snapshots (desc) then reverses to
     chronological order so the frontend chart always shows the latest window.
     """
+    assert_owns_username(account, username, db)
     stmt = (
         select(RatingSnapshot)
         .where(
@@ -1379,6 +2093,11 @@ class ExplainResponse(BaseModel):
     stats: DriverStats
     drivers: list[Driver]
     highlights: Highlights
+    # Canonical uncertainty signal (rated games in window). Drivers are
+    # descriptive, not causal; below MIN_GAMES_FOR_RATING_DRIVERS no directional
+    # driver is emitted and insufficient_data is True.
+    confidence: Literal["low", "medium", "high"]
+    insufficient_data: bool
 
 
 @app.get("/ratings/explain", response_model=ExplainResponse)
@@ -1389,9 +2108,12 @@ async def explain_rating_changes(
     since: datetime | None = None,
     limit_games: int = Query(200, ge=1, le=2000),
     db: Session = Depends(get_db),
+    account: Account | None = Depends(require_account),
 ):
     """Explain rating drivers based on recent games."""
     from services.api.models import TrainingSession
+
+    assert_owns_username(account, username, db)
 
     # 1. Determine Window
     now = datetime.now(timezone.utc)
@@ -1402,6 +2124,8 @@ async def explain_rating_changes(
         session = db.get(TrainingSession, since_session_id)
         if not session:
             raise HTTPException(status_code=404, detail="Session not found")
+        # Don't leak another tenant's session window via a guessed id: 404.
+        assert_owns_username(account, session.username, db, status_code=404)
         window_start = session.created_at.replace(tzinfo=timezone.utc)
         source_type = "session"
     elif since:
@@ -1586,10 +2310,30 @@ async def explain_rating_changes(
 
     avg_opp = int(total_opp_rating / opp_rating_count) if opp_rating_count > 0 else None
 
+    # Canonical uncertainty signal from the rated-game sample. Below the driver
+    # threshold we must not present a small delta as a confident, causal trend.
+    confidence = rating_confidence(opp_rating_count)
+    insufficient_data = opp_rating_count < MIN_GAMES_FOR_RATING_DRIVERS
+
     drivers: list[Driver] = []
     diff = actual_total_rated - expected_total
 
-    if diff > PERFORMANCE_DIFF_THRESHOLD:
+    if insufficient_data:
+        # Too few rated games to attribute drivers; stay descriptive + neutral.
+        if opp_rating_count > 0:
+            drivers.append(
+                Driver(
+                    text=(
+                        f"Only {opp_rating_count} rated "
+                        f"{time_control.lower()} game"
+                        f"{'s' if opp_rating_count != 1 else ''} in this window — "
+                        "not enough to explain rating changes confidently."
+                    ),
+                    severity="minor",
+                    direction="neutral",
+                )
+            )
+    elif diff > PERFORMANCE_DIFF_THRESHOLD:
         severity = (
             "major" if abs(diff) > 2.0 else "moderate" if abs(diff) > 1.0 else "minor"
         )
@@ -1612,49 +2356,51 @@ async def explain_rating_changes(
             )
         )
 
-    wins_vs_higher = sum(
-        1
-        for g in game_details
-        if g["opp_rating"]
-        and g["opp_rating"] >= reference_rating + RATING_DIFFERENCE_THRESHOLD
-        and g["actual"] == 1.0
-    )
-    if wins_vs_higher >= SIGNIFICANT_WINS_VS_HIGHER_THRESHOLD:
-        drivers.append(
-            Driver(
-                text=f"{wins_vs_higher} wins against higher-rated opponents likely offset losses.",
-                severity="moderate" if wins_vs_higher >= 4 else "minor",
-                direction="up",
-            )
+    # Attribution drivers below require a sufficient rated sample.
+    if not insufficient_data:
+        wins_vs_higher = sum(
+            1
+            for g in game_details
+            if g["opp_rating"]
+            and g["opp_rating"] >= reference_rating + RATING_DIFFERENCE_THRESHOLD
+            and g["actual"] == 1.0
         )
-
-    losses_vs_lower = sum(
-        1
-        for g in game_details
-        if g["opp_rating"]
-        and g["opp_rating"] <= reference_rating - RATING_DIFFERENCE_THRESHOLD
-        and g["actual"] == 0.0
-    )
-    if losses_vs_lower >= SIGNIFICANT_LOSSES_VS_LOWER_THRESHOLD:
-        drivers.append(
-            Driver(
-                text=f"{losses_vs_lower} losses against lower-rated opponents likely drove most of the drop.",
-                severity="moderate" if losses_vs_lower >= 4 else "minor",
-                direction="down",
-            )
-        )
-
-    if len(opp_ratings) >= 5:
-        variance = sum((x - avg_opp) ** 2 for x in opp_ratings) / len(opp_ratings)
-        std_dev = variance**0.5
-        if std_dev > OPPONENT_RATING_STD_DEV_THRESHOLD:
+        if wins_vs_higher >= SIGNIFICANT_WINS_VS_HIGHER_THRESHOLD:
             drivers.append(
                 Driver(
-                    text="Wide opponent rating range increased volatility.",
-                    severity="minor",
-                    direction="neutral",
+                    text=f"{wins_vs_higher} wins against higher-rated opponents likely offset losses.",
+                    severity="moderate" if wins_vs_higher >= 4 else "minor",
+                    direction="up",
                 )
             )
+
+        losses_vs_lower = sum(
+            1
+            for g in game_details
+            if g["opp_rating"]
+            and g["opp_rating"] <= reference_rating - RATING_DIFFERENCE_THRESHOLD
+            and g["actual"] == 0.0
+        )
+        if losses_vs_lower >= SIGNIFICANT_LOSSES_VS_LOWER_THRESHOLD:
+            drivers.append(
+                Driver(
+                    text=f"{losses_vs_lower} losses against lower-rated opponents likely drove most of the drop.",
+                    severity="moderate" if losses_vs_lower >= 4 else "minor",
+                    direction="down",
+                )
+            )
+
+        if len(opp_ratings) >= 5:
+            variance = sum((x - avg_opp) ** 2 for x in opp_ratings) / len(opp_ratings)
+            std_dev = variance**0.5
+            if std_dev > OPPONENT_RATING_STD_DEV_THRESHOLD:
+                drivers.append(
+                    Driver(
+                        text="Wide opponent rating range increased volatility.",
+                        severity="minor",
+                        direction="neutral",
+                    )
+                )
 
     # Sort drivers by severity (major first)
     severity_order = {"major": 0, "moderate": 1, "minor": 2}
@@ -1718,4 +2464,6 @@ async def explain_rating_changes(
         highlights=Highlights(
             best_surprises=best_surprises, worst_surprises=worst_surprises
         ),
+        confidence=confidence,
+        insufficient_data=insufficient_data,
     )

@@ -66,6 +66,10 @@ export interface MotifPerformance {
     passed: number;
     accuracy: number;
     rank: 'needs_work' | 'learning' | 'mastered';
+    attempts: number;
+    // True when attempts is below the reliability threshold: accuracy/rank
+    // are shown but should not be treated as a confident weakness signal.
+    insufficient_data: boolean;
 }
 
 export interface MotifPerformanceResponse {
@@ -83,6 +87,9 @@ export interface RecentFormData {
     last_20_results: ('pass' | 'fail')[];
     accuracy: number;
     trend: 'up' | 'down' | 'steady';
+    sample_size: number;
+    // True when too few reviews to read a direction (trend is forced 'steady').
+    insufficient_data: boolean;
 }
 
 export interface ScheduleData {
@@ -113,6 +120,9 @@ export interface MotifTrend {
     end_accuracy: number;
     change: number;
     trend: 'up' | 'down' | 'steady';
+    total_reviews: number;
+    // True when too few reviews to read a direction (trend is forced 'steady').
+    insufficient_data: boolean;
     data_points: TrendDataPoint[];
 }
 

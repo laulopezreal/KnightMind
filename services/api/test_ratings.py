@@ -151,6 +151,28 @@ def test_create_rating_snapshot_success(mock_get_stats, client_with_db, db_sessi
 
 
 @patch("services.api.main.get_player_stats")
+def test_create_rating_snapshot_hides_internal_error(mock_get_stats, client_with_db):
+    """dim 23: an unexpected exception must not leak its raw text to the caller.
+
+    The catch-all returns a generic 500 detail; the real error is only logged
+    server-side. Domain exceptions (UserNotFound/Network) keep their safe 502
+    messages — this test only covers the unexpected path.
+    """
+    secret = "psql://user:hunter2@db.internal/knightmind connection refused"
+    mock_get_stats.side_effect = RuntimeError(secret)
+
+    response = client_with_db.post(
+        "/ratings/snapshot", json={"username": "testuser", "time_control": "rapid"}
+    )
+
+    assert response.status_code == 500
+    detail = response.json()["detail"]
+    assert secret not in detail
+    assert "hunter2" not in detail
+    assert detail == "Internal server error"
+
+
+@patch("services.api.main.get_player_stats")
 def test_create_rating_snapshot_missing_rating(mock_get_stats, client_with_db):
     mock_get_stats.return_value = {"chess_rapid": {"last": {}}}
 
@@ -183,7 +205,9 @@ def test_explain_rating_changes_basic(client_with_db, db_session):
 
 1. e4 e5 2. Nf3 Nc6 1-0"""
 
-    for i in range(2):
+    # Seed enough rated games (>= MIN_GAMES_FOR_RATING_DRIVERS) so directional
+    # drivers are emitted rather than suppressed as insufficient data.
+    for i in range(5):
         db_session.add(
             Game(
                 game_id=f"game-explain-{i}",
@@ -212,10 +236,12 @@ def test_explain_rating_changes_basic(client_with_db, db_session):
 
     assert response.status_code == 200
     data = response.json()
-    assert data["stats"]["wins"] == 2
+    assert data["stats"]["wins"] == 5
     assert data["stats"]["losses"] == 0
     assert data["rating"]["reference_rating"] == 1400
     assert data["rating"]["reference_is_approx"] is False
+    assert data["insufficient_data"] is False
+    assert data["confidence"] == "low"  # 5 games: below medium (10) threshold
     assert any("outperformed" in driver["text"].lower() for driver in data["drivers"])
 
 

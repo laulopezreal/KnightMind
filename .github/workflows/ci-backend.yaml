@@ -50,3 +50,53 @@ jobs:
       working-directory: ./services/api
       run: |
         pytest
+
+  # Targeted Postgres integration job: proves the migration chain applies on a
+  # real Postgres from zero and runs the PG-only concurrency/migration tests
+  # that the default SQLite job skips. Deliberately NOT the whole suite — the
+  # rest of the tests build their own SQLite engines and assume SQLite.
+  test-postgres:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: knightmind
+          POSTGRES_PASSWORD: knightmind
+          POSTGRES_DB: knightmind
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U knightmind"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql+psycopg://knightmind:knightmind@localhost:5432/knightmind
+      KNIGHTMIND_TEST_POSTGRES_URL: postgresql+psycopg://knightmind:knightmind@localhost:5432/knightmind
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.11"
+        cache: 'pip'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -e ".[dev]"
+
+    - name: Apply migrations on Postgres (from zero)
+      working-directory: ./services/api
+      run: |
+        alembic upgrade head
+
+    - name: Run Postgres integration tests
+      working-directory: ./services/api
+      run: |
+        pytest test_jobs.py -k "postgres" -v

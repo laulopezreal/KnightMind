@@ -12,6 +12,27 @@ from services.api.models import PuzzleResult, PuzzleReview, PuzzleStats
 from services.api.puzzles.identity import assign_primary_motif, generate_puzzle_title
 from services.api.storage.puzzle_repository import PuzzleRepository
 
+# Datetime convention (single documented rule for all "due" comparisons):
+# every datetime is persisted as naive-UTC (values come from
+# ``datetime.now(timezone.utc)`` and land in naive ``DateTime`` columns).
+#   * In SQL, compare ``next_due_at`` against a NAIVE-UTC ``now`` so both sides
+#     match the stored representation. Passing an aware ``now`` is correct on
+#     SQLite (tzinfo is stripped symmetrically) but silently wrong on Postgres
+#     when the session ``TimeZone`` is not UTC, because a naive column is then
+#     reinterpreted in the session zone — shifting the due boundary by the UTC
+#     offset. Use ``_utcnow_naive()`` for every SQL comparison.
+#   * In Python, coerce a naive value read back from the DB to aware-UTC before
+#     comparing it against an aware ``now`` (see ``get_adaptive_puzzles``).
+
+
+def _utcnow_naive() -> datetime:
+    """Return the current UTC time as a naive datetime (tzinfo stripped).
+
+    Used as the bound for SQL comparisons against naive-UTC ``DateTime``
+    columns so the comparison is backend-independent (see module note).
+    """
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
 
 def calculate_next_interval(
     current_interval: int | None, ease_factor: float, result: PuzzleResult | str
@@ -45,11 +66,21 @@ def calculate_next_interval(
     return new_interval, new_ease
 
 
-def get_puzzle_stats(db: Session, puzzle_id: str, username: str) -> PuzzleStats | None:
-    """Get statistics for a specific puzzle and user."""
+def get_puzzle_stats(
+    db: Session, puzzle_id: str, username: str, *, for_update: bool = False
+) -> PuzzleStats | None:
+    """Get statistics for a specific puzzle and user.
+
+    ``for_update`` takes a row lock (Postgres ``SELECT ... FOR UPDATE``) so a
+    caller doing a read-modify-write on the counters is race-safe against
+    concurrent reviews of the same puzzle. The lock is a no-op on SQLite (which
+    doesn't support ``FOR UPDATE`` and serializes writers anyway).
+    """
     stmt = select(PuzzleStats).where(
         PuzzleStats.puzzle_id == puzzle_id, PuzzleStats.username == username
     )
+    if for_update and db.get_bind().dialect.name == "postgresql":
+        stmt = stmt.with_for_update()
     return db.scalars(stmt).first()
 
 
@@ -67,6 +98,11 @@ def insert_puzzle_review(
     time_spent_ms: int | None = None,
     reviewed_at: datetime | None = None,
     session_id: str | None = None,
+    client_review_id: str | None = None,
+    attempted_move: str | None = None,
+    client_result: PuzzleResult | str | None = None,
+    verified: bool = False,
+    source: str | None = None,
 ) -> PuzzleReview:
     """
     Record a puzzle review in the database.
@@ -79,6 +115,16 @@ def insert_puzzle_review(
         time_spent_ms: Time spent on the puzzle in milliseconds
         reviewed_at: Timestamp of the review (defaults to current time)
         session_id: Optional training session ID
+        client_review_id: Optional client-supplied idempotency key. When set, a
+            unique index over (puzzle_id, username, session_id, client_review_id)
+            prevents a retried/double-submitted review from being recorded twice.
+        attempted_move: The UCI move the user played (None for no-move flows).
+        client_result: The raw pass/fail the client claimed, preserved even when
+            the server overrides ``result`` after verifying the move.
+        verified: True only when the server checked the attempted move against
+            the puzzle's accepted-solution set.
+        source: How the outcome was decided ("server_verified" or
+            "client_reported"); None for legacy rows.
 
     Returns:
         The created PuzzleReview object
@@ -93,6 +139,11 @@ def insert_puzzle_review(
 
     # Ensure result is a string if Enum is passed
     result_val = result.value if isinstance(result, PuzzleResult) else result
+    client_result_val = (
+        client_result.value
+        if isinstance(client_result, PuzzleResult)
+        else client_result
+    )
 
     review = PuzzleReview(
         puzzle_id=puzzle_id,
@@ -101,6 +152,11 @@ def insert_puzzle_review(
         result=result_val,
         time_spent_ms=time_spent_ms,
         session_id=session_id,
+        client_review_id=client_review_id,
+        attempted_move=attempted_move,
+        client_result=client_result_val,
+        verified=verified,
+        source=source,
     )
     db.add(review)
     db.flush()
@@ -136,7 +192,13 @@ def update_puzzle_stats(
     if reviewed_at is None:
         reviewed_at = datetime.now(timezone.utc)
 
-    stats = get_puzzle_stats(db, puzzle_id, username)
+    # Lock the stats row so the counter read-modify-write and the scheduling
+    # computed from the post-increment counts are race-safe: concurrent reviews
+    # of the SAME puzzle serialize here instead of losing an increment. On the
+    # first-ever review the row doesn't exist yet, so there is nothing to lock —
+    # the INSERT's primary key then serializes the two racers (one raises
+    # IntegrityError, which the review endpoint's replay path handles).
+    stats = get_puzzle_stats(db, puzzle_id, username, for_update=True)
     res_enum = result if isinstance(result, PuzzleResult) else PuzzleResult(result)
 
     if not stats:
@@ -266,7 +328,8 @@ def get_due_puzzles(
 
 def get_due_puzzle_count(db: Session, username: str) -> int:
     """Get count of puzzles due for review."""
-    now = datetime.now(timezone.utc)
+    # naive-UTC bound: match the naive-UTC storage of next_due_at (see module note)
+    now = _utcnow_naive()
     stmt = select(func.count(PuzzleStats.puzzle_id)).where(
         PuzzleStats.username == username, PuzzleStats.next_due_at <= now
     )
@@ -275,7 +338,8 @@ def get_due_puzzle_count(db: Session, username: str) -> int:
 
 def get_next_due_date(db: Session, username: str) -> datetime | None:
     """Get the next upcoming due date for a user's puzzles."""
-    now = datetime.now(timezone.utc)
+    # naive-UTC bound: match the naive-UTC storage of next_due_at (see module note)
+    now = _utcnow_naive()
     stmt = select(func.min(PuzzleStats.next_due_at)).where(
         PuzzleStats.username == username, PuzzleStats.next_due_at > now
     )

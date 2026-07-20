@@ -7,8 +7,12 @@ export interface Puzzle {
     ply: number;
     fen: string;
     side_to_move: string;
-    played_move_uci: string;
-    best_move_uci: string;
+    // Solution-revealing fields. Omitted from the SCORED training payloads
+    // (/puzzles/due, /daily-puzzle-sessions) so the answer can't be pre-read
+    // before an attempt (audit gate 13). The Train board checks moves via
+    // checkPuzzle() and fetches the solution via revealPuzzle().
+    played_move_uci?: string;
+    best_move_uci?: string;
     eval_before: number;
     eval_after: number;
     swing: number;
@@ -45,6 +49,12 @@ export interface ReviewPuzzleResponse {
     interval_days: number;
     ease_factor: number;
     feedback: string;
+    // Server-decided outcome and whether it was independently verified from the
+    // played move. `source` is "server_verified" or "client_reported"; a
+    // self-reported pass (verified === false) must not be shown as verified.
+    result?: 'pass' | 'fail';
+    verified?: boolean;
+    source?: 'server_verified' | 'client_reported' | null;
     puzzle_info: {
         fen: string;
         best_move: string;
@@ -192,7 +202,9 @@ export async function getLibraryPuzzle(
     puzzleId: string,
     username: string
 ): Promise<LibraryPuzzle> {
-    const params = new URLSearchParams({ username });
+    // The detail page checks/reveals the move client-side, so it opts in to the
+    // solution with reveal=true. The list surface never asks for it (dim 13).
+    const params = new URLSearchParams({ username, reveal: 'true' });
     return await request<LibraryPuzzle>(`/puzzles/${encodeURIComponent(puzzleId)}?${params}`);
 }
 
@@ -212,12 +224,81 @@ export async function getLibraryPuzzles(
     return await request<LibraryListResponse>(`/puzzles/list?${searchParams}`);
 }
 
+// --- Training board: server-side check + explicit reveal (audit gate 13) ---
+
+export interface CheckPuzzleResponse {
+    correct: boolean;
+    result: 'pass' | 'fail';
+    // For a full-PV puzzle, the opponent's forced reply to a correct move (the
+    // next line ply). Safe to auto-play — it is the forced response, never the
+    // solver's upcoming answer, which the server never sends. null for a wrong
+    // move, a legacy single-move puzzle, or the final ply of the line.
+    reply?: string | null;
+    // True once the whole line is solved (or, for a legacy puzzle, on the one
+    // correct move) — record the verified pass at this point.
+    complete?: boolean;
+    // The solver's next move index in the line (this ply + 2). null when done.
+    next_ply_index?: number | null;
+}
+
+export interface RevealPuzzleResponse {
+    best_move_uci: string;
+    accept_moves_uci: string[];
+    // The full solution line (UCI). Empty for legacy single-move puzzles; the
+    // first move always equals best_move_uci.
+    solution_pv?: string[];
+}
+
+/**
+ * Verify a played move server-side for live board feedback WITHOUT revealing the
+ * solution. The response is only correct/incorrect — the answer never travels to
+ * the client. Recording/scheduling still goes through reviewPuzzle().
+ */
+export async function checkPuzzle(
+    puzzleId: string,
+    username: string,
+    attemptedMove: string,
+    // Index of this move within the solution line (an even ply). Defaults to 0
+    // so single-move puzzles keep working with a bare call.
+    plyIndex: number = 0
+): Promise<CheckPuzzleResponse> {
+    return await request<CheckPuzzleResponse>(
+        `/puzzles/${encodeURIComponent(puzzleId)}/check`,
+        {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, attempted_move: attemptedMove, ply_index: plyIndex }),
+        }
+    );
+}
+
+/**
+ * Explicitly fetch a puzzle's solution (the "give up / show me" path). The
+ * scored training payload no longer carries the answer, so the board asks for it
+ * here on demand.
+ */
+export async function revealPuzzle(
+    puzzleId: string,
+    username: string
+): Promise<RevealPuzzleResponse> {
+    return await request<RevealPuzzleResponse>(
+        `/puzzles/${encodeURIComponent(puzzleId)}/reveal`,
+        {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username }),
+        }
+    );
+}
+
 export async function reviewPuzzle(
     puzzleId: string,
     username: string,
     result: 'pass' | 'fail',
     timeSpentMs?: number,
-    sessionId?: string
+    sessionId?: string,
+    clientReviewId?: string,
+    attemptedMove?: string
 ): Promise<ReviewPuzzleResponse> {
     return await request<ReviewPuzzleResponse>(`/puzzles/${puzzleId}/review`, {
         method: 'POST',
@@ -227,6 +308,13 @@ export async function reviewPuzzle(
             result,
             time_spent_ms: timeSpentMs,
             session_id: sessionId,
+            // Idempotency key: lets the server dedupe a retried/double-submitted
+            // review so a double-click or network retry can't double-count.
+            client_review_id: clientReviewId,
+            // The UCI move actually played. When present, the SERVER verifies it
+            // and decides pass/fail — the client no longer self-grades. Omitted
+            // for no-move outcomes (timeout, "mark failed", revealed solution).
+            attempted_move: attemptedMove,
         }),
     });
 }

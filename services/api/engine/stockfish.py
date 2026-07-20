@@ -8,9 +8,14 @@ returning the best move and evaluation in pawns from the side-to-move perspectiv
 import hashlib
 import logging
 import os
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeoutError
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Callable, Optional
+
+import chess
 
 try:
     from stockfish import Stockfish as StockfishEngine
@@ -37,12 +42,53 @@ class StockfishError(Exception):
     pass
 
 
+class StockfishEngineDeadError(StockfishError):
+    """
+    Raised when an evaluation timed out and its engine subprocess was killed.
+
+    Subclasses StockfishError so existing broad handlers still catch it, but
+    lets a caller that owns a long-lived engine (e.g. the puzzle-generator
+    batch) detect that the shared subprocess is now dead and recreate it
+    instead of running every subsequent eval against a corpse.
+    """
+
+    pass
+
+
 @dataclass
 class EvalResult:
-    """Result of a position evaluation."""
+    """Result of a position evaluation.
 
-    best_move_uci: str
+    ``eval`` is a centipawn-derived pawn score from the side-to-move
+    perspective. Mate scores are *not* representable as centipawns, so they are
+    clamped to the ``MATE_EVALUATION`` sentinel in ``eval`` **and** carried
+    distinctly in ``mate_in`` so callers can tell "mate in 1" from "mate in 8"
+    and from a merely large centipawn advantage.
+
+    ``mate_in`` semantics (from the side-to-move perspective):
+        - positive N  -> side to move delivers mate in N
+        - negative N  -> side to move gets mated in N
+        - 0           -> side to move is already checkmated (terminal)
+        - None        -> not a forced mate (ordinary centipawn eval)
+
+    ``is_terminal`` is True when the position itself is game-over (checkmate,
+    stalemate, or another draw-by-rule); in that case ``best_move_uci`` is None
+    because there is no move to make.
+    """
+
+    best_move_uci: Optional[str]
     eval: float  # In pawns, from side-to-move perspective
+    mate_in: Optional[int] = None
+    is_terminal: bool = False
+
+
+@dataclass
+class MoveEval:
+    """A single candidate move with its evaluation (for multi-PV analysis)."""
+
+    uci: str
+    eval: float  # In pawns, from side-to-move perspective
+    mate_in: Optional[int] = None
 
 
 def get_stockfish_path() -> str:
@@ -51,10 +97,24 @@ def get_stockfish_path() -> str:
 
 
 def get_analysis_params() -> dict:
-    """Get analysis parameters from environment in UCI format."""
-    # This should return ENGINE OPTIONS like Hash, Threads, etc.
-    # "Depth" is a search limit, not an option.
-    return {}
+    """Engine OPTIONS (UCI ``setoption``) derived from the environment.
+
+    Returns the result-affecting Stockfish options -- ``Threads``, ``Hash``,
+    ``MultiPV`` -- read from ``STOCKFISH_THREADS`` / ``STOCKFISH_HASH_MB`` /
+    ``STOCKFISH_MULTIPV`` (with package defaults). ``Depth`` is deliberately
+    absent: it is a per-search limit set via ``set_depth``, not an engine option.
+
+    These are the same knobs folded into the eval cache key. They used to be
+    returned as ``{}`` and never applied, so the key fragmented on config that
+    had no effect on the eval (dead knobs). They are now applied ONCE at engine
+    creation (:func:`create_engine`), so the key matches the engine that actually
+    produced each cached entry (audit option (a): apply, don't drop).
+    """
+    return {
+        "Threads": get_engine_threads(),
+        "Hash": get_engine_hash_mb(),
+        "MultiPV": get_engine_multipv(),
+    }
 
 
 def get_search_depth() -> int:
@@ -63,6 +123,37 @@ def get_search_depth() -> int:
     if depth:
         return int(depth)
     return 12
+
+
+def _get_env_int(name: str, default: int) -> int:
+    """Read a positive integer env var, falling back to ``default`` on error."""
+    raw = os.environ.get(name)
+    if raw:
+        try:
+            value = int(raw)
+            if value > 0:
+                return value
+        except ValueError:
+            logger.warning("Invalid %s=%r, using default %s", name, raw, default)
+    return default
+
+
+def get_engine_threads() -> int:
+    """Number of engine threads (Stockfish 'Threads' option). Default matches
+    the ``stockfish`` package default of 1."""
+    return _get_env_int("STOCKFISH_THREADS", 1)
+
+
+def get_engine_hash_mb() -> int:
+    """Engine transposition-table size in MB (Stockfish 'Hash' option). Default
+    matches the ``stockfish`` package default of 16."""
+    return _get_env_int("STOCKFISH_HASH_MB", 16)
+
+
+def get_engine_multipv() -> int:
+    """Number of principal variations (Stockfish 'MultiPV' option). Single-line
+    evaluation uses 1; a different value can change which move is 'best'."""
+    return _get_env_int("STOCKFISH_MULTIPV", 1)
 
 
 def create_engine() -> "StockfishEngine":
@@ -93,16 +184,162 @@ def create_engine() -> "StockfishEngine":
             ) from e
         raise StockfishError(f"Failed to initialize Stockfish: {e}") from e
 
+    # Apply result-affecting engine options ONCE, here, so every evaluation this
+    # engine runs actually reflects Threads/Hash/MultiPV -- the same values folded
+    # into the cache key. Applying at creation (not per-eval) avoids re-sending
+    # setoption on every position and keeps the option set stable for the engine's
+    # whole life.
+    params = get_analysis_params()
+    if params:
+        try:
+            engine.update_engine_parameters(params)
+        except Exception as e:
+            raise StockfishError(f"Failed to apply engine parameters: {e}") from e
+
     return engine
 
 
-def evaluate_fen(fen: str, engine: Optional["StockfishEngine"] = None) -> EvalResult:
+def _get_env_positive(name: str, default: float) -> float:
+    """Read a positive numeric env var, falling back to ``default`` on error."""
+    raw = os.environ.get(name)
+    if raw:
+        try:
+            value = float(raw)
+            if value > 0:
+                return value
+        except ValueError:
+            logger.warning("Invalid %s=%r, using default %s", name, raw, default)
+    return default
+
+
+def _get_max_concurrency() -> int:
+    """Max number of concurrent Stockfish evaluations allowed in this process."""
+    return int(_get_env_positive("STOCKFISH_MAX_CONCURRENCY", 2))
+
+
+def _get_eval_timeout_s() -> float:
+    """Per-evaluation wall-clock timeout in seconds."""
+    return _get_env_positive("STOCKFISH_EVAL_TIMEOUT_S", 30.0)
+
+
+def _get_acquire_timeout_s() -> float:
+    """How long to wait for a concurrency slot before rejecting the request."""
+    return _get_env_positive("STOCKFISH_ACQUIRE_TIMEOUT_S", 60.0)
+
+
+# Bounds how many engine evaluations may run at once, so a caller cannot spawn
+# unbounded Stockfish work. Shared by every path that goes through evaluate_fen
+# (the /engine/eval endpoint and the puzzle generator batch).
+_EVAL_SEMAPHORE = threading.BoundedSemaphore(_get_max_concurrency())
+
+# Dedicated pool used only to enforce the per-eval timeout. Concurrency is
+# bounded by _EVAL_SEMAPHORE before we ever submit here; the extra headroom
+# lets a wedged worker linger without blocking healthy evaluations.
+_EVAL_EXECUTOR = ThreadPoolExecutor(
+    max_workers=_get_max_concurrency() + 2, thread_name_prefix="sf-eval"
+)
+
+
+# How long to wait for a hard-killed subprocess to actually exit before giving
+# up on reaping it. Short: kill() has already been sent, so the process should
+# die almost immediately; we only wait long enough to clear the process-table
+# entry (avoid a <defunct> zombie) without blocking teardown on a stuck kernel.
+_REAP_TIMEOUT_S = 5.0
+
+
+def _kill_engine_process(engine: Optional["StockfishEngine"]) -> None:
+    """Best-effort hard kill *and reap* of the underlying Stockfish subprocess.
+
+    ``kill()`` only delivers the signal; without a following ``wait()`` the dead
+    child lingers as a ``<defunct>`` zombie holding a process-table slot (and its
+    file descriptors) until the parent exits. Batch generation kills and
+    recreates the engine repeatedly, so we must reap each corpse here.
+    """
+    if engine is None:
+        return
+    proc = getattr(engine, "_stockfish", None)
+    if proc is not None:
+        try:
+            proc.kill()
+        except Exception:
+            logger.debug("Failed to kill Stockfish subprocess", exc_info=True)
+        # Reap the killed process so it does not become a zombie. Bounded wait:
+        # kill() was already sent, so this returns almost immediately.
+        wait = getattr(proc, "wait", None)
+        if callable(wait):
+            try:
+                wait(timeout=_REAP_TIMEOUT_S)
+            except Exception:
+                logger.debug(
+                    "Killed Stockfish subprocess did not reap in time",
+                    exc_info=True,
+                )
+
+
+def close_engine(engine: Optional["StockfishEngine"]) -> None:
+    """
+    Terminate a Stockfish engine subprocess, releasing its OS process.
+
+    stockfish>=4.x exposes ``send_quit_command()``, which sends ``quit`` and
+    waits for the subprocess to exit. We guard it so a partially constructed or
+    already-dead engine cannot raise, and fall back to killing the underlying
+    subprocess directly if the quit command is unavailable or fails.
+    """
+    if engine is None:
+        return
+    quit_cmd = getattr(engine, "send_quit_command", None)
+    if callable(quit_cmd):
+        try:
+            quit_cmd()
+            return
+        except Exception:
+            logger.debug("send_quit_command failed during teardown", exc_info=True)
+    _kill_engine_process(engine)
+
+
+def _run_with_timeout(
+    func: Callable[[], EvalResult],
+    timeout_s: float,
+    engine: "StockfishEngine",
+) -> EvalResult:
+    """
+    Run ``func`` with a wall-clock timeout so a wedged engine call cannot block
+    forever. On timeout the underlying subprocess is killed (which unblocks the
+    worker thread) and a StockfishEngineDeadError is raised so the caller knows
+    the engine is dead.
+
+    Note: future.result(timeout=...) cannot cancel an already-running task, so
+    the worker thread only unwinds once the killed subprocess makes its pending
+    read return. If proc.kill() ever fails to unblock the read, that worker can
+    linger; _EVAL_EXECUTOR is sized with headroom above the concurrency bound so
+    a stray lingering worker does not starve healthy evaluations.
+    """
+    future = _EVAL_EXECUTOR.submit(func)
+    try:
+        return future.result(timeout=timeout_s)
+    except FutureTimeoutError as e:
+        _kill_engine_process(engine)
+        raise StockfishEngineDeadError(
+            f"Engine evaluation timed out after {timeout_s}s"
+        ) from e
+
+
+def evaluate_fen(
+    fen: str,
+    engine: Optional["StockfishEngine"] = None,
+    depth: Optional[int] = None,
+) -> EvalResult:
     """
     Evaluate a chess position given its FEN string.
 
     Args:
         fen: FEN string representing the position to evaluate
         engine: Optional existing Stockfish engine instance to reuse
+        depth: Optional search-depth override. When None the process default
+            (``get_search_depth``) is used. Callers that need a deeper
+            confirmation pass (e.g. the puzzle generator's stability check)
+            pass a larger depth here; it is folded into the cache key upstream
+            so a deep eval never reuses a shallow entry.
 
     Returns:
         EvalResult with best_move_uci and eval (in pawns, from side-to-move POV)
@@ -111,85 +348,198 @@ def evaluate_fen(fen: str, engine: Optional["StockfishEngine"] = None) -> EvalRe
         StockfishNotFoundError: If Stockfish is not available
         StockfishError: If evaluation fails
     """
-    if engine is None:
-        engine = create_engine()
+    # Bound concurrency BEFORE creating an engine so a flood of callers cannot
+    # spawn unbounded Stockfish subprocesses. Reject rather than queue forever.
+    if not _EVAL_SEMAPHORE.acquire(timeout=_get_acquire_timeout_s()):
+        raise StockfishError(
+            "Engine evaluation concurrency limit reached; try again later"
+        )
 
     try:
-        # Set position
+        owns_engine = engine is None
+        if owns_engine:
+            engine = create_engine()
+
+        try:
+            return _run_with_timeout(
+                lambda: _evaluate_fen_core(fen, engine, depth=depth),
+                _get_eval_timeout_s(),
+                engine,
+            )
+        finally:
+            # Only tear down engines we created. If one was passed in, the
+            # caller owns its lifecycle (e.g. the puzzle generator batch).
+            if owns_engine:
+                close_engine(engine)
+    finally:
+        _EVAL_SEMAPHORE.release()
+
+
+def _evaluate_fen_core(
+    fen: str, engine: "StockfishEngine", depth: Optional[int] = None
+) -> EvalResult:
+    """Run the actual Stockfish evaluation. Assumes ``engine`` is ready.
+
+    ``depth`` overrides the process default search depth when provided.
+    """
+    try:
+        # Parse and validate the FEN with python-chess first. This also lets us
+        # detect terminal positions (checkmate / stalemate / draw-by-rule)
+        # explicitly rather than inferring them from a falsy get_best_move().
+        # Order matters: the stockfish package's is_fen_valid() rejects some
+        # terminal positions (e.g. checkmate), so it must run *after* the
+        # terminal check or the biggest blunders get misreported as invalid.
+        try:
+            board = chess.Board(fen)
+        except ValueError as e:
+            raise StockfishError(f"Invalid FEN: {fen}") from e
+
+        if board.is_game_over():
+            return _terminal_eval_result(board)
+
+        # Non-terminal: let the engine do its own structural validation too.
         if not engine.is_fen_valid(fen):
             raise StockfishError(f"Invalid FEN: {fen}")
 
         engine.set_fen_position(fen)
 
-        # Get analysis parameters and configure engine
-        params = get_analysis_params()
-        if params:
-            engine.update_engine_parameters(params)
+        # Engine options (Threads/Hash/MultiPV) are applied once at
+        # create_engine(), not per-eval, so nothing to configure here beyond the
+        # per-search depth limit below.
 
-        # Set search limits
-        depth = get_search_depth()
-        engine.set_depth(depth)
+        # Set search limits. A caller-supplied depth (e.g. a deeper
+        # confirmation pass) overrides the process default.
+        search_depth = depth if depth is not None else get_search_depth()
+        engine.set_depth(search_depth)
 
         # Get best move
         best_move = engine.get_best_move()
         if not best_move:
-            raise StockfishError("No legal moves available")
+            # Non-terminal position with no move means the engine itself
+            # failed -- surface it rather than pretending the game is over.
+            raise StockfishError("Engine returned no move for a non-terminal position")
 
         # Get evaluation
         evaluation = engine.get_evaluation()
 
         # Convert evaluation to pawns from side-to-move perspective
-        eval_pawns = _convert_eval_to_pawns(evaluation)
+        eval_pawns, mate_in = _convert_evaluation(evaluation)
 
-        return EvalResult(best_move_uci=best_move, eval=eval_pawns)
+        return EvalResult(best_move_uci=best_move, eval=eval_pawns, mate_in=mate_in)
 
     except (StockfishNotFoundError, StockfishError):
         raise
     except Exception as e:
         raise StockfishError(f"Evaluation failed: {e}") from e
-    finally:
-        # Only close if we created it locally.
-        # Note: The stockfish library wrapper might not have a close/quit method exposed simply,
-        # but generally for a local variable it's fine.
-        # If we passed it in, the caller is responsible.
-        pass
 
 
-# Arbitrary large value representing a decisive advantage (mate)
+# Arbitrary large value (in pawns) representing a decisive advantage (mate).
+# Distance-to-mate is preserved separately via EvalResult.mate_in.
 MATE_EVALUATION = 100.0
 
 
-def _convert_eval_to_pawns(evaluation: dict) -> float:
+def _convert_evaluation(evaluation: dict) -> tuple[float, Optional[int]]:
     """
-    Convert Stockfish evaluation to pawns.
+    Convert a Stockfish evaluation to (pawns, mate_in).
 
     Stockfish returns evaluation as either:
     - {"type": "cp", "value": centipawns} for normal positions
     - {"type": "mate", "value": moves_to_mate} for mate positions
 
-    Returns value in pawns from side-to-move perspective.
+    Returns:
+        (eval_pawns, mate_in) from the side-to-move perspective, where
+        eval_pawns is the ``MATE_EVALUATION`` sentinel for mates and mate_in is
+        the signed distance to mate (None for ordinary evals). This keeps the
+        centipawn channel backward-compatible while exposing mate distance so
+        callers no longer conflate "mate in 1" with "mate in 20".
     """
     eval_type = evaluation.get("type")
     value = evaluation.get("value", 0)
 
     if eval_type == "cp":
-        # Centipawns to pawns
-        return value / 100.0
+        return value / 100.0, None
     elif eval_type == "mate":
-        # Mate in N moves - use large value with sign
-        # Positive = side to move is winning, negative = losing
-        if value > 0:
-            return MATE_EVALUATION  # Winning
-        elif value < 0:
-            return -MATE_EVALUATION  # Losing
+        mate_in = int(value)
+        if mate_in > 0:
+            return MATE_EVALUATION, mate_in  # Side to move mates
+        elif mate_in < 0:
+            return -MATE_EVALUATION, mate_in  # Side to move gets mated
         else:
-            return 0.0
+            # value == 0 -> side to move is already checkmated
+            return -MATE_EVALUATION, 0
     else:
-        return 0.0
+        return 0.0, None
+
+
+def _convert_eval_to_pawns(evaluation: dict) -> float:
+    """Backward-compatible pawn-only view of :func:`_convert_evaluation`."""
+    return _convert_evaluation(evaluation)[0]
+
+
+def _terminal_eval_result(board: chess.Board) -> EvalResult:
+    """
+    Build an :class:`EvalResult` for a game-over position.
+
+    Checkmate is scored as a loss for the side to move (they have been mated);
+    stalemate and other draws-by-rule are scored as equal. There is no best
+    move in a terminal position, so ``best_move_uci`` is None.
+    """
+    if board.is_checkmate():
+        return EvalResult(
+            best_move_uci=None, eval=-MATE_EVALUATION, mate_in=0, is_terminal=True
+        )
+    # Stalemate, insufficient material, 75-move / fivefold, etc.
+    return EvalResult(best_move_uci=None, eval=0.0, mate_in=None, is_terminal=True)
+
+
+def get_top_moves(
+    fen: str,
+    engine: "StockfishEngine",
+    k: int = 3,
+    depth: Optional[int] = None,
+) -> list["MoveEval"]:
+    """
+    Return the engine's top-K candidate moves (multi-PV) for a position.
+
+    Used to build an acceptance set of near-equivalent best moves so a puzzle
+    solver is not marked wrong for choosing a move that is just as good as the
+    single stored best move.
+
+    Args:
+        fen: FEN string to analyze (must be a non-terminal position).
+        engine: An initialized Stockfish engine instance.
+        k: Number of principal variations to request.
+        depth: Optional search-depth override (deeper confirmation pass). When
+            None the process default (``get_search_depth``) is used.
+
+    Returns:
+        A list of MoveEval sorted best-first (as returned by Stockfish), each
+        with eval in pawns and mate distance from the side-to-move perspective.
+        Empty if the engine returns nothing (e.g. terminal position).
+    """
+    engine.set_fen_position(fen)
+    engine.set_depth(depth if depth is not None else get_search_depth())
+
+    raw = engine.get_top_moves(k) or []
+    results: list[MoveEval] = []
+    for entry in raw:
+        uci = entry.get("Move")
+        if not uci:
+            continue
+        mate = entry.get("Mate")
+        if mate is not None:
+            mate_in = int(mate)
+            ev = MATE_EVALUATION if mate_in > 0 else -MATE_EVALUATION
+            results.append(MoveEval(uci=uci, eval=ev, mate_in=mate_in))
+        else:
+            cp = entry.get("Centipawn") or 0
+            results.append(MoveEval(uci=uci, eval=cp / 100.0, mate_in=None))
+    return results
 
 
 def is_stockfish_available() -> bool:
     """Check if Stockfish is available and working."""
+    engine = None
     try:
         engine = create_engine()
         # Quick test
@@ -199,40 +549,190 @@ def is_stockfish_available() -> bool:
         return True
     except (StockfishNotFoundError, StockfishError):
         return False
+    finally:
+        close_engine(engine)
+
+
+# Scheme version for the cache-key layout itself. Bumping it invalidates every
+# previously written row wholesale (their hashes were built from a different set
+# of inputs and can never collide with the new layout).
+CACHE_KEY_SCHEME = "v2"
+
+# Version of the raw-Stockfish-eval -> (eval_pawns, mate_in) conversion in
+# _convert_evaluation. Bump this whenever that mapping changes (e.g. the mate
+# sentinel or centipawn scaling) so entries written under the old conversion are
+# never reused under the new one, even for an identical FEN + engine + config.
+EVAL_CONVERSION_VERSION = 1
+
+# Sentinel version string used when the real engine version cannot be
+# determined (e.g. no binary installed). Keeps the cache usable while making the
+# unknown-ness explicit and self-invalidating once a real version is available.
+UNKNOWN_ENGINE_VERSION = "unknown"
+
+# Process-level memo of resolved engine versions keyed by binary path, plus a
+# lock guarding it. Resolving a version requires spawning the engine once; we
+# never want to pay that on every cache lookup, so we cache it for the process.
+_ENGINE_VERSION_CACHE: dict[str, str] = {}
+_ENGINE_VERSION_LOCK = threading.Lock()
+
+
+def _read_version_from_engine(engine: Optional["StockfishEngine"]) -> Optional[str]:
+    """
+    Best-effort read of a version string from a *live* engine instance.
+
+    Uses the ``stockfish`` package's public version API
+    (``get_stockfish_major_minor_version`` / ``get_stockfish_sha_version``),
+    which is populated from the engine's UCI banner at construction time.
+    Returns None (never raises) if the engine cannot report a version, so a
+    version-probe failure degrades cache reuse but never breaks evaluation.
+    """
+    if engine is None:
+        return None
+    getter = getattr(engine, "get_stockfish_major_minor_version", None)
+    if not callable(getter):
+        return None
+    try:
+        major_minor = getter()
+    except Exception:
+        return None
+    if not major_minor:
+        return None
+    parts = [str(major_minor)]
+    sha_getter = getattr(engine, "get_stockfish_sha_version", None)
+    if callable(sha_getter):
+        try:
+            sha = sha_getter()
+        except Exception:
+            sha = None
+        if sha:
+            parts.append(str(sha))
+    return "-".join(parts)
+
+
+def get_engine_version(engine: Optional["StockfishEngine"] = None) -> str:
+    """
+    Resolve the Stockfish engine version for cache-key purposes.
+
+    If a live ``engine`` is supplied (e.g. the puzzle-generator batch owns one),
+    its version is read directly for free. Otherwise the version is resolved once
+    per binary path by spawning a throwaway probe engine and memoized for the
+    life of the process, so ordinary cache lookups never spawn an engine after
+    the first resolution.
+
+    Never raises: any failure yields ``UNKNOWN_ENGINE_VERSION`` so a version
+    lookup problem degrades cache reuse but never changes chess correctness.
+    """
+    live = _read_version_from_engine(engine)
+    if live:
+        return live
+
+    path = get_stockfish_path()
+    with _ENGINE_VERSION_LOCK:
+        cached = _ENGINE_VERSION_CACHE.get(path)
+    if cached is not None:
+        return cached
+
+    version = UNKNOWN_ENGINE_VERSION
+    probe: Optional["StockfishEngine"] = None
+    try:
+        probe = create_engine()
+        resolved = _read_version_from_engine(probe)
+        if resolved:
+            version = resolved
+    except (StockfishNotFoundError, StockfishError):
+        version = UNKNOWN_ENGINE_VERSION
+    except Exception:
+        logger.debug("Unexpected error probing engine version", exc_info=True)
+        version = UNKNOWN_ENGINE_VERSION
+    finally:
+        close_engine(probe)
+
+    with _ENGINE_VERSION_LOCK:
+        _ENGINE_VERSION_CACHE[path] = version
+    return version
+
+
+def _normalize_fen(fen: str) -> str:
+    """
+    Canonicalize a FEN so trivially different spellings of the *same* position
+    map to the same cache key. python-chess normalizes castling rights, the
+    en-passant field (only kept when a capture is actually possible), and
+    whitespace. Halfmove/fullmove counters are preserved because they affect the
+    50-move rule and therefore the evaluation. Falls back to whitespace
+    collapsing if the FEN cannot be parsed (never raises).
+    """
+    try:
+        return chess.Board(fen).fen()
+    except Exception:
+        return " ".join(fen.split())
 
 
 def _compute_cache_key(
-    fen: str, depth: int, movetime_ms: Optional[int], engine_name: str
+    *,
+    fen: str,
+    depth: int,
+    movetime_ms: Optional[int],
+    engine_name: str,
+    engine_version: str,
+    threads: int,
+    hash_mb: int,
+    multipv: int,
+    conversion_version: int = EVAL_CONVERSION_VERSION,
 ) -> str:
     """
-    Compute deterministic cache key for a FEN + engine settings.
+    Compute a deterministic cache key over *every* input that can change the
+    stored evaluation.
 
-    Args:
-        fen: FEN string
-        depth: Search depth
-        movetime_ms: Move time in milliseconds (if used instead of depth)
-        engine_name: Engine identifier
+    Reproducibility invariant: two evaluations may share a cache entry only if
+    they would produce the same result. That means the key must fold in the full
+    normalized FEN, the engine identity *and version*, all search limits (depth /
+    movetime), all result-affecting engine options (threads / hash / multipv),
+    and the eval-conversion version. Omitting any of these (as the pre-fix key
+    did for version/threads/hash/multipv/conversion) let a Stockfish upgrade or a
+    config change silently return a stale eval for the same FEN.
 
     Returns:
-        SHA256 hash as hex string
+        SHA256 hash as hex string.
     """
-    # Build key components
     key_parts = [
-        f"fen={fen}",
-        f"depth={depth}",
-        f"movetime={movetime_ms}" if movetime_ms else "",
+        f"scheme={CACHE_KEY_SCHEME}",
+        f"conv={conversion_version}",
         f"engine={engine_name}",
+        f"version={engine_version}",
+        f"fen={_normalize_fen(fen)}",
+        f"depth={depth}",
+        f"movetime={movetime_ms if movetime_ms else ''}",
+        f"threads={threads}",
+        f"hash={hash_mb}",
+        f"multipv={multipv}",
     ]
-    key_string = "|".join(p for p in key_parts if p)
+    key_string = "|".join(key_parts)
 
-    # Hash for consistent key length
+    # Hash for consistent key length.
     return hashlib.sha256(key_string.encode()).hexdigest()
+
+
+def _eval_result_from_cache(cached: "FenEvalCache") -> EvalResult:
+    """Rebuild the full EvalResult from a cache row.
+
+    Restores ``mate_in`` and ``is_terminal`` alongside the pawn score so a cache
+    HIT returns the same shape as a fresh compute. Older rows written before
+    those columns existed store NULL ``mate_in`` (already the ordinary-eval
+    default) and NULL ``is_terminal``, which we coerce to False.
+    """
+    return EvalResult(
+        best_move_uci=cached.best_move_uci,
+        eval=cached.eval_pawns,
+        mate_in=cached.mate_in,
+        is_terminal=bool(cached.is_terminal),
+    )
 
 
 def get_or_compute_eval(
     fen: str,
     engine: Optional["StockfishEngine"] = None,
     cache_stats: Optional[dict] = None,
+    depth: Optional[int] = None,
 ) -> EvalResult:
     """
     Get evaluation from cache or compute with Stockfish.
@@ -244,6 +744,11 @@ def get_or_compute_eval(
         fen: FEN string to evaluate
         engine: Optional existing Stockfish engine instance
         cache_stats: Optional dict to track cache hits/misses (will be updated in-place)
+        depth: Optional search-depth override. When None the process default
+            (``get_search_depth``) is used. The effective depth is folded into
+            the cache key, so a deeper confirmation pass gets its own entry and
+            never reuses (or clobbers) the shallow one -- and a repeated deep
+            pass on the same position is a cache hit.
 
     Returns:
         EvalResult with best_move_uci and eval
@@ -252,13 +757,30 @@ def get_or_compute_eval(
         StockfishNotFoundError: If Stockfish is not available
         StockfishError: If evaluation fails
     """
-    # Get engine settings for cache key
-    depth = get_search_depth()
+    # Get engine settings for cache key. ALL of these change the computed eval,
+    # so ALL of them must be folded into the key (see _compute_cache_key): a
+    # Stockfish upgrade or a depth/threads/hash/multipv change must yield a
+    # different key so an old entry is never reused under a materially different
+    # engine/config.
+    depth = depth if depth is not None else get_search_depth()
     movetime_ms = None  # We're using depth-based search
     engine_name = get_stockfish_path()
+    engine_version = get_engine_version(engine)
+    threads = get_engine_threads()
+    hash_mb = get_engine_hash_mb()
+    multipv = get_engine_multipv()
 
     # Compute cache key
-    cache_key = _compute_cache_key(fen, depth, movetime_ms, engine_name)
+    cache_key = _compute_cache_key(
+        fen=fen,
+        depth=depth,
+        movetime_ms=movetime_ms,
+        engine_name=engine_name,
+        engine_version=engine_version,
+        threads=threads,
+        hash_mb=hash_mb,
+        multipv=multipv,
+    )
 
     # Try cache lookup
     try:
@@ -269,9 +791,7 @@ def get_or_compute_eval(
                 if cache_stats is not None:
                     cache_stats["hits"] = cache_stats.get("hits", 0) + 1
                 logger.debug(f"Cache hit for FEN: {fen[:50]}...")
-                return EvalResult(
-                    best_move_uci=cached.best_move_uci, eval=cached.eval_pawns
-                )
+                return _eval_result_from_cache(cached)
     except Exception as e:
         # Cache lookup failed, log but continue to compute
         logger.warning(f"Cache lookup failed: {e}")
@@ -281,7 +801,12 @@ def get_or_compute_eval(
         cache_stats["misses"] = cache_stats.get("misses", 0) + 1
 
     logger.debug(f"Cache miss for FEN: {fen[:50]}...")
-    result = evaluate_fen(fen, engine=engine)
+    result = evaluate_fen(fen, engine=engine, depth=depth)
+
+    # Terminal positions have no best move and are cheap to recompute; skip the
+    # cache (best_move_uci is NOT NULL) and return them directly.
+    if result.best_move_uci is None:
+        return result
 
     # Store in cache
     try:
@@ -291,10 +816,16 @@ def get_or_compute_eval(
                 fen=fen,
                 best_move_uci=result.best_move_uci,
                 eval_pawns=result.eval,
+                mate_in=result.mate_in,
+                is_terminal=result.is_terminal,
                 depth=depth,
                 movetime_ms=movetime_ms,
                 engine_name=engine_name,
-                engine_version=None,  # Could extract from engine if available
+                engine_version=engine_version,
+                threads=threads,
+                hash_mb=hash_mb,
+                multipv=multipv,
+                conversion_version=EVAL_CONVERSION_VERSION,
                 created_at=datetime.now(timezone.utc),
             )
             db.add(cache_entry)
@@ -309,9 +840,7 @@ def get_or_compute_eval(
                     logger.debug(
                         "Concurrent insert detected, using existing cache entry"
                     )
-                    return EvalResult(
-                        best_move_uci=cached.best_move_uci, eval=cached.eval_pawns
-                    )
+                    return _eval_result_from_cache(cached)
                 # If still not found, something else went wrong
                 logger.error(
                     f"Failed to cache evaluation after integrity error: {commit_error}"

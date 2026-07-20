@@ -1,8 +1,3 @@
-from datetime import date, datetime, timezone
-from pathlib import Path
-
-from services.api.storage import GameRepository, PuzzleRepository
-
 REQUIRED_GAME_FIELDS = {
     "game_id",
     "url",
@@ -57,41 +52,6 @@ def validate_puzzle_data(puzzle_data: dict) -> list[str]:
             errors.append(f"{field}_not_number")
 
     return errors
-
-
-def _parse_datetime(value: str | None) -> datetime | None:
-    if not value:
-        return None
-    try:
-        parsed = datetime.fromisoformat(value)
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
-
-
-def _parse_date(value: str | None) -> date | None:
-    if not value:
-        return None
-    try:
-        return datetime.fromisoformat(value).date()
-    except ValueError:
-        return None
-
-
-def backfill_games(game_repository: GameRepository, base_path: Path) -> dict:
-    """Deprecated: filesystem storage has been removed. Use migrate_to_db.py instead."""
-    raise NotImplementedError(
-        "Filesystem storage has been removed. Use migrate_to_db.py instead."
-    )
-
-
-def backfill_puzzles(puzzle_repository: PuzzleRepository, base_path: Path) -> dict:
-    """Deprecated: filesystem storage has been removed. Use migrate_to_db.py instead."""
-    raise NotImplementedError(
-        "Filesystem storage has been removed. Use migrate_to_db.py instead."
-    )
 
 
 def main() -> None:

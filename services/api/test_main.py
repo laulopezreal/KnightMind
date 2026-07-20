@@ -68,7 +68,7 @@ def _create_game(
     end_time: int | None = None,
 ):
     """Helper: create a Game row."""
-    existing = db.get(Game, game_id)
+    existing = db.get(Game, (game_id, username))
     if existing:
         return
     db.add(
@@ -98,8 +98,17 @@ def _create_puzzle(
     swing: float = 2.0,
     created_at: datetime | None = None,
     used_on: date | None = None,
+    solution_pv: str | None = None,
+    accept_moves_uci: str | None = None,
 ):
-    """Helper: create a Puzzle row (and parent Game if needed)."""
+    """Helper: create a Puzzle row (and parent Game if needed).
+
+    ``solution_pv`` optionally stores a full solution line (space-separated UCI)
+    so multi-move training can be exercised. Its first move is d2d4, matching the
+    seeded ``best_move_uci`` so single- and multi-move paths stay consistent.
+    ``accept_moves_uci`` optionally widens the first-move equivalence set
+    (comma-separated UCI).
+    """
     game_id = source_game_id or f"game-{puzzle_id}"
     _create_game(db, game_id, username)
     db.add(
@@ -117,6 +126,8 @@ def _create_puzzle(
             swing=swing,
             created_at=created_at or datetime.now(timezone.utc),
             used_on=used_on,
+            solution_pv=solution_pv,
+            accept_moves_uci=accept_moves_uci,
         )
     )
     db.flush()
@@ -151,7 +162,7 @@ def test_get_openings_missing_username():
 def test_get_openings_with_games(mock_import_games, client_with_db):
     """Test /openings endpoint with imported games."""
 
-    async def mock_generator(username):
+    async def mock_generator(username, since=None):
         from services.ingest import ChessGame
 
         for game_data in MOCK_GAMES:
@@ -422,7 +433,7 @@ MOCK_GAMES = [
 def test_import_chesscom_success(mock_import_games, client_with_db):
     """Test successful import of games."""
 
-    async def mock_generator(username):
+    async def mock_generator(username, since=None):
         from services.ingest import ChessGame
 
         for game_data in MOCK_GAMES:
@@ -451,10 +462,43 @@ def test_import_chesscom_success(mock_import_games, client_with_db):
 
 
 @patch("services.api.main.import_all_games")
+def test_import_chesscom_skips_malformed_game(mock_import_games, client_with_db):
+    """One empty-url game is skipped; the good ones still import (no 500)."""
+
+    async def mock_generator(username, since=None):
+        from services.ingest import ChessGame
+
+        # A malformed game with an empty url between two valid ones.
+        payloads = [MOCK_GAMES[0], {**MOCK_GAMES[1], "url": ""}]
+        for game_data in payloads:
+            yield ChessGame(
+                url=game_data["url"],
+                pgn=game_data["pgn"],
+                time_control=game_data["time_control"],
+                end_time=game_data["end_time"],
+                rated=game_data["rated"],
+                white_username=game_data["white"]["username"],
+                black_username=game_data["black"]["username"],
+                white_result=game_data["white"]["result"],
+                black_result=game_data["black"]["result"],
+            )
+
+    mock_import_games.side_effect = mock_generator
+
+    response = client_with_db.post("/import/chesscom?username=testuser")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["games_count"] == 2
+    assert data["new_games"] == 1  # only the valid game stored
+    assert data["skipped_duplicates"] == 1  # malformed game skipped
+
+
+@patch("services.api.main.import_all_games")
 def test_import_status_after_import(mock_import_games, client_with_db):
     """Test import status before and after an import."""
 
-    async def mock_generator(username):
+    async def mock_generator(username, since=None):
         from services.ingest import ChessGame
 
         for game_data in MOCK_GAMES:
@@ -491,7 +535,7 @@ def test_import_status_after_import(mock_import_games, client_with_db):
 def test_import_chesscom_deduplication(mock_import_games, client_with_db):
     """Test that duplicate games are not re-imported."""
 
-    async def mock_generator(username):
+    async def mock_generator(username, since=None):
         from services.ingest import ChessGame
 
         for game_data in MOCK_GAMES:
@@ -533,7 +577,7 @@ def test_import_chesscom_batches_commits(mock_import_games, client_with_db, db_s
 
     total_games = IMPORT_COMMIT_BATCH_SIZE + 50
 
-    async def mock_generator(username):
+    async def mock_generator(username, since=None):
         for i in range(total_games):
             yield ChessGame(
                 url=f"https://www.chess.com/game/live/{i}",
@@ -560,6 +604,77 @@ def test_import_chesscom_batches_commits(mock_import_games, client_with_db, db_s
 
     # Two game batches (200 + 50) plus the import-summary write.
     assert mock_commit.call_count == 3
+
+
+def _chesscom_game(url: str, end_time: int) -> dict:
+    """Raw Chess.com archive game payload (nested white/black), as the API returns."""
+    return {
+        "url": url,
+        "pgn": '[Event "Test"]\n\n1. e4 e5 1/2-1/2',
+        "time_control": "600",
+        "end_time": end_time,
+        "rated": True,
+        "white": {"username": "testuser", "result": "win"},
+        "black": {"username": "opponent", "result": "lose"},
+    }
+
+
+def test_import_chesscom_incremental_skips_older_months(client_with_db):
+    """End-to-end: a second sync skips fully-imported older monthly archives,
+    re-fetches only the latest month, and imports just the new games there.
+
+    Drives the real import_all_games with the Chess.com HTTP layer mocked, so
+    the incremental archive-selection logic is actually exercised.
+    """
+    from services.ingest import chesscom
+
+    base = "https://api.chess.com/pub/player/testuser/games"
+    archives = [f"{base}/2023/12", f"{base}/2024/01"]
+
+    def ts(y, m, d):
+        return int(datetime(y, m, d, tzinfo=timezone.utc).timestamp())
+
+    # State the mocked archives serve, mutated between the two syncs.
+    games_by_archive = {
+        archives[0]: [_chesscom_game("g-2023-12-a", ts(2023, 12, 10))],
+        archives[1]: [_chesscom_game("g-2024-01-a", ts(2024, 1, 5))],
+    }
+    fetched: list[str] = []
+
+    async def fake_archives(username):
+        return list(archives)
+
+    async def fake_fetch(url):
+        fetched.append(url)
+        return list(games_by_archive.get(url, []))
+
+    with (
+        patch.object(chesscom, "get_player_archives", side_effect=fake_archives),
+        patch.object(chesscom, "fetch_games_from_archive", side_effect=fake_fetch),
+    ):
+        # First sync: no stored games → full history, both months fetched.
+        r1 = client_with_db.post("/import/chesscom?username=testuser")
+        assert r1.status_code == 200
+        assert r1.json()["new_games"] == 2
+        assert fetched == archives
+
+        # A new game lands in the current (latest) month between syncs.
+        games_by_archive[archives[1]].append(
+            _chesscom_game("g-2024-01-b", ts(2024, 1, 20))
+        )
+        fetched.clear()
+
+        # Second sync: cutoff derived from newest stored end_time (2024/01).
+        r2 = client_with_db.post("/import/chesscom?username=testuser")
+        assert r2.status_code == 200
+        data = r2.json()
+
+    # Only the latest month was re-fetched; the older month was skipped.
+    assert fetched == [archives[1]]
+    # That month had one already-stored game and one new one.
+    assert data["games_count"] == 2
+    assert data["new_games"] == 1
+    assert data["skipped_duplicates"] == 1
 
 
 @patch("services.api.main.import_all_games")
@@ -605,7 +720,7 @@ def test_import_chesscom_network_error(mock_import_games, client_with_db):
 def test_import_chesscom_no_games(mock_import_games, client_with_db):
     """Test handling user with no games."""
 
-    async def mock_generator(username):
+    async def mock_generator(username, since=None):
         if False:
             yield  # Empty generator
 
@@ -713,6 +828,96 @@ def test_get_daily_puzzles_rotation(client_with_db, db_session):
         assert puzzle_data["used_on"] == today_str
 
 
+def test_daily_puzzles_use_utc_day_boundary(db_session, monkeypatch):
+    """Daily-puzzle read and write both use the UTC day boundary.
+
+    Independent of the server's local `date.today()`: mark_puzzles_used stamps
+    the UTC date and get_daily_puzzles reads back the same "used today" set, so
+    the rotation flips at the same midnight as the training streak.
+    """
+    from services.api.storage.puzzle_repository import PuzzleRepository
+
+    fixed_utc_day = date(2026, 3, 14)
+    # Patch the repository's day-boundary helper; leave real date.today() alone
+    # so the test proves the code no longer depends on server-local time.
+    monkeypatch.setattr(
+        "services.api.storage.puzzle_repository.utc_today", lambda: fixed_utc_day
+    )
+
+    for i in range(3):
+        _create_puzzle(
+            db_session,
+            f"utc-puz-{i}",
+            "utcuser",
+            source_game_id=f"utc-game-{i}",
+            ply=10 + i,
+        )
+    db_session.commit()
+
+    repo = PuzzleRepository(db_session)
+
+    # Write: no explicit date -> stamps the UTC day.
+    marked = repo.mark_puzzles_used("utcuser", ["utc-puz-0", "utc-puz-1"])
+    assert marked == 2
+    stamped = {
+        p.used_on
+        for p in db_session.query(PuzzleModel).filter(
+            PuzzleModel.id.in_(["utc-puz-0", "utc-puz-1"])
+        )
+    }
+    assert stamped == {fixed_utc_day}
+
+    # Read: those two are treated as "used today" (UTC), so a request for 2
+    # returns exactly them rather than the unused puzzle.
+    selected = repo.get_daily_puzzles("utcuser", n=2)
+    assert {p.id for p in selected} == {"utc-puz-0", "utc-puz-1"}
+
+
+def test_create_daily_session_endpoint_stamps_utc_day(
+    client_with_db, db_session, monkeypatch
+):
+    """The /daily-puzzle-sessions endpoint stamps used_on with the UTC day.
+
+    Regression for dim 17: the endpoint used a server-local ``date.today()`` for
+    the write while ``get_daily_puzzles`` reads with the UTC day boundary. Near
+    the UTC/local midnight boundary the just-served set is written under one date
+    and read under another, breaking the used-today dedup. Simulate a fixed UTC
+    day that differs from the real server-local date and assert the write agrees
+    with the UTC read.
+    """
+    fixed_utc_day = date(2000, 1, 1)  # deliberately != real date.today()
+    monkeypatch.setattr(
+        "services.api.storage.puzzle_repository.utc_today", lambda: fixed_utc_day
+    )
+
+    for i in range(3):
+        _create_puzzle(
+            db_session,
+            f"utc-ep-{i}",
+            "utcep",
+            source_game_id=f"utc-ep-game-{i}",
+            ply=10 + i,
+        )
+    db_session.commit()
+
+    response = client_with_db.post(
+        "/daily-puzzle-sessions", json={"username": "utcep", "n": 2}
+    )
+    assert response.status_code == 200
+    served = {p["id"] for p in response.json()["puzzles"]}
+    for p in response.json()["puzzles"]:
+        # Written under the UTC day, not the server-local date.
+        assert p["used_on"] == fixed_utc_day.isoformat()
+
+    # And a re-request on the same UTC day re-serves exactly that set (the
+    # used-today read matches the write).
+    response2 = client_with_db.post(
+        "/daily-puzzle-sessions", json={"username": "utcep", "n": 2}
+    )
+    assert response2.status_code == 200
+    assert {p["id"] for p in response2.json()["puzzles"]} == served
+
+
 def test_get_daily_puzzles_no_puzzles(client_with_db):
     """Test 404 when user has no puzzles."""
     response = client_with_db.post(
@@ -769,6 +974,506 @@ def test_get_daily_puzzles_idempotent(client_with_db, db_session):
     assert puzzle_ids_1 == puzzle_ids_2
 
 
+# --- Training integrity: no pre-exposure of the solution (audit gate 13) ---
+
+# _create_puzzle seeds best_move_uci="d2d4" on the initial position, so in these
+# tests "d2d4" is the correct solution, "e2e4" is legal-but-wrong, and "e2e5" is
+# illegal.
+
+
+def test_due_puzzles_do_not_leak_solution(client_with_db, db_session, monkeypatch):
+    """SCORED training payload must NOT ship the answer before an attempt (strip flag ON)."""
+    monkeypatch.setenv("KNIGHTMIND_STRIP_PUZZLE_SOLUTIONS", "true")
+    _create_puzzle(db_session, "p-due-leak", "testuser")
+    db_session.commit()
+
+    response = client_with_db.get("/puzzles/due?username=testuser&n=5")
+    assert response.status_code == 200
+    puzzles = response.json()["puzzles"]
+    assert puzzles, "expected the new puzzle to be returned for training"
+    for p in puzzles:
+        # The board renders from fen/side_to_move — but the solution (and the
+        # original blunder, which narrows it) must never be pre-sent.
+        assert "best_move_uci" not in p
+        assert "accept_moves_uci" not in p
+        assert "played_move_uci" not in p
+        assert "fen" in p and "side_to_move" in p
+
+
+def test_daily_puzzles_do_not_leak_solution(client_with_db, db_session, monkeypatch):
+    """Post-generation warm-up payload must not carry the solution either (strip flag ON)."""
+    monkeypatch.setenv("KNIGHTMIND_STRIP_PUZZLE_SOLUTIONS", "true")
+    _create_puzzle(db_session, "p-daily-leak", "testuser")
+    db_session.commit()
+
+    response = client_with_db.post(
+        "/daily-puzzle-sessions", json={"username": "testuser", "n": 1}
+    )
+    assert response.status_code == 200
+    for p in response.json()["puzzles"]:
+        assert "best_move_uci" not in p
+        assert "accept_moves_uci" not in p
+        assert "played_move_uci" not in p
+
+
+def test_check_endpoint_correct_move(client_with_db, db_session):
+    """A correct move returns correct=True and reveals no solution."""
+    _create_puzzle(db_session, "p-check-ok", "testuser")
+    db_session.commit()
+
+    response = client_with_db.post(
+        "/puzzles/p-check-ok/check",
+        json={"username": "testuser", "attempted_move": "d2d4"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    # Legacy single-move puzzle (no stored line): correct move completes it, with
+    # no forced reply to play out.
+    assert body["correct"] is True
+    assert body["result"] == "pass"
+    assert body["complete"] is True
+    assert body["reply"] is None
+    assert body["next_ply_index"] is None
+    # The solution never appears in the response body.
+    assert "d2d4" not in {v for v in body.values() if isinstance(v, str)}
+    assert "best_move_uci" not in body
+
+
+def test_check_endpoint_wrong_move(client_with_db, db_session):
+    """A legal-but-wrong move returns correct=False without revealing the answer."""
+    _create_puzzle(db_session, "p-check-wrong", "testuser")
+    db_session.commit()
+
+    response = client_with_db.post(
+        "/puzzles/p-check-wrong/check",
+        json={"username": "testuser", "attempted_move": "e2e4"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["correct"] is False
+    assert body["result"] == "fail"
+    assert body["complete"] is False
+    assert body["reply"] is None
+
+
+def test_check_endpoint_illegal_move_is_incorrect(client_with_db, db_session):
+    """An illegal move is simply incorrect (never a 500)."""
+    _create_puzzle(db_session, "p-check-illegal", "testuser")
+    db_session.commit()
+
+    response = client_with_db.post(
+        "/puzzles/p-check-illegal/check",
+        json={"username": "testuser", "attempted_move": "e2e5"},
+    )
+    assert response.status_code == 200
+    assert response.json()["correct"] is False
+
+
+def test_check_endpoint_records_nothing(client_with_db, db_session):
+    """/check is pure feedback — it must not create a review or stats row."""
+    from services.api.models import PuzzleReview
+
+    _create_puzzle(db_session, "p-check-norecord", "testuser")
+    db_session.commit()
+
+    client_with_db.post(
+        "/puzzles/p-check-norecord/check",
+        json={"username": "testuser", "attempted_move": "d2d4"},
+    )
+    assert db_session.query(PuzzleReview).count() == 0
+
+
+def test_check_endpoint_puzzle_not_found(client_with_db):
+    response = client_with_db.post(
+        "/puzzles/does-not-exist/check",
+        json={"username": "testuser", "attempted_move": "d2d4"},
+    )
+    assert response.status_code == 404
+
+
+def test_reveal_endpoint_returns_solution(client_with_db, db_session):
+    """Explicit reveal returns the solution on demand."""
+    _create_puzzle(db_session, "p-reveal", "testuser")
+    db_session.commit()
+
+    response = client_with_db.post(
+        "/puzzles/p-reveal/reveal", json={"username": "testuser"}
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["best_move_uci"] == "d2d4"
+    assert "d2d4" in body["accept_moves_uci"]
+
+
+def test_reveal_endpoint_puzzle_not_found(client_with_db):
+    response = client_with_db.post(
+        "/puzzles/nope/reveal", json={"username": "testuser"}
+    )
+    assert response.status_code == 404
+
+
+# --- Library list/detail solution gating (dim 13) ---------------------------
+# The Library browse surface must not passively echo the solution: a user could
+# GET the answer and replay it in a scored /due session for a "verified" pass.
+# best_move_uci/accept_moves_uci are omitted unless ?reveal=true is set.
+
+
+def test_puzzles_list_omits_solution_when_strip_enabled(
+    client_with_db, db_session, monkeypatch
+):
+    """With the strip flag ON, /puzzles/list must not carry the solution."""
+    monkeypatch.setenv("KNIGHTMIND_STRIP_PUZZLE_SOLUTIONS", "true")
+    _create_puzzle(db_session, "p-list-hide", "testuser")
+    db_session.commit()
+
+    response = client_with_db.get("/puzzles/list?username=testuser")
+    assert response.status_code == 200
+    puzzles = response.json()["puzzles"]
+    assert puzzles
+    for p in puzzles:
+        assert p["best_move_uci"] is None
+        assert p["accept_moves_uci"] == []
+
+
+def test_puzzles_list_reveals_solution_on_demand(client_with_db, db_session):
+    """?reveal=true opts in to the solution (owner asking to see the answer)."""
+    _create_puzzle(db_session, "p-list-show", "testuser")
+    db_session.commit()
+
+    response = client_with_db.get("/puzzles/list?username=testuser&reveal=true")
+    assert response.status_code == 200
+    p = response.json()["puzzles"][0]
+    assert p["best_move_uci"] == "d2d4"
+    assert "d2d4" in p["accept_moves_uci"]
+
+
+def test_puzzle_detail_omits_solution_when_strip_enabled(
+    client_with_db, db_session, monkeypatch
+):
+    """With the strip flag ON, /puzzles/{id} must not carry the solution."""
+    monkeypatch.setenv("KNIGHTMIND_STRIP_PUZZLE_SOLUTIONS", "true")
+    _create_puzzle(db_session, "p-detail-hide", "testuser")
+    db_session.commit()
+
+    response = client_with_db.get("/puzzles/p-detail-hide?username=testuser")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["best_move_uci"] is None
+    assert body["accept_moves_uci"] == []
+
+
+def test_puzzle_detail_reveals_solution_on_demand(client_with_db, db_session):
+    """?reveal=true opts in to the solution on the detail endpoint."""
+    _create_puzzle(db_session, "p-detail-show", "testuser")
+    db_session.commit()
+
+    response = client_with_db.get(
+        "/puzzles/p-detail-show?username=testuser&reveal=true"
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["best_move_uci"] == "d2d4"
+    assert "d2d4" in body["accept_moves_uci"]
+
+
+# --- Additive rollout: strip flag OFF (default) keeps solutions for the old
+#     client-grading frontend (KNIGHTMIND_STRIP_PUZZLE_SOLUTIONS default false) ---
+
+
+def test_puzzles_list_includes_solution_by_default(client_with_db, db_session):
+    """Default (strip flag OFF): /puzzles/list ships the solution (old-frontend compat)."""
+    _create_puzzle(db_session, "p-list-default", "testuser")
+    db_session.commit()
+    response = client_with_db.get("/puzzles/list?username=testuser")
+    assert response.status_code == 200
+    p = response.json()["puzzles"][0]
+    assert p["best_move_uci"] == "d2d4"
+    assert "d2d4" in p["accept_moves_uci"]
+
+
+def test_puzzle_detail_includes_solution_by_default(client_with_db, db_session):
+    """Default (strip flag OFF): /puzzles/{id} ships the solution (old-frontend compat)."""
+    _create_puzzle(db_session, "p-detail-default", "testuser")
+    db_session.commit()
+    response = client_with_db.get("/puzzles/p-detail-default?username=testuser")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["best_move_uci"] == "d2d4"
+    assert "d2d4" in body["accept_moves_uci"]
+
+
+def test_due_puzzles_include_solution_by_default(client_with_db, db_session):
+    """Default (strip flag OFF): scored training payload keeps the solution so the
+    old client-side-grading frontend still works during the deploy transition."""
+    _create_puzzle(db_session, "p-due-default", "testuser")
+    db_session.commit()
+    response = client_with_db.get("/puzzles/due?username=testuser&n=5")
+    assert response.status_code == 200
+    puzzles = response.json()["puzzles"]
+    assert puzzles
+    assert any(p.get("best_move_uci") == "d2d4" for p in puzzles)
+
+
+# --- Full principal-variation (multi-move) puzzles (SCORECARD dim 12 -> 9) ---
+
+# A Queen's-Gambit line legal from the seeded start position: the solver plays
+# the even plies (d2d4, c2c4); the opponent's forced replies are the odd plies
+# (g8f6, e7e6). "c2c4" is the solver's SECOND move — it must never leak from a
+# ply-0 /check.
+_PV_LINE = "d2d4 g8f6 c2c4 e7e6"
+
+
+def test_check_pv_first_move_returns_forced_reply_not_next_answer(
+    client_with_db, db_session
+):
+    """A correct first move returns the opponent's forced reply and marks the
+    line incomplete — WITHOUT leaking the solver's next move."""
+    _create_puzzle(db_session, "p-pv-1", "testuser", solution_pv=_PV_LINE)
+    db_session.commit()
+
+    response = client_with_db.post(
+        "/puzzles/p-pv-1/check",
+        json={"username": "testuser", "attempted_move": "d2d4", "ply_index": 0},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["correct"] is True
+    assert body["result"] == "pass"
+    assert body["reply"] == "g8f6"  # opponent's forced reply is safe to reveal
+    assert body["complete"] is False
+    assert body["next_ply_index"] == 2
+    # The solver's UPCOMING answer (ply 2) must never appear in the payload.
+    leaked = {v for v in body.values() if isinstance(v, str)}
+    assert "c2c4" not in leaked
+    assert "e7e6" not in leaked
+
+
+def test_check_pv_completes_on_last_user_move(client_with_db, db_session):
+    """The final correct user move completes the line (records the pass)."""
+    _create_puzzle(db_session, "p-pv-2", "testuser", solution_pv=_PV_LINE)
+    db_session.commit()
+
+    response = client_with_db.post(
+        "/puzzles/p-pv-2/check",
+        json={"username": "testuser", "attempted_move": "c2c4", "ply_index": 2},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["correct"] is True
+    assert body["complete"] is True
+    assert body["reply"] == "e7e6"  # last forced reply is still played out
+    assert body["next_ply_index"] is None
+
+
+def test_check_pv_wrong_mid_line_move_fails(client_with_db, db_session):
+    """A wrong move at a later ply fails the line with no reply."""
+    _create_puzzle(db_session, "p-pv-3", "testuser", solution_pv=_PV_LINE)
+    db_session.commit()
+
+    response = client_with_db.post(
+        "/puzzles/p-pv-3/check",
+        # b1c3 is legal but not the PV move (c2c4) at ply 2.
+        json={"username": "testuser", "attempted_move": "b1c3", "ply_index": 2},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["correct"] is False
+    assert body["complete"] is False
+    assert body["reply"] is None
+
+
+def test_check_pv_rejects_odd_or_out_of_range_ply(client_with_db, db_session):
+    """A ply index that is not one of the solver's moves is rejected outright."""
+    _create_puzzle(db_session, "p-pv-4", "testuser", solution_pv=_PV_LINE)
+    db_session.commit()
+
+    for bad_ply in (1, 4, -2):
+        response = client_with_db.post(
+            "/puzzles/p-pv-4/check",
+            json={
+                "username": "testuser",
+                "attempted_move": "d2d4",
+                "ply_index": bad_ply,
+            },
+        )
+        assert response.status_code == 200
+        assert response.json()["correct"] is False
+
+
+def test_check_legacy_puzzle_ignores_ply_index(client_with_db, db_session):
+    """A legacy (null-PV) puzzle trains single-move regardless of ply_index."""
+    _create_puzzle(db_session, "p-pv-legacy", "testuser")  # no solution_pv
+    db_session.commit()
+
+    response = client_with_db.post(
+        "/puzzles/p-pv-legacy/check",
+        json={"username": "testuser", "attempted_move": "d2d4", "ply_index": 0},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["correct"] is True
+    assert body["complete"] is True  # single correct move completes it
+    assert body["reply"] is None
+
+
+def test_reveal_returns_full_pv(client_with_db, db_session):
+    """Reveal hands back the whole line on demand."""
+    _create_puzzle(db_session, "p-pv-reveal", "testuser", solution_pv=_PV_LINE)
+    db_session.commit()
+
+    response = client_with_db.post(
+        "/puzzles/p-pv-reveal/reveal", json={"username": "testuser"}
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["best_move_uci"] == "d2d4"
+    assert body["solution_pv"] == ["d2d4", "g8f6", "c2c4", "e7e6"]
+
+
+def test_due_puzzles_do_not_leak_solution_pv(client_with_db, db_session, monkeypatch):
+    """The scored training payload must never carry the stored line (strip flag ON)."""
+    monkeypatch.setenv("KNIGHTMIND_STRIP_PUZZLE_SOLUTIONS", "true")
+    _create_puzzle(db_session, "p-pv-noleak", "testuser", solution_pv=_PV_LINE)
+    db_session.commit()
+
+    response = client_with_db.get("/puzzles/due?username=testuser&n=5")
+    assert response.status_code == 200
+    for p in response.json()["puzzles"]:
+        assert "solution_pv" not in p
+
+
+def test_review_records_pass_only_on_full_line(client_with_db, db_session):
+    """A verified pass requires the WHOLE line; a partial or wrong line fails."""
+    _create_puzzle(db_session, "p-pv-review", "testuser", solution_pv=_PV_LINE)
+    db_session.commit()
+
+    # Full, correct line -> server-verified PASS.
+    ok = client_with_db.post(
+        "/puzzles/p-pv-review/review",
+        json={"username": "testuser", "result": "pass", "attempted_move": "d2d4 c2c4"},
+    )
+    assert ok.status_code == 200
+    ok_body = ok.json()
+    assert ok_body["result"] == "pass"
+    assert ok_body["verified"] is True
+
+    # Only the first move played -> the line is not complete -> FAIL, even though
+    # the client self-reports a pass.
+    partial = client_with_db.post(
+        "/puzzles/p-pv-review/review",
+        json={"username": "testuser", "result": "pass", "attempted_move": "d2d4"},
+    )
+    assert partial.status_code == 200
+    assert partial.json()["result"] == "fail"
+
+    # Right first move, wrong second move -> FAIL.
+    wrong = client_with_db.post(
+        "/puzzles/p-pv-review/review",
+        json={"username": "testuser", "result": "pass", "attempted_move": "d2d4 b1c3"},
+    )
+    assert wrong.status_code == 200
+    assert wrong.json()["result"] == "fail"
+
+
+# The seeded start position accepts g1f3 (Nf3) as an equal-value alternative
+# first move to the PV's d2d4; stored in accept_moves_uci. Subsequent plies of a
+# full-PV puzzle stay the exact forcing line.
+
+
+def test_verify_line_accepts_equivalent_first_move(client_with_db, db_session):
+    """dim 11: at ply 0 a full-PV puzzle accepts a first move from the accept set
+    (multi-PV equivalent), while later plies remain exact."""
+    _create_puzzle(
+        db_session,
+        "p-pv-equiv",
+        "testuser",
+        solution_pv=_PV_LINE,
+        accept_moves_uci="g1f3",
+    )
+    db_session.commit()
+
+    # Equivalent first move (g1f3) + exact second move (c2c4) -> verified PASS.
+    ok = client_with_db.post(
+        "/puzzles/p-pv-equiv/review",
+        json={"username": "testuser", "result": "pass", "attempted_move": "g1f3 c2c4"},
+    )
+    assert ok.status_code == 200
+    assert ok.json()["result"] == "pass"
+    assert ok.json()["verified"] is True
+
+
+def test_verify_line_still_rejects_wrong_first_move(client_with_db, db_session):
+    """A first move NOT in the accept set still fails, even for a full-PV puzzle."""
+    _create_puzzle(
+        db_session,
+        "p-pv-equiv-wrong",
+        "testuser",
+        solution_pv=_PV_LINE,
+        accept_moves_uci="g1f3",
+    )
+    db_session.commit()
+
+    # e2e4 is legal but not in the accept set {d2d4, g1f3}.
+    wrong = client_with_db.post(
+        "/puzzles/p-pv-equiv-wrong/review",
+        json={"username": "testuser", "result": "pass", "attempted_move": "e2e4 c2c4"},
+    )
+    assert wrong.status_code == 200
+    assert wrong.json()["result"] == "fail"
+
+
+def test_verify_line_equivalent_first_still_requires_exact_rest(
+    client_with_db, db_session
+):
+    """Accepting an equivalent first move does not relax the later plies."""
+    _create_puzzle(
+        db_session,
+        "p-pv-equiv-rest",
+        "testuser",
+        solution_pv=_PV_LINE,
+        accept_moves_uci="g1f3",
+    )
+    db_session.commit()
+
+    # Equivalent first move but a wrong second move (b1c3 != c2c4) -> FAIL.
+    wrong = client_with_db.post(
+        "/puzzles/p-pv-equiv-rest/review",
+        json={"username": "testuser", "result": "pass", "attempted_move": "g1f3 b1c3"},
+    )
+    assert wrong.status_code == 200
+    assert wrong.json()["result"] == "fail"
+
+
+def test_check_pv_accepts_equivalent_first_move(client_with_db, db_session):
+    """The live /check endpoint accepts an equivalent first move at ply 0."""
+    _create_puzzle(
+        db_session,
+        "p-pv-equiv-check",
+        "testuser",
+        solution_pv=_PV_LINE,
+        accept_moves_uci="g1f3",
+    )
+    db_session.commit()
+
+    ok = client_with_db.post(
+        "/puzzles/p-pv-equiv-check/check",
+        json={"username": "testuser", "attempted_move": "g1f3", "ply_index": 0},
+    )
+    assert ok.status_code == 200
+    body = ok.json()
+    assert body["correct"] is True
+    assert body["complete"] is False
+    assert body["next_ply_index"] == 2
+
+    # A first move outside the accept set is still wrong.
+    bad = client_with_db.post(
+        "/puzzles/p-pv-equiv-check/check",
+        json={"username": "testuser", "attempted_move": "e2e4", "ply_index": 0},
+    )
+    assert bad.status_code == 200
+    assert bad.json()["correct"] is False
+
+
 # --- Engine tests ---
 
 
@@ -798,6 +1503,36 @@ def test_engine_eval_unavailable(mock_eval):
     response = client.post("/engine/eval", json={"fen": "any"})
     assert response.status_code == 503
     assert "Engine not available" in response.json()["detail"]
+
+
+@patch("services.api.main._ENGINE_EVAL_MAX_INFLIGHT", 0)
+def test_engine_eval_rejects_when_at_capacity():
+    """The unauthenticated /engine/eval guard returns 429 when saturated."""
+    response = client.post("/engine/eval", json={"fen": "any"})
+    assert response.status_code == 429
+    assert "capacity" in response.json()["detail"].lower()
+
+
+@patch("services.api.main.get_or_compute_eval")
+def test_engine_eval_terminal_position_is_not_500(mock_eval):
+    """A terminal FEN yields an EvalResult with best_move_uci=None. The
+    response model must accept that (200 terminal shape) rather than raising a
+    Pydantic ValidationError that escapes the handlers as a 500."""
+    from services.api.engine import EvalResult
+
+    mock_eval.return_value = EvalResult(
+        best_move_uci=None, eval=-100.0, mate_in=0, is_terminal=True
+    )
+    response = client.post(
+        "/engine/eval",
+        json={"fen": "rnb1kbnr/pppp1ppp/8/4p3/6Pq/5P2/PPPPP2P/RNBQKBNR w KQkq - 1 3"},
+    )
+    assert response.status_code != 500
+    assert response.status_code == 200
+    body = response.json()
+    assert body["is_terminal"] is True
+    assert body["best_move_uci"] is None
+    assert body["mate_in"] == 0
 
 
 # --- Tricky Puzzles Endpoint Tests ---

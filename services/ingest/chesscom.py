@@ -6,6 +6,7 @@ This module handles fetching and parsing games from the Chess.com API.
 
 import ssl
 from dataclasses import dataclass
+from datetime import datetime
 from typing import AsyncIterator
 
 import httpx
@@ -188,12 +189,49 @@ def parse_game(game_data: dict) -> ChessGame:
     )
 
 
-async def import_all_games(username: str) -> AsyncIterator[ChessGame]:
+def _archive_year_month(archive_url: str) -> tuple[int, int] | None:
+    """Parse the (year, month) a monthly archive URL covers.
+
+    Chess.com monthly archive URLs end in ``.../games/YYYY/MM``. Returns
+    ``None`` when the URL doesn't match that shape so callers can choose to
+    fetch it rather than risk skipping games behind an unexpected URL.
     """
-    Import all games for a Chess.com user.
+    parts = archive_url.rstrip("/").split("/")
+    if len(parts) < 2:
+        return None
+    try:
+        year, month = int(parts[-2]), int(parts[-1])
+    except ValueError:
+        return None
+    if not 1 <= month <= 12:
+        return None
+    return year, month
+
+
+async def import_all_games(
+    username: str, since: datetime | None = None
+) -> AsyncIterator[ChessGame]:
+    """
+    Import games for a Chess.com user, optionally incrementally.
+
+    Chess.com archives are per-month (``.../games/YYYY/MM``) and append-only:
+    a game can only ever land in the archive for the month it was played. So
+    once a past month has been fully imported, it never gains new games and
+    never needs to be re-downloaded.
+
+    When ``since`` is provided, only archives from the month of ``since``
+    onward are fetched; strictly-older months are skipped. The ``since`` month
+    itself is always re-fetched because the current month keeps growing and an
+    interrupted earlier sync may have stored only part of it. Callers should
+    derive ``since`` from the newest stored game's end time (not merely a
+    last-sync timestamp) so resuming an interrupted sync stays correct.
+
+    When ``since`` is ``None`` (first sync), the full archive history is
+    downloaded.
 
     Args:
         username: Chess.com username
+        since: Only fetch archives from this month onward. ``None`` = full sync.
 
     Yields:
         ChessGame objects for each game
@@ -204,7 +242,15 @@ async def import_all_games(username: str) -> AsyncIterator[ChessGame]:
         NetworkError: If a network error occurs
     """
     archives = await get_player_archives(username)
+    cutoff = (since.year, since.month) if since is not None else None
     for archive_url in archives:
+        if cutoff is not None:
+            year_month = _archive_year_month(archive_url)
+            # Skip strictly-older months (already fully imported). Re-fetch the
+            # cutoff month and anything newer. Unparseable URLs are fetched to
+            # stay correct rather than silently drop games.
+            if year_month is not None and year_month < cutoff:
+                continue
         games = await fetch_games_from_archive(archive_url)
         for game_data in games:
             yield parse_game(game_data)

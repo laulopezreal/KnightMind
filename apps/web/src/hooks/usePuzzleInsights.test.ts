@@ -12,7 +12,7 @@ const mockUserStatus = {
 };
 
 const mockMotifPerformance = {
-    motifs: [{ name: 'fork', accuracy: 0.8, passed: 4, total_puzzles: 5, rank: 'learning' as const }],
+    motifs: [{ name: 'fork', accuracy: 0.8, passed: 4, total_puzzles: 5, rank: 'learning' as const, attempts: 5, insufficient_data: false }],
     weakest_motifs: ['pin'],
     total_motifs_practiced: 3,
 };

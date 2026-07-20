@@ -284,6 +284,93 @@ describe('usePuzzleSession', () => {
         expect(result.current.streak).toBe(0);
     });
 
+    it('sends a client_review_id idempotency key with the review', async () => {
+        const opts = makeOpts({ activeSessionId: 's1' });
+        const { result } = renderHook(() => usePuzzleSession(opts));
+
+        act(() => {
+            result.current.setPuzzles([mockPuzzle, mockPuzzle2]);
+        });
+
+        mockedReviewPuzzle.mockResolvedValue(makeReviewResponse());
+
+        await act(async () => {
+            await result.current.handleReviewPuzzle('pass');
+        });
+
+        // Signature: (puzzleId, username, result, timeSpentMs, sessionId, clientReviewId, attemptedMove)
+        const call = mockedReviewPuzzle.mock.calls[0];
+        const clientReviewId = call[5];
+        expect(typeof clientReviewId).toBe('string');
+        expect((clientReviewId as string).length).toBeGreaterThan(0);
+    });
+
+    it('forwards the attempted move so the server can verify the solve', async () => {
+        const opts = makeOpts({ activeSessionId: 's1' });
+        const { result } = renderHook(() => usePuzzleSession(opts));
+
+        act(() => {
+            result.current.setPuzzles([mockPuzzle, mockPuzzle2]);
+        });
+
+        mockedReviewPuzzle.mockResolvedValue(makeReviewResponse());
+
+        await act(async () => {
+            await result.current.handleReviewPuzzle('pass', undefined, 'e2e4');
+        });
+
+        // attemptedMove is the 7th positional arg (index 6).
+        expect(mockedReviewPuzzle.mock.calls[0][6]).toBe('e2e4');
+    });
+
+    it('trusts the server-decided result over the client claim', async () => {
+        const opts = makeOpts({ activeSessionId: 's1' });
+        const { result } = renderHook(() => usePuzzleSession(opts));
+
+        act(() => {
+            result.current.setPuzzles([mockPuzzle, mockPuzzle2]);
+        });
+
+        // Client claims 'pass', but the server verified the move and says 'fail'.
+        mockedReviewPuzzle.mockResolvedValue(
+            makeReviewResponse({ result: 'fail', verified: true, source: 'server_verified' }),
+        );
+
+        await act(async () => {
+            await result.current.handleReviewPuzzle('pass', undefined, 'e2e4');
+        });
+
+        // Streak must NOT advance on a server-rejected solve, and the history
+        // must record the server's outcome, not the client's claim.
+        expect(result.current.streak).toBe(0);
+        expect(result.current.performanceHistory.at(-1)?.result).toBe('fail');
+    });
+
+    it('in-flight guard: a concurrent double-submit fires only one POST', async () => {
+        const opts = makeOpts({ activeSessionId: 's1' });
+        const { result } = renderHook(() => usePuzzleSession(opts));
+
+        act(() => {
+            result.current.setPuzzles([mockPuzzle, mockPuzzle2]);
+        });
+
+        // Never-resolving promise keeps the first call "in flight"
+        let resolveReview: (v: ReviewPuzzleResponse) => void = () => {};
+        mockedReviewPuzzle.mockReturnValue(
+            new Promise<ReviewPuzzleResponse>((res) => { resolveReview = res; }),
+        );
+
+        await act(async () => {
+            // Fire two reviews without awaiting the first (double-click)
+            const p1 = result.current.handleReviewPuzzle('pass');
+            const p2 = result.current.handleReviewPuzzle('pass');
+            resolveReview(makeReviewResponse());
+            await Promise.all([p1, p2]);
+        });
+
+        expect(mockedReviewPuzzle).toHaveBeenCalledTimes(1);
+    });
+
     it('should call checkAchievements with correct params on review', async () => {
         const checkAchievements = vi.fn();
         const opts = makeOpts({ activeSessionId: 's1', checkAchievements });

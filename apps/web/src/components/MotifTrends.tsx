@@ -143,15 +143,24 @@ export function MotifTrends({ trends, windowDays }: MotifTrendsProps) {
                 {trends.slice(0, 3).map(trend => (
                     <div key={trend.motif} className="text-center">
                         <p className="text-sm text-primary/70 mb-1">{trend.motif}</p>
-                        <p className={`text-lg font-serif ${
-                            trend.trend === 'up' ? 'text-positive' :
-                            trend.trend === 'down' ? 'text-negative' :
-                            'text-primary/70'
-                        }`}>
-                            {trend.trend === 'up' ? '↗' : trend.trend === 'down' ? '↘' : '→'}
-                            {' '}
-                            {trend.change > 0 ? '+' : ''}{(trend.change * 100).toFixed(1)}%
-                        </p>
+                        {trend.insufficient_data ? (
+                            <p
+                                className="text-lg font-serif text-primary/70"
+                                title={`Only ${trend.total_reviews} review${trend.total_reviews === 1 ? '' : 's'} in this window — too few to show a trend.`}
+                            >
+                                → Limited data
+                            </p>
+                        ) : (
+                            <p className={`text-lg font-serif ${
+                                trend.trend === 'up' ? 'text-positive' :
+                                trend.trend === 'down' ? 'text-negative' :
+                                'text-primary/70'
+                            }`}>
+                                {trend.trend === 'up' ? '↗' : trend.trend === 'down' ? '↘' : '→'}
+                                {' '}
+                                {trend.change > 0 ? '+' : ''}{(trend.change * 100).toFixed(1)}%
+                            </p>
+                        )}
                     </div>
                 ))}
             </div>

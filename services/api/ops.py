@@ -45,14 +45,11 @@ def get_health(db: Session = Depends(get_db)):
     engine_ok, _ = is_engine_available()
     stockfish_status = "ok" if engine_ok else "missing"
 
-    # 4. Version Info
-    version = {
-        "sha": os.environ.get("GIT_SHA", "unknown"),
-        "built_at": os.environ.get(
-            "BUILD_TIME", datetime.now(timezone.utc).isoformat()
-        ),
-    }
-
+    # NOTE: deployment metadata (GIT_SHA / BUILD_TIME) is deliberately NOT
+    # returned here. /health is public/unauthed (Docker HEALTHCHECK + uptime
+    # monitors), and leaking the exact deployed commit lets anonymous callers
+    # fingerprint the build to map known vulns. Version info now lives only on
+    # the operator-gated /status endpoint below.
     all_ok = (
         db_status == "ok"
         and worker_status in ("ok", "disabled")
@@ -63,7 +60,6 @@ def get_health(db: Session = Depends(get_db)):
         "db": db_status,
         "worker": worker_status,
         "stockfish": stockfish_status,
-        "version": version,
     }
 
     status_code = 200 if all_ok else 503
@@ -151,8 +147,18 @@ def get_ops_status(db: Session = Depends(get_db)):
 
     avg_duration_ms = total_duration_ms / succeeded_count if succeeded_count > 0 else 0
 
+    # Deployment metadata — operator-only (moved off the public /health so it
+    # isn't leaked to anonymous callers).
+    version = {
+        "sha": os.environ.get("GIT_SHA", "unknown"),
+        "built_at": os.environ.get(
+            "BUILD_TIME", datetime.now(timezone.utc).isoformat()
+        ),
+    }
+
     return {
         "now": now.isoformat(),
+        "version": version,
         "active_job": active_job,
         "recent_jobs": recent_jobs,
         "last_recovery": worker.recovery_stats,

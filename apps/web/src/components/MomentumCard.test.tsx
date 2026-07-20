@@ -7,6 +7,8 @@ describe('MomentumCard', () => {
     last_20_results: Array(10).fill('pass').concat(Array(10).fill('fail')) as ('pass' | 'fail')[],
     accuracy: 0.5,
     trend: 'steady' as const,
+    sample_size: 20,
+    insufficient_data: false,
   };
 
   it('should render Momentum heading', () => {
@@ -64,8 +66,16 @@ describe('MomentumCard', () => {
     expect(summary).toBeInTheDocument();
   });
 
+  it('shows "Not enough data yet" when the sample is too small for a trend', () => {
+    render(<MomentumCard recentForm={{ ...defaultForm, trend: 'steady', sample_size: 4, insufficient_data: true }} />);
+
+    expect(screen.getByText('Not enough data yet')).toBeInTheDocument();
+    // The generic "Steady" label must not imply a settled trend here.
+    expect(screen.queryByText('Steady')).not.toBeInTheDocument();
+  });
+
   it('handles empty recent results gracefully', () => {
-    render(<MomentumCard recentForm={{ ...defaultForm, last_20_results: [] }} />);
+    render(<MomentumCard recentForm={{ ...defaultForm, last_20_results: [], sample_size: 0, insufficient_data: true }} />);
 
     const summary = screen.getByRole('img', { name: /no recent attempts yet/i });
     expect(summary).toBeInTheDocument();
