@@ -17,7 +17,7 @@ import anyio
 import chess
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import and_, case, func, literal, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -57,6 +57,7 @@ from services.api.models import (
 from services.api.motifs import MotifPerformanceResponse, get_user_motif_performance
 from services.api.openings import build_opening_tree
 from services.api.puzzles.identity import backfill_puzzle_identity
+from services.api.ratelimit import rate_limit
 from services.api.storage import GameRepository, PuzzleRepository
 from services.api.storage.spaced_repetition import (
     _utcnow_naive,
@@ -88,6 +89,19 @@ CLEANUP_INTERVAL_SECONDS = 3600
 # Commit imported games in batches instead of once per game: a full import can
 # span tens of thousands of games, and per-game commits hammer Postgres.
 IMPORT_COMMIT_BATCH_SIZE = 200
+
+# Per-principal rate limits (audit gate 10). Defaults are per 60s window and can
+# be overridden per route via RATE_LIMIT_<NAME>[ _WINDOW] env vars (0 disables).
+# See services/api/ratelimit.py for the algorithm and the multi-worker caveat.
+RATE_LIMIT_ENGINE_EVAL = 30  # Stockfish CPU; also has a per-process in-flight cap
+RATE_LIMIT_IMPORT_CHESSCOM = 5  # heavy Chess.com fetch + bulk DB writes
+RATE_LIMIT_PUZZLES_GENERATE = 5  # enqueues a heavy analysis job
+RATE_LIMIT_RATINGS_SNAPSHOT = 10  # outbound Chess.com call per request
+
+# A FEN is bounded in length (piece placement + 5 short fields); anything much
+# longer than a legal position is junk. Reject oversized input with 400 before
+# it reaches the engine, so a caller can't ship a giant body to /engine/eval.
+MAX_FEN_LENGTH = 120
 
 # Rating explain thresholds
 PERFORMANCE_DIFF_THRESHOLD = 0.5
@@ -319,9 +333,15 @@ async def validate_user(username: str):
     return {"valid": True, "username": profile.get("username", username)}
 
 
-@app.post("/import/chesscom", response_model=ImportResponse)
+@app.post(
+    "/import/chesscom",
+    response_model=ImportResponse,
+    dependencies=[
+        Depends(rate_limit("import_chesscom", default_limit=RATE_LIMIT_IMPORT_CHESSCOM))
+    ],
+)
 async def import_chesscom_games(
-    username: str,
+    username: str = Query(..., max_length=64),
     db: Session = Depends(get_db),
     account: Account | None = Depends(require_account),
 ):
@@ -626,7 +646,13 @@ _engine_eval_inflight = 0
 _engine_eval_lock = asyncio.Lock()
 
 
-@app.post("/engine/eval", response_model=EvalResponse)
+@app.post(
+    "/engine/eval",
+    response_model=EvalResponse,
+    dependencies=[
+        Depends(rate_limit("engine_eval", default_limit=RATE_LIMIT_ENGINE_EVAL))
+    ],
+)
 async def evaluate_fen(
     request: EvalRequest,
     account: Account | None = Depends(require_account),
@@ -636,6 +662,14 @@ async def evaluate_fen(
     Gated behind an authenticated account (when auth is enabled) purely to keep
     unauthenticated callers from spending Stockfish CPU. No per-user data.
     """
+    # Size cap: reject an oversized FEN before touching the engine or the
+    # in-flight guard, so a caller can't force expensive parsing with junk.
+    if len(request.fen) > MAX_FEN_LENGTH:
+        raise HTTPException(
+            status_code=400,
+            detail=f"FEN too long (max {MAX_FEN_LENGTH} characters)",
+        )
+
     global _engine_eval_inflight
     async with _engine_eval_lock:
         if _engine_eval_inflight >= _ENGINE_EVAL_MAX_INFLIGHT:
@@ -662,9 +696,19 @@ async def evaluate_fen(
             _engine_eval_inflight -= 1
 
 
-@app.post("/puzzles/generate", response_model=JobStatusResponse)
+@app.post(
+    "/puzzles/generate",
+    response_model=JobStatusResponse,
+    dependencies=[
+        Depends(
+            rate_limit("puzzles_generate", default_limit=RATE_LIMIT_PUZZLES_GENERATE)
+        )
+    ],
+)
 async def generate_puzzles_endpoint(
-    username: str = Query(..., description="Username to generate puzzles for"),
+    username: str = Query(
+        ..., max_length=64, description="Username to generate puzzles for"
+    ),
     max_games: int = Query(
         30, ge=1, le=2000, description="Maximum number of recent games to analyze"
     ),
@@ -1549,7 +1593,7 @@ def calculate_expected_score(player_rating: int, opponent_rating: int) -> float:
 
 
 class SnapshotRequest(BaseModel):
-    username: str
+    username: str = Field(max_length=64)
     time_control: Literal["rapid", "blitz", "bullet"]
 
 
@@ -1558,7 +1602,15 @@ class SnapshotResponse(BaseModel):
     recorded_at: datetime
 
 
-@app.post("/ratings/snapshot", response_model=SnapshotResponse)
+@app.post(
+    "/ratings/snapshot",
+    response_model=SnapshotResponse,
+    dependencies=[
+        Depends(
+            rate_limit("ratings_snapshot", default_limit=RATE_LIMIT_RATINGS_SNAPSHOT)
+        )
+    ],
+)
 async def create_rating_snapshot(
     request: SnapshotRequest,
     db: Session = Depends(get_db),
