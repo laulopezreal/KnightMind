@@ -920,3 +920,186 @@ def test_confirm_depth_is_never_shallower_than_base(
     monkeypatch.setenv("STOCKFISH_DEPTH", "20")
     monkeypatch.setenv("STOCKFISH_CONFIRM_DEPTH", "8")  # below base
     assert get_confirm_depth() == 20
+
+
+# --- Full principal-variation persistence (SCORECARD dim 12 -> 9) ---
+
+
+def test_compute_solution_pv_walks_bounded_line():
+    """The PV walk plays out the engine's best line, starting with the solution
+    move, up to the ply cap."""
+    from services.api.puzzles.generator import _compute_solution_pv
+
+    # A natural opening line that is legal move-by-move from the start position.
+    continuation = ["e7e5", "g1f3", "b8c6", "f1b5"]
+    calls = {"n": 0}
+
+    def eval_side_effect(fen, engine=None, cache_stats=None, depth=None):
+        move = continuation[calls["n"]]
+        calls["n"] += 1
+        return EvalResult(best_move_uci=move, eval=1.0)
+
+    with patch(
+        "services.api.puzzles.generator.get_or_compute_eval",
+        side_effect=eval_side_effect,
+    ):
+        pv = _compute_solution_pv(
+            fen=chess.STARTING_FEN,
+            first_move_uci="e2e4",
+            engine=Mock(),
+            depth=18,
+            cache_stats={},
+            max_plies=4,
+        )
+
+    # Capped at 4 plies: the solution move + 3 walked replies.
+    assert pv == ["e2e4", "e7e5", "g1f3", "b8c6"]
+
+
+def test_compute_solution_pv_stops_at_illegal_move():
+    """An illegal engine move ends the walk rather than being appended."""
+    from services.api.puzzles.generator import _compute_solution_pv
+
+    with patch(
+        "services.api.puzzles.generator.get_or_compute_eval",
+        # a1a8 is illegal in the start position (rook is blocked) -> walk stops.
+        return_value=EvalResult(best_move_uci="a1a8", eval=1.0),
+    ):
+        pv = _compute_solution_pv(
+            fen=chess.STARTING_FEN,
+            first_move_uci="e2e4",
+            engine=Mock(),
+            depth=18,
+            cache_stats={},
+            max_plies=6,
+        )
+
+    assert pv == ["e2e4"]
+
+
+def test_compute_solution_pv_stops_at_terminal_position():
+    """The walk stops once the position is game-over (e.g. after mate)."""
+    from services.api.puzzles.generator import _compute_solution_pv
+
+    # Fool's-mate position after 1. f3 e5 2. g4, Black to move and mate with
+    # Qd8-h4#. The solution move ends the game, so the walk must stop right after
+    # it without evaluating any further ply.
+    fen = "rnbqkbnr/pppp1ppp/8/4p3/6P1/5P2/PPPPP2P/RNBQKBNR b KQkq - 0 2"
+
+    called = {"n": 0}
+
+    def eval_side_effect(f, engine=None, cache_stats=None, depth=None):
+        called["n"] += 1
+        return EvalResult(best_move_uci="e5e4", eval=1.0)
+
+    with patch(
+        "services.api.puzzles.generator.get_or_compute_eval",
+        side_effect=eval_side_effect,
+    ):
+        pv = _compute_solution_pv(
+            fen=fen,
+            first_move_uci="d8h4",  # Qh4#
+            engine=Mock(),
+            depth=18,
+            cache_stats={},
+            max_plies=8,
+        )
+
+    # The mating move ends the game, so no further plies are walked or evaluated.
+    assert pv == ["d8h4"]
+    assert called["n"] == 0
+
+
+@patch("services.api.puzzles.generator.get_top_moves")
+@patch("services.api.puzzles.generator.get_ply_range")
+@patch("services.api.puzzles.generator.create_engine")
+def test_generate_persists_solution_pv(
+    mock_create_engine, mock_ply, mock_top, temp_storage
+):
+    """A generated puzzle stores the full forcing line, not just move 1."""
+    db = temp_storage
+    mock_create_engine.return_value = Mock()
+    mock_ply.return_value = (0, 100)
+    # Uniqueness: d1d5 clearly best, a2a3 far worse.
+    mock_top.return_value = [
+        MoveEval(uci="d1d5", eval=9.0),
+        MoveEval(uci="a2a3", eval=0.1),
+    ]
+
+    fen = "3q3k/6pp/8/8/8/8/PP4PP/3Q2K1 w - - 0 1"
+    pgn = f"""[Event "PV"]
+[White "testuser"]
+[Black "opponent"]
+[FEN "{fen}"]
+[SetUp "1"]
+
+1. a3 *"""
+    _store_game(db, pgn)
+
+    def eval_side_effect(f, engine=None, cache_stats=None, depth=None):
+        board = chess.Board(f)
+        if f == fen:
+            # The mistake position: a winning queen move is available.
+            return EvalResult(best_move_uci="d1d5", eval=9.0)
+        # PV walk / after-move evals: give a legal move for whoever is to move so
+        # the forcing line plays out for a couple of plies.
+        if board.turn == chess.BLACK:
+            return EvalResult(best_move_uci="h7h6", eval=9.0)
+        return EvalResult(best_move_uci="a2a4", eval=0.0)
+
+    with patch(
+        "services.api.puzzles.generator.get_or_compute_eval",
+        side_effect=eval_side_effect,
+    ):
+        result = generate_puzzles("testuser", max_games=1, max_puzzles=10)
+
+    assert result.generated == 1
+    puzzle = PuzzleRepository(db).get_all_puzzles("testuser")[0]
+    assert puzzle.solution_pv is not None
+    pv = puzzle.solution_pv.split()
+    assert pv[0] == "d1d5"  # the line starts with the solution move
+    assert len(pv) >= 2  # a real multi-ply line, not just the solution move
+
+
+@patch("services.api.puzzles.generator.get_top_moves")
+@patch("services.api.puzzles.generator.get_ply_range")
+@patch("services.api.puzzles.generator.create_engine")
+def test_generate_leaves_pv_null_for_single_move_solution(
+    mock_create_engine, mock_ply, mock_top, temp_storage
+):
+    """When the solution has no forced continuation, solution_pv stays NULL so
+    the puzzle trains as a single move (legacy behaviour)."""
+    db = temp_storage
+    mock_create_engine.return_value = Mock()
+    mock_ply.return_value = (0, 100)
+    mock_top.return_value = [
+        MoveEval(uci="d1d5", eval=9.0),
+        MoveEval(uci="a2a3", eval=0.1),
+    ]
+
+    fen = "3q3k/6pp/8/8/8/8/PP4PP/3Q2K1 w - - 0 1"
+    pgn = f"""[Event "PV-single"]
+[White "testuser"]
+[Black "opponent"]
+[FEN "{fen}"]
+[SetUp "1"]
+
+1. a3 *"""
+    _store_game(db, pgn)
+
+    def eval_side_effect(f, engine=None, cache_stats=None, depth=None):
+        if f == fen:
+            return EvalResult(best_move_uci="d1d5", eval=9.0)
+        # After the solution move, the engine's "best move" is illegal for the
+        # side to move, so the PV walk cannot extend past move 1.
+        return EvalResult(best_move_uci="a2a4", eval=0.0)
+
+    with patch(
+        "services.api.puzzles.generator.get_or_compute_eval",
+        side_effect=eval_side_effect,
+    ):
+        result = generate_puzzles("testuser", max_games=1, max_puzzles=10)
+
+    assert result.generated == 1
+    puzzle = PuzzleRepository(db).get_all_puzzles("testuser")[0]
+    assert puzzle.solution_pv is None  # single-move puzzle -> no stored line

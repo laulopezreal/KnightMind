@@ -87,6 +87,91 @@ def get_confirm_depth() -> int:
     return max(confirm, base)
 
 
+def get_pv_max_plies() -> int:
+    """Maximum length (in plies) of the persisted solution principal variation.
+
+    The generator walks the engine's best line from the puzzle FEN and stores it
+    so the puzzle can be trained move-by-move. The walk is bounded by this cap
+    (``PUZZLE_PV_MAX_PLIES``, default 8) and stops early at a mate / terminal
+    position, so a single confirmed puzzle costs at most this many extra deep
+    evals — most of which hit the version-aware cache (#199). Longer lines mean
+    richer training but more generation compute; 8 plies (4 full moves) covers
+    the overwhelming majority of forcing tactical combinations.
+    """
+    raw = os.environ.get("PUZZLE_PV_MAX_PLIES")
+    if raw:
+        try:
+            value = int(raw)
+            if value >= 1:
+                return value
+        except ValueError:
+            logger.warning("Invalid PUZZLE_PV_MAX_PLIES=%r, using default 8", raw)
+    return 8
+
+
+def _compute_solution_pv(
+    *,
+    fen: str,
+    first_move_uci: str,
+    engine,
+    depth: int,
+    cache_stats: dict,
+    max_plies: int,
+) -> list[str]:
+    """Walk the engine's best line from ``fen`` into a bounded UCI solution PV.
+
+    The line always starts with ``first_move_uci`` (the confirmed solution move);
+    each subsequent ply is the deep best move for the resulting position, played
+    out until a mate/terminal position, an illegal/empty engine move, or the
+    ``max_plies`` cap. Deep evals reuse ``get_or_compute_eval`` at the
+    confirmation depth, so they hit the same version-aware cache the confirmation
+    pass just populated.
+
+    Best-effort by contract (mirrors ``_deep_top_moves``): ANY failure while
+    walking — engine error, a mocked engine running out of scripted evals, an
+    illegal move — simply stops the walk and returns the line built so far. It
+    never raises, so PV enrichment can never break generation. Returns a list of
+    at least one move (the solution); the caller stores it only when it is a real
+    multi-ply line.
+    """
+    board = chess.Board(fen)
+    try:
+        first = chess.Move.from_uci(first_move_uci)
+    except ValueError:
+        return []
+    if first not in board.legal_moves:
+        return []
+
+    line = [first_move_uci]
+    board.push(first)
+
+    for _ in range(max_plies - 1):
+        if board.is_game_over():
+            break
+        try:
+            result = get_or_compute_eval(
+                board.fen(), engine=engine, cache_stats=cache_stats, depth=depth
+            )
+        except (
+            Exception
+        ) as e:  # noqa: BLE001 - best-effort, must never break generation
+            logger.debug("PV walk eval failed for %s: %s", board.fen()[:40], e)
+            break
+        next_uci = result.best_move_uci
+        if not next_uci:
+            break
+        try:
+            move = chess.Move.from_uci(next_uci)
+        except ValueError:
+            break
+        if move not in board.legal_moves:
+            break
+        line.append(next_uci)
+        board.push(move)
+
+    return line
+
+
 def get_uniqueness_margin() -> float:
     """Minimum pawn advantage the solution must hold over the next NON-equivalent
     move for a candidate to be a real puzzle rather than a toss-up.
@@ -463,6 +548,7 @@ def generate_puzzles(
         confirm_depth = get_confirm_depth()
         uniqueness_margin = get_uniqueness_margin()
         equiv_tolerance = get_equiv_tolerance()
+        pv_max_plies = get_pv_max_plies()
 
         # Create engine instance for the whole batch
         try:
@@ -689,6 +775,26 @@ def generate_puzzles(
                     # set, and confirmed_depth for auditability/reproducibility.
                     confirmed_best = outcome.best_move_uci or best_move_uci
                     accept_csv = ",".join(outcome.accept_moves) or None
+
+                    # Persist the full forcing line (principal variation) so the
+                    # puzzle trains move-by-move, not just move 1. Walk the deep
+                    # best line from the puzzle FEN starting at the confirmed
+                    # solution move. Store it only when it is a real multi-ply
+                    # line (>= 2 plies: the solution + at least the forced reply);
+                    # a lone solution move is legacy single-move training, so it
+                    # stays NULL. Best-effort — a walk failure yields a short line
+                    # and never blocks the save.
+                    solution_line = _compute_solution_pv(
+                        fen=fen_before,
+                        first_move_uci=confirmed_best,
+                        engine=engine,
+                        depth=confirm_depth,
+                        cache_stats=cache_stats,
+                        max_plies=pv_max_plies,
+                    )
+                    solution_pv = (
+                        " ".join(solution_line) if len(solution_line) >= 2 else None
+                    )
                     # A DB error here must skip this one puzzle, not abort the
                     # whole batch (save_puzzle handles duplicate rows).
                     try:
@@ -706,6 +812,7 @@ def generate_puzzles(
                             swing=outcome.swing,
                             accept_moves_uci=accept_csv,
                             confirmed_depth=outcome.confirmed_depth,
+                            solution_pv=solution_pv,
                         )
                     except SQLAlchemyError as e:
                         logger.warning(

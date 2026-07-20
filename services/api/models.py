@@ -387,6 +387,13 @@ class Puzzle(Base):
     # (the multi-PV equivalence set). Nullable for pre-existing rows; solvers
     # should fall back to best_move_uci when absent.
     accept_moves_uci: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # The full solution line (principal variation) as space-separated UCI moves,
+    # starting with the solution move (== best_move_uci). Persisted so the puzzle
+    # trains the whole forcing combination move-by-move, not just move 1. NULL for
+    # legacy rows generated before full-PV persistence — those train as a single
+    # move exactly as before. Bounded length (see generator PUZZLE_PV_MAX_PLIES);
+    # stops at mate/terminal.
+    solution_pv: Mapped[str | None] = mapped_column(Text, nullable=True)
     eval_before: Mapped[float] = mapped_column(Float, nullable=False)
     eval_after: Mapped[float] = mapped_column(Float, nullable=False)
     swing: Mapped[float] = mapped_column(Float, nullable=False)
