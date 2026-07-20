@@ -58,6 +58,13 @@ COPY scripts/ ./scripts/
 # Stockfish path (apt installs to /usr/games/stockfish)
 ENV STOCKFISH_PATH=/usr/games/stockfish
 
+# Run the API as an unprivileged user. Keep /app owned by that user for any
+# runtime cache/temp files while preserving root-owned system dependencies.
+RUN addgroup --system knightmind \
+    && adduser --system --ingroup knightmind --home /app --no-create-home knightmind \
+    && chown -R knightmind:knightmind /app
+USER knightmind
+
 # Expose API port
 EXPOSE 8000
 
