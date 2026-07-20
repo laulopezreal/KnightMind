@@ -201,9 +201,24 @@ export default function RatingInsights() {
         );
     }
 
-    const hasSnapshots = data?.rating.end !== null;
+    // Base "has snapshots" on the ACTUAL recorded snapshot history, not on the windowed
+    // explain payload. A window with no in/pre-window anchor (or no games) returns
+    // rating.end === null even when the user has snapshots on file — deriving from
+    // rating.end mislabels that as a brand-new user and shows first-snapshot onboarding.
+    const hasSnapshots = history.length > 0;
     const hasGames = (data?.stats.games || 0) > 0;
-    const isState0 = data && !hasGames;
+    // Whether THIS window has both anchors needed to show a net rating change. This is
+    // a property of the explain payload, distinct from whether snapshots exist at all.
+    const hasWindowRating = data?.rating.end != null;
+    // First-snapshot onboarding only when there is genuinely nothing for this control:
+    // no recorded snapshots AND no games in the window.
+    const isState0 = data && !hasSnapshots && !hasGames;
+    // Snapshots exist but this window has no games to explain a rating change. Show the
+    // recorded history + an honest note instead of the first-snapshot onboarding.
+    const thinWindow = data != null && hasSnapshots && !hasGames;
+    // The server flagged the in-window sample as too small to draw conclusions from,
+    // even though there are some games. Surface an honest note alongside the drivers.
+    const insufficientSample = data?.insufficient_data === true && hasGames;
 
     const N = data?.stats.games ?? 0;
     // Prefer the server's canonical confidence (computed from rated games with a
@@ -395,6 +410,25 @@ export default function RatingInsights() {
                         </div>
                     )}
 
+                    {/* THIN WINDOW: snapshots exist, but this window has no games (or an
+                        insufficient sample) to explain a rating change. Show the recorded
+                        history + an honest note — never the first-snapshot onboarding. */}
+                    {thinWindow && (
+                        <div className="space-y-6">
+                            {chartData.length >= 2 && (
+                                <RatingChart chartData={chartData} color={chartTrendColor} />
+                            )}
+                            <div className="max-w-xl bg-primary/5 border border-primary/10 p-6 rounded-sm">
+                                <h3 className="font-serif text-lg text-primary mb-1">Not enough games in this window</h3>
+                                <p className="text-sm text-primary/70 font-sans leading-relaxed">
+                                    You have recorded snapshots for {timeControlLabel}, but there aren’t enough
+                                    {' '}{timeControlLabel} games in this window to explain your rating change.
+                                    Widen the window or play a few games, then check back.
+                                </p>
+                            </div>
+                        </div>
+                    )}
+
                     {/* STATE 1 & 2: Games exist */}
                     {hasGames && (
                         <>
@@ -411,6 +445,11 @@ export default function RatingInsights() {
                                         Ref: {data.rating.reference_rating}{data.rating.reference_is_approx ? ' (est.)' : ''}
                                     </span>
                                 )}
+                                {insufficientSample && (
+                                    <span className="text-[10px] font-sans text-status-learning">
+                                        Small sample — not enough games in this window to explain the rating change.
+                                    </span>
+                                )}
                                 {data.stats.missing_opponent_rating_games > 0 && (
                                     <span className="text-[10px] font-sans text-status-learning">
                                         {data.stats.missing_opponent_rating_games} game{data.stats.missing_opponent_rating_games > 1 ? 's' : ''} excluded (missing opponent rating)
@@ -420,57 +459,23 @@ export default function RatingInsights() {
 
                             {/* Rating Trend Chart */}
                             {chartData.length >= 2 && (
-                                <section className="p-6 bg-primary/5 rounded-sm border border-primary/10">
-                                    <h2 className="text-sm font-sans uppercase tracking-widest text-primary/70 mb-4">Rating Over Time</h2>
-                                    <ResponsiveContainer width="100%" height={220}>
-                                        <LineChart data={chartData}>
-                                            <XAxis dataKey="label" tick={{ fontSize: 11 }} stroke="currentColor" strokeOpacity={0.2} />
-                                            <YAxis domain={['dataMin - 20', 'dataMax + 20']} tick={{ fontSize: 11 }} stroke="currentColor" strokeOpacity={0.2} width={45} />
-                                            <Tooltip
-                                                contentStyle={{ fontSize: 12, borderRadius: 4, border: '1px solid rgba(0,0,0,0.1)' }}
-                                                labelStyle={{ fontWeight: 600 }}
-                                            />
-                                            <Line
-                                                type="monotone"
-                                                dataKey="rating"
-                                                stroke={chartTrendColor}
-                                                strokeWidth={2}
-                                                dot={false}
-                                                activeDot={{ r: 4 }}
-                                            />
-                                            <ReferenceDot
-                                                x={chartData[0].label}
-                                                y={chartData[0].rating}
-                                                r={4}
-                                                fill="currentColor"
-                                                fillOpacity={0.4}
-                                            />
-                                            <ReferenceDot
-                                                x={chartData[chartData.length - 1].label}
-                                                y={chartData[chartData.length - 1].rating}
-                                                r={4}
-                                                fill="currentColor"
-                                                fillOpacity={0.8}
-                                            />
-                                        </LineChart>
-                                    </ResponsiveContainer>
-                                </section>
+                                <RatingChart chartData={chartData} color={chartTrendColor} />
                             )}
 
                             {/* Summary Cards */}
                             <section className="grid grid-cols-1 md:grid-cols-4 gap-6">
                                 <Card
                                     label="Net Change"
-                                    value={hasSnapshots && data.rating.net_change !== null
+                                    value={hasWindowRating && data.rating.net_change !== null
                                         ? (data.rating.net_change > 0 ? `+${data.rating.net_change}` : `${data.rating.net_change}`)
                                         : "—"}
                                     sub={
-                                        hasSnapshots && data.rating.start !== null && data.rating.end !== null
+                                        hasWindowRating && data.rating.start !== null && data.rating.end !== null
                                             ? `${data.rating.start} → ${data.rating.end}`
                                             : windowLabel
                                     }
-                                    highlight={hasSnapshots && data.rating.net_change !== null && data.rating.net_change !== 0}
-                                    positive={hasSnapshots && data.rating.net_change !== null && data.rating.net_change > 0}
+                                    highlight={hasWindowRating && data.rating.net_change !== null && data.rating.net_change !== 0}
+                                    positive={hasWindowRating && data.rating.net_change !== null && data.rating.net_change > 0}
                                     extra={!hasSnapshots ? "Record a snapshot to track rating change." : undefined}
                                 />
                                 <Card
@@ -574,6 +579,44 @@ export default function RatingInsights() {
         </div>
     );
 }
+
+const RatingChart = ({ chartData, color }: { chartData: { label: string; rating: number }[], color: string }) => (
+    <section className="p-6 bg-primary/5 rounded-sm border border-primary/10">
+        <h2 className="text-sm font-sans uppercase tracking-widest text-primary/70 mb-4">Rating Over Time</h2>
+        <ResponsiveContainer width="100%" height={220}>
+            <LineChart data={chartData}>
+                <XAxis dataKey="label" tick={{ fontSize: 11 }} stroke="currentColor" strokeOpacity={0.2} />
+                <YAxis domain={['dataMin - 20', 'dataMax + 20']} tick={{ fontSize: 11 }} stroke="currentColor" strokeOpacity={0.2} width={45} />
+                <Tooltip
+                    contentStyle={{ fontSize: 12, borderRadius: 4, border: '1px solid rgba(0,0,0,0.1)' }}
+                    labelStyle={{ fontWeight: 600 }}
+                />
+                <Line
+                    type="monotone"
+                    dataKey="rating"
+                    stroke={color}
+                    strokeWidth={2}
+                    dot={false}
+                    activeDot={{ r: 4 }}
+                />
+                <ReferenceDot
+                    x={chartData[0].label}
+                    y={chartData[0].rating}
+                    r={4}
+                    fill="currentColor"
+                    fillOpacity={0.4}
+                />
+                <ReferenceDot
+                    x={chartData[chartData.length - 1].label}
+                    y={chartData[chartData.length - 1].rating}
+                    r={4}
+                    fill="currentColor"
+                    fillOpacity={0.8}
+                />
+            </LineChart>
+        </ResponsiveContainer>
+    </section>
+);
 
 const Card = ({ label, value, sub, helper, highlight, positive, extra }: { label: string, value: string, sub?: string, helper?: string, highlight?: boolean, positive?: boolean, extra?: string }) => (
     <div className="p-6 bg-primary/5 rounded-sm border border-primary/10">
