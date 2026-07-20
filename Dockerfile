@@ -58,6 +58,14 @@ COPY scripts/ ./scripts/
 # Stockfish path (apt installs to /usr/games/stockfish)
 ENV STOCKFISH_PATH=/usr/games/stockfish
 
+# Least privilege: run as a non-root user instead of root, so a code-exec or
+# path-traversal bug (or a compromised Stockfish subprocess) has a limited
+# blast radius inside the container. Stockfish at /usr/games/stockfish is
+# world-executable by default; /app is chowned so the app can read its source.
+RUN useradd --system --uid 10001 --no-create-home appuser \
+    && chown -R appuser:appuser /app
+USER appuser
+
 # Expose API port
 EXPOSE 8000
 
