@@ -393,8 +393,14 @@ async def import_chesscom_games(
                     skipped += 1
             db.commit()
 
+        # Incremental sync: fetch only monthly archives that could contain new
+        # games. Derive the cutoff from the newest stored game's end time (not
+        # the last-sync timestamp) so an interrupted prior sync resumes safely.
+        # First sync (no stored games) → since=None → full history.
+        since = await asyncio.to_thread(game_repository.get_latest_game_time, username)
+
         batch: list[ChessGame] = []
-        async for game in import_all_games(username):
+        async for game in import_all_games(username, since=since):
             count += 1
             batch.append(game)
             if len(batch) >= IMPORT_COMMIT_BATCH_SIZE:

@@ -151,7 +151,7 @@ def test_get_openings_missing_username():
 def test_get_openings_with_games(mock_import_games, client_with_db):
     """Test /openings endpoint with imported games."""
 
-    async def mock_generator(username):
+    async def mock_generator(username, since=None):
         from services.ingest import ChessGame
 
         for game_data in MOCK_GAMES:
@@ -422,7 +422,7 @@ MOCK_GAMES = [
 def test_import_chesscom_success(mock_import_games, client_with_db):
     """Test successful import of games."""
 
-    async def mock_generator(username):
+    async def mock_generator(username, since=None):
         from services.ingest import ChessGame
 
         for game_data in MOCK_GAMES:
@@ -454,7 +454,7 @@ def test_import_chesscom_success(mock_import_games, client_with_db):
 def test_import_chesscom_skips_malformed_game(mock_import_games, client_with_db):
     """One empty-url game is skipped; the good ones still import (no 500)."""
 
-    async def mock_generator(username):
+    async def mock_generator(username, since=None):
         from services.ingest import ChessGame
 
         # A malformed game with an empty url between two valid ones.
@@ -487,7 +487,7 @@ def test_import_chesscom_skips_malformed_game(mock_import_games, client_with_db)
 def test_import_status_after_import(mock_import_games, client_with_db):
     """Test import status before and after an import."""
 
-    async def mock_generator(username):
+    async def mock_generator(username, since=None):
         from services.ingest import ChessGame
 
         for game_data in MOCK_GAMES:
@@ -524,7 +524,7 @@ def test_import_status_after_import(mock_import_games, client_with_db):
 def test_import_chesscom_deduplication(mock_import_games, client_with_db):
     """Test that duplicate games are not re-imported."""
 
-    async def mock_generator(username):
+    async def mock_generator(username, since=None):
         from services.ingest import ChessGame
 
         for game_data in MOCK_GAMES:
@@ -566,7 +566,7 @@ def test_import_chesscom_batches_commits(mock_import_games, client_with_db, db_s
 
     total_games = IMPORT_COMMIT_BATCH_SIZE + 50
 
-    async def mock_generator(username):
+    async def mock_generator(username, since=None):
         for i in range(total_games):
             yield ChessGame(
                 url=f"https://www.chess.com/game/live/{i}",
@@ -593,6 +593,77 @@ def test_import_chesscom_batches_commits(mock_import_games, client_with_db, db_s
 
     # Two game batches (200 + 50) plus the import-summary write.
     assert mock_commit.call_count == 3
+
+
+def _chesscom_game(url: str, end_time: int) -> dict:
+    """Raw Chess.com archive game payload (nested white/black), as the API returns."""
+    return {
+        "url": url,
+        "pgn": '[Event "Test"]\n\n1. e4 e5 1/2-1/2',
+        "time_control": "600",
+        "end_time": end_time,
+        "rated": True,
+        "white": {"username": "testuser", "result": "win"},
+        "black": {"username": "opponent", "result": "lose"},
+    }
+
+
+def test_import_chesscom_incremental_skips_older_months(client_with_db):
+    """End-to-end: a second sync skips fully-imported older monthly archives,
+    re-fetches only the latest month, and imports just the new games there.
+
+    Drives the real import_all_games with the Chess.com HTTP layer mocked, so
+    the incremental archive-selection logic is actually exercised.
+    """
+    from services.ingest import chesscom
+
+    base = "https://api.chess.com/pub/player/testuser/games"
+    archives = [f"{base}/2023/12", f"{base}/2024/01"]
+
+    def ts(y, m, d):
+        return int(datetime(y, m, d, tzinfo=timezone.utc).timestamp())
+
+    # State the mocked archives serve, mutated between the two syncs.
+    games_by_archive = {
+        archives[0]: [_chesscom_game("g-2023-12-a", ts(2023, 12, 10))],
+        archives[1]: [_chesscom_game("g-2024-01-a", ts(2024, 1, 5))],
+    }
+    fetched: list[str] = []
+
+    async def fake_archives(username):
+        return list(archives)
+
+    async def fake_fetch(url):
+        fetched.append(url)
+        return list(games_by_archive.get(url, []))
+
+    with (
+        patch.object(chesscom, "get_player_archives", side_effect=fake_archives),
+        patch.object(chesscom, "fetch_games_from_archive", side_effect=fake_fetch),
+    ):
+        # First sync: no stored games → full history, both months fetched.
+        r1 = client_with_db.post("/import/chesscom?username=testuser")
+        assert r1.status_code == 200
+        assert r1.json()["new_games"] == 2
+        assert fetched == archives
+
+        # A new game lands in the current (latest) month between syncs.
+        games_by_archive[archives[1]].append(
+            _chesscom_game("g-2024-01-b", ts(2024, 1, 20))
+        )
+        fetched.clear()
+
+        # Second sync: cutoff derived from newest stored end_time (2024/01).
+        r2 = client_with_db.post("/import/chesscom?username=testuser")
+        assert r2.status_code == 200
+        data = r2.json()
+
+    # Only the latest month was re-fetched; the older month was skipped.
+    assert fetched == [archives[1]]
+    # That month had one already-stored game and one new one.
+    assert data["games_count"] == 2
+    assert data["new_games"] == 1
+    assert data["skipped_duplicates"] == 1
 
 
 @patch("services.api.main.import_all_games")
@@ -638,7 +709,7 @@ def test_import_chesscom_network_error(mock_import_games, client_with_db):
 def test_import_chesscom_no_games(mock_import_games, client_with_db):
     """Test handling user with no games."""
 
-    async def mock_generator(username):
+    async def mock_generator(username, since=None):
         if False:
             yield  # Empty generator
 
