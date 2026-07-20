@@ -157,11 +157,18 @@ class OpeningTreeBuilder:
         # Update root stats
         current_tree_node.stats.add_result(result)
 
+        # Maintain a single board and advance it incrementally. Calling
+        # ``node.board()`` inside the loop replays every move from the start on
+        # each call, making the walk O(ply^2) per game; pushing moves onto one
+        # board keeps it linear. SAN is computed on the position *before* the
+        # move (identical to the previous ``node.board().san(move)``).
+        board = game.board()
+
         while node.variations and ply < self.max_ply:
             next_node = node.variation(0)  # Main line
             move = next_node.move
-            board = node.board()
             move_san = board.san(move)
+            board.push(move)
 
             ply += 1
 

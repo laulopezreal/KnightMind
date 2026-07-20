@@ -270,3 +270,249 @@ class TestBuildOpeningTree:
         tree = build_opening_tree(pgns, "testplayer", "both", max_ply=6)
 
         assert tree["games_count"] == 2  # Only 2 valid games
+
+
+# Golden serialized tree for all five fixtures at max_ply=6. This locks the
+# EXACT output structure (nodes, ordering, move_san, ply, counts, win_rate,
+# children) so any change to how the tree is walked/built — e.g. the O(ply^2)
+# -> O(ply) board-walk refactor — is provably behavior-preserving.
+GOLDEN_TREE_ALL_FIXTURES = {
+    "move_san": "Start",
+    "ply": 0,
+    "games_count": 5,
+    "wins": 2,
+    "draws": 1,
+    "losses": 2,
+    "win_rate": 50.0,
+    "children": [
+        {
+            "move_san": "e4",
+            "ply": 1,
+            "games_count": 3,
+            "wins": 1,
+            "draws": 1,
+            "losses": 1,
+            "win_rate": 50.0,
+            "children": [
+                {
+                    "move_san": "c5",
+                    "ply": 2,
+                    "games_count": 2,
+                    "wins": 1,
+                    "draws": 0,
+                    "losses": 1,
+                    "win_rate": 50.0,
+                    "children": [
+                        {
+                            "move_san": "Nf3",
+                            "ply": 3,
+                            "games_count": 2,
+                            "wins": 1,
+                            "draws": 0,
+                            "losses": 1,
+                            "win_rate": 50.0,
+                            "children": [
+                                {
+                                    "move_san": "d6",
+                                    "ply": 4,
+                                    "games_count": 2,
+                                    "wins": 1,
+                                    "draws": 0,
+                                    "losses": 1,
+                                    "win_rate": 50.0,
+                                    "children": [
+                                        {
+                                            "move_san": "d4",
+                                            "ply": 5,
+                                            "games_count": 2,
+                                            "wins": 1,
+                                            "draws": 0,
+                                            "losses": 1,
+                                            "win_rate": 50.0,
+                                            "children": [
+                                                {
+                                                    "move_san": "cxd4",
+                                                    "ply": 6,
+                                                    "games_count": 2,
+                                                    "wins": 1,
+                                                    "draws": 0,
+                                                    "losses": 1,
+                                                    "win_rate": 50.0,
+                                                }
+                                            ],
+                                        }
+                                    ],
+                                }
+                            ],
+                        }
+                    ],
+                },
+                {
+                    "move_san": "e6",
+                    "ply": 2,
+                    "games_count": 1,
+                    "wins": 0,
+                    "draws": 1,
+                    "losses": 0,
+                    "win_rate": 50.0,
+                    "children": [
+                        {
+                            "move_san": "d4",
+                            "ply": 3,
+                            "games_count": 1,
+                            "wins": 0,
+                            "draws": 1,
+                            "losses": 0,
+                            "win_rate": 50.0,
+                            "children": [
+                                {
+                                    "move_san": "d5",
+                                    "ply": 4,
+                                    "games_count": 1,
+                                    "wins": 0,
+                                    "draws": 1,
+                                    "losses": 0,
+                                    "win_rate": 50.0,
+                                    "children": [
+                                        {
+                                            "move_san": "Nc3",
+                                            "ply": 5,
+                                            "games_count": 1,
+                                            "wins": 0,
+                                            "draws": 1,
+                                            "losses": 0,
+                                            "win_rate": 50.0,
+                                            "children": [
+                                                {
+                                                    "move_san": "Bb4",
+                                                    "ply": 6,
+                                                    "games_count": 1,
+                                                    "wins": 0,
+                                                    "draws": 1,
+                                                    "losses": 0,
+                                                    "win_rate": 50.0,
+                                                }
+                                            ],
+                                        }
+                                    ],
+                                }
+                            ],
+                        }
+                    ],
+                },
+            ],
+        },
+        {
+            "move_san": "d4",
+            "ply": 1,
+            "games_count": 2,
+            "wins": 1,
+            "draws": 0,
+            "losses": 1,
+            "win_rate": 50.0,
+            "children": [
+                {
+                    "move_san": "Nf6",
+                    "ply": 2,
+                    "games_count": 2,
+                    "wins": 1,
+                    "draws": 0,
+                    "losses": 1,
+                    "win_rate": 50.0,
+                    "children": [
+                        {
+                            "move_san": "c4",
+                            "ply": 3,
+                            "games_count": 2,
+                            "wins": 1,
+                            "draws": 0,
+                            "losses": 1,
+                            "win_rate": 50.0,
+                            "children": [
+                                {
+                                    "move_san": "e6",
+                                    "ply": 4,
+                                    "games_count": 1,
+                                    "wins": 1,
+                                    "draws": 0,
+                                    "losses": 0,
+                                    "win_rate": 100.0,
+                                    "children": [
+                                        {
+                                            "move_san": "Nc3",
+                                            "ply": 5,
+                                            "games_count": 1,
+                                            "wins": 1,
+                                            "draws": 0,
+                                            "losses": 0,
+                                            "win_rate": 100.0,
+                                            "children": [
+                                                {
+                                                    "move_san": "Bb4",
+                                                    "ply": 6,
+                                                    "games_count": 1,
+                                                    "wins": 1,
+                                                    "draws": 0,
+                                                    "losses": 0,
+                                                    "win_rate": 100.0,
+                                                }
+                                            ],
+                                        }
+                                    ],
+                                },
+                                {
+                                    "move_san": "g6",
+                                    "ply": 4,
+                                    "games_count": 1,
+                                    "wins": 0,
+                                    "draws": 0,
+                                    "losses": 1,
+                                    "win_rate": 0.0,
+                                    "children": [
+                                        {
+                                            "move_san": "Nc3",
+                                            "ply": 5,
+                                            "games_count": 1,
+                                            "wins": 0,
+                                            "draws": 0,
+                                            "losses": 1,
+                                            "win_rate": 0.0,
+                                            "children": [
+                                                {
+                                                    "move_san": "Bg7",
+                                                    "ply": 6,
+                                                    "games_count": 1,
+                                                    "wins": 0,
+                                                    "draws": 0,
+                                                    "losses": 1,
+                                                    "win_rate": 0.0,
+                                                }
+                                            ],
+                                        }
+                                    ],
+                                },
+                            ],
+                        }
+                    ],
+                }
+            ],
+        },
+    ],
+}
+
+
+class TestGoldenTreeStructure:
+    """Locks the exact serialized tree so refactors stay behavior-preserving."""
+
+    def test_full_tree_matches_golden(self):
+        pgns = [
+            PGN_SICILIAN_WIN,
+            PGN_SICILIAN_LOSS,
+            PGN_FRENCH_DRAW,
+            PGN_AS_BLACK_WIN,
+            PGN_AS_BLACK_LOSS,
+        ]
+
+        tree = build_opening_tree(pgns, "testplayer", "both", max_ply=6)
+
+        assert tree == GOLDEN_TREE_ALL_FIXTURES
