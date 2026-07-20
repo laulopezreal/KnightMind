@@ -380,6 +380,13 @@ class Puzzle(Base):
     eval_before: Mapped[float] = mapped_column(Float, nullable=False)
     eval_after: Mapped[float] = mapped_column(Float, nullable=False)
     swing: Mapped[float] = mapped_column(Float, nullable=False)
+    # Search depth at which the mistake+solution were CONFIRMED stable (the
+    # generator's deeper confirmation pass). NULL for pre-confirmation rows, so
+    # a puzzle's provenance is auditable: a solver/analyst can tell a puzzle
+    # vetted at depth 18 from a legacy single-shallow-pass one. eval_before /
+    # eval_after / swing / accept_moves_uci on a confirmed row reflect this
+    # depth, not the shallow scan that first flagged the candidate.
+    confirmed_depth: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(timezone.utc)
     )
