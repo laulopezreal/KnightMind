@@ -305,3 +305,75 @@ def test_migration_applied_heartbeat_column_postgres():
     pg_engine = create_engine(os.environ["KNIGHTMIND_TEST_POSTGRES_URL"])
     cols = {c["name"] for c in inspect(pg_engine).get_columns("jobs")}
     assert "heartbeat_at" in cols
+
+
+@pytest.mark.skipif(
+    not os.getenv("KNIGHTMIND_TEST_POSTGRES_URL"),
+    reason="requires a disposable Postgres (set KNIGHTMIND_TEST_POSTGRES_URL)",
+)
+def test_active_job_unique_under_concurrency_postgres():
+    """Integration (dim 19): two workers inserting a QUEUED job for the SAME
+    username over separate Postgres connections must yield exactly ONE active
+    job.
+
+    Real two-connection race on the partial unique index ``ix_jobs_active_username``
+    (``postgresql_where status IN ('queued','running')``): one INSERT commits,
+    the other raises IntegrityError — which the /puzzles/generate endpoint turns
+    into an "already in progress" replay (see test_generate_puzzles_idempotency).
+    SQLite serializes writers and can't truly race, so this is PG-gated.
+
+    Deterministic (no sleeps): a 2-party barrier crossed BEFORE either commits
+    guarantees both INSERTs overlap; the database then arbitrates.
+    """
+    import threading
+
+    from sqlalchemy import func, select
+    from sqlalchemy.exc import IntegrityError
+
+    pg_engine = create_engine(os.environ["KNIGHTMIND_TEST_POSTGRES_URL"])
+    PgSession = sessionmaker(bind=pg_engine)
+    Base.metadata.create_all(bind=pg_engine)
+
+    with PgSession() as s:
+        s.query(Job).delete()
+        s.commit()
+
+    barrier = threading.Barrier(2, timeout=30)
+    outcomes: dict[int, str] = {}
+
+    def insert(idx):
+        try:
+            with PgSession() as s:
+                s.add(
+                    Job(
+                        username="dim19-race",
+                        status=JobStatus.QUEUED,
+                        message="queued",
+                    )
+                )
+                # Both threads reach here (nothing flushed yet), then commit at
+                # once so the two INSERTs contend on the partial unique index.
+                try:
+                    barrier.wait()
+                except threading.BrokenBarrierError:
+                    pass
+                s.commit()
+                outcomes[idx] = "committed"
+        except IntegrityError:
+            outcomes[idx] = "rejected"
+
+    threads = [threading.Thread(target=insert, args=(i,)) for i in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    # Exactly one INSERT wins; the other is rejected by the partial unique index.
+    assert sorted(outcomes.values()) == ["committed", "rejected"]
+    with PgSession() as s:
+        active = s.scalar(
+            select(func.count())
+            .select_from(Job)
+            .where(Job.status.in_([JobStatus.QUEUED, JobStatus.RUNNING]))
+        )
+        assert active == 1
