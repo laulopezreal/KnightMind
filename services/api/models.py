@@ -218,10 +218,30 @@ class PuzzleReview(Base):
     reviewed_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(timezone.utc)
     )
+    # Authoritative outcome that drives scheduling/stats. Equals the
+    # server-verified result when an attempted move was verified; otherwise it
+    # falls back to the client-reported result (legacy / no-move flows).
     result: Mapped[PuzzleResult] = mapped_column(String)
     time_spent_ms: Mapped[int] = mapped_column(Integer, nullable=True)
     session_id: Mapped[str] = mapped_column(String, nullable=True, index=True)
     client_review_id: Mapped[str] = mapped_column(String, nullable=True)
+    # --- Training-integrity fields (audit gate 7) ---
+    # The move the user actually played, in UCI. NULL for legacy/no-move
+    # submissions (e.g. timeouts, "mark failed", revealed solutions).
+    attempted_move: Mapped[str | None] = mapped_column(String, nullable=True)
+    # The raw pass/fail the client claimed, preserved even when the server
+    # overrides it (e.g. client says "pass" but the move was wrong). NULL for
+    # pre-migration rows.
+    client_result: Mapped[str | None] = mapped_column(String, nullable=True)
+    # True only when the server independently verified the attempted move
+    # against the puzzle's accepted-solution set. Self-reported reviews stay
+    # False and MUST NOT be presented as verified skill.
+    verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # How the recorded result was determined:
+    #   "server_verified" — server checked the attempted move (verified True)
+    #   "client_reported" — trust the client's pass/fail (no move to verify)
+    # NULL for pre-migration rows.
+    source: Mapped[str | None] = mapped_column(String, nullable=True)
 
 
 class TrainingSession(Base):
