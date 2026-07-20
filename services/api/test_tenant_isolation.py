@@ -263,9 +263,12 @@ def test_owner_can_check_own_puzzle(iso):
     assert resp.json()["correct"] is True
 
 
-def test_owner_reveal_does_not_leak_via_due(iso):
+def test_owner_reveal_does_not_leak_via_due(iso, monkeypatch):
     """The scored /puzzles/due payload must not carry the solution even for the
-    owner — the answer is only available through the explicit reveal path."""
+    owner — the answer is only available through the explicit reveal path.
+
+    Asserts the strict anti-cheat mode (KNIGHTMIND_STRIP_PUZZLE_SOLUTIONS on)."""
+    monkeypatch.setenv("KNIGHTMIND_STRIP_PUZZLE_SOLUTIONS", "true")
     resp = iso["client"].get(
         "/puzzles/due?username=alice", headers=_auth(iso["token_a"])
     )
