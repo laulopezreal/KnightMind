@@ -212,7 +212,13 @@ class GenerationResult:
     analyzed_positions: int  # Total positions analyzed
     cache_hits: int = 0  # Number of cache hits
     cache_misses: int = 0  # Number of cache misses
-    failed_positions: int = 0  # Positions that raised during evaluation
+    failed_positions: int = 0  # Positions that raised a hard eval error
+    # Positions whose evaluation TIMED OUT (engine subprocess killed). Tracked
+    # separately from failed_positions because a timeout kills the shared batch
+    # engine and is recovered by recreating it, but it is still a failure to
+    # evaluate -- so it must feed PARTIAL/ALL_FAILED, never be silently dropped
+    # into a fake NO_MISTAKES on a wedged host where every eval times out.
+    timed_out: int = 0
     # --- Confirmation / stability metrics (audit gate 10) ---
     # A "candidate" is a position whose swing cleared the shallow threshold.
     # It becomes a puzzle only if the deeper confirmation pass upholds it.
@@ -576,6 +582,7 @@ def generate_puzzles(
             skipped = 0
             analyzed_positions = 0
             failed_positions = 0
+            timed_out = 0
             candidates_found = 0
             candidates_confirmed = 0
             discarded_unstable = 0
@@ -583,6 +590,14 @@ def generate_puzzles(
             cache_stats = {"hits": 0, "misses": 0}  # Track cache performance
 
             for game_meta in recent_games:
+                # A prior game's engine died mid-batch and could not be
+                # recreated. The inner move loop already broke out; end the whole
+                # run cleanly here rather than iterating the remaining games with
+                # a dead engine=None (which silently abandoned each game's plies
+                # and spawned throwaway engines on every subsequent position).
+                if engine is None:
+                    break
+
                 # Check for cancellation before processing each game
                 if cancellation_check and cancellation_check():
                     logger.info(f"Puzzle generation canceled for {username}")
@@ -659,6 +674,9 @@ def generate_puzzles(
                         # The shared batch engine is dead; recreate before
                         # continuing, else every remaining position runs against
                         # a corpse (each stalling until the timeout fires again).
+                        # Count the timeout so an all-timeout run reports
+                        # ALL_FAILED, never a fake NO_MISTAKES.
+                        timed_out += 1
                         engine = _recreate_batch_engine()
                         if engine is None:
                             break
@@ -695,7 +713,10 @@ def generate_puzzles(
                                 fen_after, engine=engine, cache_stats=cache_stats
                             ).eval
                     except StockfishEngineDeadError:
-                        # Board is already advanced; recreate and move on.
+                        # Board is already advanced; recreate and move on. Count
+                        # the timeout so a degraded/all-timeout run is surfaced
+                        # (PARTIAL/ALL_FAILED) rather than swallowed.
+                        timed_out += 1
                         engine = _recreate_batch_engine()
                         if engine is None:
                             break
@@ -746,7 +767,10 @@ def generate_puzzles(
                     except StockfishEngineDeadError:
                         # Confirmation eval killed the shared engine; recreate
                         # and move on (board already advanced). The candidate is
-                        # left unconfirmed rather than emitted unvetted.
+                        # left unconfirmed rather than emitted unvetted. Count the
+                        # timeout too, so a run whose confirmations all time out
+                        # is surfaced as degraded, not a clean NO_MISTAKES.
+                        timed_out += 1
                         engine = _recreate_batch_engine()
                         if engine is None:
                             break
@@ -830,13 +854,17 @@ def generate_puzzles(
                         skipped += 1
 
             # Derive a machine-readable outcome from the counters. Any
-            # evaluation failure is surfaced (ALL_FAILED / PARTIAL) so a
-            # degraded run is never silently reported as a clean NO_MISTAKES.
-            if analyzed_positions > 0 and failed_positions == analyzed_positions:
+            # evaluation failure -- a hard error OR a timeout that killed the
+            # engine -- is surfaced (ALL_FAILED / PARTIAL) so a degraded run is
+            # never silently reported as a clean NO_MISTAKES. Counting timeouts
+            # here is what stops a fully-wedged host (every eval times out) from
+            # masquerading as "no mistakes found".
+            total_failed = failed_positions + timed_out
+            if analyzed_positions > 0 and total_failed >= analyzed_positions:
                 status = GenerationStatus.ALL_FAILED
-            elif failed_positions > 0:
-                # Some positions failed (whether or not any puzzles were
-                # produced); the run is degraded, not a clean pass.
+            elif total_failed > 0:
+                # Some positions failed/timed out (whether or not any puzzles
+                # were produced); the run is degraded, not a clean pass.
                 status = GenerationStatus.PARTIAL
             elif generated > 0:
                 status = GenerationStatus.SUCCESS
@@ -850,6 +878,7 @@ def generate_puzzles(
                 cache_hits=cache_stats["hits"],
                 cache_misses=cache_stats["misses"],
                 failed_positions=failed_positions,
+                timed_out=timed_out,
                 candidates_found=candidates_found,
                 candidates_confirmed=candidates_confirmed,
                 discarded_unstable=discarded_unstable,

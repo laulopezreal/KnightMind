@@ -446,6 +446,92 @@ def test_partial_failure_is_not_reported_as_no_mistakes(
     assert result.status == GenerationStatus.PARTIAL.value  # not NO_MISTAKES
 
 
+@patch("services.api.puzzles.generator.get_ply_range")
+@patch("services.api.puzzles.generator.create_engine")
+def test_all_evals_timing_out_is_not_reported_as_no_mistakes(
+    mock_create_engine, mock_ply, temp_storage
+):
+    """REGRESSION: on a wedged host where every evaluation times out, the engine
+    is effectively broken -- the run must NOT masquerade as a clean NO_MISTAKES.
+
+    Before the fix the StockfishEngineDeadError (timeout) recovery path recreated
+    the engine and continued WITHOUT counting the failure, so an all-timeout run
+    produced failed_positions=0, generated=0, analyzed_positions=N -> NO_MISTAKES
+    (a broken engine reported as "no mistakes found"). Timeouts must now feed a
+    timed_out counter so the run reports ALL_FAILED (or PARTIAL), never
+    NO_MISTAKES."""
+    db = temp_storage
+    # A fresh engine is always available on recreate, so the batch keeps going
+    # position-by-position -- and every single eval times out.
+    mock_create_engine.return_value = Mock()
+    mock_ply.return_value = (0, 100)
+    pgn = """[Event "Test Game"]
+[White "testuser"]
+[Black "opponent"]
+
+1. e4 e5 2. Nf3 Nc6 3. Bc4 Bc5 4. c3 Nf6 5. d3 d6"""
+    _store_game(db, pgn)
+
+    with patch(
+        "services.api.puzzles.generator.get_or_compute_eval",
+        side_effect=StockfishEngineDeadError("Engine evaluation timed out"),
+    ):
+        result = generate_puzzles("testuser", max_games=1, max_puzzles=10)
+
+    # Positions were analyzed, but every one timed out -> broken engine.
+    assert result.analyzed_positions > 0
+    assert result.generated == 0
+    assert result.timed_out == result.analyzed_positions
+    assert result.failed_positions == 0
+    # The whole point: this is NOT a clean no-mistakes run.
+    assert result.status != GenerationStatus.NO_MISTAKES.value
+    assert result.status == GenerationStatus.ALL_FAILED.value
+
+
+@patch("services.api.puzzles.generator.get_ply_range")
+@patch("services.api.puzzles.generator.create_engine")
+def test_unrecoverable_engine_death_ends_run_without_spawning_more_engines(
+    mock_create_engine, mock_ply, temp_storage
+):
+    """REGRESSION: when the shared engine dies and cannot be recreated, the run
+    must end cleanly. Before the fix the inner move loop broke, but the OUTER
+    per-game loop kept iterating with engine=None, silently abandoning the rest
+    of the current game and spawning throwaway engines for every remaining game.
+    Now a dead, un-recreatable engine ends the whole run at the top of the outer
+    loop."""
+    db = temp_storage
+    mock_ply.return_value = (0, 100)
+    # First create() succeeds; every recreate() thereafter fails (returns None).
+    creates = {"n": 0}
+
+    def create_side_effect():
+        creates["n"] += 1
+        return Mock() if creates["n"] == 1 else None
+
+    mock_create_engine.side_effect = create_side_effect
+
+    pgn = """[Event "Test Game"]
+[White "testuser"]
+[Black "opponent"]
+
+1. e4 e5 2. Nf3 Nc6 3. Bc4 Bc5 4. c3 Nf6 5. d3 d6"""
+    # Two distinct games so the outer loop would iterate again if not stopped.
+    _store_game(db, pgn, url="https://chess.com/game/one")
+    _store_game(db, pgn, url="https://chess.com/game/two")
+
+    with patch(
+        "services.api.puzzles.generator.get_or_compute_eval",
+        side_effect=StockfishEngineDeadError("Engine evaluation timed out"),
+    ):
+        result = generate_puzzles("testuser", max_games=2, max_puzzles=10)
+
+    # Exactly one recreate attempt: initial create + one failed recreate. The
+    # second game was never touched (no third create). Pre-fix this was >= 3.
+    assert creates["n"] == 2
+    assert result.generated == 0
+    assert result.status == GenerationStatus.ALL_FAILED.value
+
+
 @patch("services.api.puzzles.generator.get_top_moves")
 @patch("services.api.puzzles.generator.get_ply_range")
 @patch("services.api.puzzles.generator.create_engine")

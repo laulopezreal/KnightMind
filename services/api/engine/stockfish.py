@@ -97,10 +97,24 @@ def get_stockfish_path() -> str:
 
 
 def get_analysis_params() -> dict:
-    """Get analysis parameters from environment in UCI format."""
-    # This should return ENGINE OPTIONS like Hash, Threads, etc.
-    # "Depth" is a search limit, not an option.
-    return {}
+    """Engine OPTIONS (UCI ``setoption``) derived from the environment.
+
+    Returns the result-affecting Stockfish options -- ``Threads``, ``Hash``,
+    ``MultiPV`` -- read from ``STOCKFISH_THREADS`` / ``STOCKFISH_HASH_MB`` /
+    ``STOCKFISH_MULTIPV`` (with package defaults). ``Depth`` is deliberately
+    absent: it is a per-search limit set via ``set_depth``, not an engine option.
+
+    These are the same knobs folded into the eval cache key. They used to be
+    returned as ``{}`` and never applied, so the key fragmented on config that
+    had no effect on the eval (dead knobs). They are now applied ONCE at engine
+    creation (:func:`create_engine`), so the key matches the engine that actually
+    produced each cached entry (audit option (a): apply, don't drop).
+    """
+    return {
+        "Threads": get_engine_threads(),
+        "Hash": get_engine_hash_mb(),
+        "MultiPV": get_engine_multipv(),
+    }
 
 
 def get_search_depth() -> int:
@@ -170,6 +184,18 @@ def create_engine() -> "StockfishEngine":
             ) from e
         raise StockfishError(f"Failed to initialize Stockfish: {e}") from e
 
+    # Apply result-affecting engine options ONCE, here, so every evaluation this
+    # engine runs actually reflects Threads/Hash/MultiPV -- the same values folded
+    # into the cache key. Applying at creation (not per-eval) avoids re-sending
+    # setoption on every position and keeps the option set stable for the engine's
+    # whole life.
+    params = get_analysis_params()
+    if params:
+        try:
+            engine.update_engine_parameters(params)
+        except Exception as e:
+            raise StockfishError(f"Failed to apply engine parameters: {e}") from e
+
     return engine
 
 
@@ -214,8 +240,21 @@ _EVAL_EXECUTOR = ThreadPoolExecutor(
 )
 
 
+# How long to wait for a hard-killed subprocess to actually exit before giving
+# up on reaping it. Short: kill() has already been sent, so the process should
+# die almost immediately; we only wait long enough to clear the process-table
+# entry (avoid a <defunct> zombie) without blocking teardown on a stuck kernel.
+_REAP_TIMEOUT_S = 5.0
+
+
 def _kill_engine_process(engine: Optional["StockfishEngine"]) -> None:
-    """Best-effort hard kill of the underlying Stockfish subprocess."""
+    """Best-effort hard kill *and reap* of the underlying Stockfish subprocess.
+
+    ``kill()`` only delivers the signal; without a following ``wait()`` the dead
+    child lingers as a ``<defunct>`` zombie holding a process-table slot (and its
+    file descriptors) until the parent exits. Batch generation kills and
+    recreates the engine repeatedly, so we must reap each corpse here.
+    """
     if engine is None:
         return
     proc = getattr(engine, "_stockfish", None)
@@ -224,6 +263,17 @@ def _kill_engine_process(engine: Optional["StockfishEngine"]) -> None:
             proc.kill()
         except Exception:
             logger.debug("Failed to kill Stockfish subprocess", exc_info=True)
+        # Reap the killed process so it does not become a zombie. Bounded wait:
+        # kill() was already sent, so this returns almost immediately.
+        wait = getattr(proc, "wait", None)
+        if callable(wait):
+            try:
+                wait(timeout=_REAP_TIMEOUT_S)
+            except Exception:
+                logger.debug(
+                    "Killed Stockfish subprocess did not reap in time",
+                    exc_info=True,
+                )
 
 
 def close_engine(engine: Optional["StockfishEngine"]) -> None:
@@ -353,10 +403,9 @@ def _evaluate_fen_core(
 
         engine.set_fen_position(fen)
 
-        # Get analysis parameters and configure engine
-        params = get_analysis_params()
-        if params:
-            engine.update_engine_parameters(params)
+        # Engine options (Threads/Hash/MultiPV) are applied once at
+        # create_engine(), not per-eval, so nothing to configure here beyond the
+        # per-search depth limit below.
 
         # Set search limits. A caller-supplied depth (e.g. a deeper
         # confirmation pass) overrides the process default.

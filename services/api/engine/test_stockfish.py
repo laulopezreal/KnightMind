@@ -174,31 +174,55 @@ class TestGetStockfishPath:
 
 
 class TestGetAnalysisParams:
-    """Test analysis parameter configuration."""
+    """Analysis parameters are the real engine OPTIONS (Threads/Hash/MultiPV).
 
-    def test_default_depth(self):
-        """Default is depth 12."""
+    Previously this returned ``{}``: the threads/hash/multipv env vars were
+    folded into the cache key but never applied to the engine, so they only
+    fragmented the cache (dead config knobs). Now they are populated from env
+    and applied at engine creation, so the key matches the engine that produced
+    the entry (audit option (a)).
+    """
+
+    def test_defaults_match_package_defaults(self):
+        """Defaults: 1 thread, 16 MB hash, single PV (the stockfish package
+        defaults) -- 'Depth' is a search limit, not an option, so it is absent."""
         with patch.dict(os.environ, {}, clear=True):
-            os.environ.pop("STOCKFISH_DEPTH", None)
-            os.environ.pop("STOCKFISH_MOVETIME_MS", None)
-            assert get_analysis_params() == {}
+            assert get_analysis_params() == {"Threads": 1, "Hash": 16, "MultiPV": 1}
 
-    def test_custom_depth(self):
-        """Custom depth from env var."""
-        with patch.dict(os.environ, {"STOCKFISH_DEPTH": "15"}):
-            assert get_analysis_params() == {}
-
-    def test_movetime_when_depth_not_set(self):
-        """Movetime from env var is used when depth is not set."""
-        with patch.dict(os.environ, {"STOCKFISH_MOVETIME_MS": "500"}, clear=True):
-            os.environ.pop("STOCKFISH_DEPTH", None)
-            assert get_analysis_params() == {}
-
-    def test_depth_has_precedence_over_movetime(self):
-        """Depth from env var has precedence over movetime."""
-        env_vars = {"STOCKFISH_DEPTH": "10", "STOCKFISH_MOVETIME_MS": "500"}
+    def test_reflects_env_overrides(self):
+        """Threads/Hash/MultiPV env vars flow through into the applied options."""
+        env_vars = {
+            "STOCKFISH_THREADS": "4",
+            "STOCKFISH_HASH_MB": "256",
+            "STOCKFISH_MULTIPV": "3",
+        }
         with patch.dict(os.environ, env_vars):
-            assert get_analysis_params() == {}
+            assert get_analysis_params() == {"Threads": 4, "Hash": 256, "MultiPV": 3}
+
+    def test_depth_is_not_an_option(self):
+        """STOCKFISH_DEPTH is a search limit and must never leak into options."""
+        with patch.dict(os.environ, {"STOCKFISH_DEPTH": "15"}, clear=True):
+            assert "Depth" not in get_analysis_params()
+
+    def test_params_are_applied_at_engine_creation(self):
+        """create_engine applies the options to the live engine ONCE, so the
+        eval actually reflects them (they are no longer dead knobs)."""
+        env_vars = {
+            "STOCKFISH_THREADS": "4",
+            "STOCKFISH_HASH_MB": "256",
+            "STOCKFISH_MULTIPV": "3",
+        }
+        engine = MagicMock()
+        with (
+            patch.object(sf_module, "StockfishEngine", return_value=engine),
+            patch.dict(os.environ, env_vars),
+        ):
+            result = sf_module.create_engine()
+
+        assert result is engine
+        engine.update_engine_parameters.assert_called_once_with(
+            {"Threads": 4, "Hash": 256, "MultiPV": 3}
+        )
 
 
 class TestEvaluateFen:
@@ -325,6 +349,18 @@ class TestEngineLifecycle:
         engine = MagicMock(spec=["_stockfish"])  # no send_quit_command attr
         close_engine(engine)
         engine._stockfish.kill.assert_called_once()
+
+    def test_kill_reaps_subprocess(self):
+        """A hard-killed subprocess must be reaped (``.wait()``) so it does not
+        linger as a ``<defunct>`` zombie holding file descriptors. Before the
+        fix _kill_engine_process called .kill() with no .wait()."""
+        from .stockfish import _kill_engine_process
+
+        engine = MagicMock(spec=["_stockfish"])
+        _kill_engine_process(engine)
+        engine._stockfish.kill.assert_called_once()
+        # kill() only signals; wait() actually reaps the process table entry.
+        engine._stockfish.wait.assert_called_once()
 
     def test_close_engine_none_is_noop(self):
         """close_engine(None) is safe."""
