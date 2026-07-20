@@ -1524,7 +1524,16 @@ async def review_puzzle(
         from services.api.models import PuzzleResult as PR
         from services.api.models import TrainingSession
 
+        # Lock the session row for the duration of this transaction so the
+        # counter read-modify-write below is race-safe: concurrent reviews in the
+        # SAME session serialize on this lock instead of both reading the stale
+        # count and losing an increment (Postgres READ COMMITTED). SQLite has no
+        # row lock but serializes writers, so the plain SELECT is safe there.
+        # Locking the session BEFORE the puzzle-stats row (below) gives a single
+        # consistent lock order, so concurrent same-session reviews can't deadlock.
         stmt = select(TrainingSession).where(TrainingSession.id == request.session_id)
+        if db.get_bind().dialect.name == "postgresql":
+            stmt = stmt.with_for_update()
         session = db.scalars(stmt).first()
 
         if not session:

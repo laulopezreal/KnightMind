@@ -2,7 +2,10 @@
 Integration test for review endpoint with session tracking.
 """
 
+import os
+import threading
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 
 import pytest
@@ -11,6 +14,7 @@ from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+import services.api.main as main
 from services.api.db import Base, get_db
 from services.api.main import app
 from services.api.models import Game, PuzzleReview, PuzzleStats, TrainingSession
@@ -546,6 +550,44 @@ def test_equivalent_accepted_move_is_a_pass(client, test_db):
     assert review.verified is True
 
 
+def test_check_endpoint_accepts_equivalent_best_move(client, test_db):
+    """dim 11: POST /puzzles/{id}/check honors the accepted-solution set, not just
+    the single best_move_uci.
+
+    Confirms #195's accept_moves + #200/#203 grading end-to-end on the live
+    training-board path: an equivalent best move from the multi-PV set grades
+    ``correct`` while a legal-but-wrong or illegal move does not. The /review
+    path already proves this (test_equivalent_accepted_move_is_a_pass); this pins
+    the same equivalence at the server-authoritative /check endpoint the Train
+    board actually calls for live feedback.
+    """
+    puzzle_id = str(uuid.uuid4())
+    # best is d2d4; g1f3 is an accepted multi-PV equivalent.
+    _create_puzzle(
+        test_db,
+        puzzle_id,
+        "testuser",
+        "game-check-eq",
+        10,
+        accept_moves_uci="d2d4,g1f3",
+    )
+
+    def _check(move):
+        return client.post(
+            f"/puzzles/{puzzle_id}/check",
+            json={"username": "testuser", "attempted_move": move},
+        )
+
+    # Single best move -> correct.
+    assert _check("d2d4").json() == {"correct": True, "result": "pass"}
+    # Equivalent from the accept set (NOT the single best move) -> correct.
+    assert _check("g1f3").json() == {"correct": True, "result": "pass"}
+    # Legal but not in the accept set -> incorrect.
+    assert _check("e2e4").json() == {"correct": False, "result": "fail"}
+    # Illegal move -> incorrect.
+    assert _check("e2e5").json() == {"correct": False, "result": "fail"}
+
+
 def test_wrong_move_is_a_fail_even_when_client_claims_pass(client, test_db):
     """Reproduction + fix: a spoofed 'pass' with a wrong move is recorded FAIL.
 
@@ -647,3 +689,340 @@ def test_wrong_move_resets_session_streak(client, test_db):
     assert session.pass_count == 0
     assert session.fail_count == 1
     assert session.current_streak == 0
+
+
+# ─── Real multi-connection Postgres concurrency (audit dims 14 & 15) ─────────
+#
+# The tests above simulate the same-key race in a single SQLite session by
+# forcing the replay SELECT to miss (``_make_race_find``). SQLite serializes
+# writers and shares one connection, so it can't reproduce a *true* race. The
+# tests below run two requests on separate Postgres connections/threads and let
+# the database arbitrate, exercising the #194 IntegrityError-replay backstop and
+# the COALESCE(session_id, '') unique index under genuine contention.
+#
+# Determinism (no sleeps): a monkeypatched sync point makes the FIRST call from
+# each of the two racing threads block on a shared Barrier so both cross the
+# patched point together; later calls (the post-IntegrityError replay lookups)
+# pass straight through. The barrier is placed BEFORE either request commits, so
+# both are guaranteed to overlap without a fragile timing window.
+
+POSTGRES_URL = os.getenv("KNIGHTMIND_TEST_POSTGRES_URL")
+
+requires_postgres = pytest.mark.skipif(
+    not POSTGRES_URL,
+    reason="requires a disposable Postgres (set KNIGHTMIND_TEST_POSTGRES_URL)",
+)
+
+# Child-first delete order so a clean-up never trips a foreign key.
+_PG_CLEANUP_MODELS = (PuzzleReview, PuzzleStats, TrainingSession, PuzzleModel, Game)
+
+
+@contextmanager
+def _pg_review_harness():
+    """Yield a ``PgSession`` sessionmaker bound to a clean Postgres schema, with
+    the app's ``get_db`` overridden to hand each request its OWN per-connection
+    session (mirroring production's one-session-per-request).
+
+    A shared SQLite session (as the other fixtures use) would force every thread
+    onto one connection and defeat the point; here two threads genuinely race on
+    two connections.
+    """
+    engine = create_engine(POSTGRES_URL)
+    Base.metadata.create_all(engine)
+    PgSession = sessionmaker(bind=engine)
+    with PgSession() as s:
+        for model in _PG_CLEANUP_MODELS:
+            s.query(model).delete()
+        s.commit()
+
+    def override_get_db():
+        db = PgSession()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    app.dependency_overrides[get_db] = override_get_db
+    try:
+        yield PgSession
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+        engine.dispose()
+
+
+def _install_race_barrier(monkeypatch, attr):
+    """Patch ``services.api.main.<attr>`` so the FIRST invocation from each of two
+    racing threads blocks on a shared 2-party barrier, guaranteeing both threads
+    cross the patched point concurrently before either proceeds to commit.
+
+    Subsequent invocations (e.g. the endpoint's post-IntegrityError replay, which
+    re-calls ``_find_existing_review``) pass through untouched so the recovery
+    path is not deadlocked.
+    """
+    barrier = threading.Barrier(2, timeout=30)
+    real = getattr(main, attr)
+    lock = threading.Lock()
+    crossed = {"n": 0}
+
+    def wrapper(*args, **kwargs):
+        with lock:
+            first = crossed["n"] < 2
+            if first:
+                crossed["n"] += 1
+        if first:
+            try:
+                barrier.wait()
+            except threading.BrokenBarrierError:
+                pass
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(main, attr, wrapper)
+    return barrier
+
+
+def _race_review_posts(puzzle_id, body):
+    """Fire two concurrent POST /review with independent TestClients (independent
+    event loops) so the two async handlers truly overlap. Returns {idx: status}.
+    """
+    statuses: dict[int, int] = {}
+
+    def submit(idx):
+        resp = TestClient(app).post(f"/puzzles/{puzzle_id}/review", json=body)
+        statuses[idx] = resp.status_code
+
+    threads = [threading.Thread(target=submit, args=(i,)) for i in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    return statuses
+
+
+@requires_postgres
+def test_review_concurrent_same_key_one_row_postgres(monkeypatch):
+    """dim 14: two REAL concurrent same-``client_review_id`` submits over separate
+    Postgres connections record exactly ONE review, increment puzzle stats and
+    session counters exactly ONCE, and neither returns 500.
+
+    This is the true-race counterpart to the simulated
+    ``test_review_endpoint_concurrent_same_key_replays_with_session``: the loser's
+    duplicate INSERT is rejected by the unique index, and the endpoint's
+    IntegrityError -> replay backstop (#194) returns the winner's outcome.
+    """
+    with _pg_review_harness() as PgSession:
+        session_id = str(uuid.uuid4())
+        puzzle_id = str(uuid.uuid4())
+        with PgSession() as s:
+            _create_puzzle(
+                s, puzzle_id, "testuser", "pg-race-14", 10, accept_moves_uci="d2d4"
+            )
+            s.add(
+                TrainingSession(
+                    id=session_id,
+                    username="testuser",
+                    requested_n=5,
+                    pass_count=0,
+                    fail_count=0,
+                    total_time_ms=0,
+                )
+            )
+            s.commit()
+
+        _install_race_barrier(monkeypatch, "_find_existing_review")
+
+        body = {
+            "username": "testuser",
+            "result": "pass",
+            "time_spent_ms": 1000,
+            "session_id": session_id,
+            "attempted_move": "d2d4",
+            "client_review_id": "race-key-pg",
+        }
+        statuses = _race_review_posts(puzzle_id, body)
+
+        # Both graceful (no 500), whichever won the INSERT.
+        assert statuses == {0: 200, 1: 200}
+
+        with PgSession() as s:
+            assert s.scalar(select(func.count()).select_from(PuzzleReview)) == 1
+            stats = s.get(PuzzleStats, puzzle_id)
+            assert stats.attempts == 1
+            assert stats.pass_count == 1
+            assert stats.interval_days == 1  # scheduling advanced exactly once
+            sess = s.get(TrainingSession, session_id)
+            assert sess.pass_count == 1
+            assert sess.current_streak == 1
+            assert sess.total_time_ms == 1000  # counted once, not doubled
+
+
+@requires_postgres
+def test_review_concurrent_same_key_session_less_postgres(monkeypatch):
+    """dim 14: the SESSION-LESS same-key race must also dedupe to one row.
+
+    Guards the COALESCE(session_id, '') functional index: a plain multi-column
+    unique index treats each NULL session_id as distinct (both SQLite and
+    Postgres), so two concurrent no-session submits with the same
+    client_review_id would BOTH insert and double-count. Under a real
+    two-connection race exactly one row must survive.
+    """
+    with _pg_review_harness() as PgSession:
+        puzzle_id = str(uuid.uuid4())
+        with PgSession() as s:
+            _create_puzzle(
+                s, puzzle_id, "testuser", "pg-race-14b", 10, accept_moves_uci="d2d4"
+            )
+            s.commit()
+
+        _install_race_barrier(monkeypatch, "_find_existing_review")
+
+        body = {
+            "username": "testuser",
+            "result": "pass",
+            "time_spent_ms": 1000,
+            "attempted_move": "d2d4",
+            "client_review_id": "race-key-no-session",
+        }
+        statuses = _race_review_posts(puzzle_id, body)
+
+        assert statuses == {0: 200, 1: 200}
+        with PgSession() as s:
+            assert s.scalar(select(func.count()).select_from(PuzzleReview)) == 1
+            assert s.get(PuzzleStats, puzzle_id).attempts == 1
+
+
+@requires_postgres
+def test_review_same_session_atomic_no_partial_state_postgres(monkeypatch):
+    """dim 15: a losing concurrent submit commits ATOMICALLY or not at all — the
+    session/stat/review are one transaction boundary with no partial leak.
+
+    The losing request stages a session counter increment (``pass_count += 1``,
+    ``total_time_ms += ...``) and a review row BEFORE it flushes and trips the
+    unique index. The endpoint must roll ALL of that back (not just the review)
+    and replay the winner's outcome. We assert the session counters reflect a
+    single review — proof the loser's staged increments were discarded, not
+    half-committed.
+    """
+    with _pg_review_harness() as PgSession:
+        session_id = str(uuid.uuid4())
+        puzzle_id = str(uuid.uuid4())
+        with PgSession() as s:
+            _create_puzzle(
+                s, puzzle_id, "testuser", "pg-race-15", 10, accept_moves_uci="d2d4"
+            )
+            s.add(
+                TrainingSession(
+                    id=session_id,
+                    username="testuser",
+                    requested_n=5,
+                    pass_count=0,
+                    fail_count=0,
+                    total_time_ms=0,
+                )
+            )
+            s.commit()
+
+        _install_race_barrier(monkeypatch, "_find_existing_review")
+
+        body = {
+            "username": "testuser",
+            "result": "pass",
+            "time_spent_ms": 2500,
+            "session_id": session_id,
+            "attempted_move": "d2d4",
+            "client_review_id": "race-key-atomic",
+        }
+        statuses = _race_review_posts(puzzle_id, body)
+        assert statuses == {0: 200, 1: 200}
+
+        with PgSession() as s:
+            # Exactly one of every artefact — no orphan review, no orphan stats,
+            # counters incremented once. If the loser's session increment had
+            # leaked, pass_count/total_time_ms would show two.
+            assert s.scalar(select(func.count()).select_from(PuzzleReview)) == 1
+            assert s.scalar(select(func.count()).select_from(PuzzleStats)) == 1
+            sess = s.get(TrainingSession, session_id)
+            assert sess.pass_count == 1
+            assert sess.fail_count == 0
+            assert sess.current_streak == 1
+            assert sess.total_time_ms == 2500
+
+
+@requires_postgres
+def test_review_distinct_reviews_same_session_no_lost_increment_postgres(monkeypatch):
+    """dim 15: two concurrent reviews of DIFFERENT puzzles in the SAME session
+    must not lose a counter increment.
+
+    Both reviews are legitimate (distinct puzzles, distinct idempotency keys), so
+    the session must end with pass_count == 2 and total_time_ms == 2000.
+
+    Regression guard for a lost-update bug: session counters were a Python-side
+    read-modify-write (``session.pass_count += 1``) with no row lock, so under
+    Postgres READ COMMITTED both requests read the stale count and one increment
+    was silently lost (final pass_count == 1). The fix takes a
+    ``SELECT ... FOR UPDATE`` on the session row so concurrent same-session
+    reviews serialize. The two requests are released together at the entry
+    replay-SELECT; the session lock then forces the second to read the first's
+    committed count.
+    """
+    with _pg_review_harness() as PgSession:
+        session_id = str(uuid.uuid4())
+        puzzle_a = str(uuid.uuid4())
+        puzzle_b = str(uuid.uuid4())
+        with PgSession() as s:
+            _create_puzzle(
+                s, puzzle_a, "testuser", "pg-race-15b-a", 10, accept_moves_uci="d2d4"
+            )
+            _create_puzzle(
+                s, puzzle_b, "testuser", "pg-race-15b-b", 12, accept_moves_uci="d2d4"
+            )
+            s.add(
+                TrainingSession(
+                    id=session_id,
+                    username="testuser",
+                    requested_n=5,
+                    pass_count=0,
+                    fail_count=0,
+                    total_time_ms=0,
+                )
+            )
+            s.commit()
+
+        # Release both requests together at the entry replay-SELECT (before the
+        # session lock). Without the fix both would then read pass_count=0 and
+        # lose an increment; with the FOR UPDATE lock the second blocks until the
+        # first commits and reads the fresh count.
+        _install_race_barrier(monkeypatch, "_find_existing_review")
+
+        statuses: dict[int, int] = {}
+
+        def submit(idx, puzzle_id, key):
+            resp = TestClient(app).post(
+                f"/puzzles/{puzzle_id}/review",
+                json={
+                    "username": "testuser",
+                    "result": "pass",
+                    "time_spent_ms": 1000,
+                    "session_id": session_id,
+                    "attempted_move": "d2d4",
+                    "client_review_id": key,
+                },
+            )
+            statuses[idx] = resp.status_code
+
+        threads = [
+            threading.Thread(target=submit, args=(0, puzzle_a, "key-a")),
+            threading.Thread(target=submit, args=(1, puzzle_b, "key-b")),
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert statuses == {0: 200, 1: 200}
+        with PgSession() as s:
+            # Both distinct reviews are genuinely recorded ...
+            assert s.scalar(select(func.count()).select_from(PuzzleReview)) == 2
+            # ... but the aggregate session counters must reflect BOTH.
+            sess = s.get(TrainingSession, session_id)
+            assert sess.pass_count == 2
+            assert sess.total_time_ms == 2000
