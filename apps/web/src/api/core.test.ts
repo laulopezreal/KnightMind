@@ -1,5 +1,12 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { request, ApiError, API_BASE } from './core';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import {
+    request,
+    ApiError,
+    API_BASE,
+    setAuthToken,
+    getAuthToken,
+    setUnauthorizedHandler,
+} from './core';
 
 const mockFetch = vi.fn();
 vi.stubGlobal('fetch', mockFetch);
@@ -202,5 +209,85 @@ describe('request()', () => {
                 body: JSON.stringify({ key: 'value' }),
             }),
         );
+    });
+});
+
+describe('request() auth wiring', () => {
+    beforeEach(() => {
+        vi.resetAllMocks();
+    });
+
+    afterEach(() => {
+        // Reset module-level auth state so tests don't leak into each other.
+        setAuthToken(null);
+        setUnauthorizedHandler(null);
+    });
+
+    it('attaches Authorization: Bearer when a token is set', async () => {
+        setAuthToken('jwt-123');
+        mockFetch.mockReturnValue(jsonResponse({ ok: true }));
+
+        await request('/protected');
+
+        const [, init] = mockFetch.mock.calls[0];
+        // Headers is a Headers instance when a token is injected.
+        const headers = init.headers as Headers;
+        expect(headers.get('Authorization')).toBe('Bearer jwt-123');
+    });
+
+    it('merges the token with caller-provided headers', async () => {
+        setAuthToken('jwt-abc');
+        mockFetch.mockReturnValue(jsonResponse({ ok: true }));
+
+        await request('/protected', { headers: { 'Content-Type': 'application/json' } });
+
+        const [, init] = mockFetch.mock.calls[0];
+        const headers = init.headers as Headers;
+        expect(headers.get('Authorization')).toBe('Bearer jwt-abc');
+        expect(headers.get('Content-Type')).toBe('application/json');
+    });
+
+    it('sends no Authorization header and leaves headers untouched with no token (backwards compat)', async () => {
+        // No setAuthToken → today's behaviour: headers passed through as-is.
+        mockFetch.mockReturnValue(jsonResponse({ ok: true }));
+
+        await request('/public', { headers: { 'Content-Type': 'application/json' } });
+
+        const [, init] = mockFetch.mock.calls[0];
+        // Still the caller's plain object, not a Headers instance — unchanged.
+        expect(init.headers).toEqual({ 'Content-Type': 'application/json' });
+        expect(init.headers instanceof Headers).toBe(false);
+    });
+
+    it('invokes the unauthorized handler on a 401 and still throws ApiError', async () => {
+        const onUnauthorized = vi.fn();
+        setUnauthorizedHandler(onUnauthorized);
+        mockFetch.mockReturnValue(jsonResponse({ detail: 'Invalid or missing credentials' }, 401));
+
+        const err = await request('/protected').catch((e: unknown) => e) as ApiError;
+
+        expect(onUnauthorized).toHaveBeenCalledTimes(1);
+        expect(err).toBeInstanceOf(ApiError);
+        expect(err.statusCode).toBe(401);
+    });
+
+    it('does NOT invoke the unauthorized handler for a 401 from /auth/login', async () => {
+        // Bad credentials on the login exchange are shown inline, not treated as a
+        // session expiry — the global logout/redirect must not fire.
+        const onUnauthorized = vi.fn();
+        setUnauthorizedHandler(onUnauthorized);
+        mockFetch.mockReturnValue(jsonResponse({ detail: 'Invalid email or password' }, 401));
+
+        const err = await request('/auth/login', { method: 'POST' }).catch((e: unknown) => e) as ApiError;
+
+        expect(onUnauthorized).not.toHaveBeenCalled();
+        expect(err.statusCode).toBe(401);
+    });
+
+    it('setAuthToken / getAuthToken round-trip and clear', () => {
+        setAuthToken('abc');
+        expect(getAuthToken()).toBe('abc');
+        setAuthToken(null);
+        expect(getAuthToken()).toBeNull();
     });
 });
