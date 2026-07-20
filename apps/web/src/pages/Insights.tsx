@@ -6,7 +6,9 @@ import { TacticalRadar } from '../components/TacticalRadar';
 import { MotifTrends } from '../components/MotifTrends';
 import { RecentlyTrickyCard } from '../components/RecentlyTrickyCard';
 import { PageHeader } from '../components/PageHeader';
-import { DataStateEmpty, DataStateError, DataStateLoading } from '../components/DataState';
+import { DataStateEmpty, DataStateError, DataStateLoading, DataStateOffline } from '../components/DataState';
+import { useOnlineStatus } from '../hooks/useOnlineStatus';
+import { useLatestRequest } from '../hooks/useLatestRequest';
 
 export default function Insights() {
     const { username } = useChessUsername();
@@ -17,17 +19,10 @@ export default function Insights() {
     const [trickyPuzzles, setTrickyPuzzles] = useState<TrickyPuzzlesResponse | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
-    const isFetchingRef = useRef(false);
-    const isMountedRef = useRef(true);
     const hasLoadedRef = useRef(false);
 
-    // Track mounted status to prevent state updates after unmount
-    useEffect(() => {
-        isMountedRef.current = true;
-        return () => {
-            isMountedRef.current = false;
-        };
-    }, []);
+    const online = useOnlineStatus();
+    const request = useLatestRequest();
 
     // Redirect if no username
     useEffect(() => {
@@ -38,9 +33,12 @@ export default function Insights() {
 
     // Load insights data
     const loadInsightsData = useCallback(async () => {
-        if (!username || isFetchingRef.current) return;
+        if (!username) return;
 
-        isFetchingRef.current = true;
+        // Guard against stale-response races: a username change (or a focus
+        // refresh) begins a newer request; the older, slower response must not
+        // clobber the newer one.
+        const token = request.begin();
         try {
             // Only show full-page spinner on initial load, not on background refreshes
             if (!hasLoadedRef.current) {
@@ -56,24 +54,19 @@ export default function Insights() {
             // Supplementary: fail silently — page works without it
             const tricky = await getTrickyPuzzles(username, 5).catch(() => null);
 
-            if (isMountedRef.current) {
-                setMotifPerformance(motifs);
-                setTrends(trendsData);
-                setTrickyPuzzles(tricky);
-                hasLoadedRef.current = true;
-            }
+            if (token.isStale()) return;
+            setMotifPerformance(motifs);
+            setTrends(trendsData);
+            setTrickyPuzzles(tricky);
+            hasLoadedRef.current = true;
         } catch (err) {
+            if (token.isStale()) return;
             console.error('Failed to load insights:', err);
-            if (isMountedRef.current) {
-                setError(err instanceof Error ? err.message : 'Failed to load insights data');
-            }
+            setError(err instanceof Error ? err.message : 'Failed to load insights data');
         } finally {
-            if (isMountedRef.current) {
-                setLoading(false);
-            }
-            isFetchingRef.current = false;
+            if (!token.isStale()) setLoading(false);
         }
-    }, [username]);
+    }, [username, request]);
 
     // Initial load
     useEffect(() => {
@@ -108,12 +101,16 @@ export default function Insights() {
             {loading ? (
                 <DataStateLoading label="Loading insights..." />
             ) : error ? (
-                <DataStateError
-                    message={error}
-                    onRetry={loadInsightsData}
-                    retryLabel="Retry"
-                    ariaLabel="Retry loading insights"
-                />
+                !online ? (
+                    <DataStateOffline onRetry={loadInsightsData} />
+                ) : (
+                    <DataStateError
+                        message={error}
+                        onRetry={loadInsightsData}
+                        retryLabel="Retry"
+                        ariaLabel="Retry loading insights"
+                    />
+                )
             ) : (
                 <>
                     {/* Empty state — only when no data at all */}

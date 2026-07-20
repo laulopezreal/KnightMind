@@ -6,7 +6,9 @@ import { useChessUsername } from '../context/ChessUsernameContext';
 import { createSnapshot, getRatingExplain, getRatingHistory, type ExplainResponse, type HighlightGame, type SnapshotResponse, type SnapshotHistoryItem } from '../api/ratings';
 import { getRecentSessions } from '../api/sessions';
 import { PageHeader } from '../components/PageHeader';
-import { DataStateError, DataStateLoading } from '../components/DataState';
+import { DataStateError, DataStateLoading, DataStateOffline } from '../components/DataState';
+import { useOnlineStatus } from '../hooks/useOnlineStatus';
+import { useLatestRequest } from '../hooks/useLatestRequest';
 
 const LS_KEYS = {
     RATINGS_TIME_CONTROL: 'knightmind:ratings:time_control',
@@ -47,9 +49,14 @@ export default function RatingInsights() {
     const [lastSessionId, setLastSessionId] = useState<string | null>(null);
     const [sessionsLoading, setSessionsLoading] = useState(false);
     const [history, setHistory] = useState<SnapshotHistoryItem[]>([]);
+    const online = useOnlineStatus();
+    const request = useLatestRequest();
 
     const fetchData = useCallback(async (resolvedSessionId?: string | null) => {
         if (!username) return;
+        // Guard against stale-response races: a username/time-control/window change
+        // begins a newer request; the older, slower response must not clobber it.
+        const token = request.begin();
         setLoading(true);
         setError(null);
         try {
@@ -70,14 +77,16 @@ export default function RatingInsights() {
                 getRatingExplain(username, timeControl, sessionId, sinceStr),
                 getRatingHistory(username, timeControl),
             ]);
+            if (token.isStale()) return;
             setData(resp);
             setHistory(historyData);
         } catch (err) {
+            if (token.isStale()) return;
             setError(err instanceof Error ? err.message : 'Failed to load insights');
         } finally {
-            setLoading(false);
+            if (!token.isStale()) setLoading(false);
         }
-    }, [username, timeControl, windowSource, lastSessionId]);
+    }, [username, timeControl, windowSource, lastSessionId, request]);
 
     // Single coordinated effect: fetch sessions first, then data with the resolved session ID.
     // Also handles auto-switch to "Last 7 Days" when no sessions exist, to avoid a
@@ -315,13 +324,19 @@ export default function RatingInsights() {
             </section>
 
             {error && (
-                <DataStateError
-                    message={error}
-                    onRetry={() => fetchData()}
-                    retryLabel="Retry"
-                    ariaLabel="Retry loading rating insights"
-                    compact
-                />
+                !online ? (
+                    // A failed load while the browser is offline is a connectivity
+                    // problem, not a server error — say so instead of a bare message.
+                    <DataStateOffline onRetry={() => fetchData()} compact />
+                ) : (
+                    <DataStateError
+                        message={error}
+                        onRetry={() => fetchData()}
+                        retryLabel="Retry"
+                        ariaLabel="Retry loading rating insights"
+                        compact
+                    />
+                )
             )}
 
             {loading && !data && (
