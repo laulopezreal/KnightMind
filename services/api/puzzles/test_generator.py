@@ -20,9 +20,11 @@ from services.api.engine import (
 )
 from services.api.models import Game
 from services.api.puzzles.generator import (
+    GenerationResult,
     GenerationStatus,
     _is_user_move,
     generate_puzzles,
+    get_confirm_depth,
 )
 from services.api.storage.puzzle_repository import PuzzleRepository
 
@@ -212,16 +214,23 @@ def test_generate_puzzles_swing_calculation(
 
     _store_game(db, pgn)
 
-    with patch("services.api.puzzles.generator.get_or_compute_eval") as mock_eval:
-        mock_eval.side_effect = [
-            EvalResult(best_move_uci="d2d4", eval=0.5),  # Before white's move
-            EvalResult(
-                best_move_uci="e7e5", eval=1.5
-            ),  # After (from black's perspective)
-            EvalResult(best_move_uci="e2e4", eval=0.3),  # Before next move
-            EvalResult(best_move_uci="e7e6", eval=0.3),  # After
-        ]
+    # FEN-keyed so the deeper confirmation pass (which re-evaluates the same
+    # before/after FENs at confirm depth) returns the SAME evals as the shallow
+    # scan -- a genuine, stable blunder that survives confirmation.
+    def eval_side_effect(fen, engine=None, cache_stats=None, depth=None):
+        board = chess.Board(fen)
+        if board.turn == chess.WHITE and board.fullmove_number == 1:
+            # Before white's first move: a strong move is available (+0.5).
+            return EvalResult(best_move_uci="d2d4", eval=0.5)
+        if board.turn == chess.BLACK and board.fullmove_number == 1:
+            # After 1.e4 (opponent POV): white threw away the edge (+1.5 -> swing 2.0).
+            return EvalResult(best_move_uci="e7e5", eval=1.5)
+        return EvalResult(best_move_uci="e2e4", eval=0.3)  # later moves: flat
 
+    with patch(
+        "services.api.puzzles.generator.get_or_compute_eval",
+        side_effect=eval_side_effect,
+    ):
         result = generate_puzzles("testuser", max_games=1, max_puzzles=10)
 
         assert result.generated >= 1
@@ -289,7 +298,7 @@ def test_walking_into_terminal_is_captured_not_dropped(
     mock_top.return_value = []  # acceptance-set lookup irrelevant here
     _store_game(db, _STALEMATE_TRAP_PGN)
 
-    def eval_side_effect(fen, engine=None, cache_stats=None):
+    def eval_side_effect(fen, engine=None, cache_stats=None, depth=None):
         if fen == _STALEMATE_TRAP_FEN:
             return EvalResult(best_move_uci="f1f6", eval=9.0)  # winning before
         # Any other FEN here is the terminal after-position; the real engine
@@ -466,7 +475,7 @@ def test_equivalent_best_moves_are_all_accepted(
 1. a3 *"""
     _store_game(db, pgn)
 
-    def eval_side_effect(f, engine=None, cache_stats=None):
+    def eval_side_effect(f, engine=None, cache_stats=None, depth=None):
         if f == fen:
             return EvalResult(best_move_uci="d1d5", eval=9.0)  # winning capture avail
         return EvalResult(best_move_uci="a2a4", eval=0.0)  # after the weak a3
@@ -511,7 +520,7 @@ def test_generate_puzzles_recovers_from_engine_timeout(
 
     call_state = {"n": 0}
 
-    def eval_side_effect(fen, engine=None, cache_stats=None):
+    def eval_side_effect(fen, engine=None, cache_stats=None, depth=None):
         call_state["n"] += 1
         # Fail the 'after' eval of the FIRST analyzed position (call #2),
         # simulating a timeout that killed the shared engine mid-batch. The
@@ -645,3 +654,269 @@ def test_generate_puzzles_ply_range_filtering(mock_create_engine, temp_storage):
 
         assert result.analyzed_positions == 0
         assert result.generated == 0
+
+
+# ---------------------------------------------------------------------------
+# AUDIT GATE 10: deeper confirmation / stability pass
+# ---------------------------------------------------------------------------
+#
+# A candidate is flagged from a single shallow scan (STOCKFISH_DEPTH). Before it
+# is emitted as a puzzle the generator re-analyzes it at STOCKFISH_CONFIRM_DEPTH
+# and keeps it ONLY if the swing survives, the solution is stable, and the best
+# move is clearly superior (uniqueness margin). These tests drive a one-white-
+# move game so there is exactly one analyzed position / one candidate, and mock
+# get_or_compute_eval to return DIFFERENT evals at shallow vs confirm depth.
+
+# One analyzable white move (ply range is opened to 0-100 in these tests).
+_ONE_MOVE_PGN = """[Event "One move"]
+[White "testuser"]
+[Black "opponent"]
+
+1. e4 e5"""
+
+
+def _depth_aware_eval(before_shallow, after_shallow, before_deep, after_deep):
+    """Build a get_or_compute_eval double keyed on side-to-move and depth.
+
+    White-to-move is the pre-move (mistake) position; black-to-move is the
+    post-move position. ``depth is None`` is the shallow scan; a non-None depth
+    is the confirmation pass. Each arg is an (best_move_uci, eval) tuple.
+    """
+
+    def _eval(fen, engine=None, cache_stats=None, depth=None):
+        board = chess.Board(fen)
+        is_before = board.turn == chess.WHITE
+        is_deep = depth is not None
+        if is_before:
+            uci, ev = before_deep if is_deep else before_shallow
+        else:
+            uci, ev = after_deep if is_deep else after_shallow
+        return EvalResult(best_move_uci=uci, eval=ev)
+
+    return _eval
+
+
+@patch("services.api.puzzles.generator.get_top_moves")
+@patch("services.api.puzzles.generator.get_ply_range")
+@patch("services.api.puzzles.generator.create_engine")
+def test_noisy_candidate_discarded_when_swing_collapses_at_depth(
+    mock_create_engine, mock_ply, mock_top, temp_storage
+):
+    """REPRODUCTION: a candidate that clears the shallow threshold but whose
+    swing collapses under deeper analysis (engine noise) must be DISCARDED, not
+    emitted. The single-shallow-pass generator emitted it as a puzzle."""
+    db = temp_storage
+    mock_create_engine.return_value = Mock()
+    mock_ply.return_value = (0, 100)
+    mock_top.return_value = []  # uniqueness not reached; unstable check fires first
+    _store_game(db, _ONE_MOVE_PGN)
+
+    # Shallow: +0.5 -> +1.5 => swing 2.0 (>= threshold). Deep: +0.2 -> +0.2 =>
+    # swing 0.4 (< threshold): the "blunder" was shallow-depth noise.
+    eval_double = _depth_aware_eval(
+        before_shallow=("d2d4", 0.5),
+        after_shallow=("e7e5", 1.5),
+        before_deep=("d2d4", 0.2),
+        after_deep=("e7e5", 0.2),
+    )
+    with patch(
+        "services.api.puzzles.generator.get_or_compute_eval", side_effect=eval_double
+    ):
+        result = generate_puzzles("testuser", max_games=1, max_puzzles=10)
+
+    assert result.candidates_found == 1
+    assert result.candidates_confirmed == 0
+    assert result.discarded_unstable == 1
+    assert result.discarded_low_margin == 0
+    assert result.generated == 0
+    assert result.validity_rate == 0.0
+    assert PuzzleRepository(db).get_all_puzzles("testuser") == []
+
+
+@patch("services.api.puzzles.generator.get_top_moves")
+@patch("services.api.puzzles.generator.get_ply_range")
+@patch("services.api.puzzles.generator.create_engine")
+def test_candidate_discarded_when_best_move_flips_at_depth(
+    mock_create_engine, mock_ply, mock_top, temp_storage
+):
+    """A candidate whose best move FLIPS to a move outside the shallow
+    acceptance set under deeper analysis is unstable and must be discarded."""
+    db = temp_storage
+    mock_create_engine.return_value = Mock()
+    mock_ply.return_value = (0, 100)
+    # Shallow acceptance set = {d2d4, g1f3} (within 0.3). The deep best (a2a3)
+    # is NOT in it -> the solution flipped.
+    mock_top.return_value = [
+        MoveEval(uci="d2d4", eval=3.0),
+        MoveEval(uci="g1f3", eval=2.9),
+    ]
+    _store_game(db, _ONE_MOVE_PGN)
+
+    eval_double = _depth_aware_eval(
+        before_shallow=("d2d4", 3.0),
+        after_shallow=("e7e5", 3.0),  # swing 6.0 shallow
+        before_deep=("a2a3", 3.0),  # deep best flips; swing still 6.0
+        after_deep=("e7e5", 3.0),
+    )
+    with patch(
+        "services.api.puzzles.generator.get_or_compute_eval", side_effect=eval_double
+    ):
+        result = generate_puzzles("testuser", max_games=1, max_puzzles=10)
+
+    assert result.candidates_found == 1
+    assert result.discarded_unstable == 1
+    assert result.discarded_low_margin == 0
+    assert result.generated == 0
+
+
+@patch("services.api.puzzles.generator.get_top_moves")
+@patch("services.api.puzzles.generator.get_ply_range")
+@patch("services.api.puzzles.generator.create_engine")
+def test_tossup_without_uniqueness_margin_discarded(
+    mock_create_engine, mock_ply, mock_top, temp_storage
+):
+    """A candidate whose best move barely beats the next NON-equivalent move
+    (below the uniqueness margin) is a toss-up, not a puzzle, and is discarded
+    with the low_margin reason."""
+    db = temp_storage
+    mock_create_engine.return_value = Mock()
+    mock_ply.return_value = (0, 100)
+    # Best is +3.0; the next move is +2.6 -> gap 0.4. That is outside the 0.3
+    # equivalence tolerance (so not an equally-good alternative) but inside the
+    # 0.5 uniqueness margin (so not clearly superior) -> a coin-flip.
+    mock_top.return_value = [
+        MoveEval(uci="d2d4", eval=3.0),
+        MoveEval(uci="c2c4", eval=2.6),
+    ]
+    _store_game(db, _ONE_MOVE_PGN)
+
+    eval_double = _depth_aware_eval(
+        before_shallow=("d2d4", 3.0),
+        after_shallow=("e7e5", 3.0),
+        before_deep=("d2d4", 3.0),  # swing + stability fine; only margin fails
+        after_deep=("e7e5", 3.0),
+    )
+    with patch(
+        "services.api.puzzles.generator.get_or_compute_eval", side_effect=eval_double
+    ):
+        result = generate_puzzles("testuser", max_games=1, max_puzzles=10)
+
+    assert result.candidates_found == 1
+    assert result.discarded_low_margin == 1
+    assert result.discarded_unstable == 0
+    assert result.generated == 0
+
+
+@patch("services.api.puzzles.generator.get_top_moves")
+@patch("services.api.puzzles.generator.get_ply_range")
+@patch("services.api.puzzles.generator.create_engine")
+def test_stable_blunder_is_kept_with_confirmed_provenance(
+    mock_create_engine, mock_ply, mock_top, temp_storage
+):
+    """A genuine blunder that survives the deeper pass is kept, and the saved
+    puzzle carries confirmed provenance: confirmed_depth, the confirm-depth
+    swing/evals, and the refined (confirmed) acceptance set."""
+    db = temp_storage
+    mock_create_engine.return_value = Mock()
+    mock_ply.return_value = (0, 100)
+    # Deep multi-PV: d2d4 (best) and g1f3 equally good (within 0.3); a2a3 far
+    # worse -> clear uniqueness margin. Confirmed accept set = {d2d4, g1f3}.
+    mock_top.return_value = [
+        MoveEval(uci="d2d4", eval=3.2),
+        MoveEval(uci="g1f3", eval=3.1),
+        MoveEval(uci="a2a3", eval=0.1),
+    ]
+    _store_game(db, _ONE_MOVE_PGN)
+
+    eval_double = _depth_aware_eval(
+        before_shallow=("d2d4", 3.0),
+        after_shallow=("e7e5", 3.0),  # shallow swing 6.0
+        before_deep=("d2d4", 3.2),
+        after_deep=("e7e5", 3.1),  # confirmed swing 6.3
+    )
+    with patch(
+        "services.api.puzzles.generator.get_or_compute_eval", side_effect=eval_double
+    ):
+        result = generate_puzzles("testuser", max_games=1, max_puzzles=10)
+
+    assert result.candidates_found == 1
+    assert result.candidates_confirmed == 1
+    assert result.discarded_unstable == 0
+    assert result.discarded_low_margin == 0
+    assert result.generated == 1
+    assert result.validity_rate == 1.0
+
+    puzzle = PuzzleRepository(db).get_all_puzzles("testuser")[0]
+    # Provenance reflects the confirmation pass, not the shallow scan.
+    assert puzzle.confirmed_depth == get_confirm_depth()
+    assert puzzle.swing == pytest.approx(6.3)  # confirmed swing, not shallow 6.0
+    assert puzzle.best_move_uci == "d2d4"
+    accepted = set(puzzle.accept_moves_uci.split(","))
+    assert accepted == {"d2d4", "g1f3"}  # equally-good alternative kept
+    assert "a2a3" not in accepted  # clearly-worse move excluded
+
+
+@patch("services.api.puzzles.generator.get_top_moves")
+@patch("services.api.puzzles.generator.get_ply_range")
+@patch("services.api.puzzles.generator.create_engine")
+def test_confirmation_reanalysis_uses_the_cache_entry_point(
+    mock_create_engine, mock_ply, mock_top, temp_storage
+):
+    """The deeper re-analysis must go through get_or_compute_eval with an
+    explicit confirm depth, so it reuses the version-aware cache (#199): a
+    repeated confirm pass on the same position is a cache hit, and it never
+    reuses (or clobbers) the shallow entry. We assert the confirm-depth calls
+    are routed through the cache entry point."""
+    db = temp_storage
+    mock_create_engine.return_value = Mock()
+    mock_ply.return_value = (0, 100)
+    mock_top.return_value = [
+        MoveEval(uci="d2d4", eval=3.0),
+        MoveEval(uci="a2a3", eval=0.1),
+    ]
+    _store_game(db, _ONE_MOVE_PGN)
+
+    seen_depths = []
+
+    def _eval(fen, engine=None, cache_stats=None, depth=None):
+        seen_depths.append(depth)
+        board = chess.Board(fen)
+        return EvalResult(best_move_uci="d2d4", eval=3.0 if board.turn else 3.0)
+
+    with patch("services.api.puzzles.generator.get_or_compute_eval", side_effect=_eval):
+        result = generate_puzzles("testuser", max_games=1, max_puzzles=10)
+
+    assert result.generated == 1
+    # Shallow scan calls carry depth=None; the confirmation pass carries the
+    # confirm depth -- both routed through the single cached entry point.
+    assert None in seen_depths
+    assert get_confirm_depth() in seen_depths
+
+
+def test_validity_rate_property_math():
+    """validity_rate = confirmed / found, and is 1.0 when nothing was flagged."""
+    assert GenerationResult(0, 0, 0).validity_rate == 1.0
+    assert (
+        GenerationResult(
+            generated=1,
+            skipped=0,
+            analyzed_positions=4,
+            candidates_found=4,
+            candidates_confirmed=1,
+        ).validity_rate
+        == 0.25
+    )
+
+
+@patch("services.api.puzzles.generator.get_top_moves")
+@patch("services.api.puzzles.generator.get_ply_range")
+@patch("services.api.puzzles.generator.create_engine")
+def test_confirm_depth_is_never_shallower_than_base(
+    mock_create_engine, mock_ply, mock_top, temp_storage, monkeypatch
+):
+    """Guard: a misconfigured STOCKFISH_CONFIRM_DEPTH below the base scan depth
+    is clamped up to the base depth, so the confirmation pass is never weaker
+    than the scan that flagged the candidate."""
+    monkeypatch.setenv("STOCKFISH_DEPTH", "20")
+    monkeypatch.setenv("STOCKFISH_CONFIRM_DEPTH", "8")  # below base
+    assert get_confirm_depth() == 20

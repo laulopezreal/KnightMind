@@ -274,13 +274,22 @@ def _run_with_timeout(
         ) from e
 
 
-def evaluate_fen(fen: str, engine: Optional["StockfishEngine"] = None) -> EvalResult:
+def evaluate_fen(
+    fen: str,
+    engine: Optional["StockfishEngine"] = None,
+    depth: Optional[int] = None,
+) -> EvalResult:
     """
     Evaluate a chess position given its FEN string.
 
     Args:
         fen: FEN string representing the position to evaluate
         engine: Optional existing Stockfish engine instance to reuse
+        depth: Optional search-depth override. When None the process default
+            (``get_search_depth``) is used. Callers that need a deeper
+            confirmation pass (e.g. the puzzle generator's stability check)
+            pass a larger depth here; it is folded into the cache key upstream
+            so a deep eval never reuses a shallow entry.
 
     Returns:
         EvalResult with best_move_uci and eval (in pawns, from side-to-move POV)
@@ -303,7 +312,7 @@ def evaluate_fen(fen: str, engine: Optional["StockfishEngine"] = None) -> EvalRe
 
         try:
             return _run_with_timeout(
-                lambda: _evaluate_fen_core(fen, engine),
+                lambda: _evaluate_fen_core(fen, engine, depth=depth),
                 _get_eval_timeout_s(),
                 engine,
             )
@@ -316,8 +325,13 @@ def evaluate_fen(fen: str, engine: Optional["StockfishEngine"] = None) -> EvalRe
         _EVAL_SEMAPHORE.release()
 
 
-def _evaluate_fen_core(fen: str, engine: "StockfishEngine") -> EvalResult:
-    """Run the actual Stockfish evaluation. Assumes ``engine`` is ready."""
+def _evaluate_fen_core(
+    fen: str, engine: "StockfishEngine", depth: Optional[int] = None
+) -> EvalResult:
+    """Run the actual Stockfish evaluation. Assumes ``engine`` is ready.
+
+    ``depth`` overrides the process default search depth when provided.
+    """
     try:
         # Parse and validate the FEN with python-chess first. This also lets us
         # detect terminal positions (checkmate / stalemate / draw-by-rule)
@@ -344,9 +358,10 @@ def _evaluate_fen_core(fen: str, engine: "StockfishEngine") -> EvalResult:
         if params:
             engine.update_engine_parameters(params)
 
-        # Set search limits
-        depth = get_search_depth()
-        engine.set_depth(depth)
+        # Set search limits. A caller-supplied depth (e.g. a deeper
+        # confirmation pass) overrides the process default.
+        search_depth = depth if depth is not None else get_search_depth()
+        engine.set_depth(search_depth)
 
         # Get best move
         best_move = engine.get_best_move()
@@ -428,7 +443,12 @@ def _terminal_eval_result(board: chess.Board) -> EvalResult:
     return EvalResult(best_move_uci=None, eval=0.0, mate_in=None, is_terminal=True)
 
 
-def get_top_moves(fen: str, engine: "StockfishEngine", k: int = 3) -> list["MoveEval"]:
+def get_top_moves(
+    fen: str,
+    engine: "StockfishEngine",
+    k: int = 3,
+    depth: Optional[int] = None,
+) -> list["MoveEval"]:
     """
     Return the engine's top-K candidate moves (multi-PV) for a position.
 
@@ -440,6 +460,8 @@ def get_top_moves(fen: str, engine: "StockfishEngine", k: int = 3) -> list["Move
         fen: FEN string to analyze (must be a non-terminal position).
         engine: An initialized Stockfish engine instance.
         k: Number of principal variations to request.
+        depth: Optional search-depth override (deeper confirmation pass). When
+            None the process default (``get_search_depth``) is used.
 
     Returns:
         A list of MoveEval sorted best-first (as returned by Stockfish), each
@@ -447,7 +469,7 @@ def get_top_moves(fen: str, engine: "StockfishEngine", k: int = 3) -> list["Move
         Empty if the engine returns nothing (e.g. terminal position).
     """
     engine.set_fen_position(fen)
-    engine.set_depth(get_search_depth())
+    engine.set_depth(depth if depth is not None else get_search_depth())
 
     raw = engine.get_top_moves(k) or []
     results: list[MoveEval] = []
@@ -645,6 +667,7 @@ def get_or_compute_eval(
     fen: str,
     engine: Optional["StockfishEngine"] = None,
     cache_stats: Optional[dict] = None,
+    depth: Optional[int] = None,
 ) -> EvalResult:
     """
     Get evaluation from cache or compute with Stockfish.
@@ -656,6 +679,11 @@ def get_or_compute_eval(
         fen: FEN string to evaluate
         engine: Optional existing Stockfish engine instance
         cache_stats: Optional dict to track cache hits/misses (will be updated in-place)
+        depth: Optional search-depth override. When None the process default
+            (``get_search_depth``) is used. The effective depth is folded into
+            the cache key, so a deeper confirmation pass gets its own entry and
+            never reuses (or clobbers) the shallow one -- and a repeated deep
+            pass on the same position is a cache hit.
 
     Returns:
         EvalResult with best_move_uci and eval
@@ -669,7 +697,7 @@ def get_or_compute_eval(
     # Stockfish upgrade or a depth/threads/hash/multipv change must yield a
     # different key so an old entry is never reused under a materially different
     # engine/config.
-    depth = get_search_depth()
+    depth = depth if depth is not None else get_search_depth()
     movetime_ms = None  # We're using depth-based search
     engine_name = get_stockfish_path()
     engine_version = get_engine_version(engine)
@@ -710,7 +738,7 @@ def get_or_compute_eval(
         cache_stats["misses"] = cache_stats.get("misses", 0) + 1
 
     logger.debug(f"Cache miss for FEN: {fen[:50]}...")
-    result = evaluate_fen(fen, engine=engine)
+    result = evaluate_fen(fen, engine=engine, depth=depth)
 
     # Terminal positions have no best move and are cheap to recompute; skip the
     # cache (best_move_uci is NOT NULL) and return them directly.

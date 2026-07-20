@@ -24,6 +24,7 @@ from services.api.engine import (
     close_engine,
     create_engine,
     get_or_compute_eval,
+    get_search_depth,
     get_top_moves,
 )
 from services.api.storage import GameRepository, PuzzleRepository
@@ -60,6 +61,44 @@ def get_ply_range() -> tuple[int, int]:
     return start, end
 
 
+def get_confirm_depth() -> int:
+    """Depth for the puzzle-stability confirmation pass.
+
+    A candidate flagged at the shallow scan depth (``STOCKFISH_DEPTH``, default
+    12) is re-analyzed at this deeper depth (``STOCKFISH_CONFIRM_DEPTH``,
+    default 18) before it is accepted, so engine noise at shallow depth cannot
+    emit a low-quality puzzle whose best move flips or whose swing collapses
+    under deeper search.
+
+    Guard: the confirmation pass must never be *shallower* than the base scan,
+    or it would "confirm" with a weaker analysis than the one that flagged the
+    candidate. We clamp to ``max(configured, base_depth)``.
+    """
+    base = get_search_depth()
+    raw = os.environ.get("STOCKFISH_CONFIRM_DEPTH")
+    confirm = base + 6
+    if raw:
+        try:
+            confirm = int(raw)
+        except ValueError:
+            logger.warning(
+                "Invalid STOCKFISH_CONFIRM_DEPTH=%r, using default %s", raw, confirm
+            )
+    return max(confirm, base)
+
+
+def get_uniqueness_margin() -> float:
+    """Minimum pawn advantage the solution must hold over the next NON-equivalent
+    move for a candidate to be a real puzzle rather than a toss-up.
+
+    Moves within ``PUZZLE_EQUIV_TOLERANCE`` of the best form the acceptance set
+    (all correct). The *first move outside* that set must be at least this much
+    worse (``PUZZLE_UNIQUENESS_MARGIN``, default 0.5 pawns), otherwise the
+    position has no clearly-superior idea and solving it is a coin-flip.
+    """
+    return float(os.environ.get("PUZZLE_UNIQUENESS_MARGIN", "0.5"))
+
+
 class GenerationStatus(str, Enum):
     """Outcome of a puzzle-generation run.
 
@@ -89,10 +128,29 @@ class GenerationResult:
     cache_hits: int = 0  # Number of cache hits
     cache_misses: int = 0  # Number of cache misses
     failed_positions: int = 0  # Positions that raised during evaluation
+    # --- Confirmation / stability metrics (audit gate 10) ---
+    # A "candidate" is a position whose swing cleared the shallow threshold.
+    # It becomes a puzzle only if the deeper confirmation pass upholds it.
+    candidates_found: int = 0  # Cleared the shallow swing threshold
+    candidates_confirmed: int = 0  # Passed every confirmation check
+    discarded_unstable: int = 0  # Swing collapsed / best move flipped at depth
+    discarded_low_margin: int = 0  # Solution was a toss-up (no uniqueness margin)
     # Machine-readable outcome so callers can tell engine-unavailable /
     # all-failed / no-mistakes / partial / success apart. Stored as a plain
     # string (via GenerationStatus.value) so it is JSON-serializable.
     status: str = GenerationStatus.SUCCESS.value
+
+    @property
+    def validity_rate(self) -> float:
+        """Fraction of shallow candidates that survived confirmation.
+
+        1.0 when no candidate was ever flagged (nothing invalid was emitted);
+        otherwise confirmed / found. A low rate means the shallow scan is noisy
+        relative to the confirmation depth.
+        """
+        if self.candidates_found == 0:
+            return 1.0
+        return self.candidates_confirmed / self.candidates_found
 
     @staticmethod
     def engine_unavailable() -> "GenerationResult":
@@ -145,6 +203,186 @@ def _build_accept_set(fen: str, engine, best_move_uci: str) -> list[str]:
         if best_eval - candidate.eval <= tolerance and candidate.uci not in accept:
             accept.append(candidate.uci)
     return accept
+
+
+@dataclass
+class ConfirmationOutcome:
+    """Result of the deeper stability/uniqueness confirmation of a candidate.
+
+    ``accepted`` is True only when every check passed. On rejection ``reason``
+    is one of ``"unstable"`` (swing collapsed or the best move flipped under
+    deeper search) or ``"low_margin"`` (the solution is a toss-up). The eval /
+    swing / accept-set fields reflect the *confirmation depth*, so a saved
+    puzzle's provenance matches the analysis that vetted it -- not the shallow
+    scan that first flagged it.
+    """
+
+    accepted: bool
+    reason: str | None
+    eval_before: float
+    eval_after: float  # From the side-to-move (opponent) perspective, as evaluated
+    swing: float
+    best_move_uci: str | None
+    accept_moves: list[str]
+    confirmed_depth: int
+
+
+def _deep_top_moves(fen: str, engine, depth: int, k: int = 3):
+    """Best-effort deep multi-PV for the uniqueness check.
+
+    Mirrors ``_build_accept_set``'s degrade-don't-break contract: any multi-PV
+    failure (terminal position, engine quirk, mocked engine in tests) returns an
+    empty list rather than raising, so an unavailable multi-PV never discards a
+    genuine blunder -- the uniqueness check treats "can't assess" as unique.
+    """
+    try:
+        return get_top_moves(fen, engine=engine, k=k, depth=depth) or []
+    except Exception as e:  # noqa: BLE001 - best-effort, must never break generation
+        logger.debug("Deep multi-PV unavailable for %s: %s", fen[:40], e)
+        return []
+
+
+def _assess_uniqueness(
+    deep_top, best_move_uci: str | None, tolerance: float, margin: float
+) -> tuple[list[str], bool]:
+    """Derive the confirmed acceptance set and whether the puzzle is unique.
+
+    The acceptance set is every deep move within ``tolerance`` of the top eval
+    (all equally correct). The puzzle is a real one -- not a toss-up -- only if
+    the FIRST move *outside* that set is at least ``margin`` pawns worse than
+    the best. If no non-equivalent move is seen (multi-PV empty, or every
+    returned move is equally good), we cannot prove a toss-up, so we treat the
+    position as unique and accept the equivalent cluster.
+    """
+    accept: list[str] = []
+    if best_move_uci:
+        accept.append(best_move_uci)
+    if not deep_top:
+        return accept, True
+
+    best_eval = deep_top[0].eval
+    first_non_equiv_gap: float | None = None
+    for candidate in deep_top:
+        gap = best_eval - candidate.eval
+        if gap <= tolerance:
+            if candidate.uci not in accept:
+                accept.append(candidate.uci)
+        else:
+            first_non_equiv_gap = gap
+            break
+
+    if first_non_equiv_gap is None:
+        return accept, True
+    return accept, first_non_equiv_gap >= margin
+
+
+def _confirm_candidate(
+    *,
+    fen_before: str,
+    fen_after: str,
+    after_is_terminal: bool,
+    board_after: chess.Board,
+    engine,
+    shallow_accept: list[str],
+    swing_threshold: float,
+    confirm_depth: int,
+    uniqueness_margin: float,
+    equiv_tolerance: float,
+    cache_stats: dict,
+) -> ConfirmationOutcome:
+    """
+    Re-analyze a shallow-flagged candidate at ``confirm_depth`` and decide
+    whether it is a high-quality, stable puzzle.
+
+    Confirms ALL of:
+      (a) the swing is still >= ``swing_threshold`` at the confirmation depth;
+      (b) the deep best move is STABLE -- it is still one of the shallow
+          acceptance-set moves (the solution did not flip to an unrelated move);
+      (c) a UNIQUENESS MARGIN -- the best move beats the next non-equivalent
+          move by >= ``uniqueness_margin`` (the puzzle is not a toss-up).
+
+    The deeper evals go through ``get_or_compute_eval`` with an explicit depth,
+    so they reuse the version-aware cache (#199): a repeated confirmation pass
+    on the same position is a cache hit and never clobbers the shallow entry.
+
+    May raise ``StockfishEngineDeadError`` / ``StockfishError`` from the deep
+    evals; the caller recreates the engine (dead) or discards the candidate.
+    """
+    # (1) Deep re-analysis of the MISTAKE position (cache-friendly). Gives the
+    #     deep best move (stability) and deep eval_before (swing).
+    deep_before = get_or_compute_eval(
+        fen_before, engine=engine, cache_stats=cache_stats, depth=confirm_depth
+    )
+    deep_eval_before = deep_before.eval
+    deep_best = deep_before.best_move_uci
+
+    # (2) Deep eval of the resulting position for the confirmed swing. A
+    #     terminal after-position is depth-independent (mate/draw is exact), so
+    #     derive it from the board rather than paying an engine call.
+    if after_is_terminal:
+        deep_eval_after, _ = _terminal_eval_after(board_after)
+    else:
+        deep_eval_after = get_or_compute_eval(
+            fen_after, engine=engine, cache_stats=cache_stats, depth=confirm_depth
+        ).eval
+
+    # eval is from side-to-move POV; flip eval_after (opponent's POV) to get the
+    # swing in the original player's terms (same convention as the shallow scan).
+    confirmed_swing = deep_eval_before - (-deep_eval_after)
+
+    # (a) Swing must survive the deeper analysis.
+    if confirmed_swing < swing_threshold:
+        return ConfirmationOutcome(
+            accepted=False,
+            reason="unstable",
+            eval_before=deep_eval_before,
+            eval_after=deep_eval_after,
+            swing=confirmed_swing,
+            best_move_uci=deep_best,
+            accept_moves=[],
+            confirmed_depth=confirm_depth,
+        )
+
+    # (b) The deep best move must not flip to a move outside the shallow set.
+    if deep_best is not None and deep_best not in shallow_accept:
+        return ConfirmationOutcome(
+            accepted=False,
+            reason="unstable",
+            eval_before=deep_eval_before,
+            eval_after=deep_eval_after,
+            swing=confirmed_swing,
+            best_move_uci=deep_best,
+            accept_moves=[],
+            confirmed_depth=confirm_depth,
+        )
+
+    # (c) Uniqueness margin + confirmed acceptance set from the deep multi-PV.
+    deep_top = _deep_top_moves(fen_before, engine, confirm_depth)
+    accept_moves, is_unique = _assess_uniqueness(
+        deep_top, deep_best, equiv_tolerance, uniqueness_margin
+    )
+    if not is_unique:
+        return ConfirmationOutcome(
+            accepted=False,
+            reason="low_margin",
+            eval_before=deep_eval_before,
+            eval_after=deep_eval_after,
+            swing=confirmed_swing,
+            best_move_uci=deep_best,
+            accept_moves=accept_moves,
+            confirmed_depth=confirm_depth,
+        )
+
+    return ConfirmationOutcome(
+        accepted=True,
+        reason=None,
+        eval_before=deep_eval_before,
+        eval_after=deep_eval_after,
+        swing=confirmed_swing,
+        best_move_uci=deep_best,
+        accept_moves=accept_moves,
+        confirmed_depth=confirm_depth,
+    )
 
 
 def _recreate_batch_engine():
@@ -222,6 +460,9 @@ def generate_puzzles(
         # Get configuration
         swing_threshold = get_swing_threshold()
         ply_start, ply_end = get_ply_range()
+        confirm_depth = get_confirm_depth()
+        uniqueness_margin = get_uniqueness_margin()
+        equiv_tolerance = get_equiv_tolerance()
 
         # Create engine instance for the whole batch
         try:
@@ -249,6 +490,10 @@ def generate_puzzles(
             skipped = 0
             analyzed_positions = 0
             failed_positions = 0
+            candidates_found = 0
+            candidates_confirmed = 0
+            discarded_unstable = 0
+            discarded_low_margin = 0
             cache_stats = {"hits": 0, "misses": 0}  # Track cache performance
 
             for game_meta in recent_games:
@@ -355,8 +600,9 @@ def generate_puzzles(
                     # than asking the engine -- the engine raises on terminal
                     # FENs and those errors used to be swallowed, silently
                     # dropping the biggest blunders.
+                    after_is_terminal = board.is_game_over()
                     try:
-                        if board.is_game_over():
+                        if after_is_terminal:
                             eval_after, _ = _terminal_eval_after(board)
                         else:
                             eval_after = get_or_compute_eval(
@@ -380,43 +626,101 @@ def generate_puzzles(
                     # sign of eval_after (it is from the opponent's perspective).
                     swing = eval_before - (-eval_after)
 
-                    # Check if this is a blunder
-                    if swing >= swing_threshold:
-                        # Build the acceptance set of equally-good moves so an
-                        # alternative best move is not judged wrong at solve time.
-                        accept_moves = _build_accept_set(
-                            fen_before, engine, best_move_uci
-                        )
-                        # A DB error here must skip this one puzzle, not abort
-                        # the whole batch (save_puzzle handles duplicate rows).
-                        try:
-                            is_new, _ = puzzle_repository.save_puzzle(
-                                username=username,
-                                source_game_id=game_meta.game_id,
-                                ply=ply,
-                                fen=fen_before,
-                                side_to_move=side_to_move,
-                                played_move_uci=played_move_uci,
-                                best_move_uci=best_move_uci,
-                                eval_before=eval_before,
-                                eval_after=-eval_after,  # From original player's POV
-                                swing=swing,
-                                accept_moves_uci=",".join(accept_moves),
-                            )
-                        except SQLAlchemyError as e:
-                            logger.warning(
-                                "Failed to save puzzle for FEN %s",
-                                fen_before,
-                                exc_info=e,
-                            )
-                            continue
+                    # Not a blunder at the shallow scan depth -> nothing to do.
+                    if swing < swing_threshold:
+                        continue
 
-                        if is_new:
-                            generated += 1
-                            if generated >= max_puzzles:
-                                break
+                    # A shallow candidate. Do NOT emit it yet: a single shallow
+                    # pass is noisy, so re-analyze at a deeper depth and only
+                    # keep candidates whose mistake+solution are STABLE and
+                    # whose solution is clearly best (a real puzzle, not a
+                    # toss-up). This is the audit-gate-10 quality gate.
+                    candidates_found += 1
+
+                    # Shallow acceptance set: the deep best move must stay within
+                    # it, or the solution "flipped" to an unrelated move.
+                    shallow_accept = _build_accept_set(
+                        fen_before, engine, best_move_uci
+                    )
+
+                    try:
+                        outcome = _confirm_candidate(
+                            fen_before=fen_before,
+                            fen_after=fen_after,
+                            after_is_terminal=after_is_terminal,
+                            board_after=board,
+                            engine=engine,
+                            shallow_accept=shallow_accept,
+                            swing_threshold=swing_threshold,
+                            confirm_depth=confirm_depth,
+                            uniqueness_margin=uniqueness_margin,
+                            equiv_tolerance=equiv_tolerance,
+                            cache_stats=cache_stats,
+                        )
+                    except StockfishEngineDeadError:
+                        # Confirmation eval killed the shared engine; recreate
+                        # and move on (board already advanced). The candidate is
+                        # left unconfirmed rather than emitted unvetted.
+                        engine = _recreate_batch_engine()
+                        if engine is None:
+                            break
+                        discarded_unstable += 1
+                        continue
+                    except (StockfishError, StockfishNotFoundError) as e:
+                        # Could not confirm stability -> discard conservatively,
+                        # never emit an unvetted puzzle.
+                        discarded_unstable += 1
+                        logger.warning(
+                            "Confirmation failed for FEN %s", fen_before, exc_info=e
+                        )
+                        continue
+
+                    if not outcome.accepted:
+                        if outcome.reason == "low_margin":
+                            discarded_low_margin += 1
                         else:
-                            skipped += 1
+                            discarded_unstable += 1
+                        continue
+
+                    candidates_confirmed += 1
+
+                    # Persist the CONFIRMED analysis (deeper depth): the deep
+                    # best move, the confirmed swing/evals, the refined accept
+                    # set, and confirmed_depth for auditability/reproducibility.
+                    confirmed_best = outcome.best_move_uci or best_move_uci
+                    accept_csv = ",".join(outcome.accept_moves) or None
+                    # A DB error here must skip this one puzzle, not abort the
+                    # whole batch (save_puzzle handles duplicate rows).
+                    try:
+                        is_new, _ = puzzle_repository.save_puzzle(
+                            username=username,
+                            source_game_id=game_meta.game_id,
+                            ply=ply,
+                            fen=fen_before,
+                            side_to_move=side_to_move,
+                            played_move_uci=played_move_uci,
+                            best_move_uci=confirmed_best,
+                            eval_before=outcome.eval_before,
+                            # From the original player's POV (flip opponent POV).
+                            eval_after=-outcome.eval_after,
+                            swing=outcome.swing,
+                            accept_moves_uci=accept_csv,
+                            confirmed_depth=outcome.confirmed_depth,
+                        )
+                    except SQLAlchemyError as e:
+                        logger.warning(
+                            "Failed to save puzzle for FEN %s",
+                            fen_before,
+                            exc_info=e,
+                        )
+                        continue
+
+                    if is_new:
+                        generated += 1
+                        if generated >= max_puzzles:
+                            break
+                    else:
+                        skipped += 1
 
             # Derive a machine-readable outcome from the counters. Any
             # evaluation failure is surfaced (ALL_FAILED / PARTIAL) so a
@@ -439,6 +743,10 @@ def generate_puzzles(
                 cache_hits=cache_stats["hits"],
                 cache_misses=cache_stats["misses"],
                 failed_positions=failed_positions,
+                candidates_found=candidates_found,
+                candidates_confirmed=candidates_confirmed,
+                discarded_unstable=discarded_unstable,
+                discarded_low_margin=discarded_low_margin,
                 status=status.value,
             )
         finally:

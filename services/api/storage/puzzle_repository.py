@@ -28,6 +28,7 @@ class Puzzle:
     created_at: str  # ISO timestamp
     used_on: str | None  # Date when puzzle was used (YYYY-MM-DD), None if unused
     accept_moves_uci: str | None = None  # Comma-separated equivalence set
+    confirmed_depth: int | None = None  # Depth of the stability confirmation pass
 
 
 class PuzzleRepository:
@@ -50,6 +51,7 @@ class PuzzleRepository:
             created_at=puzzle.created_at.replace(tzinfo=timezone.utc).isoformat(),
             used_on=puzzle.used_on.isoformat() if puzzle.used_on else None,
             accept_moves_uci=puzzle.accept_moves_uci,
+            confirmed_depth=puzzle.confirmed_depth,
         )
 
     def save_puzzle(
@@ -70,6 +72,7 @@ class PuzzleRepository:
         imported_at: datetime | None = None,
         source_path: str | None = None,
         accept_moves_uci: str | None = None,
+        confirmed_depth: int | None = None,
     ) -> tuple[bool, str]:
         username_lower = username.lower()
         puzzle_id = puzzle_id or str(uuid.uuid4())
@@ -87,6 +90,7 @@ class PuzzleRepository:
             eval_before=eval_before,
             eval_after=eval_after,
             swing=swing,
+            confirmed_depth=confirmed_depth,
             created_at=created_at or datetime.now(timezone.utc),
             used_on=used_on,
             imported_at=imported_at or datetime.now(timezone.utc),
