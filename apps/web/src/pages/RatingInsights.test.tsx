@@ -136,6 +136,35 @@ describe('RatingInsights', () => {
     });
   });
 
+  it('shows the chart + window-insufficient note (not first-snapshot onboarding) when snapshots exist but the window is thin', async () => {
+    // Repro: snapshots on file (history non-empty) but the selected window has 0 games,
+    // so the explain payload reports rating.end === null / insufficient_data.
+    mockGetRatingExplain.mockResolvedValue({
+      rating: { start: null, end: null, net_change: null, reference_rating: 0, reference_is_approx: false },
+      stats: { games: 0, wins: 0, draws: 0, losses: 0, actual_minus_expected: null, avg_opponent_rating: null, missing_opponent_rating_games: 0 },
+      drivers: [],
+      highlights: { best_surprises: [], worst_surprises: [] },
+      window: null,
+      confidence: 'low',
+      insufficient_data: true,
+    });
+    mockGetRatingHistory.mockResolvedValue([
+      { rating: 1200, recorded_at: '2025-01-01T00:00:00Z' },
+      { rating: 1240, recorded_at: '2025-01-05T00:00:00Z' },
+    ]);
+
+    render(<RatingInsights />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Not enough games in this window/i)).toBeInTheDocument();
+    });
+    // The recorded snapshot history still renders as a chart.
+    expect(screen.getByTestId('line-chart')).toBeInTheDocument();
+    // Crucially, the brand-new-user onboarding must NOT appear.
+    expect(screen.queryByText(/Step 1/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Step 2/)).not.toBeInTheDocument();
+  });
+
   it('should show time control buttons', () => {
     mockGetRatingExplain.mockReturnValue(new Promise(() => {}));
     mockGetRatingHistory.mockReturnValue(new Promise(() => {}));
