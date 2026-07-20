@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Link, useSearchParams, useNavigate } from 'react-router-dom';
 import { AccessibleChessboard } from '../components/AccessibleChessboard';
 import { Chess } from 'chess.js';
-import { generatePuzzles, getDailyPuzzles, cancelJob, ApiError } from '../api';
+import { generatePuzzles, getDailyPuzzles, cancelJob, checkPuzzle, revealPuzzle, ApiError } from '../api';
 import { JobStatusCard } from '../components/JobStatusCard';
 import { SessionSummaryCard } from '../components/SessionSummaryCard';
 import { WarmupSummary } from '../components/WarmupSummary';
@@ -32,6 +32,10 @@ export default function Puzzles() {
     });
     const [prevUsername, setPrevUsername] = useState(username);
     const [game, setGame] = useState(new Chess());
+    // The solution is NOT pre-sent with the puzzle (audit gate 13). It is
+    // fetched on demand (reveal / full clue) and held only for the current
+    // puzzle, so the client never holds the answer before the user asks.
+    const [revealedMove, setRevealedMove] = useState<string | null>(null);
 
     // Get motif filter and warmup mode from URL query params
     const [searchParams] = useSearchParams();
@@ -113,7 +117,9 @@ export default function Puzzles() {
 
     const startPuzzleTimer = timer.startPuzzleTimer;
     const currentPuzzle = puzzles[currentIndex];
-    const clue = useClue(currentPuzzle?.best_move_uci ?? '', currentPuzzle?.fen ?? '');
+    // The clue/board work off the on-demand-fetched solution, never a pre-sent
+    // one — so the hint machinery only has the answer once the user asks for it.
+    const clue = useClue(revealedMove ?? '', currentPuzzle?.fen ?? '');
     const clueReset = clue.reset;
     const puzzlesAvailable = puzzles.length > 0;
     const isFinalPuzzle = puzzlesAvailable && currentIndex >= puzzles.length - 1;
@@ -313,17 +319,40 @@ export default function Puzzles() {
         !shouldShowJobStatusCard &&
         !shouldShowErrorCard;
 
-    const handleCheckAnswer = () => {
-        if (!currentPuzzle) return;
-        const normalizedUserMove = userMove.trim().toLowerCase();
-        const normalizedBestMove = currentPuzzle.best_move_uci.toLowerCase();
-        if (normalizedUserMove === normalizedBestMove) setStatus('correct');
-        else setStatus('incorrect');
+    // Ensure we have the solution for the current puzzle, fetching it once from
+    // the server on demand (reveal / full clue). Returns the lowercased UCI move,
+    // or null if unavailable.
+    const ensureRevealedMove = async (): Promise<string | null> => {
+        if (revealedMove) return revealedMove;
+        if (!currentPuzzle || !username) return null;
+        try {
+            const { best_move_uci } = await revealPuzzle(currentPuzzle.id, username);
+            const move = best_move_uci.toLowerCase();
+            setRevealedMove(move);
+            return move;
+        } catch (err) {
+            console.error('Failed to reveal solution:', err);
+            return null;
+        }
     };
 
-    const handleRevealSolution = () => {
+    const handleCheckAnswer = async () => {
+        if (!currentPuzzle) return;
+        const normalizedUserMove = userMove.trim().toLowerCase();
+        if (!normalizedUserMove) return;
+        try {
+            // Server decides correct/incorrect — the client never holds the answer.
+            const { correct } = await checkPuzzle(currentPuzzle.id, username, normalizedUserMove);
+            setStatus(correct ? 'correct' : 'incorrect');
+        } catch (err) {
+            console.error('Failed to check move:', err);
+            setStatus('incorrect');
+        }
+    };
+
+    const handleRevealSolution = async () => {
+        const bestMove = await ensureRevealedMove();
         setStatus('revealed');
-        const bestMove = currentPuzzle?.best_move_uci?.toLowerCase();
         setUserMove(bestMove || '');
         if (currentPuzzle && bestMove) {
             const solutionGame = new Chess(currentPuzzle.fen);
@@ -335,11 +364,14 @@ export default function Puzzles() {
         }
     };
 
-    const handleClue = () => {
+    const handleClue = async () => {
         if (clue.clueStage === 1) {
             clue.advance();
-            handleRevealSolution();
+            await handleRevealSolution();
         } else {
+            // Fetch the solution before advancing so the piece-hint highlight has
+            // something to derive its square from.
+            await ensureRevealedMove();
             clue.advance();
         }
     };
@@ -349,6 +381,8 @@ export default function Puzzles() {
     if (currentPuzzle && currentPuzzle !== prevPuzzle) {
         setPrevPuzzle(currentPuzzle);
         setGame(new Chess(currentPuzzle.fen));
+        // Drop any solution held for the previous puzzle.
+        setRevealedMove(null);
     }
 
     // Reset clue and start timer when puzzle changes (side effects in effect)
@@ -368,9 +402,15 @@ export default function Puzzles() {
             setGame(new Chess(game.fen()));
             const uciMove = `${move.from}${move.to}${move.promotion || ''}`;
             setUserMove(uciMove);
-            const normalizedBestMove = currentPuzzle.best_move_uci.toLowerCase();
-            if (uciMove === normalizedBestMove) setStatus('correct');
-            else setStatus('incorrect');
+            // The board applies the move locally (chess.js validates legality),
+            // but whether it SOLVES the puzzle is decided server-side so the
+            // client never holds the answer (audit gate 13).
+            void checkPuzzle(currentPuzzle.id, username, uciMove)
+                .then(({ correct }) => setStatus(correct ? 'correct' : 'incorrect'))
+                .catch((err) => {
+                    console.error('Failed to check move:', err);
+                    setStatus('incorrect');
+                });
             return true;
         } catch { return false; }
     };
@@ -952,7 +992,7 @@ export default function Puzzles() {
                             {status === 'revealed' && (
                                 <div>
                                     <p className="text-primary/70 font-sans text-xs uppercase tracking-widest mb-1">Solution</p>
-                                    <p className="text-primary font-mono text-xl">{currentPuzzle.best_move_uci}</p>
+                                    <p className="text-primary font-mono text-xl">{revealedMove ?? '…'}</p>
                                 </div>
                             )}
                         </div>
@@ -997,8 +1037,8 @@ export default function Puzzles() {
                                         type="button"
                                         onClick={activeSessionId ? handleUseHint : handleClue}
                                         disabled={activeSessionId
-                                            ? (!currentPuzzle?.best_move_uci || hintsUsed >= 3)
-                                            : clue.isDisabled}
+                                            ? hintsUsed >= 3
+                                            : (!currentPuzzle || (clue.clueStage === 2))}
                                         aria-label={puzzleActionA11yCopy.hintLabel}
                                         className="px-6 py-4 border border-primary/20 text-primary rounded-sm font-serif text-lg transition-all km-interactive km-focus-visible disabled:opacity-50 disabled:cursor-default">
                                         {activeSessionId ? `Hint (${hintsUsed}/3)` : 'Clue'}

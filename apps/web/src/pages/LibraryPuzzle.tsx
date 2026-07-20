@@ -211,6 +211,13 @@ export default function LibraryPuzzle() {
                 <h1 className="text-3xl md:text-4xl font-serif text-primary">
                     {puzzle.title || 'Puzzle'}
                 </h1>
+                <p className="mt-2 text-sm font-sans text-primary/60">
+                    Exploration mode — the solution is shown on request and results here
+                    are not counted as verified training. For a scored session, use{' '}
+                    <Link to="/puzzles" className="km-inline-link km-focus-visible text-primary">
+                        Train
+                    </Link>.
+                </p>
             </section>
 
             {/* Metadata strip */}

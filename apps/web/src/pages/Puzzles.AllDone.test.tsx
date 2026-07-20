@@ -50,6 +50,8 @@ vi.mock('../api', () => ({
     startSession: vi.fn(),
     completeSession: vi.fn(),
     reviewPuzzle: vi.fn().mockResolvedValue({}),
+    checkPuzzle: vi.fn().mockResolvedValue({ correct: true, result: 'pass' }),
+    revealPuzzle: vi.fn().mockResolvedValue({ best_move_uci: 'e2e4', accept_moves_uci: ['e2e4'] }),
     getSession: vi.fn().mockRejectedValue(new Error('No session')),
     useHint: vi.fn(),
     getUserStatus: vi.fn().mockResolvedValue({ games_count: 10, puzzles_count: 5, due_count: 3, has_new_games: false }),
