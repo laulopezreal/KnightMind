@@ -1106,6 +1106,64 @@ def test_reveal_endpoint_puzzle_not_found(client_with_db):
     assert response.status_code == 404
 
 
+# --- Library list/detail solution gating (dim 13) ---------------------------
+# The Library browse surface must not passively echo the solution: a user could
+# GET the answer and replay it in a scored /due session for a "verified" pass.
+# best_move_uci/accept_moves_uci are omitted unless ?reveal=true is set.
+
+
+def test_puzzles_list_omits_solution_by_default(client_with_db, db_session):
+    """Default /puzzles/list must not carry the solution."""
+    _create_puzzle(db_session, "p-list-hide", "testuser")
+    db_session.commit()
+
+    response = client_with_db.get("/puzzles/list?username=testuser")
+    assert response.status_code == 200
+    puzzles = response.json()["puzzles"]
+    assert puzzles
+    for p in puzzles:
+        assert p["best_move_uci"] is None
+        assert p["accept_moves_uci"] == []
+
+
+def test_puzzles_list_reveals_solution_on_demand(client_with_db, db_session):
+    """?reveal=true opts in to the solution (owner asking to see the answer)."""
+    _create_puzzle(db_session, "p-list-show", "testuser")
+    db_session.commit()
+
+    response = client_with_db.get("/puzzles/list?username=testuser&reveal=true")
+    assert response.status_code == 200
+    p = response.json()["puzzles"][0]
+    assert p["best_move_uci"] == "d2d4"
+    assert "d2d4" in p["accept_moves_uci"]
+
+
+def test_puzzle_detail_omits_solution_by_default(client_with_db, db_session):
+    """Default /puzzles/{id} must not carry the solution."""
+    _create_puzzle(db_session, "p-detail-hide", "testuser")
+    db_session.commit()
+
+    response = client_with_db.get("/puzzles/p-detail-hide?username=testuser")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["best_move_uci"] is None
+    assert body["accept_moves_uci"] == []
+
+
+def test_puzzle_detail_reveals_solution_on_demand(client_with_db, db_session):
+    """?reveal=true opts in to the solution on the detail endpoint."""
+    _create_puzzle(db_session, "p-detail-show", "testuser")
+    db_session.commit()
+
+    response = client_with_db.get(
+        "/puzzles/p-detail-show?username=testuser&reveal=true"
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["best_move_uci"] == "d2d4"
+    assert "d2d4" in body["accept_moves_uci"]
+
+
 # --- Full principal-variation (multi-move) puzzles (SCORECARD dim 12 -> 9) ---
 
 # A Queen's-Gambit line legal from the seeded start position: the solver plays

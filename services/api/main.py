@@ -511,7 +511,11 @@ class PuzzleListItem(BaseModel):
     swing: float
     fen: str
     side_to_move: str
-    best_move_uci: str
+    # Solution fields are gated: they are populated only when the caller opts in
+    # with ?reveal=true (owner asking to see the answer). Otherwise they are None
+    # / empty so the Library browse surface can't passively echo the solution
+    # into a scored /due session (dim 13).
+    best_move_uci: str | None = None
     # Full set of accepted solutions (multi-PV equivalence set). Falls back to
     # [best_move_uci] for puzzles generated before this was persisted.
     accept_moves_uci: list[str] = []
@@ -1250,6 +1254,11 @@ async def list_puzzles(
     ),
     limit: int = Query(50, ge=1, le=100, description="Page size"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
+    reveal: bool = Query(
+        False,
+        description="Include the solution (best_move_uci/accept_moves_uci). "
+        "Off by default so the browse surface can't echo the answer.",
+    ),
     db: Session = Depends(get_db),
     account: Account | None = Depends(require_account),
 ):
@@ -1422,8 +1431,9 @@ async def list_puzzles(
                 swing=puzzle.swing,
                 fen=puzzle.fen,
                 side_to_move=puzzle.side_to_move,
-                best_move_uci=puzzle.best_move_uci,
-                accept_moves_uci=_accept_moves(puzzle),
+                # Gated on ?reveal=true (dim 13): omit the solution by default.
+                best_move_uci=puzzle.best_move_uci if reveal else None,
+                accept_moves_uci=_accept_moves(puzzle) if reveal else [],
                 status=row_status,
                 attempts=stats.attempts if stats else 0,
                 pass_count=stats.pass_count if stats else 0,
@@ -1455,6 +1465,11 @@ async def list_puzzles(
 async def get_puzzle_detail(
     puzzle_id: str,
     username: str = Query(..., description="Username to look up puzzle for"),
+    reveal: bool = Query(
+        False,
+        description="Include the solution (best_move_uci/accept_moves_uci). "
+        "Off by default so the browse surface can't echo the answer.",
+    ),
     db: Session = Depends(get_db),
     account: Account | None = Depends(require_account),
 ):
@@ -1508,8 +1523,9 @@ async def get_puzzle_detail(
         swing=puzzle.swing,
         fen=puzzle.fen,
         side_to_move=puzzle.side_to_move,
-        best_move_uci=puzzle.best_move_uci,
-        accept_moves_uci=_accept_moves(puzzle),
+        # Gated on ?reveal=true (dim 13): omit the solution by default.
+        best_move_uci=puzzle.best_move_uci if reveal else None,
+        accept_moves_uci=_accept_moves(puzzle) if reveal else [],
         status=computed_status,
         attempts=stats.attempts if stats else 0,
         pass_count=stats.pass_count if stats else 0,

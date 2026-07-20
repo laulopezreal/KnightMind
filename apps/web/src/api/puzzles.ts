@@ -202,7 +202,9 @@ export async function getLibraryPuzzle(
     puzzleId: string,
     username: string
 ): Promise<LibraryPuzzle> {
-    const params = new URLSearchParams({ username });
+    // The detail page checks/reveals the move client-side, so it opts in to the
+    // solution with reveal=true. The list surface never asks for it (dim 13).
+    const params = new URLSearchParams({ username, reveal: 'true' });
     return await request<LibraryPuzzle>(`/puzzles/${encodeURIComponent(puzzleId)}?${params}`);
 }
 
