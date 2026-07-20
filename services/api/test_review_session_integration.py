@@ -947,28 +947,22 @@ def test_review_same_session_atomic_no_partial_state_postgres(monkeypatch):
             assert sess.total_time_ms == 2500
 
 
-@pytest.mark.xfail(
-    reason=(
-        "KNOWN BUG (reported, not fixed here): session counter increments are a "
-        "Python-side read-modify-write (session.pass_count += 1) with no row lock "
-        "or atomic SQL UPDATE, so two concurrent reviews of DIFFERENT puzzles in "
-        "the same session lose an increment under Postgres READ COMMITTED "
-        "(final pass_count=1 instead of 2). See test_review_session_integration "
-        "report."
-    ),
-    strict=False,
-)
 @requires_postgres
 def test_review_distinct_reviews_same_session_no_lost_increment_postgres(monkeypatch):
     """dim 15: two concurrent reviews of DIFFERENT puzzles in the SAME session
     must not lose a counter increment.
 
     Both reviews are legitimate (distinct puzzles, distinct idempotency keys), so
-    the session should end with pass_count == 2 and total_time_ms == 2000. This
-    currently FAILS (xfail) because the counter update is a non-atomic
-    read-modify-write — a real lost-update bug, reported for a separate fix. The
-    review ROWS are still both recorded; only the aggregate session counters are
-    lost, which is why this is a silent-correctness bug rather than a 500.
+    the session must end with pass_count == 2 and total_time_ms == 2000.
+
+    Regression guard for a lost-update bug: session counters were a Python-side
+    read-modify-write (``session.pass_count += 1``) with no row lock, so under
+    Postgres READ COMMITTED both requests read the stale count and one increment
+    was silently lost (final pass_count == 1). The fix takes a
+    ``SELECT ... FOR UPDATE`` on the session row so concurrent same-session
+    reviews serialize. The two requests are released together at the entry
+    replay-SELECT; the session lock then forces the second to read the first's
+    committed count.
     """
     with _pg_review_harness() as PgSession:
         session_id = str(uuid.uuid4())
@@ -993,9 +987,11 @@ def test_review_distinct_reviews_same_session_no_lost_increment_postgres(monkeyp
             )
             s.commit()
 
-        # Sync both requests just before they recompute+commit the shared session
-        # row, forcing the concurrent read-modify-write to overlap.
-        _install_race_barrier(monkeypatch, "update_puzzle_stats")
+        # Release both requests together at the entry replay-SELECT (before the
+        # session lock). Without the fix both would then read pass_count=0 and
+        # lose an increment; with the FOR UPDATE lock the second blocks until the
+        # first commits and reads the fresh count.
+        _install_race_barrier(monkeypatch, "_find_existing_review")
 
         statuses: dict[int, int] = {}
 
