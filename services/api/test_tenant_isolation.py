@@ -235,6 +235,46 @@ def test_b_cannot_review_alice_puzzle(iso):
     assert resp.status_code == 403
 
 
+def test_b_cannot_check_alice_puzzle(iso):
+    resp = iso["client"].post(
+        "/puzzles/p-alice/check",
+        json={"username": "alice", "attempted_move": "d2d4"},
+        headers=_auth(iso["token_b"]),
+    )
+    assert resp.status_code == 403
+
+
+def test_b_cannot_reveal_alice_puzzle(iso):
+    resp = iso["client"].post(
+        "/puzzles/p-alice/reveal",
+        json={"username": "alice"},
+        headers=_auth(iso["token_b"]),
+    )
+    assert resp.status_code == 403
+
+
+def test_owner_can_check_own_puzzle(iso):
+    resp = iso["client"].post(
+        "/puzzles/p-alice/check",
+        json={"username": "alice", "attempted_move": "d2d4"},
+        headers=_auth(iso["token_a"]),
+    )
+    assert resp.status_code == 200
+    assert resp.json()["correct"] is True
+
+
+def test_owner_reveal_does_not_leak_via_due(iso):
+    """The scored /puzzles/due payload must not carry the solution even for the
+    owner — the answer is only available through the explicit reveal path."""
+    resp = iso["client"].get(
+        "/puzzles/due?username=alice", headers=_auth(iso["token_a"])
+    )
+    assert resp.status_code == 200
+    for p in resp.json()["puzzles"]:
+        assert "best_move_uci" not in p
+        assert "accept_moves_uci" not in p
+
+
 def test_b_cannot_create_alice_daily_session(iso):
     resp = iso["client"].post(
         "/daily-puzzle-sessions",

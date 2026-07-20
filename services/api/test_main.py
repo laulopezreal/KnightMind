@@ -847,6 +847,132 @@ def test_get_daily_puzzles_idempotent(client_with_db, db_session):
     assert puzzle_ids_1 == puzzle_ids_2
 
 
+# --- Training integrity: no pre-exposure of the solution (audit gate 13) ---
+
+# _create_puzzle seeds best_move_uci="d2d4" on the initial position, so in these
+# tests "d2d4" is the correct solution, "e2e4" is legal-but-wrong, and "e2e5" is
+# illegal.
+
+
+def test_due_puzzles_do_not_leak_solution(client_with_db, db_session):
+    """SCORED training payload must NOT ship the answer before an attempt."""
+    _create_puzzle(db_session, "p-due-leak", "testuser")
+    db_session.commit()
+
+    response = client_with_db.get("/puzzles/due?username=testuser&n=5")
+    assert response.status_code == 200
+    puzzles = response.json()["puzzles"]
+    assert puzzles, "expected the new puzzle to be returned for training"
+    for p in puzzles:
+        # The board renders from fen/side_to_move — but the solution (and the
+        # original blunder, which narrows it) must never be pre-sent.
+        assert "best_move_uci" not in p
+        assert "accept_moves_uci" not in p
+        assert "played_move_uci" not in p
+        assert "fen" in p and "side_to_move" in p
+
+
+def test_daily_puzzles_do_not_leak_solution(client_with_db, db_session):
+    """Post-generation warm-up payload must not carry the solution either."""
+    _create_puzzle(db_session, "p-daily-leak", "testuser")
+    db_session.commit()
+
+    response = client_with_db.post(
+        "/daily-puzzle-sessions", json={"username": "testuser", "n": 1}
+    )
+    assert response.status_code == 200
+    for p in response.json()["puzzles"]:
+        assert "best_move_uci" not in p
+        assert "accept_moves_uci" not in p
+        assert "played_move_uci" not in p
+
+
+def test_check_endpoint_correct_move(client_with_db, db_session):
+    """A correct move returns correct=True and reveals no solution."""
+    _create_puzzle(db_session, "p-check-ok", "testuser")
+    db_session.commit()
+
+    response = client_with_db.post(
+        "/puzzles/p-check-ok/check",
+        json={"username": "testuser", "attempted_move": "d2d4"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body == {"correct": True, "result": "pass"}
+    # The solution never appears in the response body.
+    assert "d2d4" not in {v for v in body.values() if isinstance(v, str)}
+    assert "best_move_uci" not in body
+
+
+def test_check_endpoint_wrong_move(client_with_db, db_session):
+    """A legal-but-wrong move returns correct=False without revealing the answer."""
+    _create_puzzle(db_session, "p-check-wrong", "testuser")
+    db_session.commit()
+
+    response = client_with_db.post(
+        "/puzzles/p-check-wrong/check",
+        json={"username": "testuser", "attempted_move": "e2e4"},
+    )
+    assert response.status_code == 200
+    assert response.json() == {"correct": False, "result": "fail"}
+
+
+def test_check_endpoint_illegal_move_is_incorrect(client_with_db, db_session):
+    """An illegal move is simply incorrect (never a 500)."""
+    _create_puzzle(db_session, "p-check-illegal", "testuser")
+    db_session.commit()
+
+    response = client_with_db.post(
+        "/puzzles/p-check-illegal/check",
+        json={"username": "testuser", "attempted_move": "e2e5"},
+    )
+    assert response.status_code == 200
+    assert response.json()["correct"] is False
+
+
+def test_check_endpoint_records_nothing(client_with_db, db_session):
+    """/check is pure feedback — it must not create a review or stats row."""
+    from services.api.models import PuzzleReview
+
+    _create_puzzle(db_session, "p-check-norecord", "testuser")
+    db_session.commit()
+
+    client_with_db.post(
+        "/puzzles/p-check-norecord/check",
+        json={"username": "testuser", "attempted_move": "d2d4"},
+    )
+    assert db_session.query(PuzzleReview).count() == 0
+
+
+def test_check_endpoint_puzzle_not_found(client_with_db):
+    response = client_with_db.post(
+        "/puzzles/does-not-exist/check",
+        json={"username": "testuser", "attempted_move": "d2d4"},
+    )
+    assert response.status_code == 404
+
+
+def test_reveal_endpoint_returns_solution(client_with_db, db_session):
+    """Explicit reveal returns the solution on demand."""
+    _create_puzzle(db_session, "p-reveal", "testuser")
+    db_session.commit()
+
+    response = client_with_db.post(
+        "/puzzles/p-reveal/reveal", json={"username": "testuser"}
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["best_move_uci"] == "d2d4"
+    assert "d2d4" in body["accept_moves_uci"]
+
+
+def test_reveal_endpoint_puzzle_not_found(client_with_db):
+    response = client_with_db.post(
+        "/puzzles/nope/reveal", json={"username": "testuser"}
+    )
+    assert response.status_code == 404
+
+
 # --- Engine tests ---
 
 

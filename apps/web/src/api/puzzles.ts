@@ -7,8 +7,12 @@ export interface Puzzle {
     ply: number;
     fen: string;
     side_to_move: string;
-    played_move_uci: string;
-    best_move_uci: string;
+    // Solution-revealing fields. Omitted from the SCORED training payloads
+    // (/puzzles/due, /daily-puzzle-sessions) so the answer can't be pre-read
+    // before an attempt (audit gate 13). The Train board checks moves via
+    // checkPuzzle() and fetches the solution via revealPuzzle().
+    played_move_uci?: string;
+    best_move_uci?: string;
     eval_before: number;
     eval_after: number;
     swing: number;
@@ -216,6 +220,57 @@ export async function getLibraryPuzzles(
     if (params.offset !== undefined) searchParams.append('offset', params.offset.toString());
 
     return await request<LibraryListResponse>(`/puzzles/list?${searchParams}`);
+}
+
+// --- Training board: server-side check + explicit reveal (audit gate 13) ---
+
+export interface CheckPuzzleResponse {
+    correct: boolean;
+    result: 'pass' | 'fail';
+}
+
+export interface RevealPuzzleResponse {
+    best_move_uci: string;
+    accept_moves_uci: string[];
+}
+
+/**
+ * Verify a played move server-side for live board feedback WITHOUT revealing the
+ * solution. The response is only correct/incorrect — the answer never travels to
+ * the client. Recording/scheduling still goes through reviewPuzzle().
+ */
+export async function checkPuzzle(
+    puzzleId: string,
+    username: string,
+    attemptedMove: string
+): Promise<CheckPuzzleResponse> {
+    return await request<CheckPuzzleResponse>(
+        `/puzzles/${encodeURIComponent(puzzleId)}/check`,
+        {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, attempted_move: attemptedMove }),
+        }
+    );
+}
+
+/**
+ * Explicitly fetch a puzzle's solution (the "give up / show me" path). The
+ * scored training payload no longer carries the answer, so the board asks for it
+ * here on demand.
+ */
+export async function revealPuzzle(
+    puzzleId: string,
+    username: string
+): Promise<RevealPuzzleResponse> {
+    return await request<RevealPuzzleResponse>(
+        `/puzzles/${encodeURIComponent(puzzleId)}/reveal`,
+        {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username }),
+        }
+    );
 }
 
 export async function reviewPuzzle(

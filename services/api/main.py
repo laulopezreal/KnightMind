@@ -553,6 +553,31 @@ class ReviewRequest(BaseModel):
     attempted_move: str | None = None
 
 
+class CheckRequest(BaseModel):
+    username: str
+    # The UCI move the user played on the board. Verified server-side; the
+    # solution is never echoed back (audit gate 13).
+    attempted_move: str
+
+
+class CheckResponse(BaseModel):
+    # Server-authoritative live feedback for the training board. Reveals only
+    # whether the played move solves the puzzle — NOT what the solution is.
+    correct: bool
+    result: str  # "pass" | "fail"
+
+
+class RevealRequest(BaseModel):
+    username: str
+
+
+class RevealResponse(BaseModel):
+    # Explicit "give up / show me" path. Returns the solution only when the
+    # owner asks for it directly — the scored training payload never carries it.
+    best_move_uci: str
+    accept_moves_uci: list[str] = []
+
+
 @app.get("/")
 async def root():
     return {"message": "KnightMind API", "version": "0.1.0"}
@@ -883,7 +908,9 @@ async def create_daily_puzzle_session(
         else:
             p_dict["primary_motif"] = None
             p_dict["title"] = None
-        puzzles_dict.append(p_dict)
+        # SCORED training path (post-generation warm-up): strip the solution so
+        # it can't be pre-read before an attempt (audit gate 13).
+        puzzles_dict.append(_strip_solution(p_dict))
 
     return DailyPuzzlesResponse(puzzles=puzzles_dict, count=len(puzzles_dict))
 
@@ -985,7 +1012,8 @@ async def get_due_puzzles_endpoint(
                     "primary_motif": None,
                 }
             )
-        result_puzzles.append(p_dict)
+        # SCORED training path: never ship the solution up front.
+        result_puzzles.append(_strip_solution(p_dict))
 
     # 4. Total due count for metadata
     # 4. Total due count for metadata
@@ -1003,6 +1031,24 @@ async def get_due_puzzles_endpoint(
         "now": now,
         "puzzles": result_puzzles,
     }
+
+
+# Fields that reveal (or strongly hint at) a puzzle's solution. They are
+# stripped from every SCORED TRAINING payload so a client cannot pre-read the
+# answer before making an attempt (audit gate 13 — closes the pre-exposure cheat
+# vector left after gate 7's server-verified reviews). The training board gets
+# live correct/incorrect feedback from POST /puzzles/{id}/check, and the
+# solution only from POST /puzzles/{id}/reveal or a server-verified solve.
+# played_move_uci (the original blunder) is included because it narrows the
+# solution and the training client never needs it.
+_SOLUTION_FIELDS = ("best_move_uci", "accept_moves_uci", "played_move_uci")
+
+
+def _strip_solution(p_dict: dict) -> dict:
+    """Remove solution-revealing fields from a training puzzle dict, in place."""
+    for field in _SOLUTION_FIELDS:
+        p_dict.pop(field, None)
+    return p_dict
 
 
 def _swing_to_difficulty(swing: float) -> str:
@@ -1569,6 +1615,57 @@ async def review_puzzle(
         effective_result,
         verified=verified,
         source=review_source,
+    )
+
+
+@app.post("/puzzles/{puzzle_id}/check", response_model=CheckResponse)
+async def check_puzzle(
+    puzzle_id: str,
+    request: CheckRequest,
+    db: Session = Depends(get_db),
+    account: Account | None = Depends(require_account),
+):
+    """Server-authoritative live feedback for the training board (audit gate 13).
+
+    Verifies the played move against the puzzle's accepted-solution set and
+    returns only correct/incorrect — never the solution itself. This lets the
+    Train board tell the user whether their move was right WITHOUT the client
+    ever holding the answer. It records nothing; scheduling/stats still flow
+    through POST /puzzles/{id}/review. Ownership is enforced exactly as review.
+    """
+    assert_owns_username(account, request.username, db)
+    puzzle_repository = PuzzleRepository(db)
+    puzzle = puzzle_repository.get_puzzle(request.username, puzzle_id)
+    if not puzzle:
+        raise HTTPException(status_code=404, detail="Puzzle not found")
+
+    result = _verify_attempt(puzzle, request.attempted_move)
+    return CheckResponse(correct=result == PuzzleResult.PASS, result=result.value)
+
+
+@app.post("/puzzles/{puzzle_id}/reveal", response_model=RevealResponse)
+async def reveal_puzzle(
+    puzzle_id: str,
+    request: RevealRequest,
+    db: Session = Depends(get_db),
+    account: Account | None = Depends(require_account),
+):
+    """Explicit "show me the solution" path for the training board.
+
+    The scored training payload (list/due/daily) no longer carries the answer,
+    so a user who gives up (or asks for a full clue) fetches it here on demand.
+    Returns nothing but the solution; recording the resulting fail still happens
+    via POST /puzzles/{id}/review when the user moves on. Ownership enforced.
+    """
+    assert_owns_username(account, request.username, db)
+    puzzle_repository = PuzzleRepository(db)
+    puzzle = puzzle_repository.get_puzzle(request.username, puzzle_id)
+    if not puzzle:
+        raise HTTPException(status_code=404, detail="Puzzle not found")
+
+    return RevealResponse(
+        best_move_uci=puzzle.best_move_uci,
+        accept_moves_uci=_accept_moves(puzzle),
     )
 
 
