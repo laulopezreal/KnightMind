@@ -3,23 +3,35 @@
 import os
 import threading
 import time
+from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
+
+from services.api.db import Base
+from services.api.models import FenEvalCache
 
 from . import stockfish as sf_module
 from .stockfish import (
+    EVAL_CONVERSION_VERSION,
     MATE_EVALUATION,
+    UNKNOWN_ENGINE_VERSION,
     EvalResult,
     MoveEval,
     StockfishEngineDeadError,
     StockfishError,
     StockfishNotFoundError,
+    _compute_cache_key,
     _convert_eval_to_pawns,
     _convert_evaluation,
     close_engine,
     evaluate_fen,
     get_analysis_params,
+    get_engine_version,
+    get_or_compute_eval,
     get_stockfish_path,
     get_top_moves,
     is_stockfish_available,
@@ -352,3 +364,282 @@ class TestEngineConcurrencyBound:
                     evaluate_fen(_START_FEN)
             finally:
                 one_slot.release()
+
+
+# --------------------------------------------------------------------------- #
+# Audit gate 4: version-aware, reproducible engine eval cache.
+# --------------------------------------------------------------------------- #
+
+
+def _base_key_kwargs(**overrides) -> dict:
+    """Canonical set of cache-key inputs; override one dim per test."""
+    kwargs = dict(
+        fen=_START_FEN,
+        depth=12,
+        movetime_ms=None,
+        engine_name="stockfish",
+        engine_version="16.1",
+        threads=1,
+        hash_mb=16,
+        multipv=1,
+    )
+    kwargs.update(overrides)
+    return kwargs
+
+
+class TestCacheKeyInputs:
+    """The cache key must fold in every result-changing input."""
+
+    def test_identical_inputs_yield_identical_key(self):
+        assert _compute_cache_key(**_base_key_kwargs()) == _compute_cache_key(
+            **_base_key_kwargs()
+        )
+
+    @pytest.mark.parametrize(
+        "override",
+        [
+            {"engine_version": "17.0"},
+            {"engine_name": "/opt/other/stockfish"},
+            {"depth": 20},
+            {"movetime_ms": 500},
+            {"threads": 4},
+            {"hash_mb": 256},
+            {"multipv": 3},
+            {"conversion_version": EVAL_CONVERSION_VERSION + 1},
+        ],
+    )
+    def test_each_dimension_changes_the_key(self, override):
+        """Flipping any single result-changing dimension must change the key,
+        so an old entry can never be reused under a different engine/config."""
+        base = _compute_cache_key(**_base_key_kwargs())
+        changed = _compute_cache_key(**_base_key_kwargs(**override))
+        assert base != changed, f"key did not change for {override}"
+
+    def test_fen_is_normalized(self):
+        """Trivially different spellings of the same FEN (extra whitespace)
+        collapse to the same key."""
+        spaced = "  rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR   w KQkq - 0 1 "
+        assert _compute_cache_key(**_base_key_kwargs()) == _compute_cache_key(
+            **_base_key_kwargs(fen=spaced)
+        )
+
+
+class TestGetEngineVersion:
+    """Version resolution must degrade, never crash, when no engine is present."""
+
+    def test_unknown_when_no_binary(self):
+        sf_module._ENGINE_VERSION_CACHE.clear()
+        try:
+            with patch.object(sf_module, "create_engine") as mock_create:
+                mock_create.side_effect = StockfishNotFoundError("no binary")
+                assert get_engine_version() == UNKNOWN_ENGINE_VERSION
+        finally:
+            sf_module._ENGINE_VERSION_CACHE.clear()
+
+    def test_reads_version_from_live_engine(self):
+        """A live engine's version is read directly (no probe spawned)."""
+        engine = MagicMock()
+        engine.get_stockfish_major_minor_version.return_value = "16.1"
+        engine.get_stockfish_sha_version.return_value = ""
+        with patch.object(sf_module, "create_engine") as mock_create:
+            assert get_engine_version(engine) == "16.1"
+            mock_create.assert_not_called()  # no throwaway probe when engine given
+
+
+@contextmanager
+def _cache_db():
+    """In-memory SQLite DB patched into stockfish.SessionLocal."""
+    engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+
+    @contextmanager
+    def fake_session_local():
+        db = Session()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    with patch.object(sf_module, "SessionLocal", fake_session_local):
+        yield Session
+
+
+def _live_key(engine_version: str, fen: str = _START_FEN) -> str:
+    """Recompute the exact key get_or_compute_eval will use for ``fen`` under
+    the current process config and the given engine version."""
+    return _compute_cache_key(
+        fen=fen,
+        depth=sf_module.get_search_depth(),
+        movetime_ms=None,
+        engine_name=sf_module.get_stockfish_path(),
+        engine_version=engine_version,
+        threads=sf_module.get_engine_threads(),
+        hash_mb=sf_module.get_engine_hash_mb(),
+        multipv=sf_module.get_engine_multipv(),
+    )
+
+
+class TestVersionAwareCache:
+    """End-to-end cache behaviour across engine versions/configs."""
+
+    def test_stale_entry_not_reused_after_version_change(self):
+        """Core regression: an entry cached under engine version A must NOT be
+        returned for the same FEN under version B (the pre-fix bug returned the
+        stale eval because the key omitted the version)."""
+        with _cache_db() as Session:
+            # Seed a row as if computed under version A -> eval 1.0.
+            with Session() as db:
+                db.add(
+                    FenEvalCache(
+                        key=_live_key("A"),
+                        fen=_START_FEN,
+                        best_move_uci="e2e4",
+                        eval_pawns=1.0,
+                        engine_version="A",
+                    )
+                )
+                db.commit()
+
+            # Engine is now version B and would compute a different eval.
+            def fake_eval(fen, engine=None):
+                return EvalResult(best_move_uci="e2e4", eval=2.0)
+
+            stats: dict = {}
+            with (
+                patch.object(sf_module, "get_engine_version", return_value="B"),
+                patch.object(sf_module, "evaluate_fen", side_effect=fake_eval),
+            ):
+                result = get_or_compute_eval(_START_FEN, cache_stats=stats)
+
+            assert result.eval == 2.0  # recomputed, not the stale 1.0
+            assert stats == {"misses": 1}
+
+            # The version-B row was written; the stale A row is untouched.
+            with Session() as db:
+                assert db.get(FenEvalCache, _live_key("A")).eval_pawns == 1.0
+                b_row = db.get(FenEvalCache, _live_key("B"))
+                assert b_row is not None
+                assert b_row.eval_pawns == 2.0
+                assert b_row.engine_version == "B"
+
+    def test_same_config_hits_cache(self):
+        """A matching engine version/config still hits the cache without
+        touching the engine at all."""
+        with _cache_db() as Session:
+            with Session() as db:
+                db.add(
+                    FenEvalCache(
+                        key=_live_key("16.1"),
+                        fen=_START_FEN,
+                        best_move_uci="e2e4",
+                        eval_pawns=0.42,
+                        engine_version="16.1",
+                    )
+                )
+                db.commit()
+
+            def boom(fen, engine=None):  # pragma: no cover - must not run
+                raise AssertionError("cache hit must not call evaluate_fen")
+
+            stats: dict = {}
+            with (
+                patch.object(sf_module, "get_engine_version", return_value="16.1"),
+                patch.object(sf_module, "evaluate_fen", side_effect=boom),
+            ):
+                result = get_or_compute_eval(_START_FEN, cache_stats=stats)
+
+            assert result.eval == 0.42
+            assert stats == {"hits": 1}
+
+    def test_computed_entry_is_self_describing(self):
+        """A freshly computed entry records engine version + full config so it
+        is reproducible/auditable."""
+        with _cache_db() as Session:
+            with (
+                patch.object(sf_module, "get_engine_version", return_value="16.1"),
+                patch.object(
+                    sf_module,
+                    "evaluate_fen",
+                    side_effect=lambda fen, engine=None: EvalResult("e2e4", 0.2),
+                ),
+            ):
+                get_or_compute_eval(_START_FEN)
+
+            with Session() as db:
+                row = db.get(FenEvalCache, _live_key("16.1"))
+            assert row is not None
+            assert row.engine_version == "16.1"
+            assert row.threads == sf_module.get_engine_threads()
+            assert row.hash_mb == sf_module.get_engine_hash_mb()
+            assert row.multipv == sf_module.get_engine_multipv()
+            assert row.conversion_version == EVAL_CONVERSION_VERSION
+
+    def test_terminal_eval_not_cached(self):
+        """Terminal positions (no best move) are intentionally not cached, so a
+        cache miss/failure only ever costs performance, never correctness."""
+        with _cache_db() as Session:
+            terminal = EvalResult(
+                best_move_uci=None, eval=-MATE_EVALUATION, mate_in=0, is_terminal=True
+            )
+            with (
+                patch.object(sf_module, "get_engine_version", return_value="16.1"),
+                patch.object(
+                    sf_module,
+                    "evaluate_fen",
+                    side_effect=lambda fen, engine=None: terminal,
+                ),
+            ):
+                result = get_or_compute_eval(_START_FEN)
+
+            assert result.is_terminal is True
+            with Session() as db:
+                assert db.get(FenEvalCache, _live_key("16.1")) is None
+
+    def test_concurrent_insert_returns_existing_entry(self):
+        """If a concurrent writer inserts the same key between our miss-read and
+        our commit, the IntegrityError path re-selects and returns that row
+        rather than raising."""
+        with _cache_db() as Session:
+            key = _live_key("16.1")
+
+            # A fake SessionLocal that, on the *write* (2nd) use, first inserts a
+            # conflicting row (simulating a concurrent process) before yielding.
+            call_count = {"n": 0}
+            real_cm = sf_module.SessionLocal  # the patched _cache_db context mgr
+
+            @contextmanager
+            def racing_session_local():
+                call_count["n"] += 1
+                if call_count["n"] == 2:
+                    with Session() as other:
+                        other.add(
+                            FenEvalCache(
+                                key=key,
+                                fen=_START_FEN,
+                                best_move_uci="e2e4",
+                                eval_pawns=9.9,  # value written by the "other" process
+                                engine_version="16.1",
+                            )
+                        )
+                        other.commit()
+                with real_cm() as db:
+                    yield db
+
+            with (
+                patch.object(sf_module, "get_engine_version", return_value="16.1"),
+                patch.object(sf_module, "SessionLocal", racing_session_local),
+                patch.object(
+                    sf_module,
+                    "evaluate_fen",
+                    side_effect=lambda fen, engine=None: EvalResult("e2e4", 2.0),
+                ),
+            ):
+                result = get_or_compute_eval(_START_FEN)
+
+            # We must return the concurrently-inserted value, not raise.
+            assert result.eval == 9.9

@@ -111,6 +111,37 @@ def get_search_depth() -> int:
     return 12
 
 
+def _get_env_int(name: str, default: int) -> int:
+    """Read a positive integer env var, falling back to ``default`` on error."""
+    raw = os.environ.get(name)
+    if raw:
+        try:
+            value = int(raw)
+            if value > 0:
+                return value
+        except ValueError:
+            logger.warning("Invalid %s=%r, using default %s", name, raw, default)
+    return default
+
+
+def get_engine_threads() -> int:
+    """Number of engine threads (Stockfish 'Threads' option). Default matches
+    the ``stockfish`` package default of 1."""
+    return _get_env_int("STOCKFISH_THREADS", 1)
+
+
+def get_engine_hash_mb() -> int:
+    """Engine transposition-table size in MB (Stockfish 'Hash' option). Default
+    matches the ``stockfish`` package default of 16."""
+    return _get_env_int("STOCKFISH_HASH_MB", 16)
+
+
+def get_engine_multipv() -> int:
+    """Number of principal variations (Stockfish 'MultiPV' option). Single-line
+    evaluation uses 1; a different value can change which move is 'best'."""
+    return _get_env_int("STOCKFISH_MULTIPV", 1)
+
+
 def create_engine() -> "StockfishEngine":
     """Create and configure a Stockfish engine instance."""
     if StockfishEngine is None:
@@ -451,31 +482,162 @@ def is_stockfish_available() -> bool:
         close_engine(engine)
 
 
+# Scheme version for the cache-key layout itself. Bumping it invalidates every
+# previously written row wholesale (their hashes were built from a different set
+# of inputs and can never collide with the new layout).
+CACHE_KEY_SCHEME = "v2"
+
+# Version of the raw-Stockfish-eval -> (eval_pawns, mate_in) conversion in
+# _convert_evaluation. Bump this whenever that mapping changes (e.g. the mate
+# sentinel or centipawn scaling) so entries written under the old conversion are
+# never reused under the new one, even for an identical FEN + engine + config.
+EVAL_CONVERSION_VERSION = 1
+
+# Sentinel version string used when the real engine version cannot be
+# determined (e.g. no binary installed). Keeps the cache usable while making the
+# unknown-ness explicit and self-invalidating once a real version is available.
+UNKNOWN_ENGINE_VERSION = "unknown"
+
+# Process-level memo of resolved engine versions keyed by binary path, plus a
+# lock guarding it. Resolving a version requires spawning the engine once; we
+# never want to pay that on every cache lookup, so we cache it for the process.
+_ENGINE_VERSION_CACHE: dict[str, str] = {}
+_ENGINE_VERSION_LOCK = threading.Lock()
+
+
+def _read_version_from_engine(engine: Optional["StockfishEngine"]) -> Optional[str]:
+    """
+    Best-effort read of a version string from a *live* engine instance.
+
+    Uses the ``stockfish`` package's public version API
+    (``get_stockfish_major_minor_version`` / ``get_stockfish_sha_version``),
+    which is populated from the engine's UCI banner at construction time.
+    Returns None (never raises) if the engine cannot report a version, so a
+    version-probe failure degrades cache reuse but never breaks evaluation.
+    """
+    if engine is None:
+        return None
+    getter = getattr(engine, "get_stockfish_major_minor_version", None)
+    if not callable(getter):
+        return None
+    try:
+        major_minor = getter()
+    except Exception:
+        return None
+    if not major_minor:
+        return None
+    parts = [str(major_minor)]
+    sha_getter = getattr(engine, "get_stockfish_sha_version", None)
+    if callable(sha_getter):
+        try:
+            sha = sha_getter()
+        except Exception:
+            sha = None
+        if sha:
+            parts.append(str(sha))
+    return "-".join(parts)
+
+
+def get_engine_version(engine: Optional["StockfishEngine"] = None) -> str:
+    """
+    Resolve the Stockfish engine version for cache-key purposes.
+
+    If a live ``engine`` is supplied (e.g. the puzzle-generator batch owns one),
+    its version is read directly for free. Otherwise the version is resolved once
+    per binary path by spawning a throwaway probe engine and memoized for the
+    life of the process, so ordinary cache lookups never spawn an engine after
+    the first resolution.
+
+    Never raises: any failure yields ``UNKNOWN_ENGINE_VERSION`` so a version
+    lookup problem degrades cache reuse but never changes chess correctness.
+    """
+    live = _read_version_from_engine(engine)
+    if live:
+        return live
+
+    path = get_stockfish_path()
+    with _ENGINE_VERSION_LOCK:
+        cached = _ENGINE_VERSION_CACHE.get(path)
+    if cached is not None:
+        return cached
+
+    version = UNKNOWN_ENGINE_VERSION
+    probe: Optional["StockfishEngine"] = None
+    try:
+        probe = create_engine()
+        resolved = _read_version_from_engine(probe)
+        if resolved:
+            version = resolved
+    except (StockfishNotFoundError, StockfishError):
+        version = UNKNOWN_ENGINE_VERSION
+    except Exception:
+        logger.debug("Unexpected error probing engine version", exc_info=True)
+        version = UNKNOWN_ENGINE_VERSION
+    finally:
+        close_engine(probe)
+
+    with _ENGINE_VERSION_LOCK:
+        _ENGINE_VERSION_CACHE[path] = version
+    return version
+
+
+def _normalize_fen(fen: str) -> str:
+    """
+    Canonicalize a FEN so trivially different spellings of the *same* position
+    map to the same cache key. python-chess normalizes castling rights, the
+    en-passant field (only kept when a capture is actually possible), and
+    whitespace. Halfmove/fullmove counters are preserved because they affect the
+    50-move rule and therefore the evaluation. Falls back to whitespace
+    collapsing if the FEN cannot be parsed (never raises).
+    """
+    try:
+        return chess.Board(fen).fen()
+    except Exception:
+        return " ".join(fen.split())
+
+
 def _compute_cache_key(
-    fen: str, depth: int, movetime_ms: Optional[int], engine_name: str
+    *,
+    fen: str,
+    depth: int,
+    movetime_ms: Optional[int],
+    engine_name: str,
+    engine_version: str,
+    threads: int,
+    hash_mb: int,
+    multipv: int,
+    conversion_version: int = EVAL_CONVERSION_VERSION,
 ) -> str:
     """
-    Compute deterministic cache key for a FEN + engine settings.
+    Compute a deterministic cache key over *every* input that can change the
+    stored evaluation.
 
-    Args:
-        fen: FEN string
-        depth: Search depth
-        movetime_ms: Move time in milliseconds (if used instead of depth)
-        engine_name: Engine identifier
+    Reproducibility invariant: two evaluations may share a cache entry only if
+    they would produce the same result. That means the key must fold in the full
+    normalized FEN, the engine identity *and version*, all search limits (depth /
+    movetime), all result-affecting engine options (threads / hash / multipv),
+    and the eval-conversion version. Omitting any of these (as the pre-fix key
+    did for version/threads/hash/multipv/conversion) let a Stockfish upgrade or a
+    config change silently return a stale eval for the same FEN.
 
     Returns:
-        SHA256 hash as hex string
+        SHA256 hash as hex string.
     """
-    # Build key components
     key_parts = [
-        f"fen={fen}",
-        f"depth={depth}",
-        f"movetime={movetime_ms}" if movetime_ms else "",
+        f"scheme={CACHE_KEY_SCHEME}",
+        f"conv={conversion_version}",
         f"engine={engine_name}",
+        f"version={engine_version}",
+        f"fen={_normalize_fen(fen)}",
+        f"depth={depth}",
+        f"movetime={movetime_ms if movetime_ms else ''}",
+        f"threads={threads}",
+        f"hash={hash_mb}",
+        f"multipv={multipv}",
     ]
-    key_string = "|".join(p for p in key_parts if p)
+    key_string = "|".join(key_parts)
 
-    # Hash for consistent key length
+    # Hash for consistent key length.
     return hashlib.sha256(key_string.encode()).hexdigest()
 
 
@@ -502,13 +664,30 @@ def get_or_compute_eval(
         StockfishNotFoundError: If Stockfish is not available
         StockfishError: If evaluation fails
     """
-    # Get engine settings for cache key
+    # Get engine settings for cache key. ALL of these change the computed eval,
+    # so ALL of them must be folded into the key (see _compute_cache_key): a
+    # Stockfish upgrade or a depth/threads/hash/multipv change must yield a
+    # different key so an old entry is never reused under a materially different
+    # engine/config.
     depth = get_search_depth()
     movetime_ms = None  # We're using depth-based search
     engine_name = get_stockfish_path()
+    engine_version = get_engine_version(engine)
+    threads = get_engine_threads()
+    hash_mb = get_engine_hash_mb()
+    multipv = get_engine_multipv()
 
     # Compute cache key
-    cache_key = _compute_cache_key(fen, depth, movetime_ms, engine_name)
+    cache_key = _compute_cache_key(
+        fen=fen,
+        depth=depth,
+        movetime_ms=movetime_ms,
+        engine_name=engine_name,
+        engine_version=engine_version,
+        threads=threads,
+        hash_mb=hash_mb,
+        multipv=multipv,
+    )
 
     # Try cache lookup
     try:
@@ -549,7 +728,11 @@ def get_or_compute_eval(
                 depth=depth,
                 movetime_ms=movetime_ms,
                 engine_name=engine_name,
-                engine_version=None,  # Could extract from engine if available
+                engine_version=engine_version,
+                threads=threads,
+                hash_mb=hash_mb,
+                multipv=multipv,
+                conversion_version=EVAL_CONVERSION_VERSION,
                 created_at=datetime.now(timezone.utc),
             )
             db.add(cache_entry)

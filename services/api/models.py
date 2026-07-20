@@ -141,6 +141,16 @@ class FenEvalCache(Base):
     movetime_ms: Mapped[int] = mapped_column(Integer, nullable=True)
     engine_name: Mapped[str] = mapped_column(Text, nullable=True)
     engine_version: Mapped[str] = mapped_column(Text, nullable=True)
+    # Result-changing engine config, stored so a cache row is self-describing
+    # and auditable. These are *also* folded into the primary ``key`` (see
+    # engine.stockfish._compute_cache_key), so a change in any of them yields a
+    # different key and old rows can never be reused under a new config.
+    threads: Mapped[int] = mapped_column(Integer, nullable=True)
+    hash_mb: Mapped[int] = mapped_column(Integer, nullable=True)
+    multipv: Mapped[int] = mapped_column(Integer, nullable=True)
+    # Version of the raw-eval -> (eval_pawns, mate_in) conversion used to write
+    # this row; bumped when that mapping changes so stale conversions invalidate.
+    conversion_version: Mapped[int] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(timezone.utc)
     )
