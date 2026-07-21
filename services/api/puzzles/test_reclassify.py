@@ -9,6 +9,8 @@ as a fork and a back-rank mate, then assert:
     - a second real run is a no-op (idempotency).
 """
 
+from datetime import datetime
+
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -48,8 +50,18 @@ def db_session():
         Base.metadata.drop_all(engine)
 
 
-def _seed_puzzle(db, *, puzzle_id, username, fen, best_move, motif, title):
-    """Insert a Puzzle + a stale PuzzleStats row."""
+def _seed_puzzle(
+    db,
+    *,
+    puzzle_id,
+    username,
+    fen,
+    best_move,
+    with_stats=True,
+    motif=None,
+    title=None,
+):
+    """Insert a Puzzle and optionally seed its PuzzleStats identity row."""
     db.add(
         Puzzle(
             id=puzzle_id,
@@ -65,18 +77,20 @@ def _seed_puzzle(db, *, puzzle_id, username, fen, best_move, motif, title):
             swing=3.0,
         )
     )
-    db.add(
-        PuzzleStats(
-            puzzle_id=puzzle_id,
-            username=username,
-            title=title,
-            primary_motif=motif,
+    if with_stats:
+        db.add(
+            PuzzleStats(
+                puzzle_id=puzzle_id,
+                username=username,
+                title=title,
+                primary_motif=motif,
+            )
         )
-    )
     db.commit()
 
 
 def _motif_of(db, puzzle_id):
+    """Return the stored motif/title identity tuple for a puzzle stats row."""
     stats = db.get(PuzzleStats, puzzle_id)
     return stats.primary_motif, stats.title
 
@@ -133,6 +147,54 @@ def test_dry_run_changes_nothing(db_session):
     assert _motif_of(db_session, "p_fork") == ("blunder", "The Missed Win")
 
 
+def test_reclassify_creates_missing_stats_row(db_session):
+    """A puzzle without PuzzleStats gets an identity row on a real run."""
+    _seed_puzzle(
+        db_session,
+        puzzle_id="p_missing_stats",
+        username="lauureal",
+        fen=FORK_FEN,
+        best_move=FORK_BEST,
+        with_stats=False,
+    )
+
+    summary = reclassify_motifs(db_session)
+
+    assert summary["total"] == 1
+    assert summary["created"] == 1
+    assert summary["changed_existing"] == 0
+    assert summary["affected"] == 1
+    assert summary["reclassified"] == 1
+    assert summary["before"]["<missing_stats>"] == 1
+    assert summary["after"]["fork"] == 1
+    stats = db_session.get(PuzzleStats, "p_missing_stats")
+    assert stats is not None
+    assert stats.username == "lauureal"
+    assert (stats.primary_motif, stats.title) == ("fork", "The Fork")
+
+
+def test_dry_run_reports_missing_stats_create_without_writing(db_session):
+    """--dry-run reports missing PuzzleStats rows but does not insert them."""
+    _seed_puzzle(
+        db_session,
+        puzzle_id="p_missing_stats",
+        username="lauureal",
+        fen=FORK_FEN,
+        best_move=FORK_BEST,
+        with_stats=False,
+    )
+
+    summary = reclassify_motifs(db_session, dry_run=True)
+
+    assert summary["total"] == 1
+    assert summary["created"] == 1
+    assert summary["changed_existing"] == 0
+    assert summary["affected"] == 1
+    assert summary["reclassified"] == 1
+    assert summary["before"]["<missing_stats>"] == 1
+    assert db_session.get(PuzzleStats, "p_missing_stats") is None
+
+
 def test_reclassify_is_idempotent(db_session):
     """A second real run makes zero further changes."""
     _seed_puzzle(
@@ -153,6 +215,53 @@ def test_reclassify_is_idempotent(db_session):
     assert _motif_of(db_session, "p_fork") == ("fork", "The Fork")
 
 
+def test_reclassify_is_idempotent_after_creating_missing_stats(db_session):
+    """A second real run makes zero changes after creating missing stats."""
+    _seed_puzzle(
+        db_session,
+        puzzle_id="p_missing_stats",
+        username="lauureal",
+        fen=FORK_FEN,
+        best_move=FORK_BEST,
+        with_stats=False,
+    )
+
+    first = reclassify_motifs(db_session)
+    assert first["created"] == 1
+    assert first["changed_existing"] == 0
+    assert first["affected"] == 1
+
+    second = reclassify_motifs(db_session)
+    assert second["created"] == 0
+    assert second["changed_existing"] == 0
+    assert second["affected"] == 0
+    assert second["reclassified"] == 0
+    assert _motif_of(db_session, "p_missing_stats") == ("fork", "The Fork")
+
+
+def test_existing_unclassified_stats_row_is_updated_not_created(db_session):
+    """An existing stats row with null identity fields is updated in place."""
+    _seed_puzzle(
+        db_session,
+        puzzle_id="p_unclassified",
+        username="lauureal",
+        fen=FORK_FEN,
+        best_move=FORK_BEST,
+        motif=None,
+        title=None,
+    )
+
+    summary = reclassify_motifs(db_session)
+
+    assert summary["total"] == 1
+    assert summary["created"] == 0
+    assert summary["changed_existing"] == 1
+    assert summary["affected"] == 1
+    assert summary["reclassified"] == 1
+    assert summary["before"]["<unclassified>"] == 1
+    assert _motif_of(db_session, "p_unclassified") == ("fork", "The Fork")
+
+
 def test_already_correct_row_is_untouched(db_session):
     """A quiet puzzle already labelled 'blunder' stays 'blunder' (no churn)."""
     _seed_puzzle(
@@ -169,6 +278,46 @@ def test_already_correct_row_is_untouched(db_session):
 
     assert summary["reclassified"] == 0
     assert _motif_of(db_session, "p_quiet") == ("blunder", "The Missed Win")
+
+
+def test_existing_spaced_repetition_state_is_preserved(db_session):
+    """Updating motif/title does not reset review scheduling fields."""
+    _seed_puzzle(
+        db_session,
+        puzzle_id="p_fork",
+        username="lauureal",
+        fen=FORK_FEN,
+        best_move=FORK_BEST,
+        motif="blunder",
+        title="The Missed Win",
+    )
+    reviewed_at = datetime(2026, 7, 20, 12, 0, 0)
+    due_at = datetime(2026, 7, 23, 12, 0, 0)
+    stats = db_session.get(PuzzleStats, "p_fork")
+    stats.attempts = 7
+    stats.pass_count = 5
+    stats.fail_count = 2
+    stats.last_reviewed_at = reviewed_at
+    stats.last_result = "pass"
+    stats.next_due_at = due_at
+    stats.interval_days = 3
+    stats.ease_factor = 2.4
+    db_session.commit()
+
+    summary = reclassify_motifs(db_session)
+
+    assert summary["created"] == 0
+    assert summary["changed_existing"] == 1
+    stats = db_session.get(PuzzleStats, "p_fork")
+    assert (stats.primary_motif, stats.title) == ("fork", "The Fork")
+    assert stats.attempts == 7
+    assert stats.pass_count == 5
+    assert stats.fail_count == 2
+    assert stats.last_reviewed_at == reviewed_at
+    assert stats.last_result == "pass"
+    assert stats.next_due_at == due_at
+    assert stats.interval_days == 3
+    assert stats.ease_factor == 2.4
 
 
 def test_username_filter_is_canonicalized(db_session):
@@ -225,3 +374,31 @@ def test_username_filter_scopes_updates(db_session):
     assert _motif_of(db_session, "p_fork_a") == ("fork", "The Fork")
     # The other user's row is left alone.
     assert _motif_of(db_session, "p_fork_b") == ("blunder", "The Missed Win")
+
+
+def test_username_filter_scopes_missing_stats_creation(db_session):
+    """--username creates missing PuzzleStats only for that canonical handle."""
+    _seed_puzzle(
+        db_session,
+        puzzle_id="p_fork_a",
+        username="lauureal",
+        fen=FORK_FEN,
+        best_move=FORK_BEST,
+        with_stats=False,
+    )
+    _seed_puzzle(
+        db_session,
+        puzzle_id="p_fork_b",
+        username="hikaru",
+        fen=FORK_FEN,
+        best_move=FORK_BEST,
+        with_stats=False,
+    )
+
+    summary = reclassify_motifs(db_session, username="  Lauureal  ")
+
+    assert summary["total"] == 1
+    assert summary["created"] == 1
+    assert summary["affected"] == 1
+    assert _motif_of(db_session, "p_fork_a") == ("fork", "The Fork")
+    assert db_session.get(PuzzleStats, "p_fork_b") is None

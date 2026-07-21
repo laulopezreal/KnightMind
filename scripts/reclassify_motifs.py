@@ -12,9 +12,10 @@ back-rank mate, a hanging queen, etc.
 
 This CLI re-runs the *current* ``assign_primary_motif`` / ``generate_puzzle_title``
 over EXISTING puzzles and updates ``PuzzleStats.primary_motif`` + ``title`` only
-when they differ from what the classifier now produces. It reads the position
-(``fen``) and solution (``best_move_uci``) from the ``puzzles`` table (joined to
-``puzzle_stats``), so no engine run is required — it is pure reclassification.
+when they differ from what the classifier now produces. If a puzzle has no
+``PuzzleStats`` row yet, it creates one with the computed identity. It reads the
+position (``fen``) and solution (``best_move_uci``) from the ``puzzles`` table, so
+no engine run is required — it is pure reclassification.
 
 Properties:
     - Idempotent: a second run makes zero changes (nothing differs anymore).
@@ -81,34 +82,60 @@ def reclassify_motifs(
         dry_run: When True, compute and report but write nothing.
 
     Returns:
-        A summary dict with ``total``, ``reclassified``, ``before`` (Counter),
-        and ``after`` (Counter). ``before``/``after`` are keyed by motif, with
-        ``None`` collapsed to the literal string ``"<unclassified>"``.
+        A summary dict with ``total``, ``created``, ``changed_existing``,
+        ``affected`` (created + changed_existing), ``reclassified``
+        (compatibility alias for affected), ``before`` (Counter), and ``after``
+        (Counter).
+        ``before``/``after`` are keyed by motif, with ``None`` collapsed to the
+        literal string ``"<unclassified>"`` and missing stats rows counted as
+        ``"<missing_stats>"`` in ``before``.
     """
-    stmt = select(PuzzleStats, Puzzle).join(Puzzle, Puzzle.id == PuzzleStats.puzzle_id)
+    stmt = select(Puzzle, PuzzleStats).outerjoin(
+        PuzzleStats, PuzzleStats.puzzle_id == Puzzle.id
+    )
     if username:
         # Fold to the same canonical storage key every API entry point uses, so a
         # handle with stray whitespace/case still scopes to the stored rows
         # instead of silently matching nothing.
-        stmt = stmt.where(PuzzleStats.username == canonical_username(username))
+        stmt = stmt.where(Puzzle.username == canonical_username(username))
 
     rows = db.execute(stmt).all()
 
     before: Counter = Counter()
     after: Counter = Counter()
-    reclassified = 0
+    created = 0
+    changed_existing = 0
 
-    for stats, puzzle in rows:
-        old_motif = stats.primary_motif
+    for puzzle, stats in rows:
         # assign_primary_motif reads .fen / .best_move_uci off the ORM row.
         new_motif = assign_primary_motif(puzzle)
         new_title = generate_puzzle_title(new_motif)
 
-        before[old_motif if old_motif is not None else "<unclassified>"] += 1
+        if stats is None:
+            before["<missing_stats>"] += 1
+        else:
+            before[
+                (
+                    stats.primary_motif
+                    if stats.primary_motif is not None
+                    else "<unclassified>"
+                )
+            ] += 1
         after[new_motif] += 1
 
-        if new_motif != stats.primary_motif or new_title != stats.title:
-            reclassified += 1
+        if stats is None:
+            created += 1
+            if not dry_run:
+                db.add(
+                    PuzzleStats(
+                        puzzle_id=puzzle.id,
+                        username=puzzle.username,
+                        primary_motif=new_motif,
+                        title=new_title,
+                    )
+                )
+        elif new_motif != stats.primary_motif or new_title != stats.title:
+            changed_existing += 1
             if not dry_run:
                 stats.primary_motif = new_motif
                 stats.title = new_title
@@ -120,13 +147,17 @@ def reclassify_motifs(
 
     return {
         "total": len(rows),
-        "reclassified": reclassified,
+        "created": created,
+        "changed_existing": changed_existing,
+        "affected": created + changed_existing,
+        "reclassified": created + changed_existing,
         "before": before,
         "after": after,
     }
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Parse CLI arguments and run the motif reclassification pass."""
     parser = argparse.ArgumentParser(
         description=(
             "Reclassify existing puzzle motifs/titles using the current "
@@ -161,8 +192,9 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         db.close()
 
-    logger.info("Puzzles scanned:      %d", summary["total"])
-    logger.info("Would-change / changed: %d", summary["reclassified"])
+    logger.info("Puzzles scanned:          %d", summary["total"])
+    logger.info("Stats rows to create / created: %d", summary["created"])
+    logger.info("Existing rows to update / updated: %d", summary["changed_existing"])
     logger.info(
         "Motif distribution BEFORE: %s", _format_distribution(summary["before"])
     )
@@ -171,7 +203,9 @@ def main(argv: list[str] | None = None) -> int:
         logger.info("Dry run complete — no rows were modified.")
     else:
         logger.info(
-            "Reclassification complete — %d rows updated.", summary["reclassified"]
+            "Reclassification complete — %d stats rows created, %d existing rows updated.",
+            summary["created"],
+            summary["changed_existing"],
         )
 
     return 0
