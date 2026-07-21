@@ -511,7 +511,9 @@ def test_explain_trajectory_and_estimated_net_change(client_with_db, db_session)
     assert data["rating"]["net_change"] == 32
     assert data["rating"]["is_estimated"] is True
     # Reference falls back to the player's own Elo average, not opponents'.
-    assert data["rating"]["reference_rating"] == int((1400 + 1410 + 1395 + 1420 + 1432) / 5)
+    assert data["rating"]["reference_rating"] == int(
+        (1400 + 1410 + 1395 + 1420 + 1432) / 5
+    )
     assert data["rating"]["reference_is_approx"] is True
 
 
