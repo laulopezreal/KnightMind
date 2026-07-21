@@ -312,7 +312,10 @@ export default function RatingInsights() {
                 )
             )}
 
-            {loading && !data && (
+            {/* Cover BOTH fetch phases (sessions probe, then explain/history):
+                gating on `loading` alone left the main area blank for the whole
+                sessions request on slow connections — visibly broken. */}
+            {(loading || sessionsLoading) && !data && !error && (
                 <DataStateLoading label="Analyzing games..." />
             )}
 

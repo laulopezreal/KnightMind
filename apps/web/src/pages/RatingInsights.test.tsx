@@ -86,6 +86,20 @@ describe('RatingInsights', () => {
     });
   });
 
+  it('shows the main loading state during the sessions probe (phase 1), not a blank page', async () => {
+    // Sessions request still pending: the main area must already show the
+    // loading state instead of rendering nothing until phase 2 begins.
+    mockGetRecentSessions.mockReturnValue(new Promise(() => {}));
+    mockGetRatingExplain.mockReturnValue(new Promise(() => {}));
+    mockGetRatingHistory.mockReturnValue(new Promise(() => {}));
+
+    render(<RatingInsights />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Analyzing games...')).toBeInTheDocument();
+    });
+  });
+
   it('should only call getRatingExplain once on mount (no double-fetch)', async () => {
     mockGetRatingExplain.mockResolvedValue({
       rating: { start: null, end: null, net_change: null, reference_rating: 0, reference_is_approx: false },
