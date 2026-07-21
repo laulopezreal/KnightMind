@@ -213,4 +213,61 @@ describe('RatingInsights', () => {
       expect(screen.getByText('25 games analyzed')).toBeInTheDocument();
     });
   });
+
+  it('charts the per-game trajectory (no snapshots needed) and flags estimated net change', async () => {
+    mockGetRatingExplain.mockResolvedValue({
+      rating: { start: 1400, end: 1432, net_change: 32, is_estimated: true, reference_rating: 1410, reference_is_approx: true },
+      stats: { games: 5, wins: 4, draws: 0, losses: 1, actual_minus_expected: 1.2, avg_opponent_rating: 1420, missing_opponent_rating_games: 0, casual_games_excluded: 2 },
+      drivers: [],
+      highlights: { best_surprises: [], worst_surprises: [] },
+      window: { start: '2025-01-01T00:00:00Z', end: '2025-01-15T00:00:00Z' },
+      trajectory: [
+        { played_at: '2025-01-02T10:00:00Z', rating: 1400 },
+        { played_at: '2025-01-03T10:00:00Z', rating: 1410 },
+        { played_at: '2025-01-04T10:00:00Z', rating: 1432 },
+      ],
+      confidence: 'low',
+      insufficient_data: false,
+    });
+    mockGetRatingHistory.mockResolvedValue([]);
+
+    render(<RatingInsights />);
+
+    await waitFor(() => {
+      // Chart renders from game trajectory even with zero recorded snapshots.
+      expect(screen.getByTestId('line-chart')).toBeInTheDocument();
+      expect(screen.getByText(/From your games in this window/i)).toBeInTheDocument();
+      // Net change renders, marked as estimated from games.
+      expect(screen.getByText('+32')).toBeInTheDocument();
+      expect(screen.getByText(/est\. from games/i)).toBeInTheDocument();
+      // Casual games are surfaced as excluded from attribution.
+      expect(screen.getByText(/2 casual games excluded/i)).toBeInTheDocument();
+    });
+  });
+
+  it('shows opponent name and rating in highlight rows', async () => {
+    mockGetRatingExplain.mockResolvedValue({
+      rating: { start: 1200, end: 1250, net_change: 50, reference_rating: 1220, reference_is_approx: false },
+      stats: { games: 25, wins: 15, draws: 3, losses: 7, actual_minus_expected: 2.5, avg_opponent_rating: 1230, missing_opponent_rating_games: 0 },
+      drivers: [],
+      highlights: {
+        best_surprises: [{
+          opponent_rating: 1450, opponent_username: 'MagnusFan99', result: 'Win',
+          expected_score: 0.21, rating_diff: 230, game_id: 'g1',
+          played_at: '2025-01-10T10:00:00Z', url: 'https://chess.com/game/g1',
+        }],
+        worst_surprises: [],
+      },
+      window: { start: '2025-01-01T00:00:00Z', end: '2025-01-15T00:00:00Z' },
+    });
+    mockGetRatingHistory.mockResolvedValue([]);
+
+    render(<RatingInsights />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/vs MagnusFan99/)).toBeInTheDocument();
+      expect(screen.getByText(/\(1450\)/)).toBeInTheDocument();
+      expect(screen.getByText(/230 pts higher/)).toBeInTheDocument();
+    });
+  });
 });
