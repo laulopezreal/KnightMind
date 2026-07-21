@@ -12,13 +12,13 @@ import re
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
-from typing import Literal
+from typing import Annotated, Literal
 
 import anyio
 import chess
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from sqlalchemy import and_, case, func, literal, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -71,6 +71,7 @@ from services.api.storage.spaced_repetition import (
     update_puzzle_stats,
 )
 from services.api.time_control import classify_time_control
+from services.api.usernames import Username, canonical_username
 from services.api.worker import worker
 from services.ingest import (
     ChessGame,
@@ -241,7 +242,7 @@ async def get_users(db: Session = Depends(get_db)):
 
 @app.get("/users/{username}/status", response_model=UserStatusResponse)
 async def get_user_status(
-    username: str,
+    username: Username,
     db: Session = Depends(get_db),
     account: Account | None = Depends(require_account),
 ):
@@ -299,7 +300,7 @@ async def get_user_status(
     "/users/{username}/motifs/performance", response_model=MotifPerformanceResponse
 )
 async def get_motif_performance(
-    username: str,
+    username: Username,
     db: Session = Depends(get_db),
     account: Account | None = Depends(require_account),
 ):
@@ -314,6 +315,9 @@ async def validate_user(username: str):
     Validate if a user exists on Chess.com.
     Proxies the request to avoid CORS issues and expose internal APIs.
     """
+    # This is the Chess.com existence proxy: the upstream lookup uses the raw
+    # (stripped) handle, but the value we hand back is canonical so the caller
+    # stores the same key every other endpoint keys on.
     username = username.strip()
     if not username:
         raise HTTPException(status_code=400, detail="Username is required")
@@ -333,7 +337,10 @@ async def validate_user(username: str):
     except ChessComImportError as e:
         raise HTTPException(status_code=502, detail=str(e)) from e
 
-    return {"valid": True, "username": profile.get("username", username)}
+    return {
+        "valid": True,
+        "username": profile.get("username") or canonical_username(username),
+    }
 
 
 @app.post(
@@ -344,7 +351,7 @@ async def validate_user(username: str):
     ],
 )
 async def import_chesscom_games(
-    username: str = Query(..., max_length=64),
+    username: Annotated[Username, Query(max_length=64)],
     db: Session = Depends(get_db),
     account: Account | None = Depends(require_account),
 ):
@@ -447,13 +454,11 @@ async def import_chesscom_games(
 
 @app.get("/import/status", response_model=ImportStatusResponse)
 async def get_import_status(
-    username: str,
+    username: Username,
     db: Session = Depends(get_db),
     account: Account | None = Depends(require_account),
 ):
     """Get the last import summary for a user."""
-    if not username:
-        raise HTTPException(status_code=400, detail="Username is required")
     assert_owns_username(account, username, db)
     game_repository = GameRepository(db)
     summary = game_repository.get_last_import_summary(username)
@@ -498,7 +503,7 @@ class DailyPuzzlesResponse(BaseModel):
 
 
 class DailyPuzzleSessionRequest(BaseModel):
-    username: str
+    username: Username
     n: int = 5
 
 
@@ -553,7 +558,7 @@ class PuzzleListResponse(BaseModel):
 
 
 class ReviewRequest(BaseModel):
-    username: str
+    username: Username
     result: PuzzleResult
     time_spent_ms: int | None = None
     session_id: str | None = None
@@ -570,7 +575,7 @@ class ReviewRequest(BaseModel):
 
 
 class CheckRequest(BaseModel):
-    username: str
+    username: Username
     # The UCI move the user played on the board. Verified server-side; the
     # solution is never echoed back (audit gate 13).
     attempted_move: str
@@ -599,7 +604,7 @@ class CheckResponse(BaseModel):
 
 
 class RevealRequest(BaseModel):
-    username: str
+    username: Username
 
 
 class RevealResponse(BaseModel):
@@ -620,7 +625,9 @@ async def root():
 
 @app.get("/openings")
 async def get_openings(
-    username: str = Query(..., description="Username to build opening tree for"),
+    username: Annotated[
+        Username, Query(description="Username to build opening tree for")
+    ],
     color: Literal["white", "black", "both"] = Query(
         "both", description="Filter by player's color"
     ),
@@ -766,9 +773,10 @@ async def evaluate_fen(
     ],
 )
 async def generate_puzzles_endpoint(
-    username: str = Query(
-        ..., max_length=64, description="Username to generate puzzles for"
-    ),
+    username: Annotated[
+        Username,
+        Query(max_length=64, description="Username to generate puzzles for"),
+    ],
     max_games: int = Query(
         30, ge=1, le=2000, description="Maximum number of recent games to analyze"
     ),
@@ -955,7 +963,7 @@ async def create_daily_puzzle_session(
 
 @app.get("/puzzles/due", response_model=DuePuzzlesResponse)
 async def get_due_puzzles_endpoint(
-    username: str = Query(..., description="Username to get puzzles for"),
+    username: Annotated[Username, Query(description="Username to get puzzles for")],
     n: int = Query(5, ge=1, le=20, description="Number of puzzles to return"),
     session_type: str = Query(
         "standard", description="Session type for adaptive selection"
@@ -1297,7 +1305,7 @@ def _check_solution_move(
 
 @app.get("/puzzles/list", response_model=PuzzleListResponse)
 async def list_puzzles(
-    username: str = Query(..., description="Username to list puzzles for"),
+    username: Annotated[Username, Query(description="Username to list puzzles for")],
     q: str = Query(None, description="Search by title or puzzle ID"),
     status: str = Query(None, description="Filter: new, due, learning, mastered"),
     motif: str = Query(
@@ -1334,7 +1342,9 @@ async def list_puzzles(
     # (see spaced_repetition module note); an aware now would misclassify on
     # Postgres with a non-UTC session TimeZone.
     now = _utcnow_naive()
-    username_lower = username.lower()
+    # ``username`` is already canonical (folded at the request boundary); this
+    # alias keeps the query readable without re-lowercasing.
+    username_lower = username
 
     join_cond = (PuzzleModel.id == PuzzleStats.puzzle_id) & (
         PuzzleStats.username == username_lower
@@ -1527,7 +1537,7 @@ async def list_puzzles(
 @app.get("/puzzles/{puzzle_id}", response_model=PuzzleListItem)
 async def get_puzzle_detail(
     puzzle_id: str,
-    username: str = Query(..., description="Username to look up puzzle for"),
+    username: Annotated[Username, Query(description="Username to look up puzzle for")],
     reveal: bool = Query(
         False,
         description="Include the solution (best_move_uci/accept_moves_uci). "
@@ -1545,7 +1555,8 @@ async def get_puzzle_detail(
     # old client-grading frontend keeps working; ?reveal only matters when the
     # strict gate is ON.
     reveal_solution = reveal or not _strip_puzzle_solutions_enabled()
-    username_lower = username.lower()
+    # ``username`` is already canonical (folded at the request boundary).
+    username_lower = username
     # naive-UTC bound for SQL comparison against naive next_due_at (see
     # spaced_repetition module note).
     now = _utcnow_naive()
@@ -1940,7 +1951,7 @@ def calculate_expected_score(player_rating: int, opponent_rating: int) -> float:
 
 
 class SnapshotRequest(BaseModel):
-    username: str = Field(max_length=64)
+    username: Username
     time_control: Literal["rapid", "blitz", "bullet"]
 
 
@@ -2011,7 +2022,7 @@ class SnapshotHistoryItem(BaseModel):
 
 @app.get("/ratings/history", response_model=list[SnapshotHistoryItem])
 async def get_rating_history(
-    username: str,
+    username: Username,
     time_control: str = "rapid",
     limit: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
@@ -2102,7 +2113,7 @@ class ExplainResponse(BaseModel):
 
 @app.get("/ratings/explain", response_model=ExplainResponse)
 async def explain_rating_changes(
-    username: str,
+    username: Username,
     time_control: str = "rapid",
     since_session_id: str | None = None,
     since: datetime | None = None,
