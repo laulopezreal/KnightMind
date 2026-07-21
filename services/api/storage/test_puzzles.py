@@ -10,7 +10,8 @@ from sqlalchemy.orm import sessionmaker
 
 from scripts.backfill_storage import validate_puzzle_data
 from services.api.db import Base
-from services.api.models import Game
+from services.api.models import Game, PuzzleStats
+from services.api.puzzles.identity import assign_primary_motif, generate_puzzle_title
 from services.api.storage.puzzle_repository import PuzzleRepository
 
 
@@ -121,6 +122,81 @@ def test_puzzle_repository_deduplication(repository):
     assert is_new2 is False
     assert pid1 == pid2
     assert repository.get_puzzle_count("testuser") == 1
+
+
+def test_save_puzzle_creates_identity_stats(repository, db_session):
+    fen = "3q3k/6pp/8/8/8/8/PP4PP/3Q2K1 w - - 0 1"
+    is_new, puzzle_id = repository.save_puzzle(
+        username="TestUser",
+        source_game_id="game123",
+        ply=15,
+        fen=fen,
+        side_to_move="white",
+        played_move_uci="a2a3",
+        best_move_uci="d1d5",
+        eval_before=9.0,
+        eval_after=0.0,
+        swing=9.0,
+    )
+
+    assert is_new is True
+    puzzle = repository.get_puzzle("testuser", puzzle_id)
+    motif = assign_primary_motif(puzzle)
+
+    stats = db_session.get(PuzzleStats, puzzle_id)
+    assert stats is not None
+    assert stats.username == "testuser"
+    assert stats.primary_motif == motif
+    assert stats.title == generate_puzzle_title(motif)
+    assert stats.attempts == 0
+    assert stats.pass_count == 0
+    assert stats.fail_count == 0
+    assert stats.ease_factor == 2.0
+
+
+def test_duplicate_save_preserves_existing_stats(repository, db_session):
+    is_new, puzzle_id = repository.save_puzzle(
+        username="testuser",
+        source_game_id="game123",
+        ply=15,
+        fen="3q3q1k/6pp/8/8/8/8/PP4PP/3Q2K1 w - - 0 1",
+        side_to_move="white",
+        played_move_uci="a2a3",
+        best_move_uci="d1d8",
+        eval_before=9.0,
+        eval_after=0.0,
+        swing=9.0,
+    )
+    stats = db_session.get(PuzzleStats, puzzle_id)
+    stats.attempts = 7
+    stats.pass_count = 5
+    stats.fail_count = 2
+    stats.primary_motif = "manual_motif"
+    stats.title = "Manual title"
+    db_session.commit()
+
+    is_duplicate, duplicate_id = repository.save_puzzle(
+        username="testuser",
+        source_game_id="game123",
+        ply=15,
+        fen="8/8/8/8/8/8/8/8 w - - 0 1",
+        side_to_move="white",
+        played_move_uci="e2e4",
+        best_move_uci="d2d4",
+        eval_before=1.0,
+        eval_after=-2.0,
+        swing=3.0,
+    )
+
+    assert is_new is True
+    assert is_duplicate is False
+    assert duplicate_id == puzzle_id
+    preserved = db_session.get(PuzzleStats, puzzle_id)
+    assert preserved.attempts == 7
+    assert preserved.pass_count == 5
+    assert preserved.fail_count == 2
+    assert preserved.primary_motif == "manual_motif"
+    assert preserved.title == "Manual title"
 
 
 def test_puzzle_repository_different_ply_not_duplicate(repository):

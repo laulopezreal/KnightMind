@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from services.api.day_boundary import utc_today
 from services.api.models import Puzzle as PuzzleModel
+from services.api.models import PuzzleStats
 
 
 @dataclass
@@ -103,6 +104,27 @@ class PuzzleRepository:
             source_path=source_path,
         )
         self.db.add(puzzle)
+        # Puzzle identity helpers import PuzzleRepository for legacy backfills,
+        # so keep this import lazy to avoid a module-import cycle while still
+        # assigning identity data in the same unit of work as the new puzzle.
+        from services.api.puzzles.identity import (  # noqa: PLC0415
+            assign_primary_motif,
+            generate_puzzle_title,
+        )
+
+        motif = assign_primary_motif(puzzle)
+        self.db.add(
+            PuzzleStats(
+                puzzle_id=puzzle_id,
+                username=username_lower,
+                attempts=0,
+                pass_count=0,
+                fail_count=0,
+                ease_factor=2.0,
+                primary_motif=motif,
+                title=generate_puzzle_title(motif),
+            )
+        )
         try:
             self.db.commit()
             return True, puzzle_id

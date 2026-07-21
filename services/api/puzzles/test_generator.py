@@ -7,7 +7,7 @@ from unittest.mock import Mock, patch
 
 import chess
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -18,7 +18,7 @@ from services.api.engine import (
     StockfishEngineDeadError,
     StockfishError,
 )
-from services.api.models import Game
+from services.api.models import Game, PuzzleStats
 from services.api.puzzles.generator import (
     GenerationResult,
     GenerationStatus,
@@ -26,6 +26,7 @@ from services.api.puzzles.generator import (
     generate_puzzles,
     get_confirm_depth,
 )
+from services.api.puzzles.identity import assign_primary_motif, generate_puzzle_title
 from services.api.storage.puzzle_repository import PuzzleRepository
 
 
@@ -574,6 +575,13 @@ def test_equivalent_best_moves_are_all_accepted(
 
     assert result.generated == 1
     puzzle = PuzzleRepository(db).get_all_puzzles("testuser")[0]
+    motif = assign_primary_motif(puzzle)
+    stats = db.scalar(select(PuzzleStats).where(PuzzleStats.puzzle_id == puzzle.id))
+    assert stats is not None
+    assert stats.username == "testuser"
+    assert stats.primary_motif == motif
+    assert stats.title == generate_puzzle_title(motif)
+    assert stats.attempts == 0
     accepted = set(puzzle.accept_moves_uci.split(","))
     assert "d1d5" in accepted
     assert "d1d8" in accepted  # the equally-good alternative is accepted
