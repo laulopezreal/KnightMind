@@ -171,6 +171,32 @@ def test_already_correct_row_is_untouched(db_session):
     assert _motif_of(db_session, "p_quiet") == ("blunder", "The Missed Win")
 
 
+def test_username_filter_is_canonicalized(db_session):
+    """--username is folded to the canonical storage key before scoping.
+
+    Puzzle rows are stored under canonical (stripped/lowercased) handles, so an
+    operator handle that arrives with surrounding whitespace or mixed case (e.g.
+    from shell quoting or copy-paste) must still match — matching the canonical
+    boundary every API entry point now enforces. A bare ``.lower()`` would leave
+    the whitespace on and silently scan zero rows.
+    """
+    _seed_puzzle(
+        db_session,
+        puzzle_id="p_fork",
+        username="lauureal",
+        fen=FORK_FEN,
+        best_move=FORK_BEST,
+        motif="blunder",
+        title="The Missed Win",
+    )
+
+    summary = reclassify_motifs(db_session, username="  Lauureal  ")
+
+    assert summary["total"] == 1
+    assert summary["reclassified"] == 1
+    assert _motif_of(db_session, "p_fork") == ("fork", "The Fork")
+
+
 def test_username_filter_scopes_updates(db_session):
     """--username restricts reclassification to that handle."""
     _seed_puzzle(
