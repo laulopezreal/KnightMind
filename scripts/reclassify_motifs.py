@@ -53,6 +53,7 @@ from services.api.puzzles.identity import (
     assign_primary_motif,
     generate_puzzle_title,
 )
+from services.api.usernames import canonical_username
 
 logger = logging.getLogger("reclassify_motifs")
 
@@ -75,7 +76,8 @@ def reclassify_motifs(
 
     Args:
         db: Open SQLAlchemy session.
-        username: Optional Chess.com handle filter (case-insensitive).
+        username: Optional Chess.com handle filter, folded to its canonical
+            storage key (whitespace-stripped, lowercased) before scoping.
         dry_run: When True, compute and report but write nothing.
 
     Returns:
@@ -85,7 +87,10 @@ def reclassify_motifs(
     """
     stmt = select(PuzzleStats, Puzzle).join(Puzzle, Puzzle.id == PuzzleStats.puzzle_id)
     if username:
-        stmt = stmt.where(PuzzleStats.username == username.lower())
+        # Fold to the same canonical storage key every API entry point uses, so a
+        # handle with stray whitespace/case still scopes to the stored rows
+        # instead of silently matching nothing.
+        stmt = stmt.where(PuzzleStats.username == canonical_username(username))
 
     rows = db.execute(stmt).all()
 
