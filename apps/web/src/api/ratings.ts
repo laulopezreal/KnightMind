@@ -1,10 +1,5 @@
 import { request } from './core';
 
-export interface SnapshotResponse {
-    rating: number;
-    recorded_at: string;
-}
-
 export interface HighlightGame {
     opponent_rating: number | null;
     opponent_username?: string | null;
@@ -89,14 +84,6 @@ export const getRatingHistory = (
 ): Promise<SnapshotHistoryItem[]> => {
     const params = new URLSearchParams({ username, time_control: timeControl, limit: limit.toString() });
     return request<SnapshotHistoryItem[]>(`/ratings/history?${params.toString()}`);
-};
-
-export const createSnapshot = (username: string, timeControl: string): Promise<SnapshotResponse> => {
-    return request<SnapshotResponse>('/ratings/snapshot', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, time_control: timeControl }),
-    });
 };
 
 export const getRatingExplain = (

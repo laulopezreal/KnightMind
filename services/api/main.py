@@ -59,6 +59,7 @@ from services.api.motifs import MotifPerformanceResponse, get_user_motif_perform
 from services.api.openings import build_opening_tree
 from services.api.puzzles.identity import backfill_puzzle_identity
 from services.api.ratelimit import rate_limit
+from services.api.ratings_auto import auto_snapshot, auto_snapshot_throttled
 from services.api.storage import GameRepository, PuzzleRepository
 from services.api.storage.spaced_repetition import (
     _utcnow_naive,
@@ -423,6 +424,10 @@ async def import_chesscom_games(
         await asyncio.to_thread(
             game_repository.record_import_summary, username, new_games
         )
+
+        # Fresh games are on file — record the current ratings alongside them
+        # so rating history never depends on a manual snapshot (best-effort).
+        await auto_snapshot(username, db)
 
         return ImportResponse(
             message=f"Successfully processed {count} games for {username}",
@@ -2156,6 +2161,11 @@ async def explain_rating_changes(
     from services.api.models import TrainingSession
 
     assert_owns_username(account, username, db)
+
+    # Viewing insights is itself a reason to refresh the rating record:
+    # snapshot opportunistically (throttled per username, best-effort) so the
+    # end anchor stays fresh without the user ever pressing a button.
+    await auto_snapshot_throttled(username, db)
 
     # 1. Determine Window
     now = datetime.now(timezone.utc)

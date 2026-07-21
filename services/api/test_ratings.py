@@ -321,7 +321,7 @@ def test_rating_history_empty(client_with_db):
     assert response.json() == []
 
 
-@patch("services.api.sessions.get_player_stats")
+@patch("services.api.ratings_auto.get_player_stats")
 def test_auto_snapshot_skips_unchanged_rating(mock_stats, client_with_db, db_session):
     """_auto_snapshot should not create a duplicate when rating hasn't changed."""
     from services.api.models import TrainingSession
@@ -379,7 +379,7 @@ def test_auto_snapshot_skips_unchanged_rating(mock_stats, client_with_db, db_ses
     assert blitz_snapshots[0].rating == 1200
 
 
-@patch("services.api.sessions.get_player_stats")
+@patch("services.api.ratings_auto.get_player_stats")
 def test_auto_snapshot_creates_on_changed_rating(
     mock_stats, client_with_db, db_session
 ):
@@ -578,3 +578,54 @@ def test_explain_highlights_include_opponent_username(client_with_db, db_session
     assert best[0]["opponent_username"] == "opponent"
     # rating_diff is now measured against the player's own per-game Elo.
     assert best[0]["rating_diff"] == 200
+
+
+@patch("services.api.ratings_auto.get_player_stats")
+def test_explain_auto_snapshots_current_rating(mock_stats, client_with_db, db_session):
+    """Viewing rating insights records the current rating automatically —
+    no manual snapshot button required. The fresh snapshot becomes the
+    (non-estimated) end anchor."""
+    mock_stats.return_value = {"chess_rapid": {"last": {"rating": 1455}}}
+    since_time = datetime.now(timezone.utc) - timedelta(days=2)
+    pgn = (
+        '[White "testuser"]\n[Black "opponent"]\n'
+        '[WhiteElo "1440"]\n[BlackElo "1450"]\n\n1. e4 e5 1-0'
+    )
+    for i in range(5):
+        _seed_game(db_session, i, since_time, rated=True, pgn=pgn)
+    db_session.commit()
+
+    response = client_with_db.get(
+        "/ratings/explain",
+        params={
+            "username": "testuser",
+            "time_control": "rapid",
+            "since": since_time.isoformat(),
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()
+
+    stmt = select(RatingSnapshot).where(
+        RatingSnapshot.username == "testuser",
+        RatingSnapshot.time_control == "rapid",
+    )
+    snapshots = db_session.scalars(stmt).all()
+    assert [s.rating for s in snapshots] == [1455]
+    # The auto snapshot (recorded now, after the last game) wins as end anchor.
+    assert data["rating"]["end"] == 1455
+
+
+@patch("services.api.ratings_auto.get_player_stats")
+def test_explain_auto_snapshot_is_throttled(mock_stats, client_with_db, db_session):
+    """A second view inside the throttle window must not re-hit Chess.com."""
+    mock_stats.return_value = {"chess_rapid": {"last": {"rating": 1455}}}
+
+    for _ in range(2):
+        response = client_with_db.get(
+            "/ratings/explain",
+            params={"username": "testuser", "time_control": "rapid"},
+        )
+        assert response.status_code == 200
+
+    assert mock_stats.await_count == 1

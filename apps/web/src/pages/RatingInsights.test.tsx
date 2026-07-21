@@ -118,7 +118,7 @@ describe('RatingInsights', () => {
     });
   });
 
-  it('should show onboarding when no games', async () => {
+  it('should show import onboarding (no manual snapshot ask) when no games', async () => {
     mockGetRatingExplain.mockResolvedValue({
       rating: { start: null, end: null, net_change: null, reference_rating: 0, reference_is_approx: false },
       stats: { games: 0, wins: 0, draws: 0, losses: 0, actual_minus_expected: null, avg_opponent_rating: null, missing_opponent_rating_games: 0 },
@@ -131,9 +131,12 @@ describe('RatingInsights', () => {
     render(<RatingInsights />);
 
     await waitFor(() => {
-      expect(screen.getByText(/Step 1/)).toBeInTheDocument();
-      expect(screen.getByText(/Step 2/)).toBeInTheDocument();
+      expect(screen.getByText(/No Rapid games yet/i)).toBeInTheDocument();
+      expect(screen.getByText('Import your games')).toBeInTheDocument();
+      expect(screen.getByText(/Nothing to record by hand/i)).toBeInTheDocument();
     });
+    // Snapshots are automatic: the manual button must never come back.
+    expect(screen.queryByText(/Record Snapshot/i)).not.toBeInTheDocument();
   });
 
   it('shows the chart + window-insufficient note (not first-snapshot onboarding) when snapshots exist but the window is thin', async () => {
@@ -176,13 +179,13 @@ describe('RatingInsights', () => {
     expect(screen.getByText('Rapid')).toBeInTheDocument();
   });
 
-  it('should show Record Snapshot button', () => {
+  it('should not offer a manual Record Snapshot button', () => {
     mockGetRatingExplain.mockReturnValue(new Promise(() => {}));
     mockGetRatingHistory.mockReturnValue(new Promise(() => {}));
 
     render(<RatingInsights />);
 
-    expect(screen.getByText('Record Snapshot')).toBeInTheDocument();
+    expect(screen.queryByText(/Record Snapshot/i)).not.toBeInTheDocument();
   });
 
   it('should show window selectors', () => {

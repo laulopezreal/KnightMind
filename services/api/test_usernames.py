@@ -164,7 +164,7 @@ def test_query_param_username_is_canonicalized(client):
 
 def test_session_case_variants_do_not_fork(client):
     with patch(
-        "services.api.sessions.get_player_stats", new_callable=AsyncMock
+        "services.api.ratings_auto.get_player_stats", new_callable=AsyncMock
     ) as stats:
         stats.return_value = {}
         start = client.post("/sessions/start", json={"username": "Bob", "n": 2})

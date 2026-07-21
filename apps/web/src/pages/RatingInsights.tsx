@@ -3,7 +3,7 @@ import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceDot } from 'recharts';
 import { useChessUsername } from '../context/ChessUsernameContext';
-import { createSnapshot, getRatingExplain, getRatingHistory, type ExplainResponse, type HighlightGame, type SnapshotResponse, type SnapshotHistoryItem } from '../api/ratings';
+import { getRatingExplain, getRatingHistory, type ExplainResponse, type HighlightGame, type SnapshotHistoryItem } from '../api/ratings';
 import { getRecentSessions } from '../api/sessions';
 import { PageHeader } from '../components/PageHeader';
 import { DataStateError, DataStateLoading, DataStateOffline } from '../components/DataState';
@@ -24,10 +24,6 @@ export default function RatingInsights() {
     const { username, setEditorOpen } = useChessUsername();
     const [data, setData] = useState<ExplainResponse | null>(null);
     const [loading, setLoading] = useState(false);
-    const [snapshotLoading, setSnapshotLoading] = useState(false);
-    const [snapshotSuccess, setSnapshotSuccess] = useState(false);
-    const [snapshotError, setSnapshotError] = useState<string | null>(null);
-    const [latestSnapshot, setLatestSnapshot] = useState<SnapshotResponse | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [timeControl, setTimeControlState] = useState<'rapid' | 'blitz' | 'bullet'>(() => {
         const stored = localStorage.getItem(LS_KEYS.RATINGS_TIME_CONTROL);
@@ -136,42 +132,6 @@ export default function RatingInsights() {
         return () => { cancelled = true; };
     }, [username, timeControl, windowSource, fetchData, setWindowSource]);
 
-    const handleSnapshot = async () => {
-        if (!username) return;
-        setSnapshotLoading(true);
-        setSnapshotError(null);
-        try {
-            const snapshotData = await createSnapshot(username, timeControl);
-            setLatestSnapshot(snapshotData);
-            setSnapshotSuccess(true);
-            fetchData(); // Refresh data
-        } catch (err) {
-            setSnapshotError(err instanceof Error ? err.message : 'Failed to create snapshot');
-        } finally {
-            setSnapshotLoading(false);
-        }
-    };
-
-    // Clear snapshotSuccess after 2 seconds (with cleanup to prevent memory leaks)
-    useEffect(() => {
-        if (snapshotSuccess) {
-            const timer = setTimeout(() => {
-                setSnapshotSuccess(false);
-            }, 2000);
-            return () => clearTimeout(timer);
-        }
-    }, [snapshotSuccess]);
-
-    // Clear latestSnapshot card after 8 seconds (with cleanup)
-    useEffect(() => {
-        if (latestSnapshot) {
-            const timer = setTimeout(() => {
-                setLatestSnapshot(null);
-            }, 8000);
-            return () => clearTimeout(timer);
-        }
-    }, [latestSnapshot]);
-
     // Chart source: prefer the per-game rating trajectory (real rating
     // movement inside the selected window, no manual snapshots needed);
     // fall back to recorded snapshot history when the window has no games.
@@ -260,7 +220,7 @@ export default function RatingInsights() {
             <section className="flex flex-col md:flex-row justify-between items-end gap-6">
                 <PageHeader
                     title="Rating Insights"
-                    subtitle="Understand your progress using session-based drivers."
+                    subtitle="What moved your rating — tracked automatically from your games."
                 />
 
                 <div className="flex flex-wrap gap-4 items-start">
@@ -333,21 +293,6 @@ export default function RatingInsights() {
                         )}
                     </div>
 
-                    <div className="flex flex-col gap-1">
-<button
-                            type="button"
-                            onClick={handleSnapshot}
-                            disabled={snapshotLoading}
-                            className={`km-focus-visible px-5 py-2 border border-primary/20 text-primary text-sm font-sans transition-all rounded-sm ${snapshotLoading ? 'km-interactive-disabled' : 'km-interactive'}`}
-                        >
-                            {snapshotSuccess ? '✓ Snapshot recorded' : snapshotLoading ? 'Recording...' : 'Record Snapshot'}
-                        </button>
-                        {snapshotError && (
-                            <p className="text-xs text-negative font-sans">
-                                Could not record snapshot. Try again.
-                            </p>
-                        )}
-                    </div>
                 </div>
             </section>
 
@@ -371,56 +316,32 @@ export default function RatingInsights() {
                 <DataStateLoading label="Analyzing games..." />
             )}
 
-            {/* Latest Snapshot Confirmation Card */}
-            {latestSnapshot && (
-                <div className="p-4 border border-primary/10 bg-primary/5 rounded-sm max-w-md">
-                    <h3 className="text-lg font-serif text-primary mb-1">Latest Snapshot</h3>
-                    <p className="text-primary/80 font-sans text-sm">
-                        {timeControl.charAt(0).toUpperCase() + timeControl.slice(1)} · {latestSnapshot.rating}
-                    </p>
-                    <p className="text-primary/70 font-sans text-xs">
-                        Recorded just now
-                    </p>
-                    {!hasGames && (
-                        <p className="text-primary/70 font-sans text-sm mt-2">
-                            Play a few {timeControl} games on Chess.com to unlock insights.
-                        </p>
-                    )}
-                </div>
-            )}
-
             {data && (
                 <>
-                    {/* STATE 0: No games */}
+                    {/* STATE 0: no games and no rating history for this control.
+                        Snapshots are recorded automatically (on import, session
+                        completion, and visits here), so the only ask is games. */}
                     {isState0 && (
-                        <div className="max-w-xl mx-auto bg-primary/5 border border-primary/10 p-12 rounded-sm space-y-10">
+                        <div className="max-w-xl mx-auto bg-primary/5 border border-primary/10 p-12 rounded-sm space-y-8">
                             <div>
-                                <h2 className="text-2xl font-serif text-primary mb-2">Rating Insights</h2>
-                                <p className="text-primary/70 font-sans">See what influenced your rating changes over time.</p>
+                                <h2 className="text-2xl font-serif text-primary mb-2">No {timeControlLabel} games yet</h2>
+                                <p className="text-primary/70 font-sans leading-relaxed">
+                                    Import your Chess.com games — or play a few {timeControlLabel} games and
+                                    import again — and this page will chart your rating and explain what moved it.
+                                </p>
                             </div>
-
-                            <div className="space-y-8">
-                                <div className="space-y-2">
-                                    <h3 className="font-serif text-lg text-primary">Step 1 — Record your first snapshot</h3>
-                                    <p className="text-sm text-primary/70 font-sans leading-relaxed">
-                                        This saves your current Chess.com rating so we can compare future progress.
-                                    </p>
-                                    <button
-                                        type="button"
-                                        onClick={handleSnapshot}
-                                        disabled={snapshotLoading}
-                                        className={`mt-2 px-6 py-2 bg-primary text-bg-primary text-sm font-sans transition-all rounded-sm km-focus-visible ${snapshotLoading ? 'km-interactive-disabled' : 'km-interactive'}`}
-                                    >
-                                        {snapshotLoading ? 'Recording...' : 'Record Snapshot'}
-                                    </button>
-                                </div>
-
-                                <div className="space-y-2">
-                                    <h3 className="font-serif text-lg text-primary">Step 2 — Play a few games</h3>
-                                    <p className="text-sm text-primary/70 font-sans leading-relaxed">
-                                        After you’ve played a few games, come back here to see what drove changes.
-                                    </p>
-                                </div>
+                            <div className="space-y-3">
+                                <button
+                                    type="button"
+                                    onClick={() => navigate('/')}
+                                    className="px-6 py-2 bg-primary text-bg-primary text-sm font-sans transition-all rounded-sm km-focus-visible km-interactive"
+                                >
+                                    Import your games
+                                </button>
+                                <p className="text-xs text-primary/70 font-sans leading-relaxed">
+                                    Your rating is tracked automatically — when you import games, finish a
+                                    training session, or visit this page. Nothing to record by hand.
+                                </p>
                             </div>
                         </div>
                     )}
@@ -496,7 +417,7 @@ export default function RatingInsights() {
                                     }
                                     highlight={hasWindowRating && data.rating.net_change !== null && data.rating.net_change !== 0}
                                     positive={hasWindowRating && data.rating.net_change !== null && data.rating.net_change > 0}
-                                    extra={!hasSnapshots && !hasWindowRating ? "Record a snapshot to track rating change." : undefined}
+                                    extra={!hasSnapshots && !hasWindowRating ? "Rating is tracked automatically as you play and import games." : undefined}
                                 />
                                 <Card
                                     label="Performance"
