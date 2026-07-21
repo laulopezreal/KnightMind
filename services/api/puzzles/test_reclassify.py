@@ -50,8 +50,18 @@ def db_session():
         Base.metadata.drop_all(engine)
 
 
-def _seed_puzzle(db, *, puzzle_id, username, fen, best_move, motif=None, title=None):
-    """Insert a Puzzle and, when motif/title are supplied, a PuzzleStats row."""
+def _seed_puzzle(
+    db,
+    *,
+    puzzle_id,
+    username,
+    fen,
+    best_move,
+    with_stats=True,
+    motif=None,
+    title=None,
+):
+    """Insert a Puzzle and optionally seed its PuzzleStats identity row."""
     db.add(
         Puzzle(
             id=puzzle_id,
@@ -67,7 +77,7 @@ def _seed_puzzle(db, *, puzzle_id, username, fen, best_move, motif=None, title=N
             swing=3.0,
         )
     )
-    if motif is not None or title is not None:
+    if with_stats:
         db.add(
             PuzzleStats(
                 puzzle_id=puzzle_id,
@@ -80,6 +90,7 @@ def _seed_puzzle(db, *, puzzle_id, username, fen, best_move, motif=None, title=N
 
 
 def _motif_of(db, puzzle_id):
+    """Return the stored motif/title identity tuple for a puzzle stats row."""
     stats = db.get(PuzzleStats, puzzle_id)
     return stats.primary_motif, stats.title
 
@@ -144,6 +155,7 @@ def test_reclassify_creates_missing_stats_row(db_session):
         username="lauureal",
         fen=FORK_FEN,
         best_move=FORK_BEST,
+        with_stats=False,
     )
 
     summary = reclassify_motifs(db_session)
@@ -151,6 +163,7 @@ def test_reclassify_creates_missing_stats_row(db_session):
     assert summary["total"] == 1
     assert summary["created"] == 1
     assert summary["changed_existing"] == 0
+    assert summary["affected"] == 1
     assert summary["reclassified"] == 1
     assert summary["before"]["<missing_stats>"] == 1
     assert summary["after"]["fork"] == 1
@@ -168,6 +181,7 @@ def test_dry_run_reports_missing_stats_create_without_writing(db_session):
         username="lauureal",
         fen=FORK_FEN,
         best_move=FORK_BEST,
+        with_stats=False,
     )
 
     summary = reclassify_motifs(db_session, dry_run=True)
@@ -175,6 +189,7 @@ def test_dry_run_reports_missing_stats_create_without_writing(db_session):
     assert summary["total"] == 1
     assert summary["created"] == 1
     assert summary["changed_existing"] == 0
+    assert summary["affected"] == 1
     assert summary["reclassified"] == 1
     assert summary["before"]["<missing_stats>"] == 1
     assert db_session.get(PuzzleStats, "p_missing_stats") is None
@@ -208,17 +223,43 @@ def test_reclassify_is_idempotent_after_creating_missing_stats(db_session):
         username="lauureal",
         fen=FORK_FEN,
         best_move=FORK_BEST,
+        with_stats=False,
     )
 
     first = reclassify_motifs(db_session)
     assert first["created"] == 1
     assert first["changed_existing"] == 0
+    assert first["affected"] == 1
 
     second = reclassify_motifs(db_session)
     assert second["created"] == 0
     assert second["changed_existing"] == 0
+    assert second["affected"] == 0
     assert second["reclassified"] == 0
     assert _motif_of(db_session, "p_missing_stats") == ("fork", "The Fork")
+
+
+def test_existing_unclassified_stats_row_is_updated_not_created(db_session):
+    """An existing stats row with null identity fields is updated in place."""
+    _seed_puzzle(
+        db_session,
+        puzzle_id="p_unclassified",
+        username="lauureal",
+        fen=FORK_FEN,
+        best_move=FORK_BEST,
+        motif=None,
+        title=None,
+    )
+
+    summary = reclassify_motifs(db_session)
+
+    assert summary["total"] == 1
+    assert summary["created"] == 0
+    assert summary["changed_existing"] == 1
+    assert summary["affected"] == 1
+    assert summary["reclassified"] == 1
+    assert summary["before"]["<unclassified>"] == 1
+    assert _motif_of(db_session, "p_unclassified") == ("fork", "The Fork")
 
 
 def test_already_correct_row_is_untouched(db_session):
@@ -343,6 +384,7 @@ def test_username_filter_scopes_missing_stats_creation(db_session):
         username="lauureal",
         fen=FORK_FEN,
         best_move=FORK_BEST,
+        with_stats=False,
     )
     _seed_puzzle(
         db_session,
@@ -350,11 +392,13 @@ def test_username_filter_scopes_missing_stats_creation(db_session):
         username="hikaru",
         fen=FORK_FEN,
         best_move=FORK_BEST,
+        with_stats=False,
     )
 
     summary = reclassify_motifs(db_session, username="  Lauureal  ")
 
     assert summary["total"] == 1
     assert summary["created"] == 1
+    assert summary["affected"] == 1
     assert _motif_of(db_session, "p_fork_a") == ("fork", "The Fork")
     assert db_session.get(PuzzleStats, "p_fork_b") is None

@@ -83,7 +83,9 @@ def reclassify_motifs(
 
     Returns:
         A summary dict with ``total``, ``created``, ``changed_existing``,
-        ``reclassified``, ``before`` (Counter), and ``after`` (Counter).
+        ``affected`` (created + changed_existing), ``reclassified``
+        (compatibility alias for affected), ``before`` (Counter), and ``after``
+        (Counter).
         ``before``/``after`` are keyed by motif, with ``None`` collapsed to the
         literal string ``"<unclassified>"`` and missing stats rows counted as
         ``"<missing_stats>"`` in ``before``.
@@ -147,6 +149,7 @@ def reclassify_motifs(
         "total": len(rows),
         "created": created,
         "changed_existing": changed_existing,
+        "affected": created + changed_existing,
         "reclassified": created + changed_existing,
         "before": before,
         "after": after,
@@ -154,6 +157,7 @@ def reclassify_motifs(
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Parse CLI arguments and run the motif reclassification pass."""
     parser = argparse.ArgumentParser(
         description=(
             "Reclassify existing puzzle motifs/titles using the current "
