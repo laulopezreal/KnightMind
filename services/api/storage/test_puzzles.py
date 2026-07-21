@@ -203,6 +203,45 @@ def test_duplicate_save_preserves_existing_stats(repository, db_session):
     assert preserved.title == "Manual title"
 
 
+def test_duplicate_save_does_not_rollback_unrelated_pending_work(
+    repository, db_session
+):
+    """Duplicate detection returns before insert so it does not roll back callers."""
+
+    first_is_new, puzzle_id = repository.save_puzzle(
+        username="testuser",
+        source_game_id="game123",
+        ply=15,
+        fen="3q3q1k/6pp/8/8/8/8/PP4PP/3Q2K1 w - - 0 1",
+        side_to_move="white",
+        played_move_uci="a2a3",
+        best_move_uci="d1d8",
+        eval_before=9.0,
+        eval_after=0.0,
+        swing=9.0,
+    )
+    assert first_is_new is True
+
+    _add_game(db_session, "pending-game")
+    is_duplicate, duplicate_id = repository.save_puzzle(
+        username="testuser",
+        source_game_id="game123",
+        ply=15,
+        fen="8/8/8/8/8/8/8/8 w - - 0 1",
+        side_to_move="white",
+        played_move_uci="e2e4",
+        best_move_uci="d2d4",
+        eval_before=1.0,
+        eval_after=-2.0,
+        swing=3.0,
+    )
+    db_session.commit()
+
+    assert is_duplicate is False
+    assert duplicate_id == puzzle_id
+    assert db_session.get(Game, ("pending-game", "testuser")) is not None
+
+
 def test_puzzle_repository_different_ply_not_duplicate(repository):
     is_new1, pid1 = repository.save_puzzle(
         username="testuser",

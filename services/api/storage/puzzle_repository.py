@@ -40,6 +40,19 @@ class PuzzleRepository:
     def __init__(self, db: Session):
         self.db = db
 
+    def _existing_puzzle_id(
+        self, username: str, source_game_id: str, ply: int
+    ) -> str | None:
+        """Return the existing puzzle id for the natural duplicate key, if any."""
+
+        return self.db.scalars(
+            select(PuzzleModel.id).where(
+                PuzzleModel.username == username,
+                PuzzleModel.source_game_id == source_game_id,
+                PuzzleModel.ply == ply,
+            )
+        ).first()
+
     def _to_puzzle(self, puzzle: PuzzleModel) -> Puzzle:
         return Puzzle(
             id=puzzle.id,
@@ -84,6 +97,10 @@ class PuzzleRepository:
         """Persist a new puzzle and its identity stats, or return an existing id."""
 
         username_lower = username.lower()
+        existing = self._existing_puzzle_id(username_lower, source_game_id, ply)
+        if existing:
+            return False, existing
+
         puzzle_id = puzzle_id or str(uuid.uuid4())
 
         puzzle = PuzzleModel(
@@ -125,16 +142,10 @@ class PuzzleRepository:
             return True, puzzle_id
         except IntegrityError:
             self.db.rollback()
-            existing = self.db.scalars(
-                select(PuzzleModel.id).where(
-                    PuzzleModel.username == username_lower,
-                    PuzzleModel.source_game_id == source_game_id,
-                    PuzzleModel.ply == ply,
-                )
-            ).first()
+            existing = self._existing_puzzle_id(username_lower, source_game_id, ply)
             if existing:
-                puzzle_id = existing
-            return False, puzzle_id
+                return False, existing
+            raise
 
     def get_puzzle(self, username: str, puzzle_id: str) -> Puzzle | None:
         puzzle = self.db.get(PuzzleModel, puzzle_id)
