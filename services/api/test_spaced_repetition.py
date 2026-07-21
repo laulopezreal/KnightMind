@@ -74,6 +74,8 @@ def test_record_fail_review(db_session):
 
 
 def test_update_puzzle_stats_preserves_existing_identity(db_session):
+    """Review updates preserve existing puzzle title and motif identity fields."""
+
     db_session.add(
         PuzzleStats(
             puzzle_id="test-puzzle-identity",

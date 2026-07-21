@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from services.api.day_boundary import utc_today
 from services.api.models import Puzzle as PuzzleModel
 from services.api.models import PuzzleStats
+from services.api.puzzles.identity import assign_primary_motif, generate_puzzle_title
 
 
 @dataclass
@@ -80,6 +81,8 @@ class PuzzleRepository:
         confirmed_depth: int | None = None,
         solution_pv: str | None = None,
     ) -> tuple[bool, str]:
+        """Persist a new puzzle and its identity stats, or return an existing id."""
+
         username_lower = username.lower()
         puzzle_id = puzzle_id or str(uuid.uuid4())
 
@@ -104,14 +107,6 @@ class PuzzleRepository:
             source_path=source_path,
         )
         self.db.add(puzzle)
-        # Puzzle identity helpers import PuzzleRepository for legacy backfills,
-        # so keep this import lazy to avoid a module-import cycle while still
-        # assigning identity data in the same unit of work as the new puzzle.
-        from services.api.puzzles.identity import (  # noqa: PLC0415
-            assign_primary_motif,
-            generate_puzzle_title,
-        )
-
         motif = assign_primary_motif(puzzle)
         self.db.add(
             PuzzleStats(

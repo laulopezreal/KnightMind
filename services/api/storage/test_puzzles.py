@@ -125,6 +125,8 @@ def test_puzzle_repository_deduplication(repository):
 
 
 def test_save_puzzle_creates_identity_stats(repository, db_session):
+    """Saving a new puzzle also creates its default identity stats row."""
+
     fen = "3q3k/6pp/8/8/8/8/PP4PP/3Q2K1 w - - 0 1"
     is_new, puzzle_id = repository.save_puzzle(
         username="TestUser",
@@ -155,7 +157,9 @@ def test_save_puzzle_creates_identity_stats(repository, db_session):
 
 
 def test_duplicate_save_preserves_existing_stats(repository, db_session):
-    is_new, puzzle_id = repository.save_puzzle(
+    """Duplicate saves return the existing puzzle without replacing stats."""
+
+    first_is_new, puzzle_id = repository.save_puzzle(
         username="testuser",
         source_game_id="game123",
         ply=15,
@@ -188,7 +192,7 @@ def test_duplicate_save_preserves_existing_stats(repository, db_session):
         swing=3.0,
     )
 
-    assert is_new is True
+    assert first_is_new is True
     assert is_duplicate is False
     assert duplicate_id == puzzle_id
     preserved = db_session.get(PuzzleStats, puzzle_id)
