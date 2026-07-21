@@ -193,12 +193,12 @@ export default function RatingInsights() {
     }, [data, history]);
 
     const chartData = chart.points;
-    const chartTrendColor = useMemo(() => {
-        if (chartData.length < 2) return 'var(--color-positive)';
-        return chartData[chartData.length - 1].rating >= chartData[0].rating
-            ? 'var(--color-positive)'
-            : 'var(--color-negative)';
-    }, [chartData]);
+    // Direction only — the actual colors are theme tokens applied via the
+    // km-trend-* CSS classes (SVG attributes can't consume var()).
+    const chartTrend: 'up' | 'down' = chartData.length < 2
+        || chartData[chartData.length - 1].rating >= chartData[0].rating
+        ? 'up'
+        : 'down';
 
     if (!username) {
         return (
@@ -431,7 +431,7 @@ export default function RatingInsights() {
                     {thinWindow && (
                         <div className="space-y-6">
                             {chartData.length >= 2 && (
-                                <RatingChart chartData={chartData} color={chartTrendColor} source={chart.source} />
+                                <RatingChart chartData={chartData} trend={chartTrend} source={chart.source} />
                             )}
                             <div className="max-w-xl bg-primary/5 border border-primary/10 p-6 rounded-sm">
                                 <h3 className="font-serif text-lg text-primary mb-1">Not enough games in this window</h3>
@@ -479,7 +479,7 @@ export default function RatingInsights() {
 
                             {/* Rating Trend Chart */}
                             {chartData.length >= 2 && (
-                                <RatingChart chartData={chartData} color={chartTrendColor} source={chart.source} />
+                                <RatingChart chartData={chartData} trend={chartTrend} source={chart.source} />
                             )}
 
                             {/* Summary Cards */}
@@ -600,7 +600,7 @@ export default function RatingInsights() {
     );
 }
 
-const RatingChart = ({ chartData, color, source }: { chartData: { label: string; rating: number }[], color: string, source: 'games' | 'snapshots' }) => (
+const RatingChart = ({ chartData, trend, source }: { chartData: { label: string; rating: number }[], trend: 'up' | 'down', source: 'games' | 'snapshots' }) => (
     <section
         className="p-6 bg-primary/5 rounded-sm border border-primary/10"
         role="img"
@@ -616,24 +616,32 @@ const RatingChart = ({ chartData, color, source }: { chartData: { label: string;
             <LineChart data={chartData}>
                 <XAxis dataKey="label" tick={{ fontSize: 11 }} stroke="currentColor" strokeOpacity={0.2} />
                 <YAxis domain={['dataMin - 20', 'dataMax + 20']} tick={{ fontSize: 11 }} stroke="currentColor" strokeOpacity={0.2} width={45} />
+                {/* Theme via the runtime --bg-primary/--text-primary vars: the
+                    --color-* aliases live in @theme inline, so they are never
+                    emitted as real CSS vars and would resolve to nothing here. */}
                 <Tooltip
                     contentStyle={{
                         fontSize: 12,
                         borderRadius: 4,
-                        border: '1px solid color-mix(in srgb, var(--color-primary) 15%, transparent)',
-                        backgroundColor: 'var(--color-bg-primary)',
-                        color: 'var(--color-primary)',
+                        border: '1px solid color-mix(in srgb, var(--text-primary) 20%, transparent)',
+                        backgroundColor: 'var(--bg-primary)',
+                        color: 'var(--text-primary)',
                     }}
-                    itemStyle={{ color: 'var(--color-primary)' }}
-                    labelStyle={{ fontWeight: 600, color: 'var(--color-primary)' }}
+                    itemStyle={{ color: 'var(--text-primary)' }}
+                    labelStyle={{ fontWeight: 600, color: 'var(--text-primary)' }}
                 />
                 <Line
                     type="monotone"
                     dataKey="rating"
-                    stroke={color}
+                    className={`km-trend-${trend}`}
+                    stroke="currentColor"
                     strokeWidth={2}
                     dot={false}
                     activeDot={{ r: 4 }}
+                    // No draw-in animation: respects the app's reduced-motion
+                    // stance, and the dasharray draw-in can stall invisible in
+                    // background tabs until a re-render.
+                    isAnimationActive={false}
                 />
                 <ReferenceDot
                     x={chartData[0].label}
