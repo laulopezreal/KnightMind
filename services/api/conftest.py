@@ -1,6 +1,32 @@
 """Shared pytest fixtures for the API test suite."""
 
+from unittest.mock import AsyncMock
+
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_auto_snapshot(monkeypatch):
+    """Keep automatic rating snapshots off the network in every test.
+
+    Auto-snapshot fetches Chess.com stats on session complete, game import,
+    and (throttled) rating-insights views. Default the fetch to a network
+    failure — production treats it as best-effort, so callers proceed — and
+    clear the per-username throttle registry so state can't leak between
+    tests. Tests that need snapshot data re-patch
+    ``services.api.ratings_auto.get_player_stats``.
+    """
+    from services.api import ratings_auto
+    from services.ingest import NetworkError
+
+    ratings_auto.reset_throttle()
+    monkeypatch.setattr(
+        ratings_auto,
+        "get_player_stats",
+        AsyncMock(side_effect=NetworkError("network disabled in tests")),
+    )
+    yield
+    ratings_auto.reset_throttle()
 
 
 @pytest.fixture(autouse=True)

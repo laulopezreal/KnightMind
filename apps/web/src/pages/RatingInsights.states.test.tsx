@@ -74,12 +74,20 @@ describe('RatingInsights data states', () => {
     it('ignores a stale error from a superseded username', async () => {
         setOnline(true);
         let rejectAlice!: (reason?: unknown) => void;
-        mockGetRatingExplain
-            .mockImplementationOnce(() => new Promise((_, rej) => { rejectAlice = rej; }))
-            .mockResolvedValue(EXPLAIN_WITH_GAMES);
+        // Route by username, not call order: the page now fetches exactly once
+        // per (username, window, control), so call-order mocks would race.
+        mockGetRatingExplain.mockImplementation((username: string) =>
+            username === 'alice'
+                ? new Promise((_, rej) => { rejectAlice = rej; })
+                : Promise.resolve(EXPLAIN_WITH_GAMES)
+        );
         mockGetRatingHistory.mockResolvedValue([]);
 
         const { rerender } = render(<RatingInsights />);
+        // Wait until alice's (never-resolving) explain request is in flight.
+        await waitFor(() =>
+            expect(mockGetRatingExplain.mock.calls.some(c => c[0] === 'alice')).toBe(true)
+        );
 
         mockUsername = 'bob';
         rerender(<RatingInsights />);
