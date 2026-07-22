@@ -658,6 +658,185 @@ def test_explain_no_games_has_empty_chart_series(client_with_db, db_session):
     assert data["rating"]["end_is_estimated"] is False
 
 
+def test_explain_chart_series_starts_on_pre_window_snapshot(client_with_db, db_session):
+    """Most common production shape: snapshot history exists before the window
+    ("Last 7 Days" view). The pre-window snapshot anchors the start of the
+    fused series; the last game's Elo (fresher than any snapshot) is the end."""
+    since_time = datetime.now(timezone.utc) - timedelta(days=2)
+    db_session.add(
+        RatingSnapshot(
+            username="testuser",
+            source="chesscom",
+            time_control="rapid",
+            rating=1410,
+            recorded_at=since_time - timedelta(days=1),
+        )
+    )
+    for i, elo in enumerate([1420, 1435]):
+        pgn = (
+            '[White "testuser"]\n[Black "opponent"]\n'
+            f'[WhiteElo "{elo}"]\n[BlackElo "1450"]\n\n1. e4 e5 1-0'
+        )
+        _seed_game(db_session, i, since_time, rated=True, pgn=pgn)
+    db_session.commit()
+
+    response = client_with_db.get(
+        "/ratings/explain",
+        params={
+            "username": "testuser",
+            "time_control": "rapid",
+            "since": since_time.isoformat(),
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["rating"]["start"] == 1410
+    assert data["rating"]["start_is_estimated"] is False
+    assert data["rating"]["end"] == 1435
+    assert data["rating"]["end_is_estimated"] is True
+    assert [(p["rating"], p["source"]) for p in data["chart_series"]] == [
+        (1410, "snapshot"),
+        (1420, "game"),
+        (1435, "game"),
+    ]
+
+
+def test_explain_chart_series_snapshot_tied_to_only_game(client_with_db, db_session):
+    """Timestamp tie: one snapshot recorded at exactly the only game's end
+    time wins BOTH anchors. The series must still end on the snapshot rating
+    (card/chart endpoint agreement), not on the game's stale Elo."""
+    since_time = datetime.now(timezone.utc) - timedelta(days=2)
+    pgn = (
+        '[White "testuser"]\n[Black "opponent"]\n'
+        '[WhiteElo "1440"]\n[BlackElo "1450"]\n\n1. e4 e5 1-0'
+    )
+    _seed_game(db_session, 0, since_time, rated=True, pgn=pgn)  # ends at +1h
+    game_at = datetime.fromtimestamp(
+        int((since_time + timedelta(hours=1)).timestamp()), tz=timezone.utc
+    )
+    db_session.add(
+        RatingSnapshot(
+            username="testuser",
+            source="chesscom",
+            time_control="rapid",
+            rating=1455,
+            recorded_at=game_at,
+        )
+    )
+    db_session.commit()
+
+    response = client_with_db.get(
+        "/ratings/explain",
+        params={
+            "username": "testuser",
+            "time_control": "rapid",
+            "since": since_time.isoformat(),
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["rating"]["start"] == 1455
+    assert data["rating"]["end"] == 1455
+    assert data["chart_series"][0]["rating"] == data["rating"]["start"]
+    assert data["chart_series"][-1]["rating"] == data["rating"]["end"]
+    assert data["chart_series"][-1]["source"] == "snapshot"
+
+
+def test_explain_chart_series_anchor_order_on_timestamp_ties(
+    client_with_db, db_session
+):
+    """Pins the stable-sort invariant: a start snapshot tied to the first
+    game's timestamp stays first, an end snapshot tied to the last game's
+    timestamp stays last."""
+    since_time = datetime.now(timezone.utc) - timedelta(days=2)
+    for i, elo in enumerate([1420, 1430, 1440]):
+        pgn = (
+            '[White "testuser"]\n[Black "opponent"]\n'
+            f'[WhiteElo "{elo}"]\n[BlackElo "1450"]\n\n1. e4 e5 1-0'
+        )
+        _seed_game(db_session, i, since_time, rated=True, pgn=pgn)  # +1h..+3h
+    first_game_at = datetime.fromtimestamp(
+        int((since_time + timedelta(hours=1)).timestamp()), tz=timezone.utc
+    )
+    last_game_at = datetime.fromtimestamp(
+        int((since_time + timedelta(hours=3)).timestamp()), tz=timezone.utc
+    )
+    for rating, at in [(1415, first_game_at), (1455, last_game_at)]:
+        db_session.add(
+            RatingSnapshot(
+                username="testuser",
+                source="chesscom",
+                time_control="rapid",
+                rating=rating,
+                recorded_at=at,
+            )
+        )
+    db_session.commit()
+
+    response = client_with_db.get(
+        "/ratings/explain",
+        params={
+            "username": "testuser",
+            "time_control": "rapid",
+            "since": since_time.isoformat(),
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["rating"]["start"] == 1415
+    assert data["rating"]["end"] == 1455
+    assert [(p["rating"], p["source"]) for p in data["chart_series"]] == [
+        (1415, "snapshot"),
+        (1420, "game"),
+        (1430, "game"),
+        (1440, "game"),
+        (1455, "snapshot"),
+    ]
+
+
+def test_explain_mid_window_snapshot_wins_neither_anchor(client_with_db, db_session):
+    """A snapshot strictly between the first and last games loses both anchor
+    contests: both anchors come from game Elo (estimated) and the fused series
+    contains only game points."""
+    since_time = datetime.now(timezone.utc) - timedelta(days=2)
+    for i, elo in enumerate([1420, 1435, 1440]):
+        pgn = (
+            '[White "testuser"]\n[Black "opponent"]\n'
+            f'[WhiteElo "{elo}"]\n[BlackElo "1450"]\n\n1. e4 e5 1-0'
+        )
+        _seed_game(db_session, i, since_time, rated=True, pgn=pgn)  # +1h..+3h
+    db_session.add(
+        RatingSnapshot(
+            username="testuser",
+            source="chesscom",
+            time_control="rapid",
+            rating=1425,
+            recorded_at=since_time + timedelta(hours=2, minutes=30),
+        )
+    )
+    db_session.commit()
+
+    response = client_with_db.get(
+        "/ratings/explain",
+        params={
+            "username": "testuser",
+            "time_control": "rapid",
+            "since": since_time.isoformat(),
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["rating"]["start"] == 1420
+    assert data["rating"]["start_is_estimated"] is True
+    assert data["rating"]["end"] == 1440
+    assert data["rating"]["end_is_estimated"] is True
+    assert [(p["rating"], p["source"]) for p in data["chart_series"]] == [
+        (1420, "game"),
+        (1435, "game"),
+        (1440, "game"),
+    ]
+
+
 def test_explain_highlights_include_opponent_username(client_with_db, db_session):
     since_time = datetime.now(timezone.utc) - timedelta(days=2)
     pgn = (

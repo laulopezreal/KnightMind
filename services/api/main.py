@@ -2623,10 +2623,11 @@ async def explain_rating_changes(
             ChartPoint(at=p.played_at, rating=p.rating, source="game")
             for p in trajectory
         )
-        if (
-            end_anchor_snapshot is not None
-            and end_anchor_snapshot is not start_anchor_snapshot
-        ):
+        # Append even when the same snapshot also won the start contest (a
+        # timestamp tie with every game): dropping it would leave the last
+        # game's Elo as the series endpoint while the card shows the snapshot
+        # rating. A duplicate point at the same timestamp is harmless.
+        if end_anchor_snapshot is not None:
             chart_series.append(
                 ChartPoint(
                     at=_snapshot_at(end_anchor_snapshot),
@@ -2637,6 +2638,22 @@ async def explain_rating_changes(
         # Stable sort: on equal timestamps the start anchor stays first and
         # the end anchor stays last, preserving endpoint agreement.
         chart_series.sort(key=lambda p: p.at)
+        # Self-check the contract clients rely on instead of trusting
+        # construction: a divergence here means a card/chart mismatch shipped.
+        if chart_series and (
+            chart_series[0].rating != start_rating_val
+            or chart_series[-1].rating != end_rating_val
+        ):
+            logger.warning(
+                "chart_series endpoints diverge from rating anchors: "
+                "series %s..%s vs start=%s end=%s (username=%s tc=%s)",
+                chart_series[0].rating,
+                chart_series[-1].rating,
+                start_rating_val,
+                end_rating_val,
+                username,
+                time_control,
+            )
 
     return ExplainResponse(
         time_control=time_control,
