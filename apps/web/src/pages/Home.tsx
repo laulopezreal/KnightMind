@@ -9,7 +9,7 @@ import { useJobPolling } from '../hooks/useJobPolling';
 import { Modal } from '../components/Modal';
 import { JobStatusCard } from '../components/JobStatusCard';
 import { LoadingSpinner } from '../components/LoadingSpinner';
-import { DataStateError } from '../components/DataState';
+import { DataStateError, DataStateSkeleton } from '../components/DataState';
 
 
 type ImportStatus = {
@@ -238,7 +238,7 @@ export default function Home() {
   // ── Loading State ──────────────────────────────
   if (pageLoading && username) {
     return (
-      <div className="space-y-12 animate-teedin">
+      <DataStateSkeleton label="Loading your chess data..." className="space-y-12 animate-teedin">
         <section className="space-y-6">
           <div className="h-16 w-64 bg-primary/10 rounded-sm animate-pulse" />
           <div className="h-6 w-96 max-w-full bg-primary/5 rounded-sm animate-pulse" />
@@ -249,7 +249,7 @@ export default function Home() {
             <div key={i} className="h-36 bg-primary/5 border border-primary/10 rounded-sm animate-pulse" />
           ))}
         </div>
-      </div>
+      </DataStateSkeleton>
     );
   }
 
