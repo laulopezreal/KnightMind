@@ -16,7 +16,7 @@ export function RecentlyTrickyCard({ puzzles, totalCount }: RecentlyTrickyCardPr
 
   return (
     <section
-      className="bg-primary/5 border border-primary/5 rounded-sm p-6"
+      className="bg-primary/5 border border-primary/10 rounded-sm p-6"
       aria-labelledby="tricky-title"
     >
       <h3 id="tricky-title" className="text-xl md:text-2xl font-serif text-primary mb-4">

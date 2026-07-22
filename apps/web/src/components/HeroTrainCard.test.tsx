@@ -52,6 +52,28 @@ describe('HeroTrainCard', () => {
     expect(screen.getByText('Browse Puzzles')).toBeInTheDocument();
   });
 
+  it('surfaces the 4-hour horizon when caught up and more are coming', () => {
+    // due_in_4h is fetched already; the caught-up screen should use it instead
+    // of a dead-end "check back later".
+    render(<HeroTrainCard {...defaultProps} dueCount={0} dueIn4h={3} />);
+
+    expect(screen.getByText(/3 more puzzles will be ready within 4 hours/i)).toBeInTheDocument();
+  });
+
+  it('falls back to next-review time when caught up with none due in 4h', () => {
+    render(<HeroTrainCard {...defaultProps} dueCount={0} dueIn4h={0} nextReviewAt="2025-01-15T14:00:00Z" />);
+
+    expect(screen.getByText(/Your next review is/i)).toBeInTheDocument();
+  });
+
+  it('does not claim "0 puzzles waiting" for a first-timer with nothing generated', () => {
+    render(<HeroTrainCard {...defaultProps} totalSessions={0} dueCount={0} />);
+
+    expect(screen.getByText('Ready to Start Training?')).toBeInTheDocument();
+    expect(screen.getByText(/Import your Chess.com games/i)).toBeInTheDocument();
+    expect(screen.queryByText(/0 puzzles waiting/i)).not.toBeInTheDocument();
+  });
+
   it('should call onStartSession when button is clicked', async () => {
     const onStartSession = vi.fn();
     render(<HeroTrainCard {...defaultProps} onStartSession={onStartSession} />);
