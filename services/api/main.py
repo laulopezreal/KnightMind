@@ -427,7 +427,10 @@ async def import_chesscom_games(
 
         # Fresh games are on file — record the current ratings alongside them
         # so rating history never depends on a manual snapshot (best-effort).
-        await auto_snapshot(username, db)
+        # A sync that found nothing new can't have moved the rating, so skip
+        # the Chess.com round-trip entirely on no-op re-imports.
+        if new_games > 0:
+            await auto_snapshot(username, db)
 
         return ImportResponse(
             message=f"Successfully processed {count} games for {username}",
@@ -2006,6 +2009,24 @@ async def create_rating_snapshot(
                 detail=f"Could not find rating for {request.time_control} in Chess.com response",
             )
 
+        # Same-rating dedupe, mirroring ratings_auto.auto_snapshot: a repeat
+        # call with an unchanged rating answers from the stored row instead of
+        # writing a duplicate flat entry into the history the chart reads.
+        latest_stmt = (
+            select(RatingSnapshot)
+            .where(
+                RatingSnapshot.username == request.username,
+                RatingSnapshot.time_control == request.time_control,
+            )
+            .order_by(RatingSnapshot.recorded_at.desc())
+            .limit(1)
+        )
+        latest = db.scalars(latest_stmt).first()
+        if latest and latest.rating == rating:
+            return SnapshotResponse(
+                rating=latest.rating, recorded_at=latest.recorded_at
+            )
+
         snapshot = RatingSnapshot(
             username=request.username,
             source="chesscom",
@@ -2324,7 +2345,6 @@ async def explain_rating_changes(
                     meta.black_username if user_is_white else meta.white_username
                 ),
                 "actual": result_score,
-                "expected": None,
             }
         )
 
@@ -2344,6 +2364,12 @@ async def explain_rating_changes(
             reference_rating = 1200
         reference_is_approx = True
 
+    # One owner for the per-game self-rating fallback: the player's own Elo at
+    # that game when the PGN has it, else the window reference. Used by the
+    # expected-score math and both vs-higher/vs-lower driver counts.
+    for g in game_details:
+        g["r_self"] = g["player_rating"] or reference_rating
+
     expected_total = 0.0
     actual_total_rated = 0.0
     # (surprise value, game) pairs — ranked on the unrounded value so ties
@@ -2356,9 +2382,8 @@ async def explain_rating_changes(
             # Prefer the player's own Elo at that game over the single
             # window-wide reference: expected score then reflects the actual
             # matchup, not an anchor that may be days stale.
-            r_self = item["player_rating"] or reference_rating
+            r_self = item["r_self"]
             expected = calculate_expected_score(r_self, r_opp)
-            item["expected"] = expected
 
             expected_total += expected
             actual_total_rated += item["actual"]
@@ -2445,8 +2470,7 @@ async def explain_rating_changes(
             1
             for g in game_details
             if g["opp_rating"]
-            and g["opp_rating"]
-            >= (g["player_rating"] or reference_rating) + RATING_DIFFERENCE_THRESHOLD
+            and g["opp_rating"] >= g["r_self"] + RATING_DIFFERENCE_THRESHOLD
             and g["actual"] == 1.0
         )
         if wins_vs_higher >= SIGNIFICANT_WINS_VS_HIGHER_THRESHOLD:
@@ -2462,8 +2486,7 @@ async def explain_rating_changes(
             1
             for g in game_details
             if g["opp_rating"]
-            and g["opp_rating"]
-            <= (g["player_rating"] or reference_rating) - RATING_DIFFERENCE_THRESHOLD
+            and g["opp_rating"] <= g["r_self"] - RATING_DIFFERENCE_THRESHOLD
             and g["actual"] == 0.0
         )
         if losses_vs_lower >= SIGNIFICANT_LOSSES_VS_LOWER_THRESHOLD:

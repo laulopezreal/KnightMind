@@ -194,6 +194,7 @@ export default function RatingInsights() {
     const insufficientSample = data?.insufficient_data === true && hasGames;
 
     const N = data?.stats.games ?? 0;
+    const casualExcluded = data?.stats.casual_games_excluded ?? 0;
     // Prefer the server's canonical confidence (computed from rated games with a
     // known opponent rating). Fall back to the game count only for older payloads.
     const confidence = data?.confidence
@@ -353,7 +354,7 @@ export default function RatingInsights() {
                                 <button
                                     type="button"
                                     onClick={() => navigate('/')}
-                                    className="px-6 py-2 bg-primary text-bg-primary text-sm font-sans transition-all rounded-sm km-focus-visible km-interactive"
+                                    className="px-6 py-2 bg-primary text-bg-primary hover:opacity-90 rounded-sm font-serif transition-colors km-focus-visible km-interactive"
                                 >
                                     Import your games
                                 </button>
@@ -410,9 +411,9 @@ export default function RatingInsights() {
                                         {data.stats.missing_opponent_rating_games} game{data.stats.missing_opponent_rating_games > 1 ? 's' : ''} excluded (missing opponent rating)
                                     </span>
                                 )}
-                                {(data.stats.casual_games_excluded ?? 0) > 0 && (
+                                {casualExcluded > 0 && (
                                     <span className="text-[10px] font-sans text-primary/70">
-                                        {data.stats.casual_games_excluded} casual game{(data.stats.casual_games_excluded ?? 0) > 1 ? 's' : ''} excluded (don’t affect rating)
+                                        {casualExcluded} casual game{casualExcluded > 1 ? 's' : ''} excluded (don’t affect rating)
                                     </span>
                                 )}
                             </div>
