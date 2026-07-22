@@ -288,7 +288,13 @@ export default function RatingInsights() {
                         </div>
                         {data && data.stats.games === 0 && (
                             <div className="text-[10px] text-primary/70 font-sans ml-1">
-                                <span>No data yet for {timeControl.charAt(0).toUpperCase() + timeControl.slice(1)}.</span>
+                                {/* Thin window still charts snapshots below, so "no data yet"
+                                    would contradict the visible chart — scope the copy. */}
+                                <span>
+                                    {thinWindow
+                                        ? `No ${timeControlLabel} games in this window.`
+                                        : `No data yet for ${timeControlLabel}.`}
+                                </span>
                             </div>
                         )}
                     </div>
@@ -525,7 +531,8 @@ export default function RatingInsights() {
 }
 
 const RatingChart = ({ chartData, trend, source }: { chartData: { label: string; rating: number }[], trend: 'up' | 'down', source: 'games' | 'snapshots' }) => (
-    <section
+    // div, not section: role="img" is not an allowed role on section (axe aria-allowed-role)
+    <div
         className="p-6 bg-primary/5 rounded-sm border border-primary/10"
         role="img"
         aria-label={`Rating over time, ${chartData.length} points from ${chartData[0].rating} to ${chartData[chartData.length - 1].rating}`}
@@ -557,6 +564,7 @@ const RatingChart = ({ chartData, trend, source }: { chartData: { label: string;
                 <Line
                     type="monotone"
                     dataKey="rating"
+                    name="Rating"
                     className={`km-trend-${trend}`}
                     stroke="currentColor"
                     strokeWidth={2}
@@ -583,7 +591,7 @@ const RatingChart = ({ chartData, trend, source }: { chartData: { label: string;
                 />
             </LineChart>
         </ResponsiveContainer>
-    </section>
+    </div>
 );
 
 const Card = ({ label, value, sub, helper, highlight, positive, extra }: { label: string, value: string, sub?: string, helper?: string, highlight?: boolean, positive?: boolean, extra?: string }) => (
