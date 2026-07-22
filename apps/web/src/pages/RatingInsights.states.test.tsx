@@ -278,6 +278,25 @@ describe('RatingInsights fetch concurrency & error isolation', () => {
         expect(screen.queryByText(/No Rapid games yet/i)).not.toBeInTheDocument();
     });
 
+    it("clears the previous username's insights immediately on a switch", async () => {
+        mockGetRatingExplain.mockImplementation((username: string) =>
+            username === 'alice'
+                ? Promise.resolve(EXPLAIN_WITH_GAMES)
+                : new Promise(() => {})
+        );
+        mockGetRatingHistory.mockResolvedValue([]);
+
+        const { rerender } = render(<RatingInsights />);
+        await waitFor(() => expect(screen.getByText('15W - 3D - 7L')).toBeInTheDocument());
+
+        mockUsername = 'bob';
+        rerender(<RatingInsights />);
+
+        // Alice's stats must not linger under bob's context while bob's
+        // explain request is still in flight.
+        await waitFor(() => expect(screen.queryByText('15W - 3D - 7L')).not.toBeInTheDocument());
+    });
+
     it('resets history on a time-control switch so stale snapshots never mislabel the chart', async () => {
         mockGetRatingExplain.mockResolvedValue(EXPLAIN_NO_GAMES);
         let resolveBlitzHistory!: (v: unknown) => void;

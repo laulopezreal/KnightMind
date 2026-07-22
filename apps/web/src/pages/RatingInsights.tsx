@@ -117,6 +117,16 @@ export default function RatingInsights() {
         fetchHistory();
     }, [fetchExplain, fetchHistory]);
 
+    // Explain data from the previous username/timeControl must not keep
+    // rendering under the new selection's labels (the username can change
+    // in-place via the global editor — no remount). History gets the same
+    // treatment in its own effect below. windowSource toggles deliberately
+    // keep the old window's data visible while the new window loads.
+    useEffect(() => {
+        setData(null);
+        setError(null);
+    }, [username, timeControl]);
+
     // History depends only on username + time control — its params don't include
     // the window — so it fetches on its own, concurrently with the sessions probe,
     // and is NOT refetched when windowSource toggles.
