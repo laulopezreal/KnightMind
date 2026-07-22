@@ -262,6 +262,51 @@ describe('RatingInsights', () => {
     });
   });
 
+  it('renders the server-fused chart series so the line ends on the card end anchor', async () => {
+    // Mixed case: fresh snapshot (1455) won the end anchor over the stale
+    // last-game Elo (1440). The chart must render chart_series — ending at
+    // 1455 — not the raw trajectory, so card and chart agree.
+    mockGetRatingExplain.mockResolvedValue({
+      rating: {
+        start: 1420, end: 1455, net_change: 35,
+        is_estimated: true, start_is_estimated: true, end_is_estimated: false,
+        reference_rating: 1430, reference_is_approx: false,
+      },
+      stats: { games: 3, wins: 2, draws: 0, losses: 1, actual_minus_expected: 0.8, avg_opponent_rating: 1440, missing_opponent_rating_games: 0 },
+      drivers: [],
+      highlights: { best_surprises: [], worst_surprises: [] },
+      window: { start: '2025-01-01T00:00:00Z', end: '2025-01-15T00:00:00Z' },
+      trajectory: [
+        { played_at: '2025-01-02T10:00:00Z', rating: 1420 },
+        { played_at: '2025-01-03T10:00:00Z', rating: 1435 },
+        { played_at: '2025-01-04T10:00:00Z', rating: 1440 },
+      ],
+      chart_series: [
+        { at: '2025-01-02T10:00:00Z', rating: 1420, source: 'game' },
+        { at: '2025-01-03T10:00:00Z', rating: 1435, source: 'game' },
+        { at: '2025-01-04T10:00:00Z', rating: 1440, source: 'game' },
+        { at: '2025-01-05T08:00:00Z', rating: 1455, source: 'snapshot' },
+      ],
+      confidence: 'low',
+      insufficient_data: false,
+    });
+    mockGetRatingHistory.mockResolvedValue([]);
+
+    render(<RatingInsights />);
+
+    await waitFor(() => {
+      // The accessible chart summary reflects the fused endpoints, proving the
+      // chart drew chart_series (4 points to 1455), not the trajectory (1440).
+      expect(screen.getByRole('img')).toHaveAttribute(
+        'aria-label',
+        'Rating over time, 4 points from 1420 to 1455',
+      );
+      // Card matches, and only the start is flagged estimated.
+      expect(screen.getByText('+35')).toBeInTheDocument();
+      expect(screen.getByText(/1420 → 1455 \(start est\. from games\)/)).toBeInTheDocument();
+    });
+  });
+
   it('shows opponent name and rating in highlight rows', async () => {
     mockGetRatingExplain.mockResolvedValue({
       rating: { start: 1200, end: 1250, net_change: 50, reference_rating: 1220, reference_is_approx: false },

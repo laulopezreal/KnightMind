@@ -510,6 +510,16 @@ def test_explain_trajectory_and_estimated_net_change(client_with_db, db_session)
     assert data["rating"]["end"] == 1432
     assert data["rating"]["net_change"] == 32
     assert data["rating"]["is_estimated"] is True
+    assert data["rating"]["start_is_estimated"] is True
+    assert data["rating"]["end_is_estimated"] is True
+    # With no snapshots the fused chart series is exactly the game points.
+    assert [(p["rating"], p["source"]) for p in data["chart_series"]] == [
+        (1400, "game"),
+        (1410, "game"),
+        (1395, "game"),
+        (1420, "game"),
+        (1432, "game"),
+    ]
     # Reference falls back to the player's own Elo average, not opponents'.
     assert data["rating"]["reference_rating"] == int(
         (1400 + 1410 + 1395 + 1420 + 1432) / 5
@@ -551,6 +561,103 @@ def test_explain_snapshot_end_beats_stale_game_elo(client_with_db, db_session):
     assert data["rating"]["start"] == 1480
     assert data["rating"]["end"] == 1500
     assert data["rating"]["is_estimated"] is True
+    # Only the end anchor is estimated; the start came from a real snapshot.
+    assert data["rating"]["start_is_estimated"] is False
+    assert data["rating"]["end_is_estimated"] is True
+    # The fused chart series carries the same anchors: snapshot start, game end.
+    assert [(p["rating"], p["source"]) for p in data["chart_series"]] == [
+        (1480, "snapshot"),
+        (1500, "game"),
+    ]
+
+
+def test_explain_chart_series_ends_on_fresh_snapshot_anchor(
+    client_with_db, db_session
+):
+    """Mixed case from the card/chart mismatch bug: a snapshot recorded AFTER
+    the last game wins the end anchor, and the fused chart series must end on
+    it — previously the client charted only per-game Elo, so the card said
+    "→ 1455" while the line ended at 1440."""
+    since_time = datetime.now(timezone.utc) - timedelta(days=2)
+    for i, elo in enumerate([1420, 1435, 1440]):
+        pgn = (
+            '[White "testuser"]\n[Black "opponent"]\n'
+            f'[WhiteElo "{elo}"]\n[BlackElo "1450"]\n\n1. e4 e5 1-0'
+        )
+        _seed_game(db_session, i, since_time, rated=True, pgn=pgn)
+    # Snapshot recorded after the last game (games end at +1h..+3h).
+    db_session.add(
+        RatingSnapshot(
+            username="testuser",
+            source="chesscom",
+            time_control="rapid",
+            rating=1455,
+            recorded_at=since_time + timedelta(hours=10),
+        )
+    )
+    db_session.commit()
+
+    response = client_with_db.get(
+        "/ratings/explain",
+        params={
+            "username": "testuser",
+            "time_control": "rapid",
+            "since": since_time.isoformat(),
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()
+
+    # End anchor: the fresh snapshot, not the stale last-game Elo.
+    assert data["rating"]["end"] == 1455
+    assert data["rating"]["end_is_estimated"] is False
+    # Start anchor: the only snapshot postdates every game, so the first
+    # game's own Elo is the earliest evidence (estimated).
+    assert data["rating"]["start"] == 1420
+    assert data["rating"]["start_is_estimated"] is True
+    assert data["rating"]["net_change"] == 35
+
+    # The fused series ends on the snapshot anchor — card and chart agree.
+    assert [(p["rating"], p["source"]) for p in data["chart_series"]] == [
+        (1420, "game"),
+        (1435, "game"),
+        (1440, "game"),
+        (1455, "snapshot"),
+    ]
+
+
+def test_explain_no_games_has_empty_chart_series(client_with_db, db_session):
+    """A window without game points emits no fused series — clients keep
+    charting their recorded snapshot history — but snapshot anchors still
+    provide start/end for the card."""
+    since_time = datetime.now(timezone.utc) - timedelta(days=2)
+    for hours, rating in [(1, 1300), (5, 1320)]:
+        db_session.add(
+            RatingSnapshot(
+                username="testuser",
+                source="chesscom",
+                time_control="rapid",
+                rating=rating,
+                recorded_at=since_time + timedelta(hours=hours),
+            )
+        )
+    db_session.commit()
+
+    response = client_with_db.get(
+        "/ratings/explain",
+        params={
+            "username": "testuser",
+            "time_control": "rapid",
+            "since": since_time.isoformat(),
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["chart_series"] == []
+    assert data["rating"]["start"] == 1300
+    assert data["rating"]["end"] == 1320
+    assert data["rating"]["start_is_estimated"] is False
+    assert data["rating"]["end_is_estimated"] is False
 
 
 def test_explain_highlights_include_opponent_username(client_with_db, db_session):
