@@ -320,9 +320,19 @@ export default function RatingInsights() {
 
             {/* Cover BOTH fetch phases (sessions probe, then explain/history):
                 gating on `loading` alone left the main area blank for the whole
-                sessions request on slow connections — visibly broken. */}
+                sessions request on slow connections — visibly broken. Skeletons
+                mirror the loaded layout (metadata line, chart, stat cards). */}
             {(loading || sessionsLoading) && !data && !error && (
-                <DataStateLoading label="Analyzing games..." />
+                <div className="space-y-8" role="status">
+                    <span className="sr-only">Analyzing games...</span>
+                    <div className="h-4 w-80 max-w-full bg-primary/5 rounded-sm animate-pulse" />
+                    <div className="h-[284px] bg-primary/5 border border-primary/10 rounded-sm animate-pulse" />
+                    <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+                        {[1, 2, 3, 4].map(i => (
+                            <div key={i} className="h-40 bg-primary/5 border border-primary/10 rounded-sm animate-pulse" />
+                        ))}
+                    </div>
+                </div>
             )}
 
             {data && (
