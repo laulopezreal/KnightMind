@@ -321,7 +321,7 @@ def test_rating_history_empty(client_with_db):
     assert response.json() == []
 
 
-@patch("services.api.sessions.get_player_stats")
+@patch("services.api.ratings_auto.get_player_stats")
 def test_auto_snapshot_skips_unchanged_rating(mock_stats, client_with_db, db_session):
     """_auto_snapshot should not create a duplicate when rating hasn't changed."""
     from services.api.models import TrainingSession
@@ -379,7 +379,7 @@ def test_auto_snapshot_skips_unchanged_rating(mock_stats, client_with_db, db_ses
     assert blitz_snapshots[0].rating == 1200
 
 
-@patch("services.api.sessions.get_player_stats")
+@patch("services.api.ratings_auto.get_player_stats")
 def test_auto_snapshot_creates_on_changed_rating(
     mock_stats, client_with_db, db_session
 ):
@@ -431,3 +431,201 @@ def test_auto_snapshot_creates_on_changed_rating(
     assert len(rapid_snapshots) == 2
     assert rapid_snapshots[0].rating == 1500
     assert rapid_snapshots[1].rating == 1520
+
+
+def _seed_game(db_session, i, since_time, *, rated=True, pgn=None, result="win"):
+    """Seed one rapid game for testuser ending i hours into the window."""
+    white_result = result
+    black_result = "loss" if result == "win" else "win" if result == "loss" else result
+    db_session.add(
+        Game(
+            game_id=f"game-{rated}-{result}-{i}",
+            url=f"https://chess.com/game/{rated}-{result}-{i}",
+            username="testuser",
+            white_username="testuser",
+            black_username="opponent",
+            white_result=white_result,
+            black_result=black_result,
+            time_control="600",
+            end_time=int((since_time + timedelta(hours=1 + i)).timestamp()),
+            rated=rated,
+            pgn_blob=pgn,
+        )
+    )
+
+
+def test_explain_excludes_casual_games(client_with_db, db_session):
+    """Casual (unrated) games must not count toward rating attribution."""
+    since_time = datetime.now(timezone.utc) - timedelta(days=2)
+    pgn = (
+        '[White "testuser"]\n[Black "opponent"]\n'
+        '[WhiteElo "1400"]\n[BlackElo "1450"]\n\n1. e4 e5 1-0'
+    )
+    for i in range(5):
+        _seed_game(db_session, i, since_time, rated=True, pgn=pgn)
+    for i in range(5, 8):
+        _seed_game(db_session, i, since_time, rated=False, pgn=pgn)
+    db_session.commit()
+
+    response = client_with_db.get(
+        "/ratings/explain",
+        params={
+            "username": "testuser",
+            "time_control": "rapid",
+            "since": since_time.isoformat(),
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["stats"]["games"] == 5
+    assert data["stats"]["wins"] == 5
+    assert data["stats"]["casual_games_excluded"] == 3
+
+
+def test_explain_trajectory_and_estimated_net_change(client_with_db, db_session):
+    """With no snapshots, per-game Elo headers give a trajectory and an
+    estimated start/end so net change still renders (flagged estimated)."""
+    since_time = datetime.now(timezone.utc) - timedelta(days=2)
+    for i, elo in enumerate([1400, 1410, 1395, 1420, 1432]):
+        pgn = (
+            '[White "testuser"]\n[Black "opponent"]\n'
+            f'[WhiteElo "{elo}"]\n[BlackElo "1450"]\n\n1. e4 e5 1-0'
+        )
+        _seed_game(db_session, i, since_time, rated=True, pgn=pgn)
+    db_session.commit()
+
+    response = client_with_db.get(
+        "/ratings/explain",
+        params={
+            "username": "testuser",
+            "time_control": "rapid",
+            "since": since_time.isoformat(),
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()
+
+    assert [p["rating"] for p in data["trajectory"]] == [1400, 1410, 1395, 1420, 1432]
+    assert data["rating"]["start"] == 1400
+    assert data["rating"]["end"] == 1432
+    assert data["rating"]["net_change"] == 32
+    assert data["rating"]["is_estimated"] is True
+    # Reference falls back to the player's own Elo average, not opponents'.
+    assert data["rating"]["reference_rating"] == int(
+        (1400 + 1410 + 1395 + 1420 + 1432) / 5
+    )
+    assert data["rating"]["reference_is_approx"] is True
+
+
+def test_explain_snapshot_end_beats_stale_game_elo(client_with_db, db_session):
+    """An in-window snapshot recorded after the last game wins as the end
+    anchor; one recorded before the last game loses to the game's own Elo."""
+    since_time = datetime.now(timezone.utc) - timedelta(days=2)
+    pgn = (
+        '[White "testuser"]\n[Black "opponent"]\n'
+        '[WhiteElo "1500"]\n[BlackElo "1450"]\n\n1. e4 e5 1-0'
+    )
+    _seed_game(db_session, 5, since_time, rated=True, pgn=pgn)
+    # Snapshot recorded BEFORE the game -> stale, game Elo (1500) should win.
+    db_session.add(
+        RatingSnapshot(
+            username="testuser",
+            source="chesscom",
+            time_control="rapid",
+            rating=1480,
+            recorded_at=since_time + timedelta(hours=1),
+        )
+    )
+    db_session.commit()
+
+    response = client_with_db.get(
+        "/ratings/explain",
+        params={
+            "username": "testuser",
+            "time_control": "rapid",
+            "since": since_time.isoformat(),
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["rating"]["start"] == 1480
+    assert data["rating"]["end"] == 1500
+    assert data["rating"]["is_estimated"] is True
+
+
+def test_explain_highlights_include_opponent_username(client_with_db, db_session):
+    since_time = datetime.now(timezone.utc) - timedelta(days=2)
+    pgn = (
+        '[White "testuser"]\n[Black "opponent"]\n'
+        '[WhiteElo "1400"]\n[BlackElo "1600"]\n\n1. e4 e5 1-0'
+    )
+    for i in range(5):
+        _seed_game(db_session, i, since_time, rated=True, pgn=pgn)
+    db_session.commit()
+
+    response = client_with_db.get(
+        "/ratings/explain",
+        params={
+            "username": "testuser",
+            "time_control": "rapid",
+            "since": since_time.isoformat(),
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()
+    best = data["highlights"]["best_surprises"]
+    assert best, "wins vs a higher-rated opponent should be positive surprises"
+    assert best[0]["opponent_username"] == "opponent"
+    # rating_diff is now measured against the player's own per-game Elo.
+    assert best[0]["rating_diff"] == 200
+
+
+@patch("services.api.ratings_auto.get_player_stats")
+def test_explain_auto_snapshots_current_rating(mock_stats, client_with_db, db_session):
+    """Viewing rating insights records the current rating automatically —
+    no manual snapshot button required. The fresh snapshot becomes the
+    (non-estimated) end anchor."""
+    mock_stats.return_value = {"chess_rapid": {"last": {"rating": 1455}}}
+    since_time = datetime.now(timezone.utc) - timedelta(days=2)
+    pgn = (
+        '[White "testuser"]\n[Black "opponent"]\n'
+        '[WhiteElo "1440"]\n[BlackElo "1450"]\n\n1. e4 e5 1-0'
+    )
+    for i in range(5):
+        _seed_game(db_session, i, since_time, rated=True, pgn=pgn)
+    db_session.commit()
+
+    response = client_with_db.get(
+        "/ratings/explain",
+        params={
+            "username": "testuser",
+            "time_control": "rapid",
+            "since": since_time.isoformat(),
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()
+
+    stmt = select(RatingSnapshot).where(
+        RatingSnapshot.username == "testuser",
+        RatingSnapshot.time_control == "rapid",
+    )
+    snapshots = db_session.scalars(stmt).all()
+    assert [s.rating for s in snapshots] == [1455]
+    # The auto snapshot (recorded now, after the last game) wins as end anchor.
+    assert data["rating"]["end"] == 1455
+
+
+@patch("services.api.ratings_auto.get_player_stats")
+def test_explain_auto_snapshot_is_throttled(mock_stats, client_with_db, db_session):
+    """A second view inside the throttle window must not re-hit Chess.com."""
+    mock_stats.return_value = {"chess_rapid": {"last": {"rating": 1455}}}
+
+    for _ in range(2):
+        response = client_with_db.get(
+            "/ratings/explain",
+            params={"username": "testuser", "time_control": "rapid"},
+        )
+        assert response.status_code == 200
+
+    assert mock_stats.await_count == 1

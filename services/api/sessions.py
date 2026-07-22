@@ -15,14 +15,11 @@ from sqlalchemy.orm import Session
 
 from services.api.db import get_db
 from services.api.identity import assert_owns_username, require_account
-from services.api.models import Account, RatingSnapshot, TrainingSession
+from services.api.models import Account, TrainingSession
+from services.api.ratings_auto import auto_snapshot
 from services.api.usernames import Username
-from services.ingest import get_player_stats
 
 logger = logging.getLogger(__name__)
-
-# Time controls to auto-snapshot on session completion (best-effort)
-AUTO_SNAPSHOT_TIME_CONTROLS = ["rapid", "blitz", "bullet"]
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
@@ -197,62 +194,6 @@ async def get_session(
     )
 
 
-async def _auto_snapshot(username: str, session_id: str, db: Session) -> None:
-    """Best-effort: record rating snapshots for common time controls on session complete.
-
-    Skips a time control if the latest stored snapshot already has the same rating,
-    avoiding duplicate flat entries in the history chart.
-    """
-    try:
-        stats = await get_player_stats(username)
-    except Exception as e:
-        logger.debug(
-            "Auto-snapshot: could not fetch Chess.com stats for %s: %s", username, e
-        )
-        return
-
-    now = datetime.now(timezone.utc)
-    added = 0
-    for tc in AUTO_SNAPSHOT_TIME_CONTROLS:
-        rating = stats.get(f"chess_{tc}", {}).get("last", {}).get("rating")
-        if not rating:
-            continue
-
-        # Skip if the most recent snapshot already has the same rating
-        latest_stmt = (
-            select(RatingSnapshot)
-            .where(
-                RatingSnapshot.username == username,
-                RatingSnapshot.time_control == tc,
-            )
-            .order_by(RatingSnapshot.recorded_at.desc())
-            .limit(1)
-        )
-        latest = db.scalars(latest_stmt).first()
-        if latest and latest.rating == rating:
-            continue
-
-        snapshot = RatingSnapshot(
-            username=username,
-            source="chesscom",
-            time_control=tc,
-            rating=rating,
-            recorded_at=now,
-            session_id=session_id,
-        )
-        db.add(snapshot)
-        added += 1
-
-    if added == 0:
-        return
-
-    try:
-        db.commit()
-    except Exception as e:
-        db.rollback()
-        logger.warning("Auto-snapshot: commit failed for %s: %s", username, e)
-
-
 @router.post("/{session_id}/complete", response_model=SessionSummary)
 async def complete_session(
     session_id: str,
@@ -290,7 +231,7 @@ async def complete_session(
         should_auto_snapshot = True
 
     # Build response before auto-snapshot so a rollback inside
-    # _auto_snapshot cannot expire the ORM-managed session object.
+    # auto_snapshot cannot expire the ORM-managed session object.
     result = SessionSummary(
         session_id=session.id,
         requested_n=session.requested_n,
@@ -309,7 +250,7 @@ async def complete_session(
 
     # Best-effort auto-snapshot after response is built
     if should_auto_snapshot:
-        await _auto_snapshot(request.username, session_id, db)
+        await auto_snapshot(request.username, db, session_id=session_id)
 
     return result
 

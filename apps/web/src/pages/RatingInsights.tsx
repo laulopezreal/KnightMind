@@ -1,9 +1,9 @@
 import { LOCALE } from '../utils/locale';
-import { useEffect, useState, useCallback, useMemo } from 'react';
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceDot } from 'recharts';
 import { useChessUsername } from '../context/ChessUsernameContext';
-import { createSnapshot, getRatingExplain, getRatingHistory, type ExplainResponse, type HighlightGame, type SnapshotResponse, type SnapshotHistoryItem } from '../api/ratings';
+import { getRatingExplain, getRatingHistory, type ExplainResponse, type HighlightGame, type SnapshotHistoryItem } from '../api/ratings';
 import { getRecentSessions } from '../api/sessions';
 import { PageHeader } from '../components/PageHeader';
 import { DataStateError, DataStateLoading, DataStateOffline } from '../components/DataState';
@@ -24,10 +24,6 @@ export default function RatingInsights() {
     const { username, setEditorOpen } = useChessUsername();
     const [data, setData] = useState<ExplainResponse | null>(null);
     const [loading, setLoading] = useState(false);
-    const [snapshotLoading, setSnapshotLoading] = useState(false);
-    const [snapshotSuccess, setSnapshotSuccess] = useState(false);
-    const [snapshotError, setSnapshotError] = useState<string | null>(null);
-    const [latestSnapshot, setLatestSnapshot] = useState<SnapshotResponse | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [timeControl, setTimeControlState] = useState<'rapid' | 'blitz' | 'bullet'>(() => {
         const stored = localStorage.getItem(LS_KEYS.RATINGS_TIME_CONTROL);
@@ -46,7 +42,10 @@ export default function RatingInsights() {
         localStorage.setItem(LS_KEYS.RATINGS_WINDOW, value === 'session' ? 'since_session' : 'last_7_days');
     }, []);
     const [hasSessions, setHasSessions] = useState<boolean | null>(null);
-    const [lastSessionId, setLastSessionId] = useState<string | null>(null);
+    // Ref, not state: it's only read inside fetchData. Keeping it as state
+    // changed fetchData's identity after the sessions probe resolved, which
+    // re-ran the coordinated effect and double-fetched everything on load.
+    const lastSessionIdRef = useRef<string | null>(null);
     const [sessionsLoading, setSessionsLoading] = useState(false);
     const [history, setHistory] = useState<SnapshotHistoryItem[]>([]);
     const online = useOnlineStatus();
@@ -63,7 +62,7 @@ export default function RatingInsights() {
             let sinceStr: string | undefined = undefined;
             let sessionId: string | undefined = undefined;
 
-            const effectiveSessionId = resolvedSessionId !== undefined ? resolvedSessionId : lastSessionId;
+            const effectiveSessionId = resolvedSessionId !== undefined ? resolvedSessionId : lastSessionIdRef.current;
 
             if (windowSource === 'fallback_7d') {
                 const d = new Date();
@@ -86,7 +85,7 @@ export default function RatingInsights() {
         } finally {
             if (!token.isStale()) setLoading(false);
         }
-    }, [username, timeControl, windowSource, lastSessionId, request]);
+    }, [username, timeControl, windowSource, request]);
 
     // Single coordinated effect: fetch sessions first, then data with the resolved session ID.
     // Also handles auto-switch to "Last 7 Days" when no sessions exist, to avoid a
@@ -106,11 +105,11 @@ export default function RatingInsights() {
                 foundSessions = sessions.length > 0;
                 setHasSessions(foundSessions);
                 resolvedSessionId = foundSessions ? sessions[0].session_id : null;
-                setLastSessionId(resolvedSessionId);
+                lastSessionIdRef.current = resolvedSessionId;
             } catch {
                 if (cancelled) return;
                 setHasSessions(false);
-                setLastSessionId(null);
+                lastSessionIdRef.current = null;
             } finally {
                 if (!cancelled) setSessionsLoading(false);
             }
@@ -133,59 +132,33 @@ export default function RatingInsights() {
         return () => { cancelled = true; };
     }, [username, timeControl, windowSource, fetchData, setWindowSource]);
 
-    const handleSnapshot = async () => {
-        if (!username) return;
-        setSnapshotLoading(true);
-        setSnapshotError(null);
-        try {
-            const snapshotData = await createSnapshot(username, timeControl);
-            setLatestSnapshot(snapshotData);
-            setSnapshotSuccess(true);
-            fetchData(); // Refresh data
-        } catch (err) {
-            setSnapshotError(err instanceof Error ? err.message : 'Failed to create snapshot');
-        } finally {
-            setSnapshotLoading(false);
-        }
-    };
-
-    // Clear snapshotSuccess after 2 seconds (with cleanup to prevent memory leaks)
-    useEffect(() => {
-        if (snapshotSuccess) {
-            const timer = setTimeout(() => {
-                setSnapshotSuccess(false);
-            }, 2000);
-            return () => clearTimeout(timer);
-        }
-    }, [snapshotSuccess]);
-
-    // Clear latestSnapshot card after 8 seconds (with cleanup)
-    useEffect(() => {
-        if (latestSnapshot) {
-            const timer = setTimeout(() => {
-                setLatestSnapshot(null);
-            }, 8000);
-            return () => clearTimeout(timer);
-        }
-    }, [latestSnapshot]);
-
-    // Memoize chart data to avoid re-creating objects on every render.
-    // Uses index-based labels to guarantee unique X-axis keys even when
-    // multiple snapshots fall on the same calendar day.
-    const chartData = useMemo(() => {
+    // Chart source: prefer the per-game rating trajectory (real rating
+    // movement inside the selected window, no manual snapshots needed);
+    // fall back to recorded snapshot history when the window has no games.
+    // Labels are de-duplicated so same-day points keep unique X-axis keys.
+    const chart = useMemo(() => {
+        const trajectory = data?.trajectory ?? [];
+        const source: 'games' | 'snapshots' = trajectory.length >= 2 ? 'games' : 'snapshots';
+        const raw = source === 'games'
+            ? trajectory.map(p => ({ at: p.played_at, rating: p.rating }))
+            : history.map(h => ({ at: h.recorded_at, rating: h.rating }));
         const dateCounts = new Map<string, number>();
-        return history.map(h => {
-            const base = new Date(h.recorded_at).toLocaleDateString(LOCALE, { month: 'short', day: 'numeric' });
+        const points = raw.map(p => {
+            const base = new Date(p.at).toLocaleDateString(LOCALE, { month: 'short', day: 'numeric' });
             const count = (dateCounts.get(base) ?? 0) + 1;
             dateCounts.set(base, count);
-            return { label: count > 1 ? `${base} (${count})` : base, rating: h.rating };
+            return { label: count > 1 ? `${base} (${count})` : base, rating: p.rating };
         });
-    }, [history]);
+        return { source, points };
+    }, [data, history]);
 
-    const chartTrendColor = useMemo(() => {
-        if (history.length < 2) return '#059669';
-        return history[history.length - 1].rating >= history[0].rating ? '#059669' : '#ef4444';
-    }, [history]);
+    const chartData = chart.points;
+    // Direction only — the actual colors are theme tokens applied via the
+    // km-trend-* CSS classes (SVG attributes can't consume var()).
+    const chartTrend: 'up' | 'down' = chartData.length < 2
+        || chartData[chartData.length - 1].rating >= chartData[0].rating
+        ? 'up'
+        : 'down';
 
     if (!username) {
         return (
@@ -221,12 +194,13 @@ export default function RatingInsights() {
     const insufficientSample = data?.insufficient_data === true && hasGames;
 
     const N = data?.stats.games ?? 0;
+    const casualExcluded = data?.stats.casual_games_excluded ?? 0;
     // Prefer the server's canonical confidence (computed from rated games with a
     // known opponent rating). Fall back to the game count only for older payloads.
     const confidence = data?.confidence
         ?? (N < LOW_CONFIDENCE_THRESHOLD ? 'low' : N < HIGH_CONFIDENCE_THRESHOLD ? 'medium' : 'high');
     const timeControlLabel = timeControl === 'rapid' ? 'Rapid' : timeControl === 'blitz' ? 'Blitz' : 'Bullet';
-    const windowLabel = N >= HIGH_CONFIDENCE_THRESHOLD ? `Last ${HIGH_CONFIDENCE_THRESHOLD} ${timeControlLabel} games` : `Last ${N} ${timeControlLabel} games`;
+    const windowLabel = `${N} rated ${timeControlLabel} game${N === 1 ? '' : 's'} in window`;
 
     const formatDate = (iso: string) => {
         const d = new Date(iso);
@@ -247,7 +221,7 @@ export default function RatingInsights() {
             <section className="flex flex-col md:flex-row justify-between items-end gap-6">
                 <PageHeader
                     title="Rating Insights"
-                    subtitle="Understand your progress using session-based drivers."
+                    subtitle="What moved your rating — tracked automatically from your games."
                 />
 
                 <div className="flex flex-wrap gap-4 items-start">
@@ -315,26 +289,17 @@ export default function RatingInsights() {
                         </div>
                         {data && data.stats.games === 0 && (
                             <div className="text-[10px] text-primary/70 font-sans ml-1">
-                                <span>No data yet for {timeControl.charAt(0).toUpperCase() + timeControl.slice(1)}.</span>
+                                {/* Thin window still charts snapshots below, so "no data yet"
+                                    would contradict the visible chart — scope the copy. */}
+                                <span>
+                                    {thinWindow
+                                        ? `No ${timeControlLabel} games in this window.`
+                                        : `No data yet for ${timeControlLabel}.`}
+                                </span>
                             </div>
                         )}
                     </div>
 
-                    <div className="flex flex-col gap-1">
-<button
-                            type="button"
-                            onClick={handleSnapshot}
-                            disabled={snapshotLoading}
-                            className={`km-focus-visible px-5 py-2 border border-primary/20 text-primary text-sm font-sans transition-all rounded-sm ${snapshotLoading ? 'km-interactive-disabled' : 'km-interactive'}`}
-                        >
-                            {snapshotSuccess ? '✓ Snapshot recorded' : snapshotLoading ? 'Recording...' : 'Record Snapshot'}
-                        </button>
-                        {snapshotError && (
-                            <p className="text-xs text-negative font-sans">
-                                Could not record snapshot. Try again.
-                            </p>
-                        )}
-                    </div>
                 </div>
             </section>
 
@@ -354,58 +319,49 @@ export default function RatingInsights() {
                 )
             )}
 
-            {loading && !data && (
-                <DataStateLoading label="Analyzing games..." />
-            )}
-
-            {/* Latest Snapshot Confirmation Card */}
-            {latestSnapshot && (
-                <div className="p-4 border border-primary/10 bg-primary/5 rounded-sm max-w-md">
-                    <h3 className="text-lg font-serif text-primary mb-1">Latest Snapshot</h3>
-                    <p className="text-primary/80 font-sans text-sm">
-                        {timeControl.charAt(0).toUpperCase() + timeControl.slice(1)} · {latestSnapshot.rating}
-                    </p>
-                    <p className="text-primary/70 font-sans text-xs">
-                        Recorded just now
-                    </p>
-                    <p className="text-primary/70 font-sans text-sm mt-2">
-                        Play a few {timeControl} games on Chess.com to unlock insights.
-                    </p>
+            {/* Cover BOTH fetch phases (sessions probe, then explain/history):
+                gating on `loading` alone left the main area blank for the whole
+                sessions request on slow connections — visibly broken. Skeletons
+                mirror the loaded layout (metadata line, chart, stat cards). */}
+            {(loading || sessionsLoading) && !data && !error && (
+                <div className="space-y-8" role="status">
+                    <span className="sr-only">Analyzing games...</span>
+                    <div className="h-4 w-80 max-w-full bg-primary/5 rounded-sm animate-pulse" />
+                    <div className="h-[284px] bg-primary/5 border border-primary/10 rounded-sm animate-pulse" />
+                    <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+                        {[1, 2, 3, 4].map(i => (
+                            <div key={i} className="h-40 bg-primary/5 border border-primary/10 rounded-sm animate-pulse" />
+                        ))}
+                    </div>
                 </div>
             )}
 
             {data && (
                 <>
-                    {/* STATE 0: No games */}
+                    {/* STATE 0: no games and no rating history for this control.
+                        Snapshots are recorded automatically (on import, session
+                        completion, and visits here), so the only ask is games. */}
                     {isState0 && (
-                        <div className="max-w-xl mx-auto bg-primary/5 border border-primary/10 p-12 rounded-sm space-y-10">
+                        <div className="max-w-xl mx-auto bg-primary/5 border border-primary/10 p-12 rounded-sm space-y-8">
                             <div>
-                                <h2 className="text-2xl font-serif text-primary mb-2">Rating Insights</h2>
-                                <p className="text-primary/70 font-sans">See what influenced your rating changes over time.</p>
+                                <h2 className="text-2xl font-serif text-primary mb-2">No {timeControlLabel} games yet</h2>
+                                <p className="text-primary/70 font-sans leading-relaxed">
+                                    Import your Chess.com games — or play a few {timeControlLabel} games and
+                                    import again — and this page will chart your rating and explain what moved it.
+                                </p>
                             </div>
-
-                            <div className="space-y-8">
-                                <div className="space-y-2">
-                                    <h3 className="font-serif text-lg text-primary">Step 1 — Record your first snapshot</h3>
-                                    <p className="text-sm text-primary/70 font-sans leading-relaxed">
-                                        This saves your current Chess.com rating so we can compare future progress.
-                                    </p>
-                                    <button
-                                        type="button"
-                                        onClick={handleSnapshot}
-                                        disabled={snapshotLoading}
-                                        className={`mt-2 px-6 py-2 bg-primary text-bg-primary text-sm font-sans transition-all rounded-sm km-focus-visible ${snapshotLoading ? 'km-interactive-disabled' : 'km-interactive'}`}
-                                    >
-                                        {snapshotLoading ? 'Recording...' : 'Record Snapshot'}
-                                    </button>
-                                </div>
-
-                                <div className="space-y-2">
-                                    <h3 className="font-serif text-lg text-primary">Step 2 — Play a few games</h3>
-                                    <p className="text-sm text-primary/70 font-sans leading-relaxed">
-                                        After you’ve played a few games, come back here to see what drove changes.
-                                    </p>
-                                </div>
+                            <div className="space-y-3">
+                                <button
+                                    type="button"
+                                    onClick={() => navigate('/')}
+                                    className="px-6 py-2 bg-primary text-bg-primary hover:opacity-90 rounded-sm font-serif transition-colors km-focus-visible km-interactive"
+                                >
+                                    Import your games
+                                </button>
+                                <p className="text-xs text-primary/70 font-sans leading-relaxed">
+                                    Your rating is tracked automatically — when you import games, finish a
+                                    training session, or visit this page. Nothing to record by hand.
+                                </p>
                             </div>
                         </div>
                     )}
@@ -416,7 +372,7 @@ export default function RatingInsights() {
                     {thinWindow && (
                         <div className="space-y-6">
                             {chartData.length >= 2 && (
-                                <RatingChart chartData={chartData} color={chartTrendColor} />
+                                <RatingChart chartData={chartData} trend={chartTrend} source={chart.source} />
                             )}
                             <div className="max-w-xl bg-primary/5 border border-primary/10 p-6 rounded-sm">
                                 <h3 className="font-serif text-lg text-primary mb-1">Not enough games in this window</h3>
@@ -455,11 +411,16 @@ export default function RatingInsights() {
                                         {data.stats.missing_opponent_rating_games} game{data.stats.missing_opponent_rating_games > 1 ? 's' : ''} excluded (missing opponent rating)
                                     </span>
                                 )}
+                                {casualExcluded > 0 && (
+                                    <span className="text-[10px] font-sans text-primary/70">
+                                        {casualExcluded} casual game{casualExcluded > 1 ? 's' : ''} excluded (don’t affect rating)
+                                    </span>
+                                )}
                             </div>
 
                             {/* Rating Trend Chart */}
                             {chartData.length >= 2 && (
-                                <RatingChart chartData={chartData} color={chartTrendColor} />
+                                <RatingChart chartData={chartData} trend={chartTrend} source={chart.source} />
                             )}
 
                             {/* Summary Cards */}
@@ -471,12 +432,12 @@ export default function RatingInsights() {
                                         : "—"}
                                     sub={
                                         hasWindowRating && data.rating.start !== null && data.rating.end !== null
-                                            ? `${data.rating.start} → ${data.rating.end}`
+                                            ? `${data.rating.start} → ${data.rating.end}${data.rating.is_estimated ? ' (est. from games)' : ''}`
                                             : windowLabel
                                     }
                                     highlight={hasWindowRating && data.rating.net_change !== null && data.rating.net_change !== 0}
                                     positive={hasWindowRating && data.rating.net_change !== null && data.rating.net_change > 0}
-                                    extra={!hasSnapshots ? "Record a snapshot to track rating change." : undefined}
+                                    extra={!hasSnapshots && !hasWindowRating ? "Rating is tracked automatically as you play and import games." : undefined}
                                 />
                                 <Card
                                     label="Performance"
@@ -580,24 +541,50 @@ export default function RatingInsights() {
     );
 }
 
-const RatingChart = ({ chartData, color }: { chartData: { label: string; rating: number }[], color: string }) => (
-    <section className="p-6 bg-primary/5 rounded-sm border border-primary/10">
-        <h2 className="text-sm font-sans uppercase tracking-widest text-primary/70 mb-4">Rating Over Time</h2>
+const RatingChart = ({ chartData, trend, source }: { chartData: { label: string; rating: number }[], trend: 'up' | 'down', source: 'games' | 'snapshots' }) => (
+    // div, not section: role="img" is not an allowed role on section (axe aria-allowed-role)
+    <div
+        className="p-6 bg-primary/5 rounded-sm border border-primary/10"
+        role="img"
+        aria-label={`Rating over time, ${chartData.length} points from ${chartData[0].rating} to ${chartData[chartData.length - 1].rating}`}
+    >
+        <div className="flex items-baseline justify-between gap-3 mb-4">
+            <h2 className="text-sm font-sans uppercase tracking-widest text-primary/70">Rating Over Time</h2>
+            <span className="text-[10px] font-sans text-primary/70">
+                {source === 'games' ? 'From your games in this window' : 'From recorded snapshots'}
+            </span>
+        </div>
         <ResponsiveContainer width="100%" height={220}>
             <LineChart data={chartData}>
                 <XAxis dataKey="label" tick={{ fontSize: 11 }} stroke="currentColor" strokeOpacity={0.2} />
                 <YAxis domain={['dataMin - 20', 'dataMax + 20']} tick={{ fontSize: 11 }} stroke="currentColor" strokeOpacity={0.2} width={45} />
+                {/* Theme via the runtime --bg-primary/--text-primary vars: the
+                    --color-* aliases live in @theme inline, so they are never
+                    emitted as real CSS vars and would resolve to nothing here. */}
                 <Tooltip
-                    contentStyle={{ fontSize: 12, borderRadius: 4, border: '1px solid rgba(0,0,0,0.1)' }}
-                    labelStyle={{ fontWeight: 600 }}
+                    contentStyle={{
+                        fontSize: 12,
+                        borderRadius: 4,
+                        border: '1px solid color-mix(in srgb, var(--text-primary) 20%, transparent)',
+                        backgroundColor: 'var(--bg-primary)',
+                        color: 'var(--text-primary)',
+                    }}
+                    itemStyle={{ color: 'var(--text-primary)' }}
+                    labelStyle={{ fontWeight: 600, color: 'var(--text-primary)' }}
                 />
                 <Line
                     type="monotone"
                     dataKey="rating"
-                    stroke={color}
+                    name="Rating"
+                    className={`km-trend-${trend}`}
+                    stroke="currentColor"
                     strokeWidth={2}
                     dot={false}
                     activeDot={{ r: 4 }}
+                    // No draw-in animation: respects the app's reduced-motion
+                    // stance, and the dasharray draw-in can stall invisible in
+                    // background tabs until a re-render.
+                    isAnimationActive={false}
                 />
                 <ReferenceDot
                     x={chartData[0].label}
@@ -615,7 +602,7 @@ const RatingChart = ({ chartData, color }: { chartData: { label: string; rating:
                 />
             </LineChart>
         </ResponsiveContainer>
-    </section>
+    </div>
 );
 
 const Card = ({ label, value, sub, helper, highlight, positive, extra }: { label: string, value: string, sub?: string, helper?: string, highlight?: boolean, positive?: boolean, extra?: string }) => (
@@ -634,11 +621,14 @@ const GameRow = ({ game, type }: { game: HighlightGame, type: 'good' | 'bad' }) 
     const playedDate = game.played_at
         ? new Date(game.played_at).toLocaleDateString(LOCALE, { month: 'short', day: 'numeric' })
         : null;
+    const diff = game.rating_diff ?? 0;
+    const diffLabel = diff === 0 ? 'same rating' : `${Math.abs(diff)} pts ${diff > 0 ? 'higher' : 'lower'}`;
     return (
         <a href={game.url} target="_blank" rel="noopener noreferrer" className="block p-4 hover:bg-primary/5 transition-colors border-b border-primary/5 group">
             <div className="flex justify-between items-center mb-1">
                 <div className="font-medium text-primary/80 group-hover:text-primary transition-colors">
-                    vs {game.opponent_rating}
+                    vs {game.opponent_username ?? 'opponent'}
+                    {game.opponent_rating !== null && <span className="text-primary/70 font-normal"> ({game.opponent_rating})</span>}
                     {playedDate && <span className="text-xs font-normal text-primary/70 ml-2">{playedDate}</span>}
                 </div>
                 <div className={`text-sm font-bold ${type === 'good' ? 'text-positive' : 'text-negative'}`}>
@@ -647,7 +637,7 @@ const GameRow = ({ game, type }: { game: HighlightGame, type: 'good' | 'bad' }) 
             </div>
             <div className="flex justify-between items-center text-xs text-primary/70 font-sans">
                 <div>Expected: {game.expected_score.toFixed(2)}</div>
-                <div>{(Math.abs(game.rating_diff || 0))} pts {(game.rating_diff || 0) > 0 ? 'higher' : 'lower'}</div>
+                <div>{diffLabel}</div>
             </div>
         </a>
     );

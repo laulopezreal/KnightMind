@@ -207,6 +207,15 @@ nav,
   font-family: var(--font-serif);
 }
 
+/* Rating-trend line colors. SVG presentation attributes cannot consume var(),
+   so recharts' stroke/fill props can't take theme tokens directly — these
+   class-scoped rules resolve at paint time instead, which also means a theme
+   switch (body.night) restyles the chart without a React re-render. */
+.km-trend-up .recharts-line-curve { stroke: var(--color-positive); }
+.km-trend-down .recharts-line-curve { stroke: var(--color-negative); }
+.km-trend-up .recharts-active-dot circle { fill: var(--color-positive); stroke: var(--color-positive); }
+.km-trend-down .recharts-active-dot circle { fill: var(--color-negative); stroke: var(--color-negative); }
+
 /* Global interaction affordance (cursor + hover + focus-visible) */
 .km-interactive {
   cursor: pointer;
