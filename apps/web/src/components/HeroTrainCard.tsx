@@ -6,6 +6,8 @@ interface HeroTrainCardProps {
   needsWarmup: boolean;
   daysSinceLastSession: number;
   totalSessions: number;
+  /** Puzzles that become due within the next 4 hours (already excludes due_now). */
+  dueIn4h?: number;
   onStartSession: () => void;
 }
 
@@ -15,6 +17,7 @@ export function HeroTrainCard({
   needsWarmup,
   daysSinceLastSession,
   totalSessions,
+  dueIn4h = 0,
   onStartSession
 }: HeroTrainCardProps) {
   // Determine the state and messaging
@@ -29,12 +32,26 @@ export function HeroTrainCard({
     ? 'All Caught Up'
     : 'Train Today';
 
+  // "Caught up" copy uses data we already fetch: prefer a concrete
+  // "N ready within 4 hours", then a next-review time, then a generic nudge —
+  // so the one screen where the user has nothing to do still tells them when
+  // to come back instead of a dead-end "check back later".
+  const caughtUpText = dueIn4h > 0
+    ? `Great work! ${dueIn4h} more puzzle${dueIn4h !== 1 ? 's' : ''} will be ready within 4 hours.`
+    : nextReviewAt
+    ? `Great work! Your next review is ${formatRelativeTime(nextReviewAt)}.`
+    : 'Great work! Check back later for more puzzles.';
+
   const supportingText = isFirstTime
-    ? `You have ${dueCount} puzzle${dueCount !== 1 ? 's' : ''} waiting. Complete your first session to see your tactical profile!`
+    ? isZeroDue
+      // First-timer with nothing generated yet: don't claim "0 puzzles
+      // waiting" (self-contradicting) — point them at the real next step.
+      ? 'Import your Chess.com games to generate your first set of puzzles.'
+      : `You have ${dueCount} puzzle${dueCount !== 1 ? 's' : ''} waiting. Complete your first session to see your tactical profile!`
     : needsWarmup
     ? `You've been away ${daysSinceLastSession} days. Let's do a quick warmup to see what stuck!`
     : isZeroDue
-    ? 'Great work! Check back later for more puzzles.'
+    ? caughtUpText
     : 'Most people improve by solving these today.';
 
   const buttonText = isFirstTime
@@ -44,6 +61,14 @@ export function HeroTrainCard({
     : isZeroDue
     ? 'Browse Puzzles'
     : 'Start Session';
+
+  // Only the caught-up branch prints the next-review time in the body, and that
+  // branch is reached only after isFirstTime and needsWarmup fall through. Scope
+  // the caption-suppression guard to exactly that branch — a broader guard would
+  // hide the caption in the warmup/first-time states, where the body never states
+  // the review time, dropping the information entirely.
+  const nextReviewShownInBody =
+    !isFirstTime && !needsWarmup && isZeroDue && dueIn4h === 0 && !!nextReviewAt;
 
   return (
     <section
@@ -83,7 +108,7 @@ export function HeroTrainCard({
             {buttonText}
           </button>
 
-          {nextReviewAt && (
+          {nextReviewAt && !nextReviewShownInBody && (
             <p className="mt-3 text-sm text-primary/70 font-sans">
               Next review: {formatRelativeTime(nextReviewAt)}
             </p>
