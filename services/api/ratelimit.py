@@ -50,7 +50,6 @@ against a single well-behaved-TCP principal abusing an expensive endpoint.
 """
 
 import math
-import os
 import threading
 import time
 from collections import deque
@@ -59,6 +58,7 @@ from typing import Callable
 
 from fastapi import Depends, HTTPException, Request
 
+from services.api.envutil import env_int
 from services.api.identity import require_account
 from services.api.models import Account
 
@@ -144,16 +144,6 @@ _LIMITERS: dict[str, RateLimiter] = {}
 _REGISTRY_LOCK = threading.Lock()
 
 
-def _env_int(name: str, default: int) -> int:
-    raw = os.environ.get(name)
-    if raw is None or raw.strip() == "":
-        return default
-    try:
-        return int(raw)
-    except ValueError:
-        return default
-
-
 def get_limiter(
     name: str,
     *,
@@ -171,8 +161,9 @@ def get_limiter(
         limiter = _LIMITERS.get(name)
         if limiter is None:
             upper = name.upper()
-            limit = _env_int(f"RATE_LIMIT_{upper}", default_limit)
-            window = float(_env_int(f"RATE_LIMIT_{upper}_WINDOW", int(default_window)))
+            # No min_value: 0 (or any int) is meaningful here — 0 disables.
+            limit = env_int(f"RATE_LIMIT_{upper}", default_limit)
+            window = float(env_int(f"RATE_LIMIT_{upper}_WINDOW", int(default_window)))
             limiter = RateLimiter(limit, window)
             _LIMITERS[name] = limiter
         return limiter
