@@ -66,6 +66,33 @@ describe('HeroTrainCard', () => {
     expect(screen.getByText(/Your next review is/i)).toBeInTheDocument();
   });
 
+  it('keeps the Next review caption in the warmup state (body does not state it)', () => {
+    // Regression: the caption-suppression guard must not fire in warmup — the
+    // warmup body copy never mentions the review time, so hiding the caption
+    // would drop the information entirely.
+    render(
+      <HeroTrainCard
+        {...defaultProps}
+        needsWarmup={true}
+        daysSinceLastSession={8}
+        dueCount={0}
+        dueIn4h={0}
+        nextReviewAt="2025-01-15T14:00:00Z"
+      />
+    );
+
+    expect(screen.getByText('Welcome Back')).toBeInTheDocument();
+    expect(screen.getByText(/^Next review:/)).toBeInTheDocument();
+  });
+
+  it('suppresses the duplicate Next review caption only in the caught-up state', () => {
+    render(<HeroTrainCard {...defaultProps} dueCount={0} dueIn4h={0} nextReviewAt="2025-01-15T14:00:00Z" />);
+
+    // Body states it once ("Your next review is …"); the caption must not repeat it.
+    expect(screen.getByText(/Your next review is/i)).toBeInTheDocument();
+    expect(screen.queryByText(/^Next review:/)).not.toBeInTheDocument();
+  });
+
   it('does not claim "0 puzzles waiting" for a first-timer with nothing generated', () => {
     render(<HeroTrainCard {...defaultProps} totalSessions={0} dueCount={0} />);
 

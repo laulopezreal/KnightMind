@@ -62,10 +62,13 @@ export function HeroTrainCard({
     ? 'Browse Puzzles'
     : 'Start Session';
 
-  // In the caught-up-with-no-4h-horizon case the supporting text already states
-  // the next-review time verbatim, so the small caption under the CTA would just
-  // repeat it — suppress the caption there to avoid saying the same thing twice.
-  const nextReviewShownInBody = isZeroDue && dueIn4h === 0 && !!nextReviewAt;
+  // Only the caught-up branch prints the next-review time in the body, and that
+  // branch is reached only after isFirstTime and needsWarmup fall through. Scope
+  // the caption-suppression guard to exactly that branch — a broader guard would
+  // hide the caption in the warmup/first-time states, where the body never states
+  // the review time, dropping the information entirely.
+  const nextReviewShownInBody =
+    !isFirstTime && !needsWarmup && isZeroDue && dueIn4h === 0 && !!nextReviewAt;
 
   return (
     <section
