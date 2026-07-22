@@ -411,7 +411,7 @@ export default function RatingInsights() {
                 gating on `loading` alone left the main area blank for the whole
                 sessions request on slow connections — visibly broken. Skeletons
                 mirror the loaded layout (metadata line, chart, stat cards). */}
-            {(loading || sessionsLoading) && !data && !error && (
+            {(loading || sessionsLoading) && !data && !error && !historyError && (
                 <div className="space-y-8" role="status">
                     <span className="sr-only">Analyzing games...</span>
                     <div className="h-4 w-80 max-w-full bg-primary/5 rounded-sm animate-pulse" />

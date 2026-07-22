@@ -229,6 +229,19 @@ describe('RatingInsights fetch concurrency & error isolation', () => {
         expect(mockGetRatingHistory.mock.calls.length).toBeGreaterThanOrEqual(2);
     });
 
+    it('does not render the loading skeleton alongside a history-failure banner', async () => {
+        // Probe pending forever, history fails fast: the banner must not sit
+        // next to a "content coming soon" skeleton.
+        mockGetRecentSessions.mockReturnValue(new Promise(() => {}));
+        mockGetRatingHistory.mockRejectedValue(new Error('history down'));
+        mockGetRatingExplain.mockResolvedValue(EXPLAIN_WITH_GAMES);
+
+        render(<RatingInsights />);
+
+        await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('history down'));
+        expect(screen.queryByText('Analyzing games...')).not.toBeInTheDocument();
+    });
+
     it('a window toggle does not drop the in-flight history response (independent guards)', async () => {
         let resolveHistory!: (v: unknown) => void;
         mockGetRatingHistory.mockReturnValue(new Promise(res => { resolveHistory = res; }));
