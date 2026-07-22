@@ -49,13 +49,17 @@ export default function RatingInsights() {
     const [sessionsLoading, setSessionsLoading] = useState(false);
     const [history, setHistory] = useState<SnapshotHistoryItem[]>([]);
     const online = useOnlineStatus();
-    const request = useLatestRequest();
+    // Explain and history fetch independently, so each needs its own
+    // stale-response guard — sharing one generation counter would make
+    // either fetch mark the other stale.
+    const explainRequest = useLatestRequest();
+    const historyRequest = useLatestRequest();
 
-    const fetchData = useCallback(async (resolvedSessionId?: string | null) => {
+    const fetchExplain = useCallback(async (resolvedSessionId?: string | null) => {
         if (!username) return;
         // Guard against stale-response races: a username/time-control/window change
         // begins a newer request; the older, slower response must not clobber it.
-        const token = request.begin();
+        const token = explainRequest.begin();
         setLoading(true);
         setError(null);
         try {
@@ -72,31 +76,60 @@ export default function RatingInsights() {
                 sessionId = effectiveSessionId;
             }
 
-            const [resp, historyData] = await Promise.all([
-                getRatingExplain(username, timeControl, sessionId, sinceStr),
-                getRatingHistory(username, timeControl),
-            ]);
+            const resp = await getRatingExplain(username, timeControl, sessionId, sinceStr);
             if (token.isStale()) return;
             setData(resp);
-            setHistory(historyData);
         } catch (err) {
             if (token.isStale()) return;
             setError(err instanceof Error ? err.message : 'Failed to load insights');
         } finally {
             if (!token.isStale()) setLoading(false);
         }
-    }, [username, timeControl, windowSource, request]);
+    }, [username, timeControl, windowSource, explainRequest]);
 
-    // Single coordinated effect: fetch sessions first, then data with the resolved session ID.
+    const fetchHistory = useCallback(async () => {
+        if (!username) return;
+        const token = historyRequest.begin();
+        try {
+            const historyData = await getRatingHistory(username, timeControl);
+            if (token.isStale()) return;
+            setHistory(historyData);
+        } catch (err) {
+            if (token.isStale()) return;
+            setError(err instanceof Error ? err.message : 'Failed to load insights');
+        }
+    }, [username, timeControl, historyRequest]);
+
+    // Retry affordances refresh both requests.
+    const refetch = useCallback(() => {
+        fetchExplain();
+        fetchHistory();
+    }, [fetchExplain, fetchHistory]);
+
+    // History depends only on username + time control — its params don't include
+    // the window — so it fetches on its own, concurrently with the sessions probe,
+    // and is NOT refetched when windowSource toggles.
+    useEffect(() => {
+        if (!username) return;
+        fetchHistory();
+    }, [username, fetchHistory]);
+
+    // Coordinated sessions + explain effect. Explain needs the session ID only in
+    // 'session' mode, so only that mode serializes explain behind the sessions
+    // probe; in fallback_7d mode explain starts concurrently with the probe.
     // Also handles auto-switch to "Last 7 Days" when no sessions exist, to avoid a
     // wasted fetch with the wrong windowSource.
     useEffect(() => {
         if (!username) return;
         let cancelled = false;
 
-        async function loadAll() {
-            // 1. Check sessions
+        async function loadSessionsAndExplain() {
             setSessionsLoading(true);
+            // fallback_7d uses a date window, not a session ID — fire explain now,
+            // alongside the sessions probe (which still runs to keep the
+            // "Since Session" toggle state accurate). Its token guards staleness.
+            if (windowSource === 'fallback_7d') fetchExplain(null);
+
             let resolvedSessionId: string | null = null;
             let foundSessions = false;
             try {
@@ -114,23 +147,23 @@ export default function RatingInsights() {
                 if (!cancelled) setSessionsLoading(false);
             }
 
+            if (windowSource === 'fallback_7d') return; // explain already in flight
+
             // Auto-switch to fallback_7d when no sessions and currently on session mode.
             // This prevents a wasted fetch with session mode when there are no sessions.
-            if (!foundSessions && windowSource === 'session') {
+            if (!foundSessions) {
                 if (!cancelled) setWindowSource('fallback_7d');
                 // The windowSource change will re-trigger this effect with the correct mode.
                 return;
             }
 
-            // 2. Fetch data with resolved session ID
-            if (!cancelled) {
-                await fetchData(resolvedSessionId);
-            }
+            // 'session' mode: explain genuinely needs the resolved session ID.
+            if (!cancelled) fetchExplain(resolvedSessionId);
         }
 
-        loadAll();
+        loadSessionsAndExplain();
         return () => { cancelled = true; };
-    }, [username, timeControl, windowSource, fetchData, setWindowSource]);
+    }, [username, windowSource, fetchExplain, setWindowSource]);
 
     // Chart source: render the server-fused series when present — the backend
     // decides how per-game Elo and snapshot anchors combine, so the line's
@@ -342,11 +375,11 @@ export default function RatingInsights() {
                 !online ? (
                     // A failed load while the browser is offline is a connectivity
                     // problem, not a server error — say so instead of a bare message.
-                    <DataStateOffline onRetry={() => fetchData()} compact />
+                    <DataStateOffline onRetry={refetch} compact />
                 ) : (
                     <DataStateError
                         message={error}
-                        onRetry={() => fetchData()}
+                        onRetry={refetch}
                         retryLabel="Retry"
                         ariaLabel="Retry loading rating insights"
                         compact
