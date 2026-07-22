@@ -132,16 +132,39 @@ export default function RatingInsights() {
         return () => { cancelled = true; };
     }, [username, timeControl, windowSource, fetchData, setWindowSource]);
 
-    // Chart source: prefer the per-game rating trajectory (real rating
-    // movement inside the selected window, no manual snapshots needed);
-    // fall back to recorded snapshot history when the window has no games.
+    // Chart source: render the server-fused series when present — the backend
+    // decides how per-game Elo and snapshot anchors combine, so the line's
+    // endpoints always match the Net Change card. Older payloads without
+    // chart_series fall back to the raw trajectory, then to recorded snapshot
+    // history when the window has no games.
     // Labels are de-duplicated so same-day points keep unique X-axis keys.
     const chart = useMemo(() => {
+        const fused = data?.chart_series ?? [];
         const trajectory = data?.trajectory ?? [];
-        const source: 'games' | 'snapshots' = trajectory.length >= 2 ? 'games' : 'snapshots';
-        const raw = source === 'games'
-            ? trajectory.map(p => ({ at: p.played_at, rating: p.rating }))
-            : history.map(h => ({ at: h.recorded_at, rating: h.rating }));
+        // Contract checks: a new payload fuses at least the trajectory into
+        // chart_series, and its endpoints match rating.start/end. A violation
+        // silently re-introduces the card/chart mismatch this series exists
+        // to prevent — warn so the regression is visible, but keep rendering.
+        if (data?.chart_series !== undefined && fused.length < 2 && trajectory.length >= 2) {
+            console.warn('[ratings] chart_series shorter than trajectory; falling back to legacy chart source', { chartSeries: fused.length, trajectory: trajectory.length });
+        }
+        const useFused = fused.length >= 2;
+        if (useFused && data
+            && ((data.rating.start !== null && fused[0].rating !== data.rating.start)
+                || (data.rating.end !== null && fused[fused.length - 1].rating !== data.rating.end))) {
+            console.warn('[ratings] chart_series endpoints diverge from rating anchors', {
+                seriesStart: fused[0].rating, seriesEnd: fused[fused.length - 1].rating,
+                ratingStart: data.rating.start, ratingEnd: data.rating.end,
+            });
+        }
+        const source: 'games' | 'snapshots' | 'mixed' = useFused
+            ? (fused.some(p => p.source === 'snapshot') ? 'mixed' : 'games')
+            : trajectory.length >= 2 ? 'games' : 'snapshots';
+        const raw = useFused
+            ? fused.map(p => ({ at: p.at, rating: p.rating }))
+            : source === 'games'
+                ? trajectory.map(p => ({ at: p.played_at, rating: p.rating }))
+                : history.map(h => ({ at: h.recorded_at, rating: h.rating }));
         const dateCounts = new Map<string, number>();
         const points = raw.map(p => {
             const base = new Date(p.at).toLocaleDateString(LOCALE, { month: 'short', day: 'numeric' });
@@ -209,6 +232,18 @@ export default function RatingInsights() {
     const windowDates = data?.window
         ? `${formatDate(data.window.start)} – ${formatDate(data.window.end)}`
         : undefined;
+
+    // Per-anchor estimated flags. Older payloads only send the conflated
+    // is_estimated boolean; apply it to both anchors in that case.
+    const startEstimated = data?.rating.start_is_estimated ?? data?.rating.is_estimated ?? false;
+    const endEstimated = data?.rating.end_is_estimated ?? data?.rating.is_estimated ?? false;
+    const estimatedNote = startEstimated && endEstimated
+        ? ' (est. from games)'
+        : startEstimated
+        ? ' (start est. from games)'
+        : endEstimated
+        ? ' (end est. from games)'
+        : '';
 
     const confidenceBadge = confidence === 'low'
         ? { label: 'Low confidence', color: 'bg-negative-soft text-negative' }
@@ -432,7 +467,7 @@ export default function RatingInsights() {
                                         : "—"}
                                     sub={
                                         hasWindowRating && data.rating.start !== null && data.rating.end !== null
-                                            ? `${data.rating.start} → ${data.rating.end}${data.rating.is_estimated ? ' (est. from games)' : ''}`
+                                            ? `${data.rating.start} → ${data.rating.end}${estimatedNote}`
                                             : windowLabel
                                     }
                                     highlight={hasWindowRating && data.rating.net_change !== null && data.rating.net_change !== 0}
@@ -541,7 +576,7 @@ export default function RatingInsights() {
     );
 }
 
-const RatingChart = ({ chartData, trend, source }: { chartData: { label: string; rating: number }[], trend: 'up' | 'down', source: 'games' | 'snapshots' }) => (
+const RatingChart = ({ chartData, trend, source }: { chartData: { label: string; rating: number }[], trend: 'up' | 'down', source: 'games' | 'snapshots' | 'mixed' }) => (
     // div, not section: role="img" is not an allowed role on section (axe aria-allowed-role)
     <div
         className="p-6 bg-primary/5 rounded-sm border border-primary/10"
@@ -551,7 +586,11 @@ const RatingChart = ({ chartData, trend, source }: { chartData: { label: string;
         <div className="flex items-baseline justify-between gap-3 mb-4">
             <h2 className="text-sm font-sans uppercase tracking-widest text-primary/70">Rating Over Time</h2>
             <span className="text-[10px] font-sans text-primary/70">
-                {source === 'games' ? 'From your games in this window' : 'From recorded snapshots'}
+                {source === 'games'
+                    ? 'From your games in this window'
+                    : source === 'mixed'
+                    ? 'From your games and rating snapshots'
+                    : 'From recorded snapshots'}
             </span>
         </div>
         <ResponsiveContainer width="100%" height={220}>
