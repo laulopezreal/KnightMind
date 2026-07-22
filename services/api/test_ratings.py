@@ -571,9 +571,7 @@ def test_explain_snapshot_end_beats_stale_game_elo(client_with_db, db_session):
     ]
 
 
-def test_explain_chart_series_ends_on_fresh_snapshot_anchor(
-    client_with_db, db_session
-):
+def test_explain_chart_series_ends_on_fresh_snapshot_anchor(client_with_db, db_session):
     """Mixed case from the card/chart mismatch bug: a snapshot recorded AFTER
     the last game wins the end anchor, and the fused chart series must end on
     it — previously the client charted only per-game Elo, so the card said
