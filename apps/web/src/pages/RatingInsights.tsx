@@ -47,7 +47,13 @@ export default function RatingInsights() {
     // re-ran the coordinated effect and double-fetched everything on load.
     const lastSessionIdRef = useRef<string | null>(null);
     const [sessionsLoading, setSessionsLoading] = useState(false);
-    const [history, setHistory] = useState<SnapshotHistoryItem[]>([]);
+    // null = not loaded yet. The distinction matters: empty-state branches
+    // (first-import onboarding vs thin-window note) must not render from a
+    // "no snapshots" reading that is really just "history hasn't arrived".
+    const [history, setHistory] = useState<SnapshotHistoryItem[] | null>(null);
+    // History has its own error slot: explain's setError(null) must not be able
+    // to swallow a history failure (and vice versa) now that they fetch apart.
+    const [historyError, setHistoryError] = useState<string | null>(null);
     const online = useOnlineStatus();
     // Explain and history fetch independently, so each needs its own
     // stale-response guard — sharing one generation counter would make
@@ -57,6 +63,12 @@ export default function RatingInsights() {
 
     const fetchExplain = useCallback(async (resolvedSessionId?: string | null) => {
         if (!username) return;
+        const effectiveSessionId = resolvedSessionId !== undefined ? resolvedSessionId : lastSessionIdRef.current;
+        // 'session' mode with no session id yet (e.g. Retry clicked while the
+        // sessions probe is still in flight): an unwindowed request would
+        // silently violate the selected mode. Skip — the coordinated effect
+        // fires explain once the probe resolves.
+        if (windowSource === 'session' && !effectiveSessionId) return;
         // Guard against stale-response races: a username/time-control/window change
         // begins a newer request; the older, slower response must not clobber it.
         const token = explainRequest.begin();
@@ -65,8 +77,6 @@ export default function RatingInsights() {
         try {
             let sinceStr: string | undefined = undefined;
             let sessionId: string | undefined = undefined;
-
-            const effectiveSessionId = resolvedSessionId !== undefined ? resolvedSessionId : lastSessionIdRef.current;
 
             if (windowSource === 'fallback_7d') {
                 const d = new Date();
@@ -90,13 +100,14 @@ export default function RatingInsights() {
     const fetchHistory = useCallback(async () => {
         if (!username) return;
         const token = historyRequest.begin();
+        setHistoryError(null);
         try {
             const historyData = await getRatingHistory(username, timeControl);
             if (token.isStale()) return;
             setHistory(historyData);
         } catch (err) {
             if (token.isStale()) return;
-            setError(err instanceof Error ? err.message : 'Failed to load insights');
+            setHistoryError(err instanceof Error ? err.message : 'Failed to load rating history');
         }
     }, [username, timeControl, historyRequest]);
 
@@ -111,6 +122,10 @@ export default function RatingInsights() {
     // and is NOT refetched when windowSource toggles.
     useEffect(() => {
         if (!username) return;
+        // The current list belongs to the previous username/timeControl pair;
+        // pairing it with fresher explain data would chart the wrong snapshots
+        // under the new labels. Reset to "unknown" until the new fetch lands.
+        setHistory(null);
         fetchHistory();
     }, [username, fetchHistory]);
 
@@ -197,7 +212,7 @@ export default function RatingInsights() {
             ? fused.map(p => ({ at: p.at, rating: p.rating }))
             : source === 'games'
                 ? trajectory.map(p => ({ at: p.played_at, rating: p.rating }))
-                : history.map(h => ({ at: h.recorded_at, rating: h.rating }));
+                : (history ?? []).map(h => ({ at: h.recorded_at, rating: h.rating }));
         const dateCounts = new Map<string, number>();
         const points = raw.map(p => {
             const base = new Date(p.at).toLocaleDateString(LOCALE, { month: 'short', day: 'numeric' });
@@ -234,14 +249,17 @@ export default function RatingInsights() {
     // explain payload. A window with no in/pre-window anchor (or no games) returns
     // rating.end === null even when the user has snapshots on file — deriving from
     // rating.end mislabels that as a brand-new user and shows first-snapshot onboarding.
-    const hasSnapshots = history.length > 0;
+    const hasSnapshots = (history?.length ?? 0) > 0;
+    // History fetches independently now — until it has loaded (or failed), the
+    // empty-state branches below must not assume "no snapshots".
+    const historyKnown = history !== null;
     const hasGames = (data?.stats.games || 0) > 0;
     // Whether THIS window has both anchors needed to show a net rating change. This is
     // a property of the explain payload, distinct from whether snapshots exist at all.
     const hasWindowRating = data?.rating.end != null;
     // First-snapshot onboarding only when there is genuinely nothing for this control:
     // no recorded snapshots AND no games in the window.
-    const isState0 = data && !hasSnapshots && !hasGames;
+    const isState0 = data && historyKnown && !hasSnapshots && !hasGames;
     // Snapshots exist but this window has no games to explain a rating change. Show the
     // recorded history + an honest note instead of the first-snapshot onboarding.
     const thinWindow = data != null && hasSnapshots && !hasGames;
@@ -371,14 +389,16 @@ export default function RatingInsights() {
                 </div>
             </section>
 
-            {error && (
+            {/* Either fetch failing gets a banner; explain's message wins when both
+                failed. Retry refetches both, so every failure combination recovers. */}
+            {(error || historyError) && (
                 !online ? (
                     // A failed load while the browser is offline is a connectivity
                     // problem, not a server error — say so instead of a bare message.
                     <DataStateOffline onRetry={refetch} compact />
                 ) : (
                     <DataStateError
-                        message={error}
+                        message={error ?? historyError ?? ''}
                         onRetry={refetch}
                         retryLabel="Retry"
                         ariaLabel="Retry loading rating insights"
@@ -406,6 +426,15 @@ export default function RatingInsights() {
 
             {data && (
                 <>
+                    {/* History still in flight for a 0-games window: neither empty
+                        state can be told apart yet, so hold a placeholder instead of
+                        flashing the wrong onboarding (or a blank area). */}
+                    {!hasGames && !historyKnown && !historyError && (
+                        <div className="h-[284px] bg-primary/5 border border-primary/10 rounded-sm animate-pulse" role="status">
+                            <span className="sr-only">Loading rating history...</span>
+                        </div>
+                    )}
+
                     {/* STATE 0: no games and no rating history for this control.
                         Snapshots are recorded automatically (on import, session
                         completion, and visits here), so the only ask is games. */}
