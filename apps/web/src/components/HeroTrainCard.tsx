@@ -62,6 +62,11 @@ export function HeroTrainCard({
     ? 'Browse Puzzles'
     : 'Start Session';
 
+  // In the caught-up-with-no-4h-horizon case the supporting text already states
+  // the next-review time verbatim, so the small caption under the CTA would just
+  // repeat it — suppress the caption there to avoid saying the same thing twice.
+  const nextReviewShownInBody = isZeroDue && dueIn4h === 0 && !!nextReviewAt;
+
   return (
     <section
       className="bg-primary/10 rounded-sm p-8 md:p-12 shadow-lg shadow-primary/5"
@@ -100,7 +105,7 @@ export function HeroTrainCard({
             {buttonText}
           </button>
 
-          {nextReviewAt && (
+          {nextReviewAt && !nextReviewShownInBody && (
             <p className="mt-3 text-sm text-primary/70 font-sans">
               Next review: {formatRelativeTime(nextReviewAt)}
             </p>

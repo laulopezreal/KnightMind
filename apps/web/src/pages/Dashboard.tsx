@@ -162,7 +162,6 @@ function DashboardSkeleton() {
         <div
             className="container mx-auto p-6 max-w-7xl space-y-8 animate-pulse"
             role="status"
-            aria-live="polite"
         >
             <span className="sr-only">Loading dashboard…</span>
 
