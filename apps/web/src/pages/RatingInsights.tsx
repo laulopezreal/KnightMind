@@ -47,22 +47,36 @@ export default function RatingInsights() {
     // re-ran the coordinated effect and double-fetched everything on load.
     const lastSessionIdRef = useRef<string | null>(null);
     const [sessionsLoading, setSessionsLoading] = useState(false);
-    const [history, setHistory] = useState<SnapshotHistoryItem[]>([]);
+    // null = not loaded yet. The distinction matters: empty-state branches
+    // (first-import onboarding vs thin-window note) must not render from a
+    // "no snapshots" reading that is really just "history hasn't arrived".
+    const [history, setHistory] = useState<SnapshotHistoryItem[] | null>(null);
+    // History has its own error slot: explain's setError(null) must not be able
+    // to swallow a history failure (and vice versa) now that they fetch apart.
+    const [historyError, setHistoryError] = useState<string | null>(null);
     const online = useOnlineStatus();
-    const request = useLatestRequest();
+    // Explain and history fetch independently, so each needs its own
+    // stale-response guard — sharing one generation counter would make
+    // either fetch mark the other stale.
+    const explainRequest = useLatestRequest();
+    const historyRequest = useLatestRequest();
 
-    const fetchData = useCallback(async (resolvedSessionId?: string | null) => {
+    const fetchExplain = useCallback(async (resolvedSessionId?: string | null) => {
         if (!username) return;
+        const effectiveSessionId = resolvedSessionId !== undefined ? resolvedSessionId : lastSessionIdRef.current;
+        // 'session' mode with no session id yet (e.g. Retry clicked while the
+        // sessions probe is still in flight): an unwindowed request would
+        // silently violate the selected mode. Skip — the coordinated effect
+        // fires explain once the probe resolves.
+        if (windowSource === 'session' && !effectiveSessionId) return;
         // Guard against stale-response races: a username/time-control/window change
         // begins a newer request; the older, slower response must not clobber it.
-        const token = request.begin();
+        const token = explainRequest.begin();
         setLoading(true);
         setError(null);
         try {
             let sinceStr: string | undefined = undefined;
             let sessionId: string | undefined = undefined;
-
-            const effectiveSessionId = resolvedSessionId !== undefined ? resolvedSessionId : lastSessionIdRef.current;
 
             if (windowSource === 'fallback_7d') {
                 const d = new Date();
@@ -72,31 +86,75 @@ export default function RatingInsights() {
                 sessionId = effectiveSessionId;
             }
 
-            const [resp, historyData] = await Promise.all([
-                getRatingExplain(username, timeControl, sessionId, sinceStr),
-                getRatingHistory(username, timeControl),
-            ]);
+            const resp = await getRatingExplain(username, timeControl, sessionId, sinceStr);
             if (token.isStale()) return;
             setData(resp);
-            setHistory(historyData);
         } catch (err) {
             if (token.isStale()) return;
             setError(err instanceof Error ? err.message : 'Failed to load insights');
         } finally {
             if (!token.isStale()) setLoading(false);
         }
-    }, [username, timeControl, windowSource, request]);
+    }, [username, timeControl, windowSource, explainRequest]);
 
-    // Single coordinated effect: fetch sessions first, then data with the resolved session ID.
+    const fetchHistory = useCallback(async () => {
+        if (!username) return;
+        const token = historyRequest.begin();
+        setHistoryError(null);
+        try {
+            const historyData = await getRatingHistory(username, timeControl);
+            if (token.isStale()) return;
+            setHistory(historyData);
+        } catch (err) {
+            if (token.isStale()) return;
+            setHistoryError(err instanceof Error ? err.message : 'Failed to load rating history');
+        }
+    }, [username, timeControl, historyRequest]);
+
+    // Retry affordances refresh both requests.
+    const refetch = useCallback(() => {
+        fetchExplain();
+        fetchHistory();
+    }, [fetchExplain, fetchHistory]);
+
+    // Explain data from the previous username/timeControl must not keep
+    // rendering under the new selection's labels (the username can change
+    // in-place via the global editor — no remount). History gets the same
+    // treatment in its own effect below. windowSource toggles deliberately
+    // keep the old window's data visible while the new window loads.
+    useEffect(() => {
+        setData(null);
+        setError(null);
+    }, [username, timeControl]);
+
+    // History depends only on username + time control — its params don't include
+    // the window — so it fetches on its own, concurrently with the sessions probe,
+    // and is NOT refetched when windowSource toggles.
+    useEffect(() => {
+        if (!username) return;
+        // The current list belongs to the previous username/timeControl pair;
+        // pairing it with fresher explain data would chart the wrong snapshots
+        // under the new labels. Reset to "unknown" until the new fetch lands.
+        setHistory(null);
+        fetchHistory();
+    }, [username, fetchHistory]);
+
+    // Coordinated sessions + explain effect. Explain needs the session ID only in
+    // 'session' mode, so only that mode serializes explain behind the sessions
+    // probe; in fallback_7d mode explain starts concurrently with the probe.
     // Also handles auto-switch to "Last 7 Days" when no sessions exist, to avoid a
     // wasted fetch with the wrong windowSource.
     useEffect(() => {
         if (!username) return;
         let cancelled = false;
 
-        async function loadAll() {
-            // 1. Check sessions
+        async function loadSessionsAndExplain() {
             setSessionsLoading(true);
+            // fallback_7d uses a date window, not a session ID — fire explain now,
+            // alongside the sessions probe (which still runs to keep the
+            // "Since Session" toggle state accurate). Its token guards staleness.
+            if (windowSource === 'fallback_7d') fetchExplain(null);
+
             let resolvedSessionId: string | null = null;
             let foundSessions = false;
             try {
@@ -114,23 +172,23 @@ export default function RatingInsights() {
                 if (!cancelled) setSessionsLoading(false);
             }
 
+            if (windowSource === 'fallback_7d') return; // explain already in flight
+
             // Auto-switch to fallback_7d when no sessions and currently on session mode.
             // This prevents a wasted fetch with session mode when there are no sessions.
-            if (!foundSessions && windowSource === 'session') {
+            if (!foundSessions) {
                 if (!cancelled) setWindowSource('fallback_7d');
                 // The windowSource change will re-trigger this effect with the correct mode.
                 return;
             }
 
-            // 2. Fetch data with resolved session ID
-            if (!cancelled) {
-                await fetchData(resolvedSessionId);
-            }
+            // 'session' mode: explain genuinely needs the resolved session ID.
+            if (!cancelled) fetchExplain(resolvedSessionId);
         }
 
-        loadAll();
+        loadSessionsAndExplain();
         return () => { cancelled = true; };
-    }, [username, timeControl, windowSource, fetchData, setWindowSource]);
+    }, [username, windowSource, fetchExplain, setWindowSource]);
 
     // Chart source: render the server-fused series when present — the backend
     // decides how per-game Elo and snapshot anchors combine, so the line's
@@ -164,7 +222,7 @@ export default function RatingInsights() {
             ? fused.map(p => ({ at: p.at, rating: p.rating }))
             : source === 'games'
                 ? trajectory.map(p => ({ at: p.played_at, rating: p.rating }))
-                : history.map(h => ({ at: h.recorded_at, rating: h.rating }));
+                : (history ?? []).map(h => ({ at: h.recorded_at, rating: h.rating }));
         const dateCounts = new Map<string, number>();
         const points = raw.map(p => {
             const base = new Date(p.at).toLocaleDateString(LOCALE, { month: 'short', day: 'numeric' });
@@ -201,14 +259,17 @@ export default function RatingInsights() {
     // explain payload. A window with no in/pre-window anchor (or no games) returns
     // rating.end === null even when the user has snapshots on file — deriving from
     // rating.end mislabels that as a brand-new user and shows first-snapshot onboarding.
-    const hasSnapshots = history.length > 0;
+    const hasSnapshots = (history?.length ?? 0) > 0;
+    // History fetches independently now — until it has loaded (or failed), the
+    // empty-state branches below must not assume "no snapshots".
+    const historyKnown = history !== null;
     const hasGames = (data?.stats.games || 0) > 0;
     // Whether THIS window has both anchors needed to show a net rating change. This is
     // a property of the explain payload, distinct from whether snapshots exist at all.
     const hasWindowRating = data?.rating.end != null;
     // First-snapshot onboarding only when there is genuinely nothing for this control:
     // no recorded snapshots AND no games in the window.
-    const isState0 = data && !hasSnapshots && !hasGames;
+    const isState0 = data && historyKnown && !hasSnapshots && !hasGames;
     // Snapshots exist but this window has no games to explain a rating change. Show the
     // recorded history + an honest note instead of the first-snapshot onboarding.
     const thinWindow = data != null && hasSnapshots && !hasGames;
@@ -338,15 +399,17 @@ export default function RatingInsights() {
                 </div>
             </section>
 
-            {error && (
+            {/* Either fetch failing gets a banner; explain's message wins when both
+                failed. Retry refetches both, so every failure combination recovers. */}
+            {(error || historyError) && (
                 !online ? (
                     // A failed load while the browser is offline is a connectivity
                     // problem, not a server error — say so instead of a bare message.
-                    <DataStateOffline onRetry={() => fetchData()} compact />
+                    <DataStateOffline onRetry={refetch} compact />
                 ) : (
                     <DataStateError
-                        message={error}
-                        onRetry={() => fetchData()}
+                        message={error ?? historyError ?? ''}
+                        onRetry={refetch}
                         retryLabel="Retry"
                         ariaLabel="Retry loading rating insights"
                         compact
@@ -358,7 +421,7 @@ export default function RatingInsights() {
                 gating on `loading` alone left the main area blank for the whole
                 sessions request on slow connections — visibly broken. Skeletons
                 mirror the loaded layout (metadata line, chart, stat cards). */}
-            {(loading || sessionsLoading) && !data && !error && (
+            {(loading || sessionsLoading) && !data && !error && !historyError && (
                 <div className="space-y-8" role="status">
                     <span className="sr-only">Analyzing games...</span>
                     <div className="h-4 w-80 max-w-full bg-primary/5 rounded-sm animate-pulse" />
@@ -373,6 +436,15 @@ export default function RatingInsights() {
 
             {data && (
                 <>
+                    {/* History still in flight for a 0-games window: neither empty
+                        state can be told apart yet, so hold a placeholder instead of
+                        flashing the wrong onboarding (or a blank area). */}
+                    {!hasGames && !historyKnown && !historyError && (
+                        <div className="h-[284px] bg-primary/5 border border-primary/10 rounded-sm animate-pulse" role="status">
+                            <span className="sr-only">Loading rating history...</span>
+                        </div>
+                    )}
+
                     {/* STATE 0: no games and no rating history for this control.
                         Snapshots are recorded automatically (on import, session
                         completion, and visits here), so the only ask is games. */}
