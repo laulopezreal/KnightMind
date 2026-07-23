@@ -130,6 +130,29 @@ describe('Library', () => {
         });
     });
 
+    it('genuinely-empty library offers a Generate Puzzles button (no dead end)', async () => {
+        mockGetLibraryPuzzles.mockResolvedValue(EMPTY_RESPONSE);
+        render(<Library />);
+
+        await waitFor(() => {
+            expect(screen.getByText(/don't have any puzzles yet/i)).toBeInTheDocument();
+        });
+        expect(screen.getByRole('link', { name: 'Generate Puzzles' })).toHaveAttribute('href', '/puzzles');
+    });
+
+    it('filters-excluded-everything empty state does NOT offer Generate (puzzles exist)', async () => {
+        mockGetLibraryPuzzles.mockResolvedValue({
+            ...EMPTY_RESPONSE,
+            stats: { total: 5, due: 0, new: 0, learning: 0, mastered: 5 },
+        });
+        render(<Library />);
+
+        await waitFor(() => {
+            expect(screen.getByText(/no puzzles match your filters/i)).toBeInTheDocument();
+        });
+        expect(screen.queryByRole('link', { name: 'Generate Puzzles' })).not.toBeInTheDocument();
+    });
+
     // --- Corpus stats ---
 
     it('should display corpus stats header', async () => {
