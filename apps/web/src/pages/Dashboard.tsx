@@ -212,7 +212,15 @@ export default function Dashboard() {
         }
         : undefined;
 
-    const showStrip = stripLoading || ratingData != null || motifPerf != null;
+    // Only surface a tile once it has something real to say. Otherwise a
+    // brand-new user (no games, no practised motifs) gets two dead "—" tiles
+    // under the onboarding hero. The weakest tile deliberately stays for
+    // mid-journey users (motifs practised but none yet reliable) as a "keep
+    // going" nudge — that's informative, not clutter.
+    const hasRatingTile = (ratingData?.stats.games ?? 0) > 0;
+    const hasMotifTile = (motifPerf?.motifs.length ?? 0) > 0;
+    const tileCount = (hasRatingTile ? 1 : 0) + (hasMotifTile ? 1 : 0);
+    const showStrip = stripLoading || hasRatingTile || hasMotifTile;
 
     return (
         <div className="container mx-auto p-6 max-w-7xl space-y-8 animate-teedin">
@@ -249,7 +257,7 @@ export default function Dashboard() {
                 the loop's "is it working?" and "what next?". Loads independently of
                 the core dashboard; a failed slice simply omits its tile. */}
             {showStrip && (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div className={`grid grid-cols-1 gap-6 ${stripLoading || tileCount === 2 ? 'md:grid-cols-2' : ''}`}>
                     {stripLoading ? (
                         <>
                             <div className="h-40 bg-primary/5 border border-primary/10 rounded-sm animate-pulse" aria-hidden="true" />
@@ -257,8 +265,8 @@ export default function Dashboard() {
                         </>
                     ) : (
                         <>
-                            {ratingData && <RatingDeltaCard data={ratingData} timeControlLabel={TC_LABEL[timeControl]} />}
-                            {motifPerf && <WeakestMotifCard motifs={motifPerf.motifs} />}
+                            {hasRatingTile && ratingData && <RatingDeltaCard data={ratingData} timeControlLabel={TC_LABEL[timeControl]} />}
+                            {hasMotifTile && motifPerf && <WeakestMotifCard motifs={motifPerf.motifs} />}
                         </>
                     )}
                 </div>
