@@ -31,12 +31,23 @@ export function getSessionDetailsA11yCopy(showSessionDetails: boolean, screenRea
     } as const;
 }
 
-export function getPuzzleActionA11yCopy(activeSessionId: string | null, hintsUsed: number) {
+const HINT_RUNG_DESCRIPTIONS = [
+    'name the piece to move',
+    'highlight the destination square',
+    'reveal the full solution',
+] as const;
+
+export function getPuzzleActionA11yCopy(clueStage: number) {
+    const nextRung = clueStage + 1;
+    const rungDescription = HINT_RUNG_DESCRIPTIONS[clueStage];
     return {
         checkMoveLabel: 'Check entered move',
-        hintLabel: activeSessionId
-            ? `Use hint ${Math.min(hintsUsed + 1, 3)} of 3`
-            : 'Show clue for current puzzle',
+        // The hint is a graduated ladder: each press escalates the help given.
+        // Announcing the next rung (and what it reveals) keeps screen-reader
+        // users on equal footing with the visual "Hint (n/3)" affordance.
+        hintLabel: rungDescription
+            ? `Hint ${nextRung} of 3: ${rungDescription}`
+            : 'All hints revealed for this puzzle',
         revealLabel: 'Reveal best move solution',
         showSolutionLabel: 'Show full solution and board continuation',
     } as const;
