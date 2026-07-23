@@ -9,7 +9,7 @@ import { MomentumCard } from '../components/MomentumCard';
 import { StreakCard } from '../components/StreakCard';
 import { RecentSessionsCard } from '../components/RecentSessionsCard';
 import { PageHeader } from '../components/PageHeader';
-import { DataStateError, DataStateOffline } from '../components/DataState';
+import { DataStateError, DataStateOffline, DataStateSkeleton } from '../components/DataState';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
 import { useLatestRequest } from '../hooks/useLatestRequest';
 
@@ -154,17 +154,14 @@ export default function Dashboard() {
  * Loading skeleton that mirrors the real dashboard layout (hero, tricky list,
  * two-column momentum/streak grid). Mirroring the final structure keeps the
  * page from collapsing to a centered spinner and back — no jarring content
- * shift — and gives an honest sense of what is loading. Marked role="status"
- * with an sr-only label so assistive tech announces the loading state once.
+ * shift — and gives an honest sense of what is loading.
  */
 function DashboardSkeleton() {
     return (
-        <div
+        <DataStateSkeleton
+            label="Loading dashboard…"
             className="container mx-auto p-6 max-w-7xl space-y-8 animate-pulse"
-            role="status"
         >
-            <span className="sr-only">Loading dashboard…</span>
-
             {/* Page header */}
             <div className="space-y-2">
                 <div className="h-9 w-56 bg-primary/10 rounded-sm" />
@@ -182,6 +179,6 @@ function DashboardSkeleton() {
                 <div className="md:col-span-2 h-52 bg-primary/5 border border-primary/10 rounded-sm" />
                 <div className="md:col-span-1 h-52 bg-primary/5 border border-primary/10 rounded-sm" />
             </div>
-        </div>
+        </DataStateSkeleton>
     );
 }
