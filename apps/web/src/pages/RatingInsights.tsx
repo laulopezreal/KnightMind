@@ -6,6 +6,8 @@ import { useChessUsername } from '../context/ChessUsernameContext';
 import { getRatingExplain, getRatingHistory, type ExplainResponse, type HighlightGame, type SnapshotHistoryItem } from '../api/ratings';
 import { getRecentSessions } from '../api/sessions';
 import { PageHeader } from '../components/PageHeader';
+import { StatCard } from '../components/StatCard';
+import { ConfidenceBadge } from '../components/ConfidenceBadge';
 import { DataStateError, DataStateLoading, DataStateOffline, DataStateSkeleton } from '../components/DataState';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
 import { useLatestRequest } from '../hooks/useLatestRequest';
@@ -330,11 +332,6 @@ export default function RatingInsights() {
         ? ' (end est. from games)'
         : '';
 
-    const confidenceBadge = confidence === 'low'
-        ? { label: 'Low confidence', color: 'bg-negative-soft text-negative' }
-        : confidence === 'medium'
-        ? { label: 'Medium confidence', color: 'bg-status-learning-soft text-status-learning' }
-        : { label: 'High confidence', color: 'bg-positive-soft text-positive' };
 
     return (
         <div className="space-y-12 animate-teedin pb-20">
@@ -523,9 +520,7 @@ export default function RatingInsights() {
                                 {windowDates && (
                                     <span className="text-xs font-sans text-primary/70">{windowDates}</span>
                                 )}
-                                <span className={`text-[10px] font-sans font-medium px-2 py-0.5 rounded-full ${confidenceBadge.color}`}>
-                                    {confidenceBadge.label} ({N} games)
-                                </span>
+                                <ConfidenceBadge confidence={confidence} games={N} />
                                 {data.rating.reference_rating > 0 && (
                                     <span className="text-xs font-sans text-primary/70">
                                         Ref: {data.rating.reference_rating}{data.rating.reference_is_approx ? ' (est.)' : ''}
@@ -555,7 +550,7 @@ export default function RatingInsights() {
 
                             {/* Summary Cards */}
                             <section className="grid grid-cols-1 md:grid-cols-4 gap-6">
-                                <Card
+                                <StatCard
                                     label="Net Change"
                                     value={hasWindowRating && data.rating.net_change !== null
                                         ? (data.rating.net_change > 0 ? `+${data.rating.net_change}` : `${data.rating.net_change}`)
@@ -569,14 +564,14 @@ export default function RatingInsights() {
                                     positive={hasWindowRating && data.rating.net_change !== null && data.rating.net_change > 0}
                                     extra={!hasSnapshots && !hasWindowRating ? "Rating is tracked automatically as you play and import games." : undefined}
                                 />
-                                <Card
+                                <StatCard
                                     label="Performance"
                                     value={hasGames
                                         ? `${data.stats.wins}W - ${data.stats.draws}D - ${data.stats.losses}L`
                                         : "—"}
                                     sub={`${data.stats.games} games analyzed`}
                                 />
-                                <Card
+                                <StatCard
                                     label="Performance vs Expectation"
                                     value={hasGames && data.stats.actual_minus_expected !== null
                                         ? (data.stats.actual_minus_expected > 0 ? `+${(data.stats.actual_minus_expected || 0).toFixed(1)}` : `${(data.stats.actual_minus_expected || 0).toFixed(1)}`)
@@ -584,7 +579,7 @@ export default function RatingInsights() {
                                     sub="Actual minus expected score"
                                     helper="Positive means you outperformed expectations. Negative means you underperformed."
                                 />
-                                <Card
+                                <StatCard
                                     label="Opponent Strength"
                                     value={hasGames ? (data.stats.avg_opponent_rating?.toString() || "—") : "—"}
                                     sub={data.rating.reference_rating > 0
@@ -739,17 +734,6 @@ const RatingChart = ({ chartData, trend, source }: { chartData: { label: string;
     </div>
 );
 
-const Card = ({ label, value, sub, helper, highlight, positive, extra }: { label: string, value: string, sub?: string, helper?: string, highlight?: boolean, positive?: boolean, extra?: string }) => (
-    <div className="p-6 bg-primary/5 rounded-sm border border-primary/10">
-        <div className="text-xs font-sans uppercase tracking-widest text-primary/70 mb-2">{label}</div>
-        <div className={`text-3xl font-serif mb-1 ${highlight ? (positive ? 'text-positive' : 'text-negative') : 'text-primary'}`}>
-            {value}
-        </div>
-        {sub && <div className="text-xs font-sans text-primary/70 mb-1">{sub}</div>}
-        {helper && <div className="text-xs font-sans text-primary/70 italic">{helper}</div>}
-        {extra && <div className="text-xs font-sans text-primary/70 mt-2">{extra}</div>}
-    </div>
-);
 
 const GameRow = ({ game, type }: { game: HighlightGame, type: 'good' | 'bad' }) => {
     const playedDate = game.played_at

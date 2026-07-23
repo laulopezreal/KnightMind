@@ -7,6 +7,7 @@ let mockUsername = 'testplayer';
 
 vi.mock('react-router-dom', () => ({
   useNavigate: () => mockNavigate,
+  Link: ({ children }: { children: React.ReactNode }) => <a>{children}</a>,
 }));
 
 vi.mock('../context/ChessUsernameContext', () => ({
@@ -16,6 +17,12 @@ vi.mock('../context/ChessUsernameContext', () => ({
 vi.mock('../api/users', () => ({
   getDashboardSummary: vi.fn().mockRejectedValue(new Error('Not loaded')),
   getTrickyPuzzles: vi.fn().mockRejectedValue(new Error('Not loaded')),
+  getMotifPerformance: vi.fn().mockRejectedValue(new Error('Not loaded')),
+  getUserStatus: vi.fn().mockRejectedValue(new Error('Not loaded')),
+}));
+
+vi.mock('../api/ratings', () => ({
+  getRatingExplain: vi.fn().mockRejectedValue(new Error('Not loaded')),
 }));
 
 vi.mock('../api/sessions', () => ({
@@ -40,6 +47,14 @@ vi.mock('../components/StreakCard', () => ({
 
 vi.mock('../components/RecentSessionsCard', () => ({
   RecentSessionsCard: () => <div data-testid="sessions-card">RecentSessionsCard</div>,
+}));
+
+vi.mock('../components/WeakestMotifCard', () => ({
+  WeakestMotifCard: () => <div data-testid="weakest-card">WeakestMotifCard</div>,
+}));
+
+vi.mock('../components/RatingDeltaCard', () => ({
+  RatingDeltaCard: () => <div data-testid="rating-card">RatingDeltaCard</div>,
 }));
 
 describe('Dashboard', () => {
