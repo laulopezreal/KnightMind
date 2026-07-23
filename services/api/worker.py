@@ -182,6 +182,32 @@ class JobWorker:
             db.commit()
         return False
 
+    def _write_progress(self, job_id: str, done: int, total: int) -> None:
+        """Persist per-game generation progress so /jobs/{id} reports honest
+        movement during a long run (the bar previously sat frozen until the
+        terminal 100% write).
+
+        Called by the generator once per game — bounded writes (max_games is
+        capped), so no throttling needed. Guarded WHERE status == RUNNING for
+        the same reason as the success write: a cancel is terminal and a late
+        progress write must never touch a job that has left RUNNING.
+        """
+        if total <= 0:
+            return
+        percent = min(int(done * 100 / total), 99)  # 100 is the terminal write's
+        with SessionLocal() as db:
+            db.execute(
+                update(Job)
+                .where(Job.id == job_id, Job.status == JobStatus.RUNNING)
+                .values(
+                    progress_current=percent,
+                    progress_total=100,
+                    message=f"Analyzing game {done + 1} of {total}",
+                    updated_at=datetime.now(timezone.utc),
+                )
+            )
+            db.commit()
+
     async def execute_job(self, job_id: str):
         """Execute the actual job logic."""
         # Re-fetch job to update status
@@ -213,6 +239,9 @@ class JobWorker:
                 max_puzzles=max_puzzles,
                 cancellation_check=lambda: self._heartbeat_and_check_cancellation(
                     job_id
+                ),
+                progress_callback=lambda done, total: self._write_progress(
+                    job_id, done, total
                 ),
             )
 
