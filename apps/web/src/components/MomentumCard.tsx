@@ -64,9 +64,12 @@ export function MomentumCard({ recentForm }: MomentumCardProps) {
           </div>
         </div>
 
-        {/* Accuracy */}
+        {/* Accuracy. Labelled "Review accuracy" (not a bare "Accuracy") to be
+            honest about what it measures: recall on your spaced-repetition deck,
+            which is shaped by what the scheduler served — not a direct chess-skill
+            score. The rating tile on the dashboard carries the skill/outcome signal. */}
         <div className="flex justify-between items-center pt-2">
-          <span className="text-primary/70 font-sans text-sm">Accuracy</span>
+          <span className="text-primary/70 font-sans text-sm">Review accuracy</span>
           <span className="text-2xl font-mono text-primary">
             {Math.round(accuracy * 100)}%
           </span>
@@ -82,6 +85,10 @@ export function MomentumCard({ recentForm }: MomentumCardProps) {
             {trendMeta.text}
           </span>
         </div>
+
+        <p className="text-xs text-primary/70 font-sans italic pt-1">
+          Recall on puzzles you've reviewed — not a chess-skill score.
+        </p>
       </div>
     </section>
   );

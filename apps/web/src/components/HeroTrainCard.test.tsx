@@ -134,6 +134,20 @@ describe('HeroTrainCard', () => {
     expect(section).toBeInTheDocument();
   });
 
+  it('renders and fires the optional secondary action (smart hero shortcut)', async () => {
+    const onClick = vi.fn();
+    render(<HeroTrainCard {...defaultProps} secondaryAction={{ label: 'Or train your weakest: Back rank', onClick }} />);
+
+    const link = screen.getByRole('button', { name: 'Or train your weakest: Back rank' });
+    await user.click(link);
+    expect(onClick).toHaveBeenCalledTimes(1);
+  });
+
+  it('omits the secondary action when not provided', () => {
+    render(<HeroTrainCard {...defaultProps} />);
+    expect(screen.queryByText(/train your weakest/i)).not.toBeInTheDocument();
+  });
+
   it('renders the CTA with a solid fill via the registered primary token', () => {
     render(<HeroTrainCard {...defaultProps} />);
 

@@ -9,6 +9,12 @@ interface HeroTrainCardProps {
   /** Puzzles that become due within the next 4 hours (already excludes due_now). */
   dueIn4h?: number;
   onStartSession: () => void;
+  /**
+   * Optional targeted-training shortcut (e.g. "Train your weakest: Back rank"),
+   * shown as a subtle link under the primary CTA. The caller decides when it's
+   * meaningful — typically only in the everyday "Train Today" state.
+   */
+  secondaryAction?: { label: string; onClick: () => void };
 }
 
 export function HeroTrainCard({
@@ -18,7 +24,8 @@ export function HeroTrainCard({
   daysSinceLastSession,
   totalSessions,
   dueIn4h = 0,
-  onStartSession
+  onStartSession,
+  secondaryAction
 }: HeroTrainCardProps) {
   // Determine the state and messaging
   const isFirstTime = totalSessions === 0;
@@ -112,6 +119,16 @@ export function HeroTrainCard({
             <p className="mt-3 text-sm text-primary/70 font-sans">
               Next review: {formatRelativeTime(nextReviewAt)}
             </p>
+          )}
+
+          {secondaryAction && (
+            <button
+              type="button"
+              onClick={secondaryAction.onClick}
+              className="mt-3 text-sm font-sans text-primary/70 underline decoration-primary/30 underline-offset-4 km-interactive km-focus-visible transition-colors"
+            >
+              {secondaryAction.label}
+            </button>
           )}
         </div>
       </div>
