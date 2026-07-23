@@ -546,7 +546,7 @@ export default function Puzzles() {
     };
 
     return (
-        <div className="space-y-12 animate-teedin">
+        <div className="space-y-12 animate-teedin pb-20 md:pb-0">
             <section>
                 <Link to="/dashboard" className="text-primary/70 hover:text-primary mb-4 inline-block font-sans text-sm tracking-widest uppercase transition-colors">
                     ← Back to Dashboard
@@ -1128,7 +1128,7 @@ export default function Puzzles() {
                             )}
 
                             {status === 'solving' && (
-                                <div className="grid grid-cols-3 gap-4">
+                                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                                     <button
                                         type="button"
                                         onClick={handleCheckAnswer}
@@ -1214,7 +1214,7 @@ export default function Puzzles() {
                                         </div>
                                     )}
 
-                                    <div className="grid grid-cols-2 gap-4">
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                                         <button
                                             type="button"
                                             onClick={async () => {
