@@ -40,8 +40,8 @@ vi.mock('../components/RecentlyTrickyCard', () => ({ RecentlyTrickyCard: () => <
 vi.mock('../components/MomentumCard', () => ({ MomentumCard: () => <div /> }));
 vi.mock('../components/StreakCard', () => ({ StreakCard: () => <div /> }));
 vi.mock('../components/RecentSessionsCard', () => ({ RecentSessionsCard: () => <div /> }));
-vi.mock('../components/WeakestMotifCard', () => ({ WeakestMotifCard: () => <div /> }));
-vi.mock('../components/RatingDeltaCard', () => ({ RatingDeltaCard: () => <div /> }));
+vi.mock('../components/WeakestMotifCard', () => ({ WeakestMotifCard: () => <div data-testid="weakest-card" /> }));
+vi.mock('../components/RatingDeltaCard', () => ({ RatingDeltaCard: () => <div data-testid="rating-card" /> }));
 
 const SUMMARY = {
     schedule: { due_now: 0, next_review_at: null },
@@ -83,6 +83,32 @@ describe('Dashboard data states', () => {
         // accessible name — assert both the region and its announcement.
         const status = screen.getByRole('status');
         expect(status).toHaveTextContent(/loading dashboard/i);
+    });
+
+    it('omits both improvement tiles for a brand-new user (no games, no motifs)', async () => {
+        mockGetDashboardSummary.mockResolvedValue(SUMMARY);
+        // beforeEach defaults: motifs empty, rating games 0 — the first-run case.
+        render(<Dashboard />);
+
+        await waitFor(() => expect(screen.getByTestId('hero-card')).toBeInTheDocument());
+        expect(screen.queryByTestId('rating-card')).not.toBeInTheDocument();
+        expect(screen.queryByTestId('weakest-card')).not.toBeInTheDocument();
+    });
+
+    it('shows the improvement tiles once there is data to show', async () => {
+        mockGetDashboardSummary.mockResolvedValue(SUMMARY);
+        mockGetMotifPerformance.mockResolvedValue({
+            motifs: [{ name: 'fork', total_puzzles: 10, passed: 8, accuracy: 0.8, rank: 'learning', attempts: 10, insufficient_data: false }],
+            weakest_motifs: ['fork'], total_motifs_practiced: 1,
+        });
+        mockGetRatingExplain.mockResolvedValue({
+            rating: { net_change: 10, start: 1500, end: 1510 }, stats: { games: 12 }, confidence: 'high', chart_series: [],
+        });
+
+        render(<Dashboard />);
+
+        await waitFor(() => expect(screen.getByTestId('rating-card')).toBeInTheDocument());
+        expect(screen.getByTestId('weakest-card')).toBeInTheDocument();
     });
 
     it('shows the "new games to import" nudge only when status reports new games', async () => {
