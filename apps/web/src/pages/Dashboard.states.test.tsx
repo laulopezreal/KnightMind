@@ -53,6 +53,20 @@ describe('Dashboard data states', () => {
     });
     afterEach(() => setOnline(true));
 
+    it('announces a loading status via the shared skeleton while the fetch is in flight', () => {
+        // Dashboard summary never resolves -> the page stays in its loading state.
+        // The shared DataStateSkeleton must announce it as a role="status" region
+        // named by the sr-only label (accessible loading state, not a bare spinner).
+        mockGetDashboardSummary.mockReturnValue(new Promise(() => {}));
+
+        render(<Dashboard />);
+
+        // status is a live region, so the sr-only label is text content, not the
+        // accessible name — assert both the region and its announcement.
+        const status = screen.getByRole('status');
+        expect(status).toHaveTextContent(/loading dashboard/i);
+    });
+
     it('shows an offline affordance (not a generic error) when a fetch fails while offline', async () => {
         setOnline(false);
         mockGetDashboardSummary.mockRejectedValue(new Error('Network request failed'));
