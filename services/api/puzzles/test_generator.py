@@ -166,6 +166,30 @@ def test_heartbeat_fires_within_single_long_game(mock_create_engine, temp_storag
 
 
 @patch("services.api.puzzles.generator.create_engine")
+def test_progress_callback_fires_once_per_game(mock_create_engine, temp_storage):
+    """progress_callback reports (done, total) before each game so a caller
+    (the job worker) can surface honest movement during a long run. It is
+    separate from cancellation_check, so callers without it are unaffected."""
+    db = temp_storage
+    mock_create_engine.return_value = Mock()
+    _store_game(db, _LONG_GAME_PGN, url="https://chess.com/game/p1")
+    _store_game(db, _LONG_GAME_PGN, url="https://chess.com/game/p2")
+
+    reports: list[tuple[int, int]] = []
+
+    with patch("services.api.puzzles.generator.get_or_compute_eval") as mock_eval:
+        mock_eval.return_value = EvalResult(best_move_uci="e2e4", eval=0.3)
+        generate_puzzles(
+            "testuser",
+            max_games=2,
+            max_puzzles=10,
+            progress_callback=lambda done, total: reports.append((done, total)),
+        )
+
+    assert reports == [(0, 2), (1, 2)]
+
+
+@patch("services.api.puzzles.generator.create_engine")
 def test_intra_game_cancellation_stops_generation(mock_create_engine, temp_storage):
     """Cancellation detected mid-game via the intra-game heartbeat halts the
     run promptly instead of grinding through the rest of the game.

@@ -521,6 +521,7 @@ def generate_puzzles(
     max_games: int = 30,
     max_puzzles: int = 30,
     cancellation_check: callable = None,
+    progress_callback: callable = None,
 ) -> GenerationResult:
     """
     Generate puzzles from a user's imported games by detecting blunders.
@@ -529,6 +530,12 @@ def generate_puzzles(
         username: Username to generate puzzles for
         max_games: Maximum number of recent games to analyze
         max_puzzles: Maximum number of puzzles to generate
+        cancellation_check: Optional; called between games and every
+            HEARTBEAT_PLY_INTERVAL plies. Return True to stop generation.
+        progress_callback: Optional; called as ``progress_callback(done, total)``
+            once per game (before analyzing game ``done`` of ``total``), so a
+            caller can surface honest progress during a long run. Kept separate
+            from cancellation_check so its addition changes no existing caller.
 
     Returns:
         GenerationResult with counts
@@ -589,7 +596,7 @@ def generate_puzzles(
             discarded_low_margin = 0
             cache_stats = {"hits": 0, "misses": 0}  # Track cache performance
 
-            for game_meta in recent_games:
+            for game_index, game_meta in enumerate(recent_games):
                 # A prior game's engine died mid-batch and could not be
                 # recreated. The inner move loop already broke out; end the whole
                 # run cleanly here rather than iterating the remaining games with
@@ -602,6 +609,10 @@ def generate_puzzles(
                 if cancellation_check and cancellation_check():
                     logger.info(f"Puzzle generation canceled for {username}")
                     break
+
+                # Report per-game progress (bounded: once per game, not per ply).
+                if progress_callback:
+                    progress_callback(game_index, len(recent_games))
 
                 if generated >= max_puzzles:
                     break
