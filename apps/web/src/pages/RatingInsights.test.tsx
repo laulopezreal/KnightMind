@@ -119,6 +119,9 @@ describe('RatingInsights', () => {
     // Wait extra to ensure no second call happens
     await new Promise(r => setTimeout(r, 100));
     expect(mockGetRatingExplain).toHaveBeenCalledTimes(1);
+    // Zero sessions triggers the auto-switch to Last 7 Days; the effect re-run
+    // it causes must reuse the first probe's result, not hit sessions again.
+    expect(mockGetRecentSessions).toHaveBeenCalledTimes(1);
   });
 
   it('should show error when API fails', async () => {

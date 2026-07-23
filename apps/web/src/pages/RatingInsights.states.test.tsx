@@ -196,6 +196,91 @@ describe('RatingInsights fetch concurrency & error isolation', () => {
         expect(mockGetRatingExplain).not.toHaveBeenCalled();
     });
 
+    it('auto-switches to Last 7 Days on zero sessions without re-probing (first-time user)', async () => {
+        // First-time user: no sessions on file. The page starts in 'session'
+        // mode, probes, finds none, and auto-switches the window. The switch
+        // re-runs the coordinated effect — which must reuse the first probe's
+        // result, not call getRecentSessions again (the second probe also
+        // re-toggled sessionsLoading, flickering the loading affordance).
+        mockGetRecentSessions.mockResolvedValue([]);
+        mockGetRatingExplain.mockResolvedValue(EXPLAIN_NO_GAMES);
+        mockGetRatingHistory.mockResolvedValue([]);
+
+        render(<RatingInsights />);
+
+        // The fallback explain fires exactly once, date-windowed (not session-windowed).
+        await waitFor(() => expect(mockGetRatingExplain).toHaveBeenCalledTimes(1));
+        expect(mockGetRatingExplain).toHaveBeenCalledWith('alice', 'rapid', undefined, expect.any(String));
+
+        // The toggle reflects the auto-switch and the no-sessions note settles in.
+        await waitFor(() => expect(screen.getByText('Last 7 Days')).toHaveAttribute('aria-pressed', 'true'));
+        await waitFor(() => expect(screen.getByText(/No sessions yet/i)).toBeInTheDocument());
+        expect(screen.queryByText('Loading sessions...')).not.toBeInTheDocument();
+
+        // The core regression: exactly one sessions probe across the switch.
+        await new Promise(r => setTimeout(r, 30));
+        expect(mockGetRecentSessions).toHaveBeenCalledTimes(1);
+        expect(mockGetRatingExplain).toHaveBeenCalledTimes(1);
+    });
+
+    it('re-probes sessions for a new username after an auto-switch', async () => {
+        // The probe cache is keyed by username: after alice's zero-session
+        // switch, bob's mount-in-place must still get a real probe (bob may
+        // well have sessions).
+        mockGetRecentSessions.mockImplementation((username: string) =>
+            Promise.resolve(username === 'alice' ? [] : [{ session_id: 's-bob' }])
+        );
+        mockGetRatingExplain.mockResolvedValue(EXPLAIN_NO_GAMES);
+        mockGetRatingHistory.mockResolvedValue([]);
+
+        const { rerender } = render(<RatingInsights />);
+        await waitFor(() => expect(screen.getByText('Last 7 Days')).toHaveAttribute('aria-pressed', 'true'));
+        expect(mockGetRecentSessions).toHaveBeenCalledTimes(1);
+
+        mockUsername = 'bob';
+        rerender(<RatingInsights />);
+
+        await waitFor(() => expect(mockGetRecentSessions).toHaveBeenCalledWith('bob', 1));
+    });
+
+    it('does not re-probe sessions on a time-control switch (cached session id reused)', async () => {
+        // Sessions don't depend on time control. A control switch must refetch
+        // explain + history for the new control, windowed by the session id the
+        // first (and only) probe resolved — never a second getRecentSessions.
+        mockGetRatingExplain.mockResolvedValue(EXPLAIN_WITH_GAMES);
+        mockGetRatingHistory.mockResolvedValue(SNAPSHOTS);
+
+        render(<RatingInsights />);
+        await waitFor(() => expect(screen.getByText('15W - 3D - 7L')).toBeInTheDocument());
+        expect(mockGetRecentSessions).toHaveBeenCalledTimes(1);
+        const explainCalls = mockGetRatingExplain.mock.calls.length;
+
+        fireEvent.click(screen.getByText('Blitz'));
+
+        await waitFor(() => expect(mockGetRatingExplain.mock.calls.length).toBeGreaterThan(explainCalls));
+        expect(mockGetRatingExplain).toHaveBeenLastCalledWith('alice', 'blitz', 's1', undefined);
+        await new Promise(r => setTimeout(r, 30));
+        expect(mockGetRecentSessions).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not re-probe sessions on window toggles (probe keyed on username)', async () => {
+        mockGetRatingExplain.mockResolvedValue(EXPLAIN_WITH_GAMES);
+        mockGetRatingHistory.mockResolvedValue(SNAPSHOTS);
+
+        render(<RatingInsights />);
+        await waitFor(() => expect(screen.getByText('15W - 3D - 7L')).toBeInTheDocument());
+        expect(mockGetRecentSessions).toHaveBeenCalledTimes(1);
+
+        // Round-trip: session → fallback_7d → session.
+        fireEvent.click(screen.getByText('Last 7 Days'));
+        await waitFor(() => expect(mockGetRatingExplain).toHaveBeenLastCalledWith('alice', 'rapid', undefined, expect.any(String)));
+        fireEvent.click(screen.getByText('Since Session'));
+        await waitFor(() => expect(mockGetRatingExplain).toHaveBeenLastCalledWith('alice', 'rapid', 's1', undefined));
+
+        await new Promise(r => setTimeout(r, 30));
+        expect(mockGetRecentSessions).toHaveBeenCalledTimes(1);
+    });
+
     it('Retry recovers a history-only failure', async () => {
         mockGetRatingExplain.mockResolvedValue(EXPLAIN_NO_GAMES);
         mockGetRatingHistory
