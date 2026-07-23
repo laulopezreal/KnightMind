@@ -54,10 +54,10 @@ describe('MomentumCard', () => {
   it('fills result squares with theme-aware semantic tokens (adapts to night mode)', () => {
     render(<MomentumCard recentForm={defaultForm} />);
 
-    // Fixed green/red-800 values did not adapt to the night theme; the soft
-    // semantic tokens re-resolve per theme.
-    expect(screen.getAllByTitle('Correct')[0]).toHaveClass('bg-positive-soft');
-    expect(screen.getAllByTitle('Incorrect')[0]).toHaveClass('bg-negative-soft');
+    // Fixed green/red-800 values did not adapt to the night theme; the -fill
+    // semantic tokens re-resolve per theme and read clearly as green/red.
+    expect(screen.getAllByTitle('Correct')[0]).toHaveClass('bg-positive-fill');
+    expect(screen.getAllByTitle('Incorrect')[0]).toHaveClass('bg-negative-fill');
   });
 
   it('should have proper aria-labelledby', () => {
