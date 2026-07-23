@@ -46,6 +46,12 @@ export default function RatingInsights() {
     // changed fetchData's identity after the sessions probe resolved, which
     // re-ran the coordinated effect and double-fetched everything on load.
     const lastSessionIdRef = useRef<string | null>(null);
+    // The in-flight (or settled) sessions probe, keyed by username. Sessions
+    // don't depend on time control or window, so the probe fires once per
+    // username; the coordinated explain effect awaits this promise instead of
+    // re-probing when its other deps change. The promise never rejects —
+    // failures resolve to null (treated as "no sessions").
+    const sessionsProbeRef = useRef<{ username: string; promise: Promise<string | null> } | null>(null);
     const [sessionsLoading, setSessionsLoading] = useState(false);
     // null = not loaded yet. The distinction matters: empty-state branches
     // (first-import onboarding vs thin-window note) must not render from a
@@ -139,54 +145,72 @@ export default function RatingInsights() {
         fetchHistory();
     }, [username, fetchHistory]);
 
-    // Coordinated sessions + explain effect. Explain needs the session ID only in
-    // 'session' mode, so only that mode serializes explain behind the sessions
-    // probe; in fallback_7d mode explain starts concurrently with the probe.
-    // Also handles auto-switch to "Last 7 Days" when no sessions exist, to avoid a
-    // wasted fetch with the wrong windowSource.
+    // Sessions probe: keyed on username ONLY. Time-control and window changes
+    // re-run the coordination effect below (via fetchExplain's identity), and
+    // before this split each re-run probed getRecentSessions again — a wasted
+    // request per toggle. Now the probe fires once per username and caches its
+    // promise in sessionsProbeRef for the coordination effect to await.
+    // Declared before that effect so the ref is populated when it runs.
+    useEffect(() => {
+        if (!username) return;
+        let cancelled = false;
+        // The cached ID belongs to the previous username — a Retry clicked
+        // before this probe resolves must not window explain by it.
+        lastSessionIdRef.current = null;
+        setSessionsLoading(true);
+        sessionsProbeRef.current = {
+            username,
+            promise: (async () => {
+                let resolvedSessionId: string | null = null;
+                try {
+                    const sessions = await getRecentSessions(username, 1);
+                    resolvedSessionId = sessions.length > 0 ? sessions[0].session_id : null;
+                } catch {
+                    resolvedSessionId = null; // probe failure reads as "no sessions"
+                }
+                // The promise result stays valid for late awaiters; only the
+                // state writes are gated on this run still being current.
+                if (!cancelled) {
+                    setHasSessions(resolvedSessionId !== null);
+                    lastSessionIdRef.current = resolvedSessionId;
+                    setSessionsLoading(false);
+                }
+                return resolvedSessionId;
+            })(),
+        };
+        return () => { cancelled = true; };
+    }, [username]);
+
+    // Coordination: explain needs the session ID only in 'session' mode, so only
+    // that mode serializes explain behind the sessions probe — and re-runs await
+    // the probe's cached (usually already-settled) promise, so no request fires.
+    // In fallback_7d mode explain starts immediately. When 'session' mode resolves
+    // to zero sessions, auto-switch to "Last 7 Days": the windowSource write
+    // re-runs this effect, whose fallback branch then fires the explain.
     useEffect(() => {
         if (!username) return;
         let cancelled = false;
 
-        async function loadSessionsAndExplain() {
-            setSessionsLoading(true);
-            // fallback_7d uses a date window, not a session ID — fire explain now,
-            // alongside the sessions probe (which still runs to keep the
-            // "Since Session" toggle state accurate). Its token guards staleness.
-            if (windowSource === 'fallback_7d') fetchExplain(null);
-
-            let resolvedSessionId: string | null = null;
-            let foundSessions = false;
-            try {
-                const sessions = await getRecentSessions(username, 1);
-                if (cancelled) return;
-                foundSessions = sessions.length > 0;
-                setHasSessions(foundSessions);
-                resolvedSessionId = foundSessions ? sessions[0].session_id : null;
-                lastSessionIdRef.current = resolvedSessionId;
-            } catch {
-                if (cancelled) return;
-                setHasSessions(false);
-                lastSessionIdRef.current = null;
-            } finally {
-                if (!cancelled) setSessionsLoading(false);
-            }
-
-            if (windowSource === 'fallback_7d') return; // explain already in flight
-
-            // Auto-switch to fallback_7d when no sessions and currently on session mode.
-            // This prevents a wasted fetch with session mode when there are no sessions.
-            if (!foundSessions) {
-                if (!cancelled) setWindowSource('fallback_7d');
-                // The windowSource change will re-trigger this effect with the correct mode.
+        async function coordinateExplain() {
+            if (windowSource === 'fallback_7d') {
+                // Date-windowed — no session ID needed. Its token guards staleness.
+                fetchExplain(null);
                 return;
             }
-
-            // 'session' mode: explain genuinely needs the resolved session ID.
-            if (!cancelled) fetchExplain(resolvedSessionId);
+            const probe = sessionsProbeRef.current;
+            // Unreachable in practice: the probe effect above runs first in the
+            // same commit for any username. Bail rather than fetch unwindowed.
+            if (!probe || probe.username !== username) return;
+            const resolvedSessionId = await probe.promise;
+            if (cancelled) return;
+            if (resolvedSessionId === null) {
+                setWindowSource('fallback_7d');
+                return;
+            }
+            fetchExplain(resolvedSessionId);
         }
 
-        loadSessionsAndExplain();
+        coordinateExplain();
         return () => { cancelled = true; };
     }, [username, windowSource, fetchExplain, setWindowSource]);
 
