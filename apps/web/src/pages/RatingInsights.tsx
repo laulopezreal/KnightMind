@@ -6,7 +6,7 @@ import { useChessUsername } from '../context/ChessUsernameContext';
 import { getRatingExplain, getRatingHistory, type ExplainResponse, type HighlightGame, type SnapshotHistoryItem } from '../api/ratings';
 import { getRecentSessions } from '../api/sessions';
 import { PageHeader } from '../components/PageHeader';
-import { DataStateError, DataStateLoading, DataStateOffline } from '../components/DataState';
+import { DataStateError, DataStateLoading, DataStateOffline, DataStateSkeleton } from '../components/DataState';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
 import { useLatestRequest } from '../hooks/useLatestRequest';
 
@@ -422,8 +422,7 @@ export default function RatingInsights() {
                 sessions request on slow connections — visibly broken. Skeletons
                 mirror the loaded layout (metadata line, chart, stat cards). */}
             {(loading || sessionsLoading) && !data && !error && !historyError && (
-                <div className="space-y-8" role="status">
-                    <span className="sr-only">Analyzing games...</span>
+                <DataStateSkeleton label="Analyzing games..." className="space-y-8">
                     <div className="h-4 w-80 max-w-full bg-primary/5 rounded-sm animate-pulse" />
                     <div className="h-[284px] bg-primary/5 border border-primary/10 rounded-sm animate-pulse" />
                     <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
@@ -431,7 +430,7 @@ export default function RatingInsights() {
                             <div key={i} className="h-40 bg-primary/5 border border-primary/10 rounded-sm animate-pulse" />
                         ))}
                     </div>
-                </div>
+                </DataStateSkeleton>
             )}
 
             {data && (
