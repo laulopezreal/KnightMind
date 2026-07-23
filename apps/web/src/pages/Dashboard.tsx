@@ -12,7 +12,8 @@ import {
 } from '../api/users';
 import { getRatingExplain, type ExplainResponse } from '../api/ratings';
 import { getRecentSessions, type SessionSummary } from '../api/sessions';
-import { formatMotifName } from '../utils/motif';
+import { formatMotifName, weakestMotif } from '../utils/motif';
+import { TC_LABEL, type TimeControl } from '../utils/ratings';
 import { useChessUsername } from '../context/ChessUsernameContext';
 import { HeroTrainCard } from '../components/HeroTrainCard';
 import { RecentlyTrickyCard } from '../components/RecentlyTrickyCard';
@@ -29,17 +30,15 @@ import { useLatestRequest } from '../hooks/useLatestRequest';
 // The Rating tile mirrors whatever time control the Ratings page is set to, so
 // the two surfaces agree. Read-only here (the Ratings page owns the setter).
 const TIME_CONTROL_KEY = 'knightmind:ratings:time_control';
-function readTimeControl(): 'rapid' | 'blitz' | 'bullet' {
+function readTimeControl(): TimeControl {
     const stored = localStorage.getItem(TIME_CONTROL_KEY);
     return stored === 'blitz' || stored === 'bullet' ? stored : 'rapid';
 }
-const TC_LABEL = { rapid: 'Rapid', blitz: 'Blitz', bullet: 'Bullet' } as const;
 
-/** Reliable weakest motif (enough attempts), or null — mirrors the Insights rule. */
+/** Reliable weakest motif to lead with, or null when all-strong / no reliable data. */
 function weakestReliable(resp: MotifPerformanceResponse | null) {
-    const reliable = (resp?.motifs ?? []).filter((m) => !m.insufficient_data);
-    if (reliable.length === 0 || reliable.every((m) => m.accuracy >= 0.85)) return null;
-    return reliable.reduce((min, m) => (m.accuracy < min.accuracy ? m : min));
+    const { weakest, allStrong } = weakestMotif(resp?.motifs ?? []);
+    return allStrong ? null : weakest;
 }
 
 export default function Dashboard() {
@@ -219,7 +218,7 @@ export default function Dashboard() {
     // going" nudge — that's informative, not clutter.
     const hasRatingTile = (ratingData?.stats.games ?? 0) > 0;
     const hasMotifTile = (motifPerf?.motifs.length ?? 0) > 0;
-    const tileCount = (hasRatingTile ? 1 : 0) + (hasMotifTile ? 1 : 0);
+    const bothTiles = hasRatingTile && hasMotifTile;
     const showStrip = stripLoading || hasRatingTile || hasMotifTile;
 
     return (
@@ -257,7 +256,7 @@ export default function Dashboard() {
                 the loop's "is it working?" and "what next?". Loads independently of
                 the core dashboard; a failed slice simply omits its tile. */}
             {showStrip && (
-                <div className={`grid grid-cols-1 gap-6 ${stripLoading || tileCount === 2 ? 'md:grid-cols-2' : ''}`}>
+                <div className={`grid grid-cols-1 gap-6 ${stripLoading || bothTiles ? 'md:grid-cols-2' : ''}`}>
                     {stripLoading ? (
                         <>
                             <div className="h-40 bg-primary/5 border border-primary/10 rounded-sm animate-pulse" aria-hidden="true" />

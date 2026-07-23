@@ -2,6 +2,7 @@ import { Link } from 'react-router-dom';
 import { StatCard } from './StatCard';
 import { ConfidenceBadge } from './ConfidenceBadge';
 import { Sparkline } from './Sparkline';
+import { formatSigned } from '../utils/ratings';
 import type { ExplainResponse } from '../api/ratings';
 
 interface RatingDeltaCardProps {
@@ -27,7 +28,7 @@ export function RatingDeltaCard({ data, timeControlLabel }: RatingDeltaCardProps
   const points = (data.chart_series ?? data.trajectory ?? []).map((p) => p.rating);
   const trend: 'up' | 'down' = hasDelta && net < 0 ? 'down' : 'up';
 
-  const value = hasDelta ? (net > 0 ? `+${net}` : `${net}`) : '—';
+  const value = hasDelta ? formatSigned(net) : '—';
   const sub = hasDelta && data.rating.start != null && data.rating.end != null
     ? `${data.rating.start} → ${data.rating.end}`
     : games > 0

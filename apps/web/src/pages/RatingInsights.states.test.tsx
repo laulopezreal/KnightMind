@@ -128,10 +128,12 @@ describe('RatingInsights fetch concurrency & error isolation', () => {
         vi.unstubAllGlobals();
     });
 
-    it('surfaces a history failure even when explain later succeeds', async () => {
+    it('does not surface a history failure over a working games view', async () => {
+        // A window WITH games charts from the explain payload (chart_series /
+        // trajectory), never from history — so a history blip must NOT paint an
+        // error banner over a fully-working view. (A history failure IS surfaced
+        // when it matters — no games — see the EXPLAIN_NO_GAMES retry test below.)
         mockGetRatingHistory.mockRejectedValue(new Error('history down'));
-        // Delay the probe so the history rejection lands BEFORE explain begins:
-        // explain's own error-reset must not swallow the history error.
         mockGetRecentSessions.mockImplementation(
             () => new Promise(res => setTimeout(() => res([{ session_id: 's1' }]), 10))
         );
@@ -140,7 +142,7 @@ describe('RatingInsights fetch concurrency & error isolation', () => {
         render(<RatingInsights />);
 
         await waitFor(() => expect(screen.getByText('15W - 3D - 7L')).toBeInTheDocument());
-        expect(screen.getByRole('alert')).toHaveTextContent('history down');
+        expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     });
 
     it('does not refetch history on a window toggle (explain only)', async () => {

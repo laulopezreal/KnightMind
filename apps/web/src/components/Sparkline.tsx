@@ -36,6 +36,7 @@ export function Sparkline({ points, trend = 'up', width = 96, height = 28, ariaL
   });
 
   const colorClass = trend === 'down' ? 'text-negative' : 'text-positive';
+  const [lastX, lastY] = coords[coords.length - 1].split(',');
 
   return (
     <svg
@@ -57,12 +58,7 @@ export function Sparkline({ points, trend = 'up', width = 96, height = 28, ariaL
         strokeLinecap="round"
       />
       {/* Emphasise the latest point so the line has a clear "now". */}
-      <circle
-        cx={coords[coords.length - 1].split(',')[0]}
-        cy={coords[coords.length - 1].split(',')[1]}
-        r={2}
-        fill="currentColor"
-      />
+      <circle cx={lastX} cy={lastY} r={2} fill="currentColor" />
     </svg>
   );
 }
