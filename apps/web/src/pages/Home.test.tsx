@@ -95,7 +95,7 @@ describe('Home', () => {
       expect(saveBtn).toHaveClass('min-h-11');
     });
 
-    it('should render "Sync new games" as a bordered button (not an underline text link)', async () => {
+    it('renders "Sync New Games" as the primary CTA even when puzzles are due', async () => {
       mockUsername = 'testplayer';
       const api = await import('../api');
       (api.getUserStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
@@ -108,10 +108,15 @@ describe('Home', () => {
 
       render(<Home />);
 
+      // Home is the data door: sync is always its primary action. Training and
+      // due-puzzle state belong to the Dashboard, so no "Start Training" CTA
+      // and no due-count copy — just a quiet onward link.
       const syncBtn = await screen.findByRole('button', { name: /sync new games/i });
-      expect(syncBtn).toHaveClass('border');
-      expect(syncBtn).not.toHaveClass('underline');
-      expect(syncBtn).toHaveClass('min-h-11');
+      expect(syncBtn).toHaveClass('bg-primary');
+      expect(screen.queryByText('Start Training')).not.toBeInTheDocument();
+      expect(screen.queryByText(/puzzles are waiting/i)).not.toBeInTheDocument();
+      expect(screen.queryByText(/puzzles due/i)).not.toBeInTheDocument();
+      expect(screen.getByRole('link', { name: /go to your dashboard/i })).toHaveAttribute('href', '/dashboard');
     });
   });
 

@@ -285,14 +285,15 @@ export default function Home() {
         <h1 className="text-6xl md:text-8xl font-serif text-primary tracking-tight">
           KnightMind
         </h1>
+        {/* Door copy only: Home is the data door (connect, import, sync), so it
+            never counts due puzzles — that live training state is the
+            Dashboard's job, and duplicating it here made two welcome pages. */}
         <p className="text-xl md:text-2xl font-light text-primary/70 max-w-2xl leading-relaxed">
           {isNewUser
             ? 'Your personal chess intelligence platform. Connect your Chess.com account to begin.'
-            : hasPuzzles && userStatus!.due_count > 0
-              ? `${userStatus!.due_count} puzzles are waiting for you, ${username}.`
-              : hasData
-                ? `Welcome back, ${username}. Pick up where you left off.`
-                : `Connected as ${username}. Import your games to generate personalized puzzles.`
+            : hasData
+              ? `Welcome back, ${username}. Keep your games in sync, then pick up your training.`
+              : `Connected as ${username}. Import your games to generate personalized puzzles.`
           }
         </p>
       </section>
@@ -359,55 +360,35 @@ export default function Home() {
           </div>
         )}
 
-        {/* Has username, idle → context-dependent CTA */}
+        {/* Has username, idle → the door's one job: import/sync. Training and
+            due-puzzle state live on the Dashboard/Train pages; Home only points
+            onward instead of duplicating their CTA. */}
         {!isNewUser && onboardingPhase === 'idle' && (
           <div className="space-y-4 max-w-lg">
-            {hasPuzzles && userStatus!.due_count > 0 ? (
-              /* Due puzzles exist → training is primary, sync is secondary */
-              <div className="space-y-4">
-                <Link
-                  to="/puzzles"
-                  className="inline-block px-8 py-4 bg-primary text-bg-primary rounded-sm text-lg font-serif km-interactive km-focus-visible transition-colors"
-                >
-                  Start Training
-                </Link>
-                <div className="flex items-center gap-4 flex-wrap">
-                  <button
-                    type="button"
-                    onClick={handleImport}
-                    disabled={loading}
-                    className={`min-h-11 flex items-center px-4 py-2 border border-primary/20 text-primary/70 rounded-sm font-sans text-sm transition-all km-focus-visible ${
-                      loading ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive hover:text-primary hover:border-primary/40'
-                    }`}
-                  >
-                    {loading ? 'Syncing...' : 'Sync new games'}
-                  </button>
-                  {importStatus.lastImportedAt && (
-                    <span className="text-sm font-sans text-primary/70">
-                      Last synced {formatRelativeTime(importStatus.lastImportedAt)}
-                    </span>
-                  )}
-                </div>
-              </div>
-            ) : (
-              /* No due puzzles or no data → import/sync is primary */
-              <div className="flex items-center gap-4 flex-wrap">
-                <button
-                  type="button"
-                  onClick={handleImport}
-                  disabled={loading}
-                  className={`px-8 py-4 bg-primary text-bg-primary rounded-sm text-lg font-serif transition-colors km-focus-visible ${
-                    loading ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'
-                  }`}
-                >
-                  {loading ? 'Syncing...' : hasData ? 'Sync New Games' : 'Import Games'}
-                </button>
-                {importStatus.lastImportedAt && (
-                  <span className="text-sm font-sans text-primary/70">
-                    Last synced {formatRelativeTime(importStatus.lastImportedAt)}
-                  </span>
-                )}
-              </div>
+            <div className="flex items-center gap-4 flex-wrap">
+              <button
+                type="button"
+                onClick={handleImport}
+                disabled={loading}
+                className={`px-8 py-4 bg-primary text-bg-primary rounded-sm text-lg font-serif transition-colors km-focus-visible ${
+                  loading ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'
+                }`}
+              >
+                {loading ? 'Syncing...' : hasData ? 'Sync New Games' : 'Import Games'}
+              </button>
+              {importStatus.lastImportedAt && (
+                <span className="text-sm font-sans text-primary/70">
+                  Last synced {formatRelativeTime(importStatus.lastImportedAt)}
+                </span>
+              )}
+            </div>
+            {hasData && (
+              <Link
+                to="/dashboard"
+                className="inline-block text-sm font-sans text-primary km-interactive km-focus-visible km-inline-link underline decoration-primary/30 underline-offset-4 transition-colors"
+              >
+                Go to your dashboard →
+              </Link>
             )}
             {actionStatus && (
               <div
@@ -472,12 +453,8 @@ export default function Home() {
             <p className="text-3xl font-mono text-primary">{userStatus.puzzles_count}</p>
             <p className="text-sm font-sans text-primary/70">puzzles generated</p>
           </div>
-          {userStatus.due_count > 0 && (
-            <div>
-              <p className="text-3xl font-mono text-primary">{userStatus.due_count}</p>
-              <p className="text-sm font-sans text-primary/70">puzzles due</p>
-            </div>
-          )}
+          {/* No due-count tile: that's live training state, which belongs to the
+              Dashboard — Home's stats describe the imported data, not the queue. */}
         </section>
       )}
 
@@ -494,11 +471,11 @@ export default function Home() {
             <h3 className="text-xl font-serif text-primary mb-2 group-hover:translate-x-1 transition-transform duration-300">
               Daily Puzzles
             </h3>
+            {/* Static door copy — no live due counts here; the Dashboard owns
+                the training queue. */}
             <p className="text-sm font-sans text-primary/70 mb-4">
-              {hasPuzzles && userStatus
-                ? userStatus.due_count > 0
-                  ? `${userStatus.due_count} puzzles ready for review`
-                  : 'All caught up — practice more anytime'
+              {hasPuzzles
+                ? 'Solve puzzles generated from your own games'
                 : 'Import games to generate puzzles'}
             </p>
             <span className="text-primary/70 group-hover:text-primary/70 transition-colors text-sm font-sans">
