@@ -343,7 +343,7 @@ export default function Library() {
                 ))}
 
                 {!isLoading && puzzles.length === 0 && !error && (
-                    <div className="bg-primary/5 border border-primary/10 rounded-sm p-8 text-center">
+                    <div className="bg-primary/5 border border-primary/10 rounded-sm p-8 text-center space-y-4">
                         <p className="text-primary/70 font-sans">
                             {/* Key off the whole corpus, not individual filters:
                                 total > 0 means filters excluded everything; total 0
@@ -353,6 +353,18 @@ export default function Library() {
                                 ? 'No puzzles match your filters.'
                                 : "You don't have any puzzles yet. Generate some from your games to start building your library."}
                         </p>
+                        {/* A genuinely-empty library was a dead end (copy told the
+                            user to generate, with nowhere to do it). Point at the
+                            Train page, which owns generation and itself routes a
+                            games-less user onward to import. */}
+                        {(!corpusStats || corpusStats.total === 0) && (
+                            <Link
+                                to="/puzzles"
+                                className="inline-block px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-colors km-interactive km-focus-visible"
+                            >
+                                Generate Puzzles
+                            </Link>
+                        )}
                     </div>
                 )}
             </section>
