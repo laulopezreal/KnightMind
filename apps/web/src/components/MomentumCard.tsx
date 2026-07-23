@@ -52,11 +52,11 @@ export function MomentumCard({ recentForm }: MomentumCardProps) {
                 aria-hidden="true"
                 className={`w-6 h-6 rounded-sm transition-colors ${
                   result === 'pass'
-                    ? 'bg-positive-soft'
-                    // Fail cells get a faint inset border so pass vs fail reads
-                    // as solid-vs-outlined — a shape cue that doesn't rely on the
-                    // low-opacity green/red hue difference alone.
-                    : 'bg-negative-soft border border-primary/15'
+                    ? 'bg-positive-fill'
+                    // Fail cells also carry a faint inset border, so pass vs fail
+                    // reads as solid-vs-outlined — a shape cue that survives even
+                    // if the green/red hue is imperceptible (colour-blindness).
+                    : 'bg-negative-fill border border-primary/20'
                 }`}
                 title={result === 'pass' ? 'Correct' : 'Incorrect'}
               />
