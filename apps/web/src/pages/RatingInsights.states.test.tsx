@@ -42,6 +42,17 @@ const EXPLAIN_WITH_GAMES = {
     window: { start: '2025-01-01T00:00:00Z', end: '2025-01-15T00:00:00Z' },
 };
 
+// Like EXPLAIN_WITH_GAMES but with a fused game series (>=2 game points), so the
+// chart source is 'games' (self-sufficient) rather than 'snapshots'. Endpoints
+// match rating.start/end so the anchor-divergence warning stays quiet.
+const EXPLAIN_WITH_CHART = {
+    ...EXPLAIN_WITH_GAMES,
+    chart_series: [
+        { at: '2025-01-01T00:00:00Z', rating: 1200, source: 'game' },
+        { at: '2025-01-15T00:00:00Z', rating: 1250, source: 'game' },
+    ],
+};
+
 function setOnline(value: boolean) {
     Object.defineProperty(navigator, 'onLine', { value, configurable: true });
 }
@@ -128,10 +139,13 @@ describe('RatingInsights fetch concurrency & error isolation', () => {
         vi.unstubAllGlobals();
     });
 
-    it('surfaces a history failure even when explain later succeeds', async () => {
+    it('surfaces a history failure when the chart draws from history (snapshot source)', async () => {
+        // EXPLAIN_WITH_GAMES has no chart_series/trajectory, so the chart falls
+        // back to the snapshot source — it NEEDS history. A history failure there
+        // genuinely degrades the view (blank chart), so the banner must show even
+        // though games > 0. Delay the probe so the history rejection lands before
+        // explain begins: explain's error-reset must not swallow the history error.
         mockGetRatingHistory.mockRejectedValue(new Error('history down'));
-        // Delay the probe so the history rejection lands BEFORE explain begins:
-        // explain's own error-reset must not swallow the history error.
         mockGetRecentSessions.mockImplementation(
             () => new Promise(res => setTimeout(() => res([{ session_id: 's1' }]), 10))
         );
@@ -141,6 +155,19 @@ describe('RatingInsights fetch concurrency & error isolation', () => {
 
         await waitFor(() => expect(screen.getByText('15W - 3D - 7L')).toBeInTheDocument());
         expect(screen.getByRole('alert')).toHaveTextContent('history down');
+    });
+
+    it('does NOT surface a history failure when the chart is self-sufficient (games source)', async () => {
+        // A window whose fused series has >=2 game points charts from the explain
+        // payload, not history — a history blip is irrelevant there and must not
+        // paint an error banner over a fully-working view.
+        mockGetRatingHistory.mockRejectedValue(new Error('history down'));
+        mockGetRatingExplain.mockResolvedValue(EXPLAIN_WITH_CHART);
+
+        render(<RatingInsights />);
+
+        await waitFor(() => expect(screen.getByText('15W - 3D - 7L')).toBeInTheDocument());
+        expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     });
 
     it('does not refetch history on a window toggle (explain only)', async () => {

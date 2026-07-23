@@ -8,6 +8,7 @@ import { getRecentSessions } from '../api/sessions';
 import { PageHeader } from '../components/PageHeader';
 import { StatCard } from '../components/StatCard';
 import { ConfidenceBadge } from '../components/ConfidenceBadge';
+import { TC_LABEL, formatSigned } from '../utils/ratings';
 import { DataStateError, DataStateLoading, DataStateOffline, DataStateSkeleton } from '../components/DataState';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
 import { useLatestRequest } from '../hooks/useLatestRequest';
@@ -309,7 +310,7 @@ export default function RatingInsights() {
     // known opponent rating). Fall back to the game count only for older payloads.
     const confidence = data?.confidence
         ?? (N < LOW_CONFIDENCE_THRESHOLD ? 'low' : N < HIGH_CONFIDENCE_THRESHOLD ? 'medium' : 'high');
-    const timeControlLabel = timeControl === 'rapid' ? 'Rapid' : timeControl === 'blitz' ? 'Blitz' : 'Bullet';
+    const timeControlLabel = TC_LABEL[timeControl];
     const windowLabel = `${N} rated ${timeControlLabel} game${N === 1 ? '' : 's'} in window`;
 
     const formatDate = (iso: string) => {
@@ -420,9 +421,16 @@ export default function RatingInsights() {
                 </div>
             </section>
 
-            {/* Either fetch failing gets a banner; explain's message wins when both
-                failed. Retry refetches both, so every failure combination recovers. */}
-            {(error || historyError) && (
+            {/* Explain failing always gets a banner. A history failure only
+                matters when the chart actually draws from history — i.e. the
+                fused series is too short to chart games directly, so
+                `chart.source === 'snapshots'`. When the chart is self-sufficient
+                (games/mixed source) a history blip is irrelevant and must not
+                paint an error over a fully-working view. Note this is NOT the
+                same as `hasGames`: a low-game window can still have < 2 game
+                points and fall back to the snapshot chart. Retry refetches both,
+                so every surfaced failure recovers. */}
+            {(error || (historyError && chart.source === 'snapshots')) && (
                 !online ? (
                     // A failed load while the browser is offline is a connectivity
                     // problem, not a server error — say so instead of a bare message.
@@ -553,7 +561,7 @@ export default function RatingInsights() {
                                 <StatCard
                                     label="Net Change"
                                     value={hasWindowRating && data.rating.net_change !== null
-                                        ? (data.rating.net_change > 0 ? `+${data.rating.net_change}` : `${data.rating.net_change}`)
+                                        ? formatSigned(data.rating.net_change)
                                         : "—"}
                                     sub={
                                         hasWindowRating && data.rating.start !== null && data.rating.end !== null
@@ -574,7 +582,7 @@ export default function RatingInsights() {
                                 <StatCard
                                     label="Performance vs Expectation"
                                     value={hasGames && data.stats.actual_minus_expected !== null
-                                        ? (data.stats.actual_minus_expected > 0 ? `+${(data.stats.actual_minus_expected || 0).toFixed(1)}` : `${(data.stats.actual_minus_expected || 0).toFixed(1)}`)
+                                        ? formatSigned(data.stats.actual_minus_expected, 1)
                                         : "—"}
                                     sub="Actual minus expected score"
                                     helper="Positive means you outperformed expectations. Negative means you underperformed."
@@ -597,7 +605,7 @@ export default function RatingInsights() {
                                         {data.drivers.map((driver, i) => {
                                             const dotColor = driver.direction === 'up' ? 'bg-emerald-500' : driver.direction === 'down' ? 'bg-red-500' : 'bg-primary/40';
                                             const severityLabel = driver.severity === 'major' ? 'Major' : driver.severity === 'moderate' ? 'Moderate' : 'Minor';
-                                            const severityColor = driver.severity === 'major' ? 'bg-primary/10 text-primary/70' : driver.severity === 'moderate' ? 'bg-primary/5 text-primary/70' : 'bg-primary/5 text-primary/70';
+                                            const severityColor = driver.severity === 'major' ? 'bg-primary/10 text-primary/70' : 'bg-primary/5 text-primary/70';
                                             return (
                                                 <li key={i} className="flex items-start gap-3 text-lg font-sans text-primary/80">
                                                     <span className={`mt-2 w-2 h-2 rounded-full shrink-0 ${dotColor}`} />

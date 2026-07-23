@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom';
 import { StatCard } from './StatCard';
-import { formatMotifName } from '../utils/motif';
+import { formatMotifName, weakestMotif } from '../utils/motif';
 import type { MotifPerformance } from '../api/users';
 
 interface WeakestMotifCardProps {
@@ -21,11 +21,7 @@ const RANK_LABEL: Record<MotifPerformance['rank'], string> = {
  * "weakness".
  */
 export function WeakestMotifCard({ motifs }: WeakestMotifCardProps) {
-  const reliable = motifs.filter((m) => !m.insufficient_data);
-  const weakest = reliable.length
-    ? reliable.reduce((min, m) => (m.accuracy < min.accuracy ? m : min))
-    : null;
-  const allStrong = reliable.length > 0 && reliable.every((m) => m.accuracy >= 0.85);
+  const { weakest, allStrong } = weakestMotif(motifs);
 
   const insightsLink = (
     <Link
