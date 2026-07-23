@@ -421,12 +421,16 @@ export default function RatingInsights() {
                 </div>
             </section>
 
-            {/* Explain failing always gets a banner. A history failure only matters
-                when there are no games — the games view charts from the explain
-                payload (chart_series/trajectory), not history, so a history blip
-                there must not paint an error over a fully-working view. Retry
-                refetches both, so every surfaced failure recovers. */}
-            {(error || (historyError && !hasGames)) && (
+            {/* Explain failing always gets a banner. A history failure only
+                matters when the chart actually draws from history — i.e. the
+                fused series is too short to chart games directly, so
+                `chart.source === 'snapshots'`. When the chart is self-sufficient
+                (games/mixed source) a history blip is irrelevant and must not
+                paint an error over a fully-working view. Note this is NOT the
+                same as `hasGames`: a low-game window can still have < 2 game
+                points and fall back to the snapshot chart. Retry refetches both,
+                so every surfaced failure recovers. */}
+            {(error || (historyError && chart.source === 'snapshots')) && (
                 !online ? (
                     // A failed load while the browser is offline is a connectivity
                     // problem, not a server error — say so instead of a bare message.
