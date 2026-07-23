@@ -2117,8 +2117,11 @@ class RatingInfo(BaseModel):
     end: int | None
     net_change: int | None
     # True when start/end were estimated from the player's own per-game Elo
-    # headers (post-game ratings) rather than recorded snapshots.
+    # headers (post-game ratings) rather than recorded snapshots. Kept for
+    # older clients; new clients should read the per-anchor flags below.
     is_estimated: bool = False
+    start_is_estimated: bool = False
+    end_is_estimated: bool = False
     reference_rating: int
     reference_is_approx: bool
 
@@ -2126,6 +2129,12 @@ class RatingInfo(BaseModel):
 class TrajectoryPoint(BaseModel):
     played_at: datetime
     rating: int
+
+
+class ChartPoint(BaseModel):
+    at: datetime
+    rating: int
+    source: Literal["game", "snapshot"]
 
 
 class DriverStats(BaseModel):
@@ -2159,8 +2168,14 @@ class ExplainResponse(BaseModel):
     highlights: Highlights
     # Player's own rating over the window, from per-game PGN Elo headers
     # (chronological). Lets the frontend chart real rating movement without
-    # manual snapshots.
+    # manual snapshots. Kept for older clients; chart_series supersedes it.
     trajectory: list[TrajectoryPoint] = []
+    # Chart-ready fusion of per-game Elo points and the snapshot anchors that
+    # won the start/end contests, in time order. Its endpoints always match
+    # rating.start/rating.end, so clients must render this instead of picking
+    # a source themselves. Empty when the window has no game points (clients
+    # fall back to recorded snapshot history).
+    chart_series: list[ChartPoint] = []
     # Canonical uncertainty signal (rated games in window). Drivers are
     # descriptive, not causal; below MIN_GAMES_FOR_RATING_DRIVERS no directional
     # driver is emitted and insufficient_data is True.
@@ -2530,18 +2545,33 @@ async def explain_rating_changes(
         if g["player_rating"] is not None
     ]
 
-    # Start: prefer pre-window snapshot, fall back to earliest in-window
-    # snapshot, then to the first game's own Elo (estimated: it's the rating
-    # *after* that game, so the first game's delta is not captured).
-    is_estimated = False
-    start_rating_val = (
-        pre_window_snapshot.rating
-        if pre_window_snapshot
-        else earliest_snapshot.rating if earliest_snapshot else None
-    )
-    if start_rating_val is None and trajectory:
+    def _snapshot_at(snapshot: RatingSnapshot) -> datetime:
+        at = snapshot.recorded_at
+        return at.replace(tzinfo=timezone.utc) if at.tzinfo is None else at
+
+    # Start: prefer the pre-window snapshot (always the earliest evidence),
+    # then the earliest in-window snapshot — but only if no game finished
+    # before it (a snapshot recorded after games began is not the window's
+    # starting rating) — then the first game's own Elo (estimated: it's the
+    # rating *after* that game, so the first game's delta is not captured).
+    start_is_estimated = False
+    start_anchor_snapshot = None
+    if pre_window_snapshot is not None:
+        start_anchor_snapshot = pre_window_snapshot
+    elif earliest_snapshot is not None and (
+        not trajectory or _snapshot_at(earliest_snapshot) <= trajectory[0].played_at
+    ):
+        start_anchor_snapshot = earliest_snapshot
+
+    if start_anchor_snapshot is not None:
+        start_rating_val = start_anchor_snapshot.rating
+    elif trajectory:
         start_rating_val = trajectory[0].rating
-        is_estimated = True
+        start_is_estimated = True
+    else:
+        start_rating_val = (
+            earliest_snapshot.rating if earliest_snapshot is not None else None
+        )
 
     # End: latest snapshot within the window period
     stmt = (
@@ -2554,27 +2584,76 @@ async def explain_rating_changes(
         .order_by(RatingSnapshot.recorded_at.desc())
     )
     latest_in_window = db.scalars(stmt).first()
-    latest_snapshot_at = None
-    if latest_in_window is not None:
-        latest_snapshot_at = latest_in_window.recorded_at
-        if latest_snapshot_at.tzinfo is None:
-            latest_snapshot_at = latest_snapshot_at.replace(tzinfo=timezone.utc)
 
     # Use whichever evidence is fresher: an in-window snapshot or the last
     # game's own Elo. A snapshot recorded before the last game is stale.
+    end_is_estimated = False
+    end_anchor_snapshot = None
     if latest_in_window is not None and (
-        not trajectory or latest_snapshot_at >= trajectory[-1].played_at
+        not trajectory or _snapshot_at(latest_in_window) >= trajectory[-1].played_at
     ):
         end_rating_val = latest_in_window.rating
+        end_anchor_snapshot = latest_in_window
     elif trajectory:
         end_rating_val = trajectory[-1].rating
-        is_estimated = True
+        end_is_estimated = True
     else:
         end_rating_val = None
 
     net_change = None
     if start_rating_val is not None and end_rating_val is not None:
         net_change = end_rating_val - start_rating_val
+
+    # Fused, chart-ready series: game points plus the snapshot anchors chosen
+    # above, time-ordered. Built from the same anchor decisions as the card so
+    # the line's endpoints always equal rating.start/rating.end. Only emitted
+    # when the window has game points — with no games there is nothing to
+    # fuse, and clients chart their recorded snapshot history instead.
+    chart_series: list[ChartPoint] = []
+    if trajectory:
+        if start_anchor_snapshot is not None:
+            chart_series.append(
+                ChartPoint(
+                    at=_snapshot_at(start_anchor_snapshot),
+                    rating=start_anchor_snapshot.rating,
+                    source="snapshot",
+                )
+            )
+        chart_series.extend(
+            ChartPoint(at=p.played_at, rating=p.rating, source="game")
+            for p in trajectory
+        )
+        # Append even when the same snapshot also won the start contest (a
+        # timestamp tie with every game): dropping it would leave the last
+        # game's Elo as the series endpoint while the card shows the snapshot
+        # rating. A duplicate point at the same timestamp is harmless.
+        if end_anchor_snapshot is not None:
+            chart_series.append(
+                ChartPoint(
+                    at=_snapshot_at(end_anchor_snapshot),
+                    rating=end_anchor_snapshot.rating,
+                    source="snapshot",
+                )
+            )
+        # Stable sort: on equal timestamps the start anchor stays first and
+        # the end anchor stays last, preserving endpoint agreement.
+        chart_series.sort(key=lambda p: p.at)
+        # Self-check the contract clients rely on instead of trusting
+        # construction: a divergence here means a card/chart mismatch shipped.
+        if chart_series and (
+            chart_series[0].rating != start_rating_val
+            or chart_series[-1].rating != end_rating_val
+        ):
+            logger.warning(
+                "chart_series endpoints diverge from rating anchors: "
+                "series %s..%s vs start=%s end=%s (username=%s tc=%s)",
+                chart_series[0].rating,
+                chart_series[-1].rating,
+                start_rating_val,
+                end_rating_val,
+                username,
+                time_control,
+            )
 
     return ExplainResponse(
         time_control=time_control,
@@ -2583,7 +2662,9 @@ async def explain_rating_changes(
             start=start_rating_val,
             end=end_rating_val,
             net_change=net_change,
-            is_estimated=is_estimated,
+            is_estimated=start_is_estimated or end_is_estimated,
+            start_is_estimated=start_is_estimated,
+            end_is_estimated=end_is_estimated,
             reference_rating=reference_rating,
             reference_is_approx=reference_is_approx,
         ),
@@ -2604,6 +2685,7 @@ async def explain_rating_changes(
             best_surprises=best_surprises, worst_surprises=worst_surprises
         ),
         trajectory=trajectory,
+        chart_series=chart_series,
         confidence=confidence,
         insufficient_data=insufficient_data,
     )

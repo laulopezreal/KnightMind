@@ -56,4 +56,23 @@ describe('StreakCard', () => {
     const section = screen.getByRole('region', { name: /consistency/i });
     expect(section).toBeInTheDocument();
   });
+
+  it('renders the rhythm strip as a single labelled image', () => {
+    render(<StreakCard streakDays={3} lastSessionAt={null} />);
+
+    // One img with an aggregate label instead of seven separately-announced cells.
+    expect(screen.getByRole('img', { name: /current streak: 3 days/i })).toBeInTheDocument();
+  });
+
+  it('labels the rhythm strip as inactive when there is no streak', () => {
+    render(<StreakCard streakDays={0} lastSessionAt={null} />);
+
+    expect(screen.getByRole('img', { name: /no active streak/i })).toBeInTheDocument();
+  });
+
+  it('notes truncation when the streak exceeds the strip width', () => {
+    render(<StreakCard streakDays={12} lastSessionAt={null} />);
+
+    expect(screen.getByRole('img', { name: /current streak: 12 days \(showing the last 7\)/i })).toBeInTheDocument();
+  });
 });

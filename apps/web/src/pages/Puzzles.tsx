@@ -128,7 +128,7 @@ export default function Puzzles() {
     const currentPuzzle = puzzles[currentIndex];
     // The clue/board work off the on-demand-fetched solution, never a pre-sent
     // one — so the hint machinery only has the answer once the user asks for it.
-    const clue = useClue(revealedMove ?? '', currentPuzzle?.fen ?? '');
+    const clue = useClue(revealedMove ?? '', currentPuzzle?.fen ?? '', { maxStage: 3 });
     const clueReset = clue.reset;
     const puzzlesAvailable = puzzles.length > 0;
     const isFinalPuzzle = puzzlesAvailable && currentIndex >= puzzles.length - 1;
@@ -226,7 +226,7 @@ export default function Puzzles() {
             ? 'No new games to generate'
             : 'Generate New';
     const sessionDetailsA11yCopy = getSessionDetailsA11yCopy(showSessionDetails, screenReaderModeLabel);
-    const puzzleActionA11yCopy = getPuzzleActionA11yCopy(activeSessionId, hintsUsed);
+    const puzzleActionA11yCopy = getPuzzleActionA11yCopy(clue.clueStage);
 
     const handleGeneratePuzzles = async () => {
         if (!username.trim()) {
@@ -436,15 +436,29 @@ export default function Puzzles() {
         }
     };
 
-    const handleClue = async () => {
-        if (clue.clueStage === 1) {
-            clue.advance();
+    // One graduated hint ladder, identical with or without an active session:
+    //   rung 1 → name/highlight the piece, rung 2 → highlight the destination,
+    //   rung 3 → reveal the full solution line.
+    // In a session we also record each rung server-side (an honest hint tally),
+    // but the visual reveal never depends on that write succeeding.
+    const handleHint = async () => {
+        if (!currentPuzzle || clue.isExhausted) return;
+        const stage = clue.clueStage;
+        // Rung 1 needs the solution in hand so the piece name / squares resolve.
+        // Bail if the fetch fails — advancing with nothing to show would be a lie.
+        if (stage === 0) {
+            const move = await ensureRevealedMove();
+            if (!move) return;
+        }
+        // Force past advance()'s "no move known" guard: on the first press the
+        // move was only just fetched, so this render's closure hasn't seen it.
+        clue.advance(true);
+        // Rung 3 hands over the whole line — same destination as the Reveal button.
+        if (stage === 2) {
             await handleRevealSolution();
-        } else {
-            // Fetch the solution before advancing so the piece-hint highlight has
-            // something to derive its square from.
-            await ensureRevealedMove();
-            clue.advance();
+        }
+        if (activeSessionId) {
+            await handleUseHint();
         }
     };
 
@@ -1054,6 +1068,11 @@ export default function Puzzles() {
                                     {clue.pieceHint || 'Move the correct piece'}
                                 </p>
                             )}
+                            {status === 'solving' && clue.clueStage === 2 && (
+                                <p className="text-primary/80 font-sans text-sm">
+                                    {clue.moveHint || clue.pieceHint || 'Move the correct piece'}
+                                </p>
+                            )}
                             {status === 'correct' && (
                                 <div className="text-center">
                                     <p className="text-positive font-serif text-2xl animate-teedin">Correct! Excellent.</p>
@@ -1120,13 +1139,11 @@ export default function Puzzles() {
                                     </button>
                                     <button
                                         type="button"
-                                        onClick={activeSessionId ? handleUseHint : handleClue}
-                                        disabled={activeSessionId
-                                            ? hintsUsed >= 3
-                                            : (!currentPuzzle || (clue.clueStage === 2))}
+                                        onClick={handleHint}
+                                        disabled={!currentPuzzle || clue.isExhausted}
                                         aria-label={puzzleActionA11yCopy.hintLabel}
                                         className="px-6 py-4 border border-primary/20 text-primary rounded-sm font-serif text-lg transition-all km-interactive km-focus-visible disabled:opacity-50 disabled:cursor-default">
-                                        {activeSessionId ? `Hint (${hintsUsed}/3)` : 'Clue'}
+                                        {`Hint (${clue.clueStage}/3)`}
                                     </button>
                                     <button
                                         type="button"

@@ -27,8 +27,11 @@ export interface RatingInfo {
     end: number | null;
     net_change: number | null;
     // True when start/end were estimated from per-game Elo headers rather
-    // than recorded snapshots.
+    // than recorded snapshots. Older payloads only send this conflated flag;
+    // newer ones also send the per-anchor flags below.
     is_estimated?: boolean;
+    start_is_estimated?: boolean;
+    end_is_estimated?: boolean;
     reference_rating: number;
     reference_is_approx: boolean;
 }
@@ -36,6 +39,12 @@ export interface RatingInfo {
 export interface TrajectoryPoint {
     played_at: string;
     rating: number;
+}
+
+export interface ChartPoint {
+    at: string;
+    rating: number;
+    source: 'game' | 'snapshot';
 }
 
 export interface DriverStats {
@@ -66,7 +75,12 @@ export interface ExplainResponse {
     drivers: Driver[];
     highlights: Highlights;
     // Player's own rating over the window, from per-game PGN Elo headers.
+    // Superseded by chart_series; kept for older payloads.
     trajectory?: TrajectoryPoint[];
+    // Server-fused, chart-ready series (game Elo points + winning snapshot
+    // anchors, time-ordered). Its endpoints match rating.start/rating.end.
+    // Empty/absent when the window has no game points.
+    chart_series?: ChartPoint[];
     // Canonical server-side uncertainty signal (from rated-game count).
     confidence: 'low' | 'medium' | 'high';
     insufficient_data: boolean;

@@ -22,7 +22,7 @@ export function RecentSessionsCard({
 
     return (
         <section
-            className="bg-primary/5 border border-primary/5 rounded-sm p-6"
+            className="bg-primary/5 border border-primary/10 rounded-sm p-6"
             aria-labelledby="recent-sessions-heading"
         >
             {/* Header with optional collapse button */}
