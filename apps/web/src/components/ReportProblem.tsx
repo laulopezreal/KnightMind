@@ -1,6 +1,14 @@
+import { useLocation } from 'react-router-dom';
+
 const ISSUES_URL = 'https://github.com/laulopezreal/KnightMind/issues';
 
 export function ReportProblem() {
+    const { pathname } = useLocation();
+    // Hide on mobile while on the puzzle training route so the fixed button
+    // cannot intercept board squares or action controls at the bottom of the
+    // viewport. Still visible on desktop (md+) where layout headroom is ample.
+    const hiddenOnMobile = pathname === '/puzzles';
+
     return (
         // Complementary landmark so this persistent utility link isn't page content
         // sitting outside any landmark (axe "region"). The link itself is fixed, so
@@ -10,7 +18,7 @@ export function ReportProblem() {
             href={ISSUES_URL}
             target="_blank"
             rel="noopener noreferrer"
-            className="fixed bottom-6 right-6 z-40 h-11 w-11 flex items-center justify-center rounded-full transition-opacity duration-500 opacity-40 hover:opacity-100 km-focus-visible"
+            className={`fixed bottom-6 right-6 z-40 h-11 w-11 items-center justify-center rounded-full transition-opacity duration-500 opacity-40 hover:opacity-100 km-focus-visible ${hiddenOnMobile ? 'hidden md:flex' : 'flex'}`}
             aria-label="Report a problem"
             title="Report a problem"
         >
