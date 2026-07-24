@@ -40,6 +40,37 @@ describe('Sidebar', () => {
     expect(screen.getByText('Ratings')).toBeInTheDocument();
   });
 
+  it('groups the nav into Training / Progress / Study with accessible names', () => {
+    render(<Sidebar />);
+
+    // Each cluster is a labelled group so AT users get the same structure
+    // sighted users see.
+    const training = screen.getByRole('group', { name: 'Training' });
+    const progress = screen.getByRole('group', { name: 'Progress' });
+    const study = screen.getByRole('group', { name: 'Study' });
+
+    expect(training).toContainElement(screen.getByText('Train'));
+    expect(training).toContainElement(screen.getByText('Library'));
+    expect(progress).toContainElement(screen.getByText('Dashboard'));
+    expect(progress).toContainElement(screen.getByText('Insights'));
+    expect(progress).toContainElement(screen.getByText('Ratings'));
+    expect(study).toContainElement(screen.getByText('Openings'));
+    expect(study).toContainElement(screen.getByText('Engine'));
+  });
+
+  it('orders the nav as the loop: Home, then Training, Progress, Study', () => {
+    render(<Sidebar />);
+
+    const nav = screen.getByRole('navigation', { name: /primary navigation/i });
+    const labels = [...nav.querySelectorAll('a')].map((a) => a.textContent);
+    expect(labels).toEqual([
+      'Home',
+      'Train', 'Library',
+      'Dashboard', 'Insights', 'Ratings',
+      'Openings', 'Engine',
+    ]);
+  });
+
   it('should not render Ops link in desktop navigation', () => {
     render(<Sidebar />);
     expect(screen.queryByText('Ops')).not.toBeInTheDocument();
