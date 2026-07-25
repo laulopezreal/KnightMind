@@ -461,6 +461,9 @@ export default function Puzzles() {
         const { move: bestMove, pv } = await ensureRevealedMove();
         setStatus('revealed');
         setUserMove(bestMove || '');
+        // Drop any click-selected piece so its highlight doesn't linger over
+        // the solution playback.
+        setClickFrom(null);
         if (currentPuzzle && bestMove) {
             // Animate the whole combination (or the single move for legacy
             // puzzles) rather than teleporting one move and printing the rest.
