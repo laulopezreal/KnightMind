@@ -26,6 +26,18 @@ export function SessionSummaryCard({
     achievements,
     onStartNewSession
 }: SessionSummaryCardProps) {
+    // The finish is the session's emotional peak — headline it like a result,
+    // not a database receipt ("Successfully Recorded"). Tone tracks accuracy so
+    // a rough session isn't greeted with false cheer.
+    const total = sessionSummary.pass_count + sessionSummary.fail_count;
+    const accuracy = total > 0 ? sessionSummary.pass_count / total : 0;
+    const headline = total === 0
+        ? 'Session complete'
+        : accuracy >= 0.8
+        ? 'Sharp session!'
+        : accuracy >= 0.5
+        ? 'Session complete — solid work'
+        : 'Session complete — tough one, keep at it';
     return (
         <section className="bg-primary/5 border border-green-500/30 rounded-sm p-8 backdrop-blur-sm animate-teedin">
             <div className="flex items-center mb-6">
@@ -34,7 +46,7 @@ export function SessionSummaryCard({
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                     </svg>
                 </div>
-                <h2 className="text-2xl font-serif text-primary">Session Successfully Recorded!</h2>
+                <h2 className="text-2xl font-serif text-primary">{headline}</h2>
             </div>
 
             {sessionSummary.completed_at && (
