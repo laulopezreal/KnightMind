@@ -10,6 +10,20 @@ let mockUsername = 'alice';
 const mockSetEditorOpen = vi.fn();
 
 vi.mock('react-router-dom', () => ({ useNavigate: () => mockNavigate }));
+// The tri-control overview strip fetches its own (3×) rating histories; these
+// tests pin the PAGE's fetch discipline, so stub the strip out of the fetch
+// counts — but keep it a WORKING switcher, since several tests click "Blitz".
+vi.mock('../components/TimeControlOverview', () => ({
+    TimeControlOverview: ({ active, onSelect }: { active: string; onSelect: (tc: 'rapid' | 'blitz' | 'bullet') => void }) => (
+        <div>
+            {(['bullet', 'blitz', 'rapid'] as const).map((tc) => (
+                <button key={tc} type="button" aria-pressed={active === tc} onClick={() => onSelect(tc)}>
+                    {tc.charAt(0).toUpperCase() + tc.slice(1)}
+                </button>
+            ))}
+        </div>
+    ),
+}));
 vi.mock('../context/ChessUsernameContext', () => ({
     useChessUsername: () => ({ username: mockUsername, setEditorOpen: mockSetEditorOpen }),
 }));
