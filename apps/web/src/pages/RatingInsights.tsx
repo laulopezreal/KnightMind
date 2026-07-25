@@ -8,6 +8,7 @@ import { getRecentSessions } from '../api/sessions';
 import { PageHeader } from '../components/PageHeader';
 import { StatCard } from '../components/StatCard';
 import { ConfidenceBadge } from '../components/ConfidenceBadge';
+import { TimeControlOverview } from '../components/TimeControlOverview';
 import { TC_LABEL, formatSigned } from '../utils/ratings';
 import { DataStateError, DataStateLoading, DataStateOffline, DataStateSkeleton } from '../components/DataState';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
@@ -390,36 +391,23 @@ export default function RatingInsights() {
                         )}
                     </div>
 
-                    {/* Time Control Selector */}
-                    <div className="flex flex-col gap-1.5">
-                        <div className="flex bg-primary/5 rounded-sm p-1">
-                            {(['bullet', 'blitz', 'rapid'] as const).map(tc => (
-                                <button
-                                    key={tc}
-                                    type="button"
-                                    onClick={() => setTimeControl(tc)}
-                                    aria-pressed={timeControl === tc}
-                                    className={`km-toggle-option km-focus-visible px-3 py-2 text-sm font-sans transition-all rounded-sm ${timeControl === tc ? 'km-toggle-selected bg-primary text-bg-primary shadow-sm' : 'text-primary/70'}`}
-                                >
-                                    {tc.charAt(0).toUpperCase() + tc.slice(1)}
-                                </button>
-                            ))}
-                        </div>
-                        {data && data.stats.games === 0 && (
-                            <div className="text-[10px] text-primary/70 font-sans ml-1">
-                                {/* Thin window still charts snapshots below, so "no data yet"
-                                    would contradict the visible chart — scope the copy. */}
-                                <span>
-                                    {thinWindow
-                                        ? `No ${timeControlLabel} games in this window.`
-                                        : `No data yet for ${timeControlLabel}.`}
-                                </span>
-                            </div>
-                        )}
-                    </div>
-
                 </div>
             </section>
+
+            {/* All three time controls at a glance — each tile is the switcher
+                for its control (replaces the blind Bullet/Blitz/Rapid toggle). */}
+            <div className="space-y-1.5">
+                <TimeControlOverview username={username} active={timeControl} onSelect={setTimeControl} />
+                {data && data.stats.games === 0 && (
+                    <p className="text-[10px] text-primary/70 font-sans ml-1">
+                        {/* Thin window still charts snapshots below, so "no data yet"
+                            would contradict the visible chart — scope the copy. */}
+                        {thinWindow
+                            ? `No ${timeControlLabel} games in this window.`
+                            : `No data yet for ${timeControlLabel}.`}
+                    </p>
+                )}
+            </div>
 
             {/* Explain failing always gets a banner. A history failure only
                 matters when the chart actually draws from history — i.e. the
