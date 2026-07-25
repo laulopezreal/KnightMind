@@ -665,7 +665,7 @@ export default function RatingInsights() {
 const RatingChart = ({ chartData, trend, source }: { chartData: { label: string; rating: number }[], trend: 'up' | 'down', source: 'games' | 'snapshots' | 'mixed' }) => (
     // div, not section: role="img" is not an allowed role on section (axe aria-allowed-role)
     <div
-        className="p-6 bg-primary/5 rounded-sm border border-primary/10"
+        className="p-6 bg-primary/10 rounded-sm shadow-lg shadow-primary/5"
         role="img"
         aria-label={`Rating over time, ${chartData.length} points from ${chartData[0].rating} to ${chartData[chartData.length - 1].rating}`}
     >

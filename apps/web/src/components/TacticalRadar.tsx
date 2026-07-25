@@ -39,7 +39,7 @@ export function TacticalRadar({ motifs, onMotifClick }: TacticalRadarProps) {
     // Empty state: No motifs at all
     if (motifs.length === 0) {
         return (
-            <section className="bg-primary/5 border border-primary/10 rounded-sm p-8" aria-labelledby="tactical-radar-heading">
+            <section className="bg-primary/10 rounded-sm p-8 shadow-lg shadow-primary/5" aria-labelledby="tactical-radar-heading">
                 <h2 id="tactical-radar-heading" className="text-2xl font-serif text-primary mb-2 text-center">
                     🎯 Tactical Vision
                 </h2>
@@ -58,7 +58,7 @@ export function TacticalRadar({ motifs, onMotifClick }: TacticalRadarProps) {
     // Empty state: Not enough motifs for radar
     if (motifs.length < 3) {
         return (
-            <section className="bg-primary/5 border border-primary/10 rounded-sm p-8" aria-labelledby="tactical-radar-heading">
+            <section className="bg-primary/10 rounded-sm p-8 shadow-lg shadow-primary/5" aria-labelledby="tactical-radar-heading">
                 <h2 id="tactical-radar-heading" className="text-2xl font-serif text-primary mb-2 text-center">
                     🎯 Tactical Vision
                 </h2>
@@ -76,7 +76,7 @@ export function TacticalRadar({ motifs, onMotifClick }: TacticalRadarProps) {
     }
 
     return (
-        <section className="bg-primary/5 border border-primary/10 rounded-sm p-8" aria-labelledby="tactical-radar-heading">
+        <section className="bg-primary/10 rounded-sm p-8 shadow-lg shadow-primary/5" aria-labelledby="tactical-radar-heading">
             <h2 id="tactical-radar-heading" className="text-2xl font-serif text-primary mb-2 text-center">
                 🎯 Tactical Vision
             </h2>

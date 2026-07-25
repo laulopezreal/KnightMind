@@ -1053,7 +1053,15 @@ export default function Puzzles() {
                                             <div className="flex justify-between mt-3 text-xs">
                                                 <div className="flex items-center">
                                                     <span className="text-primary/70 mr-1">🔥</span>
-                                                    <span className="text-primary/80">Streak: {streak}</span>
+                                                    {/* key={streak} re-triggers the pop on every increase;
+                                                        milestones (3+) also gain weight. Reduced-motion
+                                                        users get the weight change without the pulse. */}
+                                                    <span
+                                                        key={streak}
+                                                        className={`text-primary/80 inline-block ${streak >= 3 ? 'animate-streakpop font-medium' : ''}`}
+                                                    >
+                                                        Streak: {streak}
+                                                    </span>
                                                     <span className="text-primary/70 mx-1">|</span>
                                                     <span className="text-primary/70 mr-1">🏆</span>
                                                     <span className="text-primary/80">Best: {bestStreak}</span>
