@@ -610,8 +610,8 @@ export default function Puzzles() {
     };
 
     return (
-        <div className="space-y-12 animate-teedin pb-20 md:pb-0">
-            <section>
+        <div className="flex flex-col gap-12 animate-teedin pb-20 md:pb-0">
+            <section className={activeSessionId && currentPuzzle ? 'hidden lg:block' : ''}>
                 <Link to="/dashboard" className="text-primary/70 hover:text-primary mb-4 inline-block font-sans text-sm tracking-widest uppercase transition-colors">
                     ← Back to Dashboard
                 </Link>
@@ -620,7 +620,7 @@ export default function Puzzles() {
                         <h1 className="text-4xl md:text-5xl font-serif text-primary mb-2">
                             {motifFilter ? `${motifFilter} Puzzles` : 'Daily Puzzles'}
                         </h1>
-                        <div className="flex items-center gap-2 mb-3">
+                        <div className={`${activeSessionId && currentPuzzle ? 'hidden lg:flex' : 'flex'} items-center gap-2 mb-3`}>
                             <span className="text-xs font-sans uppercase tracking-wider px-2 py-1 rounded-sm border border-primary/20 bg-primary/5 text-primary/80">
                                 {selectedModeLabel} {modeAvailabilityLabel}
                             </span>
@@ -628,7 +628,7 @@ export default function Puzzles() {
                                 <span className="text-xs font-sans text-primary/70">Switch to Standard to start sessions.</span>
                             )}
                         </div>
-                        <p className="text-lg text-primary/70 font-sans">
+                        <p className={`${activeSessionId && currentPuzzle ? 'hidden lg:block' : ''} text-lg text-primary/70 font-sans`}>
                             {motifFilter ? `Practice ${motifFilter} tactical patterns` : 'Tactical patterns from your own games.'}
                         </p>
                     </div>
@@ -639,7 +639,7 @@ export default function Puzzles() {
             <h2 className="sr-only">Your training</h2>
 
             {/* Controls */}
-            <section className="bg-primary/5 border border-primary/10 rounded-sm p-6 backdrop-blur-sm space-y-6">
+            <section data-testid="training-controls" className={`bg-primary/5 border border-primary/10 rounded-sm p-6 backdrop-blur-sm space-y-6${activeSessionId && currentPuzzle ? ' hidden lg:block' : ''}`}>
                 {/* Top row: Username and buttons */}
                 <div className="flex flex-col md:flex-row gap-6 items-end">
                     <div className="flex-1 relative min-w-[300px]">
@@ -918,7 +918,7 @@ export default function Puzzles() {
 
             {/* Weak Areas Card */}
             {motifPerformance && motifPerformance.weakest_motifs.length > 0 && (
-                <section className="bg-primary/5 border border-primary/10 rounded-sm p-6 backdrop-blur-sm">
+                <section className={`bg-primary/5 border border-primary/10 rounded-sm p-6 backdrop-blur-sm${activeSessionId && currentPuzzle ? ' hidden lg:block' : ''}`}>
                     <h3 className="text-lg font-serif text-primary mb-4">
                         Your Weak Areas
                     </h3>
@@ -962,9 +962,9 @@ export default function Puzzles() {
             )}
 
             {currentPuzzle && ( // Make sure currentPuzzle is defined or access checked
-                <section ref={boardSectionRef} className="grid lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)] gap-12 lg:gap-16 scroll-mt-6">
+                <section ref={boardSectionRef} className="order-1 lg:order-6 grid lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)] gap-6 lg:gap-16 scroll-mt-6">
                     {/* Chessboard */}
-                    <div className="order-2 lg:order-1">
+                    <div className="lg:order-1 scroll-mb-8">
                         <div className="aspect-square w-full max-w-[680px] mx-auto shadow-2xl shadow-primary/5 rounded-sm overflow-hidden border border-primary/10">
                             <AccessibleChessboard
                                 onKeyboardMove={({ sourceSquare, targetSquare, promotion }) =>
@@ -1005,11 +1005,23 @@ export default function Puzzles() {
                                 }}
                             />
                         </div>
+                        {/* Compact board-adjacent context: mobile-only, non-interactive meta */}
+                        <div data-testid="mobile-puzzle-context" className="lg:hidden mt-3 flex items-center justify-between text-xs font-sans text-primary/60 px-1">
+                            <span className="uppercase tracking-wide">
+                                {currentPuzzle.side_to_move === 'white' ? 'White to move' : 'Black to move'}
+                            </span>
+                            {currentPuzzle.primary_motif && (
+                                <span className="px-2 py-0.5 bg-primary/10 rounded-sm">
+                                    {formatMotifName(currentPuzzle.primary_motif)}
+                                </span>
+                            )}
+                            <span className="font-mono">{currentIndex + 1}/{puzzles.length}</span>
+                        </div>
                     </div>
 
                     {/* Sidebar Controls */}
-                    <div className="order-1 lg:order-2 space-y-8 flex flex-col justify-center">
-                        <div className="space-y-2">
+                    <div className="lg:order-2 space-y-8 flex flex-col justify-center">
+                        <div className="hidden lg:block space-y-2">
                             <div className="flex justify-between items-center bg-primary/5 p-4 rounded-sm border-l-2 border-primary">
                                 <div className="flex flex-col w-full">
                                     {activeSessionId && sessionSummary && (
@@ -1146,7 +1158,7 @@ export default function Puzzles() {
                         </div>
 
                         {/* Status Area */}
-                        <div className="min-h-[100px] flex items-center justify-center text-center p-6 border border-primary/10 rounded-sm relative overflow-hidden" role="status" aria-live="polite">
+                        <div className="min-h-[60px] md:min-h-[100px] flex items-center justify-center text-center p-4 md:p-6 border border-primary/10 rounded-sm relative overflow-hidden" role="status" aria-live="polite">
                             {status === 'solving' && clue.clueStage === 0 && (
                                 linePlyIndex > 0
                                     ? <p className="text-positive font-serif text-lg italic">Good move — now find the next move in the line.</p>
@@ -1225,13 +1237,13 @@ export default function Puzzles() {
                             )}
 
                             {status === 'solving' && (
-                                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                                <div className="grid grid-cols-3 gap-2 md:gap-3">
                                     <button
                                         type="button"
                                         onClick={handleCheckAnswer}
                                         disabled={!userMove}
                                         aria-label={puzzleActionA11yCopy.checkMoveLabel}
-                                        className={`px-6 py-4 bg-primary text-bg-primary rounded-sm font-serif text-lg transition-all shadow-lg shadow-primary/5 km-focus-visible disabled:opacity-50 ${!userMove ? 'km-interactive-disabled' : 'km-interactive'}`}>
+                                        className={`px-2 py-3 md:px-6 md:py-4 bg-primary text-bg-primary rounded-sm font-serif text-sm md:text-lg transition-all shadow-lg shadow-primary/5 km-focus-visible disabled:opacity-50 ${!userMove ? 'km-interactive-disabled' : 'km-interactive'}`}>
                                         Check Move
                                     </button>
                                     <button
@@ -1239,14 +1251,14 @@ export default function Puzzles() {
                                         onClick={handleHint}
                                         disabled={!currentPuzzle || clue.isExhausted}
                                         aria-label={puzzleActionA11yCopy.hintLabel}
-                                        className="px-6 py-4 border border-primary/20 text-primary rounded-sm font-serif text-lg transition-all km-interactive km-focus-visible disabled:opacity-50 disabled:cursor-default">
+                                        className="px-2 py-3 md:px-6 md:py-4 border border-primary/20 text-primary rounded-sm font-serif text-sm md:text-lg transition-all km-interactive km-focus-visible disabled:opacity-50 disabled:cursor-default">
                                         {`Hint (${clue.clueStage}/3)`}
                                     </button>
                                     <button
                                         type="button"
                                         onClick={handleRevealSolution}
                                         aria-label={puzzleActionA11yCopy.revealLabel}
-                                        className="px-6 py-4 border border-primary/10 text-primary/70 rounded-sm font-serif text-lg transition-all km-interactive km-focus-visible hover:text-primary hover:border-primary/30">
+                                        className="px-2 py-3 md:px-6 md:py-4 border border-primary/10 text-primary/70 rounded-sm font-serif text-sm md:text-lg transition-all km-interactive km-focus-visible hover:text-primary hover:border-primary/30">
                                         Reveal
                                     </button>
                                 </div>
@@ -1311,7 +1323,7 @@ export default function Puzzles() {
                                         </div>
                                     )}
 
-                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                    <div className="grid grid-cols-2 gap-2 md:gap-3">
                                         <button
                                             type="button"
                                             onClick={async () => {
@@ -1324,14 +1336,15 @@ export default function Puzzles() {
                                                 setAttemptedLine([]);
                                                 clue.reset();
                                             }}
-                                            className="px-6 py-4 border border-primary/20 text-primary rounded-sm font-serif text-lg transition-all km-interactive km-focus-visible">
-                                            Try Again
+                                            className="px-2 py-3 md:px-6 md:py-4 border border-primary/20 text-primary rounded-sm font-serif text-sm md:text-lg transition-all km-interactive km-focus-visible">
+                                            <span className="md:hidden">Try Again</span>
+                                            <span className="hidden md:inline">Mark as Failed & Try Again</span>
                                         </button>
                                         <button
                                             type="button"
                                             onClick={handleRevealSolution}
                                             aria-label={puzzleActionA11yCopy.showSolutionLabel}
-                                            className="px-6 py-4 bg-primary text-bg-primary rounded-sm font-serif text-lg transition-all km-interactive km-focus-visible">
+                                            className="px-2 py-3 md:px-6 md:py-4 bg-primary text-bg-primary rounded-sm font-serif text-sm md:text-lg transition-all km-interactive km-focus-visible">
                                             Show Solution
                                         </button>
                                     </div>
@@ -1375,8 +1388,8 @@ export default function Puzzles() {
             )}
 
             {/* Session Summary */}
-            {sessionSummary && (
-                <div ref={summaryRef} className="scroll-mt-6">
+            {sessionSummary && sessionState === 'completed' && (
+                <div ref={summaryRef} className="lg:order-7 scroll-mt-6">
                     {warmupMode ? (
                         <WarmupSummary
                             sessionSummary={sessionSummary}
@@ -1400,14 +1413,14 @@ export default function Puzzles() {
             )}
 
             {/* Recent Sessions */}
-            <RecentSessionsCard sessions={recentSessions} />
+            <div className="lg:order-8"><RecentSessionsCard sessions={recentSessions} /></div>
 
             {/* Achievements Progress */}
-            <AchievementsList achievements={achievements} />
+            <div className="lg:order-9"><AchievementsList achievements={achievements} /></div>
 
             {/* Chess Pattern Mastery */}
             {motifPerformance && motifPerformance.motifs.length > 0 && (
-                <section className="bg-primary/5 border border-primary/10 rounded-sm p-6 backdrop-blur-sm">
+                <section className="lg:order-10 bg-primary/5 border border-primary/10 rounded-sm p-6 backdrop-blur-sm">
                     <h3 className="text-lg font-serif text-primary mb-4">Chess Pattern Mastery</h3>
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                         {motifPerformance.motifs.map(motif => (
