@@ -122,11 +122,12 @@ vi.mock('react-chessboard', () => ({
 // does in the real hook) and observe the session-recording path.
 const mockHandleUseHint = vi.fn().mockResolvedValue(undefined);
 let capturedSessionProps: { setActiveSessionId: (id: string | null) => void } | undefined;
+let sessionReturnOverrides: Partial<UsePuzzleSessionReturn> = {};
 
 vi.mock('../hooks/usePuzzleSession', () => ({
     usePuzzleSession: (props: { setActiveSessionId: (id: string | null) => void }) => {
         capturedSessionProps = props;
-        return makeSessionReturn();
+        return makeSessionReturn(sessionReturnOverrides);
     },
 }));
 
@@ -192,6 +193,7 @@ describe('Puzzle hint ladder', () => {
         mockHandleUseHint.mockClear();
         vi.mocked(useHint).mockClear();
         capturedSessionProps = undefined;
+        sessionReturnOverrides = {};
     });
 
     it('escalates visible help on each press: piece → destination', async () => {
@@ -240,5 +242,31 @@ describe('Puzzle hint ladder', () => {
         await waitFor(() => expect(mockHandleUseHint).toHaveBeenCalledTimes(1));
         // The visual reveal still happens — recording is additive, not a swap.
         expect(screen.getByText('Move the pawn')).toBeInTheDocument();
+    });
+
+    it('does not render the completed-session summary while a session is still active', async () => {
+        sessionReturnOverrides = {
+            sessionState: 'active',
+            sessionSummary: {
+                session_id: 's1',
+                requested_n: 5,
+                pass_count: 1,
+                fail_count: 0,
+                total_time_ms: 0,
+                created_at: '2025-01-01T00:00:00Z',
+                completed_at: null,
+                session_type: 'standard',
+                current_streak: 1,
+                best_streak: 1,
+                hints_used: 1,
+            },
+            reviewedCount: 1,
+        };
+
+        render(<Puzzles />);
+        act(() => capturedSessionProps?.setActiveSessionId('s1'));
+
+        await waitFor(() => expect(screen.getByTestId('mobile-puzzle-context')).toBeInTheDocument());
+        expect(screen.queryByTestId('session-summary')).not.toBeInTheDocument();
     });
 });
