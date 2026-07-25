@@ -90,9 +90,15 @@ type Props = ComponentProps<typeof Chessboard> & {
      * auto-queens, matching the existing drag behaviour).
      */
     onKeyboardMove?: (move: KeyboardMove) => boolean;
+    /**
+     * When set, keyboard pick-up is limited to this colour's pieces (the side
+     * to move in a puzzle). Without it, picking up an opponent piece is allowed
+     * and only rejected on the drop — a confusing dead end for keyboard users.
+     */
+    moveableSide?: 'w' | 'b';
 };
 
-export function AccessibleChessboard({ onKeyboardMove, ...props }: Props) {
+export function AccessibleChessboard({ onKeyboardMove, moveableSide, ...props }: Props) {
     const ref = useRef<HTMLDivElement>(null);
     const options = props.options;
     const orientation: 'white' | 'black' = options?.boardOrientation === 'black' ? 'black' : 'white';
@@ -193,6 +199,11 @@ export function AccessibleChessboard({ onKeyboardMove, ...props }: Props) {
                     setAnnouncement(`${square} is empty. Nothing to pick up.`);
                     return;
                 }
+                if (moveableSide && code[0] !== moveableSide) {
+                    const yours = moveableSide === 'w' ? 'White' : 'Black';
+                    setAnnouncement(`That is a ${COLORS[code[0]]} piece — ${yours} to move.`);
+                    return;
+                }
                 setSelectedSquare(square);
                 const desc = describePiece(code) ?? 'piece';
                 setAnnouncement(`Picked up ${desc} on ${square}. Navigate to a destination and press Enter to move, or Escape to cancel.`);
@@ -205,7 +216,7 @@ export function AccessibleChessboard({ onKeyboardMove, ...props }: Props) {
             }
             attemptMove(selectedSquare, square);
         },
-        [selectedSquare, pieces, attemptMove],
+        [selectedSquare, pieces, attemptMove, moveableSide],
     );
 
     const handleKeyDown = useCallback(

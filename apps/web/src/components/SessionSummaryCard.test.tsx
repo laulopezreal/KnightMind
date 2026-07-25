@@ -34,7 +34,21 @@ describe('SessionSummaryCard', () => {
       />
     );
 
-    expect(screen.getByText('Session Successfully Recorded!')).toBeInTheDocument();
+    // 8/2 = 80% accuracy → the celebratory headline (tone tracks the result,
+    // never the old "Successfully Recorded" database receipt).
+    expect(screen.getByText('Sharp session!')).toBeInTheDocument();
+  });
+
+  it('keeps the headline honest on a rough session', () => {
+    render(
+      <SessionSummaryCard
+        sessionSummary={{ ...mockSessionSummary, pass_count: 2, fail_count: 8 }}
+        achievements={mockAchievements}
+        onStartNewSession={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText(/tough one, keep at it/i)).toBeInTheDocument();
   });
 
   it('should display pass and fail counts', () => {

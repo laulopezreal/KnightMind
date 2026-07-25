@@ -18,6 +18,8 @@ import { useAchievements } from '../hooks/useAchievements';
 import { usePuzzleInsights } from '../hooks/usePuzzleInsights';
 import { usePuzzleSession, type PuzzleStatus } from '../hooks/usePuzzleSession';
 import { getModeLabels, getPuzzleActionA11yCopy, getSessionDetailsA11yCopy } from '../utils/a11yCopy';
+import { formatMotifName } from '../utils/motif';
+import { uciLineToSan } from '../utils/chess';
 
 export default function Puzzles() {
     const { username, setEditorOpen } = useChessUsername();
@@ -32,6 +34,9 @@ export default function Puzzles() {
     });
     const [prevUsername, setPrevUsername] = useState(username);
     const [game, setGame] = useState(new Chess());
+    // Click-to-move: the square whose piece was selected by a click (the
+    // standard chess-site input alongside drag and keyboard).
+    const [clickFrom, setClickFrom] = useState<string | null>(null);
     // The solution is NOT pre-sent with the puzzle (audit gate 13). It is
     // fetched on demand (reveal / full clue) and held only for the current
     // puzzle, so the client never holds the answer before the user asks.
@@ -331,21 +336,51 @@ export default function Puzzles() {
     // Ensure we have the solution for the current puzzle, fetching it once from
     // the server on demand (reveal / full clue). Returns the lowercased UCI move,
     // or null if unavailable.
-    const ensureRevealedMove = async (): Promise<string | null> => {
-        if (revealedMove) return revealedMove;
-        if (!currentPuzzle || !username) return null;
+    const ensureRevealedMove = async (): Promise<{ move: string | null; pv: string[] }> => {
+        if (revealedMove) return { move: revealedMove, pv: revealedPv };
+        if (!currentPuzzle || !username) return { move: null, pv: [] };
         try {
             const { best_move_uci, solution_pv } = await revealPuzzle(currentPuzzle.id, username);
             const move = best_move_uci.toLowerCase();
+            const pv = (solution_pv ?? []).map((m) => m.toLowerCase());
             setRevealedMove(move);
             // Keep the whole line so Reveal can show the full combination, not
             // only the first move.
-            setRevealedPv((solution_pv ?? []).map((m) => m.toLowerCase()));
-            return move;
+            setRevealedPv(pv);
+            return { move, pv };
         } catch (err) {
             console.error('Failed to reveal solution:', err);
-            return null;
+            return { move: null, pv: [] };
         }
+    };
+
+    // Reveal playback: step the solution line out on the board so the answer is
+    // SEEN as chess, not just printed as text. One interval at a time; cleared
+    // on a new reveal, on puzzle change, and on unmount.
+    const playbackRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    const stopPlayback = () => {
+        if (playbackRef.current) {
+            clearInterval(playbackRef.current);
+            playbackRef.current = null;
+        }
+    };
+    useEffect(() => stopPlayback, []);
+    const playSolutionLine = (fen: string, line: string[]) => {
+        stopPlayback();
+        const board = new Chess(fen);
+        let i = 0;
+        const step = () => {
+            if (i >= line.length) return stopPlayback();
+            const uci = line[i++];
+            try {
+                board.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci.slice(4, 5) || undefined });
+                setGame(new Chess(board.fen()));
+            } catch {
+                stopPlayback();
+            }
+        };
+        step();
+        playbackRef.current = setInterval(step, 900);
     };
 
     // Verify one played move server-side and, for a multi-move line, auto-play
@@ -423,16 +458,13 @@ export default function Puzzles() {
     };
 
     const handleRevealSolution = async () => {
-        const bestMove = await ensureRevealedMove();
+        const { move: bestMove, pv } = await ensureRevealedMove();
         setStatus('revealed');
         setUserMove(bestMove || '');
         if (currentPuzzle && bestMove) {
-            const solutionGame = new Chess(currentPuzzle.fen);
-            const from = bestMove.slice(0, 2);
-            const to = bestMove.slice(2, 4);
-            const promotion = bestMove.slice(4, 5);
-            solutionGame.move({ from, to, promotion: promotion || undefined });
-            setGame(solutionGame);
+            // Animate the whole combination (or the single move for legacy
+            // puzzles) rather than teleporting one move and printing the rest.
+            playSolutionLine(currentPuzzle.fen, pv.length ? pv : [bestMove]);
         }
     };
 
@@ -447,7 +479,7 @@ export default function Puzzles() {
         // Rung 1 needs the solution in hand so the piece name / squares resolve.
         // Bail if the fetch fails — advancing with nothing to show would be a lie.
         if (stage === 0) {
-            const move = await ensureRevealedMove();
+            const { move } = await ensureRevealedMove();
             if (!move) return;
         }
         // Force past advance()'s "no move known" guard: on the first press the
@@ -473,13 +505,45 @@ export default function Puzzles() {
         // Restart the multi-move line for the new puzzle.
         setLinePlyIndex(0);
         setAttemptedLine([]);
+        setClickFrom(null);
     }
+
+    // Bring the board into view when a session starts: it renders below the
+    // setup panel, so without this the moment of highest intent ("Start
+    // Session") lands on an apparently unchanged screen with the puzzle hidden
+    // below the fold.
+    const boardSectionRef = useRef<HTMLElement>(null);
+    const scrolledForSessionRef = useRef<string | null>(null);
+    useEffect(() => {
+        if (!activeSessionId || !currentPuzzle) return;
+        if (scrolledForSessionRef.current === activeSessionId) return;
+        scrolledForSessionRef.current = activeSessionId;
+        // setTimeout, not requestAnimationFrame: rAF never fires in a hidden
+        // tab, which would silently skip the scroll entirely.
+        setTimeout(() => {
+            // Optional-call: jsdom (tests) has no scrollIntoView.
+            boardSectionRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+        }, 60);
+    }, [activeSessionId, currentPuzzle]);
+
+    // Same for the finish: the summary (stats + any achievements earned) is the
+    // session's payoff and must be seen, not pointed at with "see below".
+    const summaryRef = useRef<HTMLDivElement>(null);
+    useEffect(() => {
+        if (sessionState !== 'completed') return;
+        setTimeout(() => {
+            summaryRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+        }, 60);
+    }, [sessionState]);
 
     // Reset clue and start timer when puzzle changes (side effects in effect)
     useEffect(() => {
         if (currentPuzzle) {
             clueReset();
             startPuzzleTimer();
+            // A still-running solution playback belongs to the previous puzzle
+            // and would overwrite the fresh board with stale positions.
+            stopPlayback();
         }
     }, [currentPuzzle, clueReset, startPuzzleTimer]);
 
@@ -864,7 +928,7 @@ export default function Puzzles() {
                             .map(motif => (
                                 <div key={motif.name} className="flex justify-between items-center p-3 bg-red-500/10 rounded-sm">
                                     <div>
-                                        <span className="font-serif text-primary">{motif.name}</span>
+                                        <span className="font-serif text-primary">{formatMotifName(motif.name)}</span>
                                         <span className="text-xs text-primary/70 ml-2">
                                             {motif.passed}/{motif.total_puzzles} correct
                                         </span>
@@ -898,21 +962,46 @@ export default function Puzzles() {
             )}
 
             {currentPuzzle && ( // Make sure currentPuzzle is defined or access checked
-                <section className="grid lg:grid-cols-2 gap-12 lg:gap-24">
+                <section ref={boardSectionRef} className="grid lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)] gap-12 lg:gap-16 scroll-mt-6">
                     {/* Chessboard */}
                     <div className="order-2 lg:order-1">
-                        <div className="aspect-square w-full max-w-[600px] mx-auto shadow-2xl shadow-primary/5 rounded-sm overflow-hidden border border-primary/10">
+                        <div className="aspect-square w-full max-w-[680px] mx-auto shadow-2xl shadow-primary/5 rounded-sm overflow-hidden border border-primary/10">
                             <AccessibleChessboard
                                 onKeyboardMove={({ sourceSquare, targetSquare, promotion }) =>
                                     onPieceDrop(sourceSquare, targetSquare, promotion ?? 'q')
                                 }
+                                moveableSide={currentPuzzle.side_to_move === 'white' ? 'w' : 'b'}
                                 options={{
                                     position: game.fen(),
-                                    onPieceDrop: ({ sourceSquare, targetSquare }) => targetSquare ? onPieceDrop(sourceSquare, targetSquare) : false,
+                                    onPieceDrop: ({ sourceSquare, targetSquare }) => {
+                                        setClickFrom(null);
+                                        return targetSquare ? onPieceDrop(sourceSquare, targetSquare) : false;
+                                    },
+                                    // Click-to-move: click a piece, then its destination —
+                                    // the standard chess-site input, alongside drag + keyboard.
+                                    onSquareClick: ({ square, piece }) => {
+                                        if (status !== 'solving') return;
+                                        const side = currentPuzzle.side_to_move === 'white' ? 'w' : 'b';
+                                        const ownPiece = piece && typeof piece.pieceType === 'string' && piece.pieceType.startsWith(side);
+                                        if (!clickFrom) {
+                                            if (ownPiece) setClickFrom(square);
+                                            return;
+                                        }
+                                        if (square === clickFrom) return setClickFrom(null);
+                                        // Clicking another of your own pieces re-selects it.
+                                        if (ownPiece) return setClickFrom(square);
+                                        onPieceDrop(clickFrom, square);
+                                        setClickFrom(null);
+                                    },
                                     boardOrientation: currentPuzzle.side_to_move === 'white' ? 'white' : 'black',
                                     darkSquareStyle: { backgroundColor: 'var(--color-chess-board-dark)' },
                                     lightSquareStyle: { backgroundColor: 'var(--color-chess-cream-300)' },
-                                    squareStyles: clue.squareStyles,
+                                    squareStyles: {
+                                        ...clue.squareStyles,
+                                        ...(clickFrom
+                                            ? { [clickFrom]: { boxShadow: 'inset 0 0 0 3px var(--border-primary)' } }
+                                            : {}),
+                                    },
                                 }}
                             />
                         </div>
@@ -1044,7 +1133,7 @@ export default function Puzzles() {
                                             </span>
                                             {currentPuzzle.primary_motif && (
                                                 <span className="text-sm font-sans text-primary/70 px-2 py-1 bg-primary/10 rounded-sm">
-                                                    {currentPuzzle.primary_motif}
+                                                    {formatMotifName(currentPuzzle.primary_motif)}
                                                 </span>
                                             )}
                                         </div>
@@ -1083,7 +1172,7 @@ export default function Puzzles() {
                             )}
                             {status === 'incorrect' && (
                                 <div className="text-center">
-                                    <p className="text-negative font-serif text-2xl animate-teedin">Incorrect.</p>
+                                    <p className="text-negative font-serif text-2xl animate-teedin">Not this one — take another look.</p>
                                     {lastFeedback && (
                                         <p className="text-negative font-sans text-sm mt-2 animate-teedin">{lastFeedback}</p>
                                     )}
@@ -1094,8 +1183,16 @@ export default function Puzzles() {
                                     <p className="text-primary/70 font-sans text-xs uppercase tracking-widest mb-1">
                                         {revealedPv.length > 1 ? 'Solution line' : 'Solution'}
                                     </p>
-                                    <p className="text-primary font-mono text-xl">
-                                        {revealedPv.length > 1 ? revealedPv.join(' ') : (revealedMove ?? '…')}
+                                    {/* Human notation (SAN), not raw UCI — "Qxf7#" reads as
+                                        chess; "h5f7" reads as coordinates. Played out on the
+                                        board by the reveal playback at the same time. */}
+                                    <p className="text-primary font-serif text-xl">
+                                        {currentPuzzle
+                                            ? uciLineToSan(
+                                                currentPuzzle.fen,
+                                                revealedPv.length > 0 ? revealedPv : (revealedMove ? [revealedMove] : []),
+                                            ).join('  ') || '…'
+                                            : '…'}
                                     </p>
                                 </div>
                             )}
@@ -1228,7 +1325,7 @@ export default function Puzzles() {
                                                 clue.reset();
                                             }}
                                             className="px-6 py-4 border border-primary/20 text-primary rounded-sm font-serif text-lg transition-all km-interactive km-focus-visible">
-                                            Mark as Failed & Try Again
+                                            Try Again
                                         </button>
                                         <button
                                             type="button"
@@ -1266,7 +1363,7 @@ export default function Puzzles() {
                                                     Recording Session...
                                                 </>
                                             ) : (
-                                                'Mark as Failed & Complete Session'
+                                                'Finish Session'
                                             )}
                                         </button>
                                     )}
@@ -1279,7 +1376,7 @@ export default function Puzzles() {
 
             {/* Session Summary */}
             {sessionSummary && (
-                <>
+                <div ref={summaryRef} className="scroll-mt-6">
                     {warmupMode ? (
                         <WarmupSummary
                             sessionSummary={sessionSummary}
@@ -1299,7 +1396,7 @@ export default function Puzzles() {
                             }}
                         />
                     )}
-                </>
+                </div>
             )}
 
             {/* Recent Sessions */}
@@ -1324,7 +1421,7 @@ export default function Puzzles() {
                                         : 'bg-red-500/10 border-red-500/30'
                                 }`}
                             >
-                                <h4 className="font-serif text-primary mb-1">{motif.name}</h4>
+                                <h4 className="font-serif text-primary mb-1">{formatMotifName(motif.name)}</h4>
                                 <div className="flex justify-between text-sm">
                                     <span className="text-primary/70">
                                         {motif.passed}/{motif.total_puzzles} solved
