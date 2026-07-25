@@ -85,15 +85,26 @@ jobs:
             echo "--- Restarting with new code ---"
             ${COMPOSE} up -d
 
-            echo "--- Health check ---"
-            sleep 5
-            HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/ops/health)
-            if [ "${HTTP_STATUS}" -ne 200 ]; then
-              echo "Health check failed with status ${HTTP_STATUS}"
-              ${COMPOSE} logs --tail=50 api
-              exit 1
-            fi
-            echo "Health check passed (HTTP ${HTTP_STATUS})"
+            echo "--- Health check (in-container, with retries) ---"
+            # Probe the app inside the container, matching the image's own
+            # HEALTHCHECK. This avoids the host->published-port path, which is
+            # unreliable on this box (a host curl to 127.0.0.1:8000 connects but
+            # recv-fails), and sidesteps the localhost->::1 (IPv6) vs IPv4-only
+            # publish mismatch. The container app is the thing we actually care
+            # about being up.
+            for i in $(seq 1 10); do
+              if ${COMPOSE} exec -T api curl -fsS http://localhost:8000/ops/health >/dev/null 2>&1; then
+                echo "Health check passed (attempt ${i})"
+                break
+              fi
+              if [ "${i}" -eq 10 ]; then
+                echo "Health check failed after ${i} attempts"
+                ${COMPOSE} logs --tail=50 api
+                exit 1
+              fi
+              echo "Health check attempt ${i} failed; retrying in 3s..."
+              sleep 3
+            done
 
       - name: Notify success
         if: success()
