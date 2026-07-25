@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import { Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ResponsiveContainer } from 'recharts';
 import { type MotifPerformance } from '../api/users';
+import { formatMotifName } from '../utils/motif';
 
 interface TacticalRadarProps {
     motifs: MotifPerformance[];
@@ -11,7 +12,7 @@ export function TacticalRadar({ motifs, onMotifClick }: TacticalRadarProps) {
     // Transform data for recharts
     const radarData = useMemo(() =>
         motifs.map(m => ({
-            motif: m.name,
+            motif: formatMotifName(m.name),
             accuracy: m.accuracy * 100, // Convert to percentage
             fullMark: 100
         })),
@@ -138,24 +139,24 @@ export function TacticalRadar({ motifs, onMotifClick }: TacticalRadarProps) {
                         Your weakest area:
                     </p>
                     <p className="text-xl font-serif text-negative mb-4">
-                        {weakest.name} ({Math.round(weakest.accuracy * 100)}%)
+                        {formatMotifName(weakest.name)} ({Math.round(weakest.accuracy * 100)}%)
                     </p>
                     <button
                         type="button"
                         onClick={() => onMotifClick(weakest.name)}
                         disabled={weakest.total_puzzles === 0}
-                        aria-label={`Practice ${weakest.name} tactical patterns`}
+                        aria-label={`Practice ${formatMotifName(weakest.name)} tactical patterns`}
                         aria-disabled={weakest.total_puzzles === 0}
                         title={
                             weakest.total_puzzles === 0
                                 ? 'No puzzles available for this motif yet'
-                                : `Practice ${weakest.name} to improve your weakest area`
+                                : `Practice ${formatMotifName(weakest.name)} to improve your weakest area`
                         }
                         className={`px-6 py-3 bg-primary text-bg-primary rounded-sm font-serif transition-opacity km-focus-visible ${
                             weakest.total_puzzles === 0 ? 'km-interactive-disabled' : 'hover:opacity-90 cursor-pointer'
                         }`}
                     >
-                        Practice {weakest.name} Now
+                        Practice {formatMotifName(weakest.name)} Now
                     </button>
                 </div>
             )}
