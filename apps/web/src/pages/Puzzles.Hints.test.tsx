@@ -222,8 +222,10 @@ describe('Puzzle hint ladder', () => {
         await user.click(hintButton()); // rung 3 → reveal
 
         await waitFor(() => expect(screen.getByText('Solution')).toBeInTheDocument());
-        // The revealed move notation is shown once the ladder tops out.
-        expect(screen.getByText('e2e4')).toBeInTheDocument();
+        // The revealed move is shown in human notation (SAN), not raw UCI:
+        // e2e4 from the start position reads as "e4".
+        expect(screen.getByText('e4')).toBeInTheDocument();
+        expect(screen.queryByText('e2e4')).not.toBeInTheDocument();
     });
 
     it('records each hint against the session when one is active', async () => {
