@@ -44,8 +44,13 @@ export function AnimatedNumber({ value, duration = 700, suffix = '' }: AnimatedN
       if (t < 1) rafRef.current = requestAnimationFrame(tick);
     };
     rafRef.current = requestAnimationFrame(tick);
+    // Settle guarantee: rAF can be throttled or never fire (hidden tabs,
+    // headless jsdom in CI). A plain timer snaps to the exact final value
+    // shortly after the animation window no matter what rAF did.
+    const settle = setTimeout(() => setDisplay(value), duration + 80);
     return () => {
       if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
+      clearTimeout(settle);
     };
   }, [value, duration, animatable]);
 
