@@ -68,7 +68,13 @@ export function TimeControlOverview({ username, active, onSelect }: TimeControlO
                                 {TC_LABEL[tc]}
                             </span>
                             {delta !== null && delta !== 0 && (
-                                <span className={`text-xs font-mono ${delta > 0 ? 'text-positive' : 'text-negative'}`}>
+                                <span
+                                    className={`text-xs font-mono ${delta > 0 ? 'text-positive' : 'text-negative'}`}
+                                    // The windowed "Net Change" card below measures a different
+                                    // span — say what this number covers so the two can't read
+                                    // as a contradiction.
+                                    title={`Across your last ${points.length} recorded snapshots`}
+                                >
                                     {formatSigned(delta)}
                                 </span>
                             )}
