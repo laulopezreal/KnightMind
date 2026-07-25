@@ -21,6 +21,9 @@
   --animate-switchedin: switchedin 0.35s ease-out forwards;
   --animate-switchedout: switchedout 0.35s ease-out forwards;
   --animate-teedin: teedin 0.45s ease-out forwards;
+  /* Streak-milestone pop: brief scale pulse when an in-session streak grows.
+     Neutralized automatically by the global prefers-reduced-motion rule. */
+  --animate-streakpop: streakpop 0.4s ease-out;
   --animate-teedout: teedout 0.45s ease-out forwards;
 }
 
@@ -181,6 +184,12 @@ body {
   to {
     background-color: var(--color-chess-brown-700);
   }
+}
+
+@keyframes streakpop {
+  0% { transform: scale(1); }
+  40% { transform: scale(1.25); }
+  100% { transform: scale(1); }
 }
 
 @keyframes teedin {

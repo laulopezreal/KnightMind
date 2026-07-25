@@ -1,8 +1,12 @@
 interface SparklineProps {
   /** Series values, oldest→newest. Fewer than 2 points renders nothing. */
   points: number[];
-  /** Line colour direction; drives the semantic positive/negative token. */
-  trend?: 'up' | 'down';
+  /**
+   * Line colour: semantic positive/negative for a judged direction, or 'flat'
+   * (neutral ink) when no direction should be asserted — steady trends and
+   * insufficient-data series must not read as green wins.
+   */
+  trend?: 'up' | 'down' | 'flat';
   width?: number;
   height?: number;
   /**
@@ -35,7 +39,7 @@ export function Sparkline({ points, trend = 'up', width = 96, height = 28, ariaL
     return `${x.toFixed(2)},${y.toFixed(2)}`;
   });
 
-  const colorClass = trend === 'down' ? 'text-negative' : 'text-positive';
+  const colorClass = trend === 'down' ? 'text-negative' : trend === 'flat' ? 'text-primary/60' : 'text-positive';
   const [lastX, lastY] = coords[coords.length - 1].split(',');
 
   return (

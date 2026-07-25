@@ -21,6 +21,14 @@ describe('Sparkline', () => {
     expect(container.querySelector('svg')).toHaveClass('text-negative');
   });
 
+  it('uses neutral ink for a flat trend (no asserted direction)', () => {
+    // Steady/insufficient-data series must not read as green wins.
+    const { container } = render(<Sparkline points={[1500, 1510, 1490]} trend="flat" />);
+    const svg = container.querySelector('svg');
+    expect(svg).toHaveClass('text-primary/60');
+    expect(svg).not.toHaveClass('text-positive');
+  });
+
   it('is decorative (aria-hidden) without a label, labelled img with one', () => {
     const { container, rerender } = render(<Sparkline points={[1, 2]} />);
     expect(container.querySelector('svg')).toHaveAttribute('aria-hidden', 'true');

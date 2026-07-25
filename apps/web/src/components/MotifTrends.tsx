@@ -172,7 +172,9 @@ export function MotifTrends({ trends, windowDays }: MotifTrendsProps) {
                             <div className="mt-2">
                                 <Sparkline
                                     points={trend.data_points.map(p => p.accuracy)}
-                                    trend={trend.insufficient_data || trend.trend !== 'down' ? 'up' : 'down'}
+                                    // Colour only asserts a direction the badge asserts too:
+                                    // steady and insufficient-data series stay neutral ink.
+                                    trend={trend.insufficient_data || trend.trend === 'steady' ? 'flat' : trend.trend}
                                     width={140}
                                     height={24}
                                     ariaLabel={`${formatMotifName(trend.motif)} accuracy trend, ${trend.data_points.length} days`}

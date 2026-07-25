@@ -1,5 +1,6 @@
 import { LOCALE } from '../utils/locale';
 import { type SessionSummary } from '../api';
+import { AnimatedNumber } from './AnimatedNumber';
 
 interface Achievement {
     id: string;
@@ -57,16 +58,16 @@ export function SessionSummaryCard({
 
             <div className="grid grid-cols-2 md:grid-cols-4 gap-6 mb-6">
                 <div className="text-center">
-                    <div className="text-3xl font-serif text-positive">{sessionSummary.pass_count}</div>
+                    <div className="text-3xl font-serif text-positive"><AnimatedNumber value={sessionSummary.pass_count} /></div>
                     <div className="text-xs uppercase tracking-widest text-primary/70 mt-1">Passed</div>
                 </div>
                 <div className="text-center">
-                    <div className="text-3xl font-serif text-negative">{sessionSummary.fail_count}</div>
+                    <div className="text-3xl font-serif text-negative"><AnimatedNumber value={sessionSummary.fail_count} /></div>
                     <div className="text-xs uppercase tracking-widest text-primary/70 mt-1">Failed</div>
                 </div>
                 <div className="text-center">
                     <div className="text-3xl font-serif text-primary">
-                        {calculateAccuracy(sessionSummary.pass_count, sessionSummary.fail_count)}%
+                        <AnimatedNumber value={calculateAccuracy(sessionSummary.pass_count, sessionSummary.fail_count)} suffix="%" />
                     </div>
                     <div className="text-xs uppercase tracking-widest text-primary/70 mt-1">Accuracy</div>
                 </div>
@@ -81,11 +82,11 @@ export function SessionSummaryCard({
             {/* Enhanced Session Stats */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-6 mb-6">
                 <div className="text-center">
-                    <div className="text-3xl font-serif text-primary">{sessionSummary.best_streak}</div>
+                    <div className="text-3xl font-serif text-primary"><AnimatedNumber value={sessionSummary.best_streak} /></div>
                     <div className="text-xs uppercase tracking-widest text-primary/70 mt-1">Best Streak</div>
                 </div>
                 <div className="text-center">
-                    <div className="text-3xl font-serif text-primary">{sessionSummary.hints_used}</div>
+                    <div className="text-3xl font-serif text-primary"><AnimatedNumber value={sessionSummary.hints_used} /></div>
                     <div className="text-xs uppercase tracking-widest text-primary/70 mt-1">Hints Used</div>
                 </div>
                 {sessionSummary.session_type && sessionSummary.session_type !== 'standard' && (
