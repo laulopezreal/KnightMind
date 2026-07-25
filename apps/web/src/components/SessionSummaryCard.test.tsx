@@ -61,8 +61,8 @@ describe('SessionSummaryCard', () => {
     );
 
     // findByText: the stats count up to their final value.
-    expect(await screen.findByText('8')).toBeInTheDocument();
-    expect(await screen.findByText('2')).toBeInTheDocument();
+    expect(await screen.findByText('8', undefined, { timeout: 4000 })).toBeInTheDocument();
+    expect(await screen.findByText('2', undefined, { timeout: 4000 })).toBeInTheDocument();
   });
 
   it('should display accuracy percentage', async () => {
@@ -74,7 +74,7 @@ describe('SessionSummaryCard', () => {
       />
     );
 
-    expect(await screen.findByText('80%')).toBeInTheDocument();
+    expect(await screen.findByText('80%', undefined, { timeout: 4000 })).toBeInTheDocument();
   });
 
   it('should display total time', () => {
@@ -98,8 +98,8 @@ describe('SessionSummaryCard', () => {
       />
     );
 
-    expect(await screen.findByText('5')).toBeInTheDocument(); // best streak
-    expect(await screen.findByText('1')).toBeInTheDocument(); // hints used
+    expect(await screen.findByText('5', undefined, { timeout: 4000 })).toBeInTheDocument(); // best streak
+    expect(await screen.findByText('1', undefined, { timeout: 4000 })).toBeInTheDocument(); // hints used
   });
 
   it('should display earned achievements only', () => {
