@@ -44,6 +44,18 @@ describe('TimeControlOverview', () => {
     expect(onSelect).toHaveBeenCalledWith('blitz');
   });
 
+  it('says Unavailable — not "No games yet" — when a control\'s fetch fails', async () => {
+    mockGetRatingHistory.mockImplementation((_u: string, tc: string) =>
+      tc === 'rapid' ? Promise.resolve(hist([1500, 1524])) : Promise.reject(new Error('boom'))
+    );
+    render(<TimeControlOverview username="alice" active="rapid" onSelect={vi.fn()} />);
+
+    await waitFor(() => expect(screen.getByText('1524')).toBeInTheDocument());
+    // An outage must not read as an empty account.
+    expect(screen.getAllByText('Unavailable')).toHaveLength(2); // bullet + blitz failed
+    expect(screen.queryByText('No games yet')).not.toBeInTheDocument();
+  });
+
   it('renders a sparkline only when there are at least two snapshots', async () => {
     const { container } = render(<TimeControlOverview username="alice" active="rapid" onSelect={vi.fn()} />);
     await waitFor(() => expect(screen.getByText('1524')).toBeInTheDocument());

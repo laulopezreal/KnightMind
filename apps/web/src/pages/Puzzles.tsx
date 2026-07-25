@@ -515,6 +515,31 @@ export default function Puzzles() {
     // setup panel, so without this the moment of highest intent ("Start
     // Session") lands on an apparently unchanged screen with the puzzle hidden
     // below the fold.
+    // Scroll with a settle guarantee. Two real-world hazards: (1) smooth
+    // scrolling is an animation and can be suppressed outright (reduced-motion
+    // UAs, hidden tabs); (2) content around the target keeps rendering for a
+    // moment, so a one-shot correction can land before a late reflow moves the
+    // target thousands of pixels. Verify-and-retry a few times over ~2s, and
+    // back off the moment the user scrolls themselves.
+    const scrollWithSettle = (el: HTMLElement | null) => {
+        if (!el) return;
+        el.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+        let attempts = 0;
+        let lastAutoY: number | null = null;
+        const verify = () => {
+            attempts += 1;
+            // The user took over — never fight their scroll.
+            if (lastAutoY !== null && Math.abs(window.scrollY - lastAutoY) > 40) return;
+            const r = el.getBoundingClientRect();
+            if (r.top < -8 || r.top > window.innerHeight * 0.5) {
+                el.scrollIntoView?.({ block: 'start' });
+                lastAutoY = window.scrollY;
+            }
+            if (attempts < 4) setTimeout(verify, 500);
+        };
+        setTimeout(verify, 500);
+    };
+
     const boardSectionRef = useRef<HTMLElement>(null);
     const scrolledForSessionRef = useRef<string | null>(null);
     useEffect(() => {
@@ -523,10 +548,7 @@ export default function Puzzles() {
         scrolledForSessionRef.current = activeSessionId;
         // setTimeout, not requestAnimationFrame: rAF never fires in a hidden
         // tab, which would silently skip the scroll entirely.
-        setTimeout(() => {
-            // Optional-call: jsdom (tests) has no scrollIntoView.
-            boardSectionRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
-        }, 60);
+        setTimeout(() => scrollWithSettle(boardSectionRef.current), 60);
     }, [activeSessionId, currentPuzzle]);
 
     // Same for the finish: the summary (stats + any achievements earned) is the
@@ -534,9 +556,7 @@ export default function Puzzles() {
     const summaryRef = useRef<HTMLDivElement>(null);
     useEffect(() => {
         if (sessionState !== 'completed') return;
-        setTimeout(() => {
-            summaryRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
-        }, 60);
+        setTimeout(() => scrollWithSettle(summaryRef.current), 60);
     }, [sessionState]);
 
     // Reset clue and start timer when puzzle changes (side effects in effect)
@@ -965,7 +985,7 @@ export default function Puzzles() {
             )}
 
             {currentPuzzle && ( // Make sure currentPuzzle is defined or access checked
-                <section ref={boardSectionRef} className="order-1 lg:order-6 grid lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)] gap-6 lg:gap-16 scroll-mt-6">
+                <section ref={boardSectionRef} className="-order-1 lg:order-6 grid lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)] gap-6 lg:gap-16 scroll-mt-6">
                     {/* Chessboard */}
                     <div className="lg:order-1 scroll-mb-8">
                         <div className="aspect-square w-full max-w-[680px] mx-auto shadow-2xl shadow-primary/5 rounded-sm overflow-hidden border border-primary/10">

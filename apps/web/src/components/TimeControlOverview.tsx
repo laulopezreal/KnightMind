@@ -20,7 +20,10 @@ interface TimeControlOverviewProps {
  * the active control.
  */
 export function TimeControlOverview({ username, active, onSelect }: TimeControlOverviewProps) {
-    const [histories, setHistories] = useState<Record<TimeControl, SnapshotHistoryItem[]> | null>(null);
+    // Per-control history: an array (possibly empty) when the fetch succeeded,
+    // null when it FAILED — "no games yet" and "couldn't load" must not be
+    // conflated, or an outage reads as an empty account.
+    const [histories, setHistories] = useState<Record<TimeControl, SnapshotHistoryItem[] | null> | null>(null);
 
     // Reset to the loading state when the username changes (render-phase state
     // sync, matching the codebase pattern — sync setState in effects is linted).
@@ -34,9 +37,9 @@ export function TimeControlOverview({ username, active, onSelect }: TimeControlO
         let cancelled = false;
         Promise.allSettled(CONTROLS.map((tc) => getRatingHistory(username, tc, 20))).then((results) => {
             if (cancelled) return;
-            const next = { bullet: [], blitz: [], rapid: [] } as Record<TimeControl, SnapshotHistoryItem[]>;
+            const next = { bullet: null, blitz: null, rapid: null } as Record<TimeControl, SnapshotHistoryItem[] | null>;
             results.forEach((r, i) => {
-                if (r.status === 'fulfilled') next[CONTROLS[i]] = r.value;
+                next[CONTROLS[i]] = r.status === 'fulfilled' ? r.value : null;
             });
             setHistories(next);
         });
@@ -97,7 +100,9 @@ export function TimeControlOverview({ username, active, onSelect }: TimeControlO
                             )}
                         </div>
                         {histories !== null && latest === null && (
-                            <p className="mt-1 text-[10px] font-sans text-primary/70">No games yet</p>
+                            <p className="mt-1 text-[10px] font-sans text-primary/70">
+                                {history === null ? 'Unavailable' : 'No games yet'}
+                            </p>
                         )}
                     </button>
                 );
