@@ -240,9 +240,14 @@ RECAPTURE_PGN = """[Event "Live Chess"]
 [Black "bob"]
 [TimeControl "180+2"]
 
-1. e4 {[%clk 0:03:00]} e5 {[%clk 0:02:58]} 2. Nf3 {[%clk 0:02:55]} Nc6 {[%clk 0:02:50]}
-3. Bb5 {[%clk 0:02:50]} a6 {[%clk 0:02:40]} 4. Bxc6 {[%clk 0:02:45]} dxc6 {[%clk 0:00:12]} *
+1. e4 {[%clk 0:02:58]} e5 {[%clk 0:00:40]} 2. Nf3 {[%clk 0:02:55]} Nc6 {[%clk 0:00:30]}
+3. Bb5 {[%clk 0:02:50]} a6 {[%clk 0:00:16]} 4. Bxc6 {[%clk 0:02:45]} dxc6 {[%clk 0:00:12]} *
 """
+# Black's clock falls steadily to a genuine scramble: 16s before the mistake,
+# 12s after, so the recapture took ~6s of real thought. The earlier fixture
+# jumped 2:40 -> 0:12 on a single move, which reads as a long think that
+# happened to end low rather than as time pressure — an ambiguous case for the
+# assertion below to rest on.
 
 
 def test_pgn_replay_feeds_recapture_and_clock_evidence():
@@ -272,6 +277,9 @@ def test_pgn_replay_feeds_recapture_and_clock_evidence():
 
     assert not packet.game.pgn_desync
     assert packet.played.is_recapture
+    # A fast move on a low clock — both halves of the scramble, not just a low
+    # reading that a long think happened to end on.
+    assert packet.clock.move_time_seconds == 6.0
     assert packet.clock.seconds_left_after_move == 12.0
     assert packet.clock.is_time_pressure
     assert packet.position.phase == "opening"

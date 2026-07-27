@@ -294,6 +294,37 @@ class TestClock:
         )
         assert packet.clock.is_time_pressure is False
 
+    @pytest.mark.parametrize(
+        "before,after",
+        [(None, None), (9.0, None), (None, 7.0), (40.0, 32.0), (600.0, 12.0)],
+        ids=["neither", "before-only", "after-only", "both", "burned-down"],
+    )
+    def test_a_time_pressure_verdict_is_always_backed_by_a_citable_reading(
+        self, before, after
+    ):
+        """Regression: ``is_time_pressure`` was judged from a fallback reading
+        while the citable item was emitted only for the after-move one, so a
+        clock known only *before* the move produced a time-pressure verdict
+        with no clock fact to support it. The rule cites ``clock.seconds_left``,
+        so that gap made an uncheckable claim reachable."""
+        context = dataclasses.replace(
+            EMPTY_GAME_CONTEXT,
+            clock_before_move_seconds=before,
+            clock_after_move_seconds=after,
+        )
+        packet = extract(
+            HANGING_QUEEN,
+            "d1d2",
+            "d1d5",
+            context=context,
+            game=GameFacts(user_is_white=True, time_control=parse_time_control("600")),
+        )
+        cited = {item.id for item in to_evidence_items(packet)}
+        if packet.clock.is_time_pressure is not None:
+            assert "clock.seconds_left" in cited
+        else:
+            assert "clock.seconds_left" not in cited
+
     def test_unknown_clock_is_none_not_false(self):
         """None and False are different claims: 'we don't know' must not be
         recorded as 'they had plenty of time'."""

@@ -210,6 +210,12 @@ class KingFacts:
 
 @dataclass(frozen=True)
 class ClockFacts:
+    # The reading the time-pressure judgement is made from, and the one the
+    # citable evidence item quotes. Deriving both from ONE field is what stops
+    # them diverging: an earlier version judged from a fallback but only
+    # emitted an item for the after-move reading, so a diagnosis could claim
+    # time pressure while carrying no clock fact to back it up.
+    seconds_left: float | None
     seconds_left_before_move: float | None
     seconds_left_after_move: float | None
     move_time_seconds: float | None
@@ -540,8 +546,6 @@ def _back_rank_boxed(board: chess.Board, color: chess.Color, king_square: int) -
         for f in (file_index - 1, file_index, file_index + 1)
         if 0 <= f <= 7
     ]
-    if not neighbours:
-        return False
     return all(
         (piece := board.piece_at(square)) is not None
         and piece.color == color
@@ -551,6 +555,18 @@ def _back_rank_boxed(board: chess.Board, color: chess.Color, king_square: int) -
 
 
 def _clock_facts(context: GameContext, time_control: TimeControl) -> ClockFacts:
+    """Reduce the two clock readings to the one the diagnosis reasons from.
+
+    Prefers the after-move reading: it is what the player was actually left
+    with, which is the number that says whether they were in the danger zone.
+
+    Known limitation: this cannot distinguish a player who was already
+    scrambling from one who had ample time and burned it down to the same
+    reading on this single move. ``move_time_seconds`` is the fact that
+    separates them and is carried alongside; sharpening the rule to use it is
+    tracked as follow-up work. The exposure is bounded because
+    ``time_pressure_collapse`` is a modulator and can never be a primary cause.
+    """
     remaining = context.clock_after_move_seconds
     if remaining is None:
         remaining = context.clock_before_move_seconds
@@ -568,6 +584,7 @@ def _clock_facts(context: GameContext, time_control: TimeControl) -> ClockFacts:
             is_pressure = remaining < threshold
 
     return ClockFacts(
+        seconds_left=remaining,
         seconds_left_before_move=context.clock_before_move_seconds,
         seconds_left_after_move=context.clock_after_move_seconds,
         move_time_seconds=context.move_time_seconds,
@@ -683,12 +700,15 @@ def to_evidence_items(packet: EvidencePacket) -> tuple[EvidenceItem, ...]:
                 "true",
             )
         )
-    if packet.clock.seconds_left_after_move is not None:
+    # Emitted from the same field the time-pressure judgement reads, so
+    # ``is_time_pressure`` can never be decided from a reading the packet does
+    # not also make citable.
+    if packet.clock.seconds_left is not None:
         items.append(
             EvidenceItem(
                 "clock.seconds_left",
                 "Seconds left on the user's clock",
-                f"{packet.clock.seconds_left_after_move:.0f}",
+                f"{packet.clock.seconds_left:.0f}",
             )
         )
     if packet.clock.move_time_seconds is not None:
