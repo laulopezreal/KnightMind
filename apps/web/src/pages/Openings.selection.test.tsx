@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, act } from '@testing-library/react';
+import { render, screen, act, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import Openings from './Openings';
 import type { OpeningNode } from '../api';
@@ -130,6 +130,83 @@ describe('Openings selection panel', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Clear' }));
 
     expect(screen.queryByLabelText('Selected line')).not.toBeInTheDocument();
+  });
+});
+
+describe('Openings selection across a data change', () => {
+  it('drops a line that the new colour filter does not contain', async () => {
+    render(<Openings />);
+    await screen.findByTestId('opening-graph');
+    await act(async () => { emitSelect!(SICILIAN); });
+    expect(screen.getByText('1. e4 c5 2. Nf3')).toBeInTheDocument();
+
+    // "As black" is a different question; the panel must not keep answering
+    // the old one with the old numbers.
+    mockGetOpenings.mockResolvedValue({
+      ...TREE,
+      children: [node('d4')],
+    });
+    await userEvent.selectOptions(
+      screen.getByLabelText('Filter openings by color played'), 'black'
+    );
+
+    await waitFor(() =>
+      expect(screen.queryByLabelText('Selected line')).not.toBeInTheDocument()
+    );
+  });
+
+  it('refreshes the figures of a line that survives the refetch', async () => {
+    render(<Openings />);
+    await screen.findByTestId('opening-graph');
+    await act(async () => { emitSelect!([node('Start'), node('e4')]); });
+    expect(screen.getByLabelText('Selected line')).toHaveTextContent('21');
+
+    // Same line, new numbers after a refetch.
+    mockGetOpenings.mockResolvedValue({
+      ...TREE,
+      children: [node('e4', { games_count: 55, wins: 30, draws: 5, losses: 20, win_rate: 59.1 })],
+    });
+    await userEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+
+    await waitFor(() =>
+      expect(screen.getByLabelText('Selected line')).toHaveTextContent('55')
+    );
+    expect(screen.getByLabelText('Selected line')).toHaveTextContent('59.1%');
+  });
+});
+
+describe('Openings failed refresh', () => {
+  it('keeps the tree on screen when a refresh fails', async () => {
+    render(<Openings />);
+    await screen.findByTestId('opening-graph');
+
+    mockGetOpenings.mockRejectedValueOnce(new Error('Network request failed'));
+    await userEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+
+    // Discarding the graph would lose the user's zoom and expanded lines to a
+    // transient blip — the very thing keeping it mounted was meant to prevent.
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(/couldn’t refresh/i));
+    expect(screen.getByTestId('opening-graph')).toBeInTheDocument();
+  });
+
+  it('frames a failed refresh politely rather than as a blocking alert', async () => {
+    render(<Openings />);
+    await screen.findByTestId('opening-graph');
+
+    mockGetOpenings.mockRejectedValueOnce(new Error('Network request failed'));
+    await userEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+
+    await waitFor(() => expect(screen.getByRole('status')).toBeInTheDocument());
+    // The content below is still readable, so this is status, not alert.
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('still shows a blocking error when there is no tree to fall back on', async () => {
+    mockGetOpenings.mockRejectedValue(new Error('Network request failed'));
+    render(<Openings />);
+
+    await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument());
+    expect(screen.queryByTestId('opening-graph')).not.toBeInTheDocument();
   });
 });
 
