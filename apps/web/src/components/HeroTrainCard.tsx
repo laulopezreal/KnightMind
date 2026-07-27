@@ -1,4 +1,5 @@
 import { formatRelativeTime } from '../utils/time';
+import { needsImportFirst } from '../utils/trainEntry';
 
 interface HeroTrainCardProps {
   dueCount: number;
@@ -61,7 +62,14 @@ export function HeroTrainCard({
     ? caughtUpText
     : 'Most people improve by solving these today.';
 
-  const buttonText = isFirstTime
+  // A first-timer with nothing due has no session to start — the supporting
+  // copy already tells them to import, so the CTA must agree. The same
+  // predicate drives the route (see utils/trainEntry).
+  const needsImport = needsImportFirst({ totalSessions, dueCount });
+
+  const buttonText = needsImport
+    ? 'Import Your Games'
+    : isFirstTime
     ? 'Start First Session'
     : needsWarmup
     ? 'Start Warmup (5 puzzles)'
@@ -98,14 +106,18 @@ export function HeroTrainCard({
 
         {/* Right: Due Count + CTA + Next Review */}
         <div className="flex flex-col items-center text-center shrink-0 md:min-w-44">
-          <div className="mb-4">
-            <p className="text-4xl md:text-5xl font-mono text-primary leading-none">
-              {dueCount}
-            </p>
-            <p className="text-primary/70 text-sm font-sans mt-1">
-              puzzle{dueCount !== 1 ? 's' : ''} due
-            </p>
-          </div>
+          {/* A big "0 puzzles due" next to "import your games to generate your
+              first set" is noise — there is no queue to report yet. */}
+          {!needsImport && (
+            <div className="mb-4">
+              <p className="text-4xl md:text-5xl font-mono text-primary leading-none">
+                {dueCount}
+              </p>
+              <p className="text-primary/70 text-sm font-sans mt-1">
+                puzzle{dueCount !== 1 ? 's' : ''} due
+              </p>
+            </div>
+          )}
 
           <button
             type="button"

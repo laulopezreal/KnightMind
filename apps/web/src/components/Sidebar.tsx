@@ -51,6 +51,10 @@ const SubNavItem = ({
     <button
         onClick={onClick}
         title={tooltip}
+        // `title` never surfaces on touch and is inconsistent for keyboard users,
+        // so it can't be the only place the mode is explained — the sr-only
+        // description below carries it into the accessible name.
+        aria-label={tooltip ? `${label} — ${tooltip}` : undefined}
         className={`flex items-center min-h-11 text-sm transition-all duration-300 km-focus-visible rounded-sm px-2 -mx-1 text-left outline-none ${
             isActive
                 ? 'opacity-100 font-medium km-interactive'
@@ -221,14 +225,14 @@ export default function Sidebar({ mobileOpen = false, onMobileClose }: SidebarPr
                                     />
                                     <SubNavItem
                                         label="Timed"
-                                        badge="BETA"
+                                        badge="SOON"
                                         isActive={sessionType === 'timed'}
                                         onClick={() => setSessionType('timed')}
                                         tooltip="Coming soon: Race against the clock"
                                     />
                                     <SubNavItem
                                         label="Accuracy Goal"
-                                        badge="BETA"
+                                        badge="SOON"
                                         isActive={sessionType === 'accuracy_goal'}
                                         onClick={() => setSessionType('accuracy_goal')}
                                         tooltip="Coming soon: Focus on precision"

@@ -24,6 +24,7 @@ import { WeakestMotifCard } from '../components/WeakestMotifCard';
 import { RatingDeltaCard } from '../components/RatingDeltaCard';
 import { PageHeader } from '../components/PageHeader';
 import { DataStateError, DataStateOffline, DataStateSkeleton } from '../components/DataState';
+import { trainEntryDestination } from '../utils/trainEntry';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
 import { useLatestRequest } from '../hooks/useLatestRequest';
 
@@ -248,7 +249,11 @@ export default function Dashboard() {
                 needsWarmup={dashboardData.needs_warmup}
                 daysSinceLastSession={dashboardData.days_since_last_session}
                 totalSessions={dashboardData.total_sessions}
-                onStartSession={() => navigate(dashboardData.needs_warmup ? '/puzzles?warmup=true' : '/puzzles')}
+                onStartSession={() => navigate(trainEntryDestination({
+                    totalSessions: dashboardData.total_sessions,
+                    dueCount: dashboardData.schedule.due_now,
+                    needsWarmup: dashboardData.needs_warmup,
+                }))}
                 secondaryAction={heroSecondary}
             />
 
