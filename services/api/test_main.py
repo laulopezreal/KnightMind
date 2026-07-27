@@ -11,6 +11,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from services.api.day_boundary import utc_today
 from services.api.main import app, get_db
 from services.api.models import (
     Base,
@@ -916,7 +917,10 @@ def test_get_daily_puzzles_success(client_with_db, db_session):
     assert data["count"] == 3
     assert len(data["puzzles"]) == 3
 
-    today_str = date.today().isoformat()
+    # The server stamps `used_on` on the UTC day boundary (see day_boundary.py),
+    # so asserting against a server-local `date.today()` fails for the hours
+    # where the two calendars disagree.
+    today_str = utc_today().isoformat()
     for puzzle_data in data["puzzles"]:
         assert puzzle_data["used_on"] == today_str
         assert puzzle_data["username"] == "testuser"
@@ -924,7 +928,7 @@ def test_get_daily_puzzles_success(client_with_db, db_session):
 
 def test_get_daily_puzzles_rotation(client_with_db, db_session):
     """Test that puzzles rotate correctly - unused first, then used."""
-    yesterday = date.today() - timedelta(days=1)
+    yesterday = utc_today() - timedelta(days=1)
 
     for i in range(5):
         _create_puzzle(
@@ -946,7 +950,7 @@ def test_get_daily_puzzles_rotation(client_with_db, db_session):
     data = response.json()
     assert data["count"] == 4
 
-    today_str = date.today().isoformat()
+    today_str = utc_today().isoformat()
     for puzzle_data in data["puzzles"]:
         assert puzzle_data["used_on"] == today_str
 
