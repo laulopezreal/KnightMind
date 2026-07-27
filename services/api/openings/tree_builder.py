@@ -41,6 +41,45 @@ class OpeningStats:
 
 
 @dataclass
+class BuildReport:
+    """
+    Why each submitted PGN did or didn't make it into the tree.
+
+    The endpoint knows how many games it stored for a user but the tree only
+    reflects the ones it could actually use. Without this, a repertoire built
+    from 12 of 500 games looks identical to one built from all 500. Splitting
+    "excluded by the colour filter" (expected, user asked for it) from
+    "skipped" (unexpected data loss) lets the UI stay quiet in the first case
+    and warn in the second.
+    """
+
+    games_seen: int = 0
+    games_analyzed: int = 0
+    excluded_by_color: int = 0
+    skipped_unreadable: int = 0
+    skipped_not_player: int = 0
+    skipped_unfinished: int = 0
+
+    @property
+    def games_skipped(self) -> int:
+        """Games lost for reasons the user did not ask for."""
+        return (
+            self.skipped_unreadable + self.skipped_not_player + self.skipped_unfinished
+        )
+
+    def to_dict(self) -> dict:
+        return {
+            "games_seen": self.games_seen,
+            "games_analyzed": self.games_analyzed,
+            "excluded_by_color": self.excluded_by_color,
+            "games_skipped": self.games_skipped,
+            "skipped_unreadable": self.skipped_unreadable,
+            "skipped_not_player": self.skipped_not_player,
+            "skipped_unfinished": self.skipped_unfinished,
+        }
+
+
+@dataclass
 class OpeningNode:
     """A node in the opening tree representing a position after a move."""
 
@@ -83,6 +122,7 @@ class OpeningTreeBuilder:
         """
         self.max_ply = max_ply
         self.root = OpeningNode(move_san="root", ply=0)
+        self.report = BuildReport()
 
     def add_game(
         self,
@@ -99,17 +139,33 @@ class OpeningTreeBuilder:
             color_filter: Which games to include based on player's color
 
         Returns:
-            True if the game was added, False if skipped (wrong color or parse error)
+            True if the game was added; False if it was excluded (wrong colour)
+            or skipped (unreadable, not this player's game, or never played out
+            to a result). Either way `self.report` records the reason.
         """
+        self.report.games_seen += 1
         try:
             game = chess.pgn.read_game(io.StringIO(pgn_text))
             if game is None:
+                self.report.skipped_unreadable += 1
                 return False
 
-            # Determine player's color
-            white_player = game.headers.get("White", "").lower()
-            black_player = game.headers.get("Black", "").lower()
-            player_lower = player_username.lower()
+            # Determine player's color. Headers are stripped as well as
+            # lowercased: a stray space in `[White "alice "]` would otherwise
+            # fail the match and drop the game from the repertoire silently.
+            white_player = game.headers.get("White", "").strip().lower()
+            black_player = game.headers.get("Black", "").strip().lower()
+            player_lower = player_username.strip().lower()
+
+            # python-chess is lenient: arbitrary text parses into a game whose
+            # seven-tag-roster fields are filled with the PGN "unknown"
+            # placeholder ("?") rather than returning None. Treat a game that
+            # names neither player as malformed, not as "someone else's game" —
+            # the two mean very different things to a user reading the warning.
+            unknown = {"", "?"}
+            if white_player in unknown and black_player in unknown:
+                self.report.skipped_unreadable += 1
+                return False
 
             if player_lower == white_player:
                 player_color = "white"
@@ -117,13 +173,19 @@ class OpeningTreeBuilder:
                 player_color = "black"
             else:
                 # Player not in this game
+                self.report.skipped_not_player += 1
                 return False
 
             # Apply color filter
             if color_filter != "both" and color_filter != player_color:
+                self.report.excluded_by_color += 1
                 return False
 
-            # Determine result from player's perspective
+            # Determine result from player's perspective. Anything that isn't a
+            # decisive result or an agreed draw ("*" for ongoing/aborted, or a
+            # malformed header) is excluded rather than scored: counting it as a
+            # draw would award half a point for a game that was never played out
+            # and quietly skew the score every node is coloured by.
             result_str = game.headers.get("Result", "*")
             if result_str == "1-0":
                 result = "win" if player_color == "white" else "loss"
@@ -132,15 +194,17 @@ class OpeningTreeBuilder:
             elif result_str == "1/2-1/2":
                 result = "draw"
             else:
-                # Ongoing or unknown result - count as draw for stats
-                result = "draw"
+                self.report.skipped_unfinished += 1
+                return False
 
             # Walk through the moves and update the tree
             self._add_moves_to_tree(game, result, player_color)
+            self.report.games_analyzed += 1
             return True
 
         except Exception:
             # Skip games that can't be parsed
+            self.report.skipped_unreadable += 1
             return False
 
     def _add_moves_to_tree(

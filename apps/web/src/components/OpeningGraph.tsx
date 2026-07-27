@@ -1,7 +1,7 @@
 import { useEffect, useRef, useImperativeHandle } from 'react';
 import * as d3 from 'd3';
 import type { OpeningNode } from '../api';
-import { getWinRateColor } from '../utils/openings';
+import { getScoreColor } from '../utils/openings';
 
 const LAYOUT = {
   nodeSpacing: 35,
@@ -279,7 +279,7 @@ export function OpeningGraph({ data, onNodeHover, onNodeHoverEnd, onError, graph
         // Circle
         nodeEnter.append('circle')
           .attr('r', d => Math.max(6, Math.min(16, Math.sqrt(d.data.games_count) * 1.5 + 4)))
-          .attr('fill', d => getWinRateColor(d.data.win_rate))
+          .attr('fill', d => getScoreColor(d.data.win_rate))
           .attr('stroke', 'var(--bg-primary)')
           .attr('stroke-width', 2);
 

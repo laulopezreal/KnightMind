@@ -198,6 +198,48 @@ def test_get_openings_with_games(mock_import_games, client_with_db):
     assert "win_rate" in data
     assert data["games_count"] == 2
 
+    # The response must account for every stored game, so a tree built from a
+    # fraction of a user's archive is reportable instead of looking complete.
+    analysis = data["analysis"]
+    assert analysis["games_stored"] == 2
+    assert analysis["games_analyzed"] == 2
+    assert analysis["games_skipped"] == 0
+    assert analysis["excluded_by_color"] == 0
+
+
+@patch("services.api.main.import_all_games")
+def test_get_openings_analysis_reports_color_exclusions(
+    mock_import_games, client_with_db
+):
+    """Games dropped by the colour filter are reported, but not as 'skipped'."""
+
+    async def mock_generator(username, since=None):
+        from services.ingest import ChessGame
+
+        for game_data in MOCK_GAMES:
+            yield ChessGame(
+                url=game_data["url"],
+                pgn=game_data["pgn"],
+                time_control=game_data["time_control"],
+                end_time=game_data["end_time"],
+                rated=game_data["rated"],
+                white_username=game_data["white"]["username"],
+                black_username=game_data["black"]["username"],
+                white_result=game_data["white"]["result"],
+                black_result=game_data["black"]["result"],
+            )
+
+    mock_import_games.side_effect = mock_generator
+    client_with_db.post("/import/chesscom?username=testuser")
+
+    response = client_with_db.get("/openings?username=testuser&color=white")
+    assert response.status_code == 200
+    analysis = response.json()["analysis"]
+
+    assert analysis["games_stored"] == 2
+    assert analysis["games_analyzed"] + analysis["excluded_by_color"] == 2
+    assert analysis["games_skipped"] == 0
+
 
 def test_get_openings_no_games(client_with_db):
     """Test /openings returns 404 when user has no games."""
