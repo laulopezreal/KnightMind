@@ -6,10 +6,23 @@ import { evaluateFen, getEngineStatus, ApiError } from '../api';
 import { useClue } from '../hooks/useClue';
 import { PageHeader } from '../components/PageHeader';
 import { DataStateError, DataStateLoading } from '../components/DataState';
+import { useChessUsername } from '../context/ChessUsernameContext';
+import { createManualPuzzle } from '../api/puzzles';
+
+const MOTIF_OPTIONS: { value: string; label: string }[] = [
+  { value: 'back_rank', label: 'Back Rank Panic' },
+  { value: 'blunder', label: 'The Missed Win' },
+  { value: 'fork', label: 'The Fork' },
+  { value: 'hanging_piece', label: 'Loose Piece' },
+  { value: 'hanging_queen', label: 'The Hanging Queen' },
+  { value: 'mate_threat', label: 'Missed Mate' },
+  { value: 'pin', label: 'Pinned and Lost' },
+];
 
 const STARTING_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
 
 export default function Engine() {
+  const { username } = useChessUsername();
   const [fen, setFen] = useState(STARTING_FEN);
   const [fenInput, setFenInput] = useState(STARTING_FEN);
   const [evaluation, setEvaluation] = useState<{ bestMove: string; eval: number } | null>(null);
@@ -25,6 +38,15 @@ export default function Engine() {
   const isMountedRef = useRef(true);
   const clue = useClue(evaluation?.bestMove ?? '', fen);
   const clueReset = clue.reset;
+
+  // Save-as-puzzle state
+  const [saveTitle, setSaveTitle] = useState('');
+  const [saveMotif, setSaveMotif] = useState('blunder');
+  const [saveSource, setSaveSource] = useState('');
+  const [saveSolution, setSaveSolution] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [savedPuzzleId, setSavedPuzzleId] = useState<string | null>(null);
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -180,6 +202,36 @@ export default function Engine() {
       clueReset();
     } else {
       clue.advance();
+    }
+  };
+
+  // Pre-fill solution when evaluation arrives; reset save state on new position
+  useEffect(() => {
+    if (evaluation) {
+      setSaveSolution(evaluation.bestMove);
+      setSavedPuzzleId(null);
+      setSaveError(null);
+    }
+  }, [evaluation]);
+
+  const handleSavePuzzle = async () => {
+    if (!username || !evaluation) return;
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const result = await createManualPuzzle({
+        username,
+        fen,
+        title: saveTitle.trim(),
+        motif: saveMotif,
+        source: saveSource.trim() || undefined,
+        solution_pv: saveSolution.trim(),
+      });
+      setSavedPuzzleId(result.puzzle_id);
+    } catch (err) {
+      setSaveError(err instanceof ApiError ? err.message : 'Failed to save puzzle');
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -340,6 +392,96 @@ export default function Engine() {
             </div>
             {fenError && <p id="fen-error" role="alert" className="text-negative text-xs font-sans">{fenError}</p>}
           </div>
+
+          {/* Save as puzzle */}
+          {evaluation && (
+            <div className="bg-primary/5 border border-primary/10 rounded-sm p-6 space-y-4">
+              <span className="block font-serif text-base text-primary border-b border-primary/10 pb-3">Save as puzzle</span>
+
+              {savedPuzzleId ? (
+                <div className="space-y-2">
+                  <p className="text-positive text-sm font-sans">Puzzle saved.</p>
+                  <Link
+                    to={`/library/${savedPuzzleId}`}
+                    className="km-interactive km-focus-visible km-inline-link text-primary text-sm font-sans tracking-wide"
+                  >
+                    View in Library →
+                  </Link>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <div className="space-y-1">
+                    <label htmlFor="save-title" className="block text-[10px] font-sans uppercase tracking-widest text-primary/60">Title</label>
+                    <input
+                      id="save-title"
+                      type="text"
+                      value={saveTitle}
+                      onChange={(e) => setSaveTitle(e.target.value)}
+                      placeholder="e.g. Back rank idea"
+                      className="w-full bg-transparent border-b border-primary/20 pb-1 outline-none text-primary font-sans text-sm placeholder-primary/30 focus:border-primary/60 transition-colors"
+                    />
+                  </div>
+
+                  <div className="space-y-1">
+                    <label htmlFor="save-motif" className="block text-[10px] font-sans uppercase tracking-widest text-primary/60">Motif</label>
+                    <select
+                      id="save-motif"
+                      value={saveMotif}
+                      onChange={(e) => setSaveMotif(e.target.value)}
+                      className="w-full bg-transparent border-b border-primary/20 pb-1 outline-none text-primary font-sans text-sm focus:border-primary/60 transition-colors"
+                    >
+                      {MOTIF_OPTIONS.map((o) => (
+                        <option key={o.value} value={o.value}>{o.label}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="space-y-1">
+                    <label htmlFor="save-solution" className="block text-[10px] font-sans uppercase tracking-widest text-primary/60">Solution line</label>
+                    <p id="save-solution-help" className="text-primary/50 text-xs font-sans">
+                      UCI PV, include opponent replies, e.g. e2e4 e7e5 g1f3
+                    </p>
+                    <input
+                      id="save-solution"
+                      type="text"
+                      value={saveSolution}
+                      onChange={(e) => setSaveSolution(e.target.value)}
+                      aria-describedby="save-solution-help"
+                      placeholder="e.g. e2e4 e7e5 g1f3"
+                      className="w-full bg-transparent border-b border-primary/20 pb-1 outline-none text-primary font-mono text-sm placeholder-primary/30 focus:border-primary/60 transition-colors"
+                    />
+                  </div>
+
+                  <div className="space-y-1">
+                    <label htmlFor="save-source" className="block text-[10px] font-sans uppercase tracking-widest text-primary/60">Source (optional)</label>
+                    <input
+                      id="save-source"
+                      type="text"
+                      value={saveSource}
+                      onChange={(e) => setSaveSource(e.target.value)}
+                      placeholder="e.g. Lau game, imported FEN"
+                      className="w-full bg-transparent border-b border-primary/20 pb-1 outline-none text-primary font-sans text-sm placeholder-primary/30 focus:border-primary/60 transition-colors"
+                    />
+                  </div>
+
+                  {saveError && <p role="alert" className="text-negative text-xs font-sans">{saveError}</p>}
+
+                  {!username && (
+                    <p className="text-primary/60 text-xs font-sans">Set your Chess.com username to save puzzles.</p>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={handleSavePuzzle}
+                    disabled={saving || !username || !saveTitle.trim() || !saveSolution.trim()}
+                    className="km-interactive km-focus-visible border border-primary/20 px-4 py-2 text-xs font-sans uppercase tracking-widest text-primary transition-colors rounded-sm disabled:opacity-40"
+                  >
+                    {saving ? 'Saving…' : 'Save puzzle'}
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </section>
     </div>
