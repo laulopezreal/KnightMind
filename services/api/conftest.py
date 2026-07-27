@@ -43,3 +43,19 @@ def _reset_rate_limiters():
     reset_limiters()
     yield
     reset_limiters()
+
+
+@pytest.fixture(autouse=True)
+def _reset_openings_cache():
+    """Clear the opening-tree cache around every test.
+
+    It is a module-global keyed partly by game count and latest game time, so
+    two tests importing the same fixture games under the same username would
+    produce the same key and the second would silently be served the first
+    one's tree — masking real differences in what the endpoint built.
+    """
+    from services.api.openings import tree_cache
+
+    tree_cache.clear()
+    yield
+    tree_cache.clear()

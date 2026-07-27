@@ -64,6 +64,8 @@ from services.api.models import (
 )
 from services.api.motifs import MotifPerformanceResponse, get_user_motif_performance
 from services.api.openings import OpeningTreeBuilder
+from services.api.openings import make_key as make_openings_cache_key
+from services.api.openings import tree_cache as openings_tree_cache
 from services.api.puzzles.identity import backfill_puzzle_identity
 from services.api.ratelimit import rate_limit
 from services.api.ratings_auto import auto_snapshot, auto_snapshot_throttled
@@ -693,6 +695,20 @@ async def get_openings(
             detail=f"No games found for user '{username}'. Import games first using POST /import/chesscom",
         )
 
+    # Rebuilding re-parses every stored PGN, and the client refetches on mount
+    # and on every colour-filter change. The key folds in the game count and the
+    # newest game's timestamp, so an import invalidates this by construction.
+    cache_key = make_openings_cache_key(
+        username=username,
+        color=color,
+        max_ply=max_ply,
+        game_count=game_count,
+        latest_game_time=game_repository.get_latest_game_time(username),
+    )
+    cached = openings_tree_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
     # Stream all PGNs for the user in bulk batches (one query per batch)
     # instead of one query per game, without holding every blob in memory.
     metadata_list = game_repository.get_all_metadata(username)
@@ -718,6 +734,10 @@ async def get_openings(
     # the repository, so a tree built from a fraction of a user's games is
     # reportable instead of silently looking complete.
     tree["analysis"] = {"games_stored": game_count, **builder.report.to_dict()}
+    # Stored only once the response is fully composed: the cache hands values
+    # back by reference, so anything mutated after this point would corrupt
+    # every later hit.
+    openings_tree_cache.put(cache_key, tree)
     return tree
 
 
