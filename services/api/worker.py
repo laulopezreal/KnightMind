@@ -1,17 +1,85 @@
 import asyncio
 import logging
 import traceback
-from dataclasses import asdict
+from dataclasses import asdict, dataclass, is_dataclass
 from datetime import datetime, timedelta, timezone
+from typing import Any, Callable
 
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from services.api.db import SessionLocal
-from services.api.models import Job, JobStatus
+from services.api.models import Job, JobStatus, JobType
 from services.api.puzzles.generator import generate_puzzles
 
 logger = logging.getLogger(__name__)
+
+
+class UnknownJobTypeError(Exception):
+    """A job names a type with no registered handler.
+
+    Raised (and therefore surfaced as a FAILED job with a readable message)
+    rather than falling back to a default handler. A job that quietly runs the
+    wrong work is far worse than one that fails loudly: before the handler
+    registry existed, ``execute_job`` ignored ``job.type`` entirely and ran
+    puzzle generation for every job regardless of what it claimed to be.
+    """
+
+
+@dataclass(frozen=True)
+class JobContext:
+    """Everything a handler needs, and nothing about the worker.
+
+    ``heartbeat`` returns True when the job has been canceled and the handler
+    should stop; calling it also bumps the liveness lease, so a long-running
+    handler must call it periodically or crash recovery will reclaim the job.
+    """
+
+    job_id: str
+    username: str
+    params: dict
+    heartbeat: Callable[[], bool]
+    progress: Callable[[int, int], None]
+
+
+# A handler returns a dataclass or dict, which is persisted to
+# ``Job.result_json``. Anything else is a programming error (see
+# ``_result_payload``).
+JobHandler = Callable[[JobContext], Any]
+
+
+def _run_puzzle_generation(ctx: JobContext) -> Any:
+    """Handler for :attr:`JobType.PUZZLE_GENERATION`."""
+    # Job params bypass FastAPI validation; clamp to the same bounds as the
+    # endpoint so a stored job can't trigger an unbounded bulk PGN load.
+    max_games = min(max(int(ctx.params.get("max_games", 30)), 1), 2000)
+    max_puzzles = min(max(int(ctx.params.get("max_puzzles", 30)), 1), 2000)
+    return generate_puzzles(
+        username=ctx.username,
+        max_games=max_games,
+        max_puzzles=max_puzzles,
+        cancellation_check=ctx.heartbeat,
+        progress_callback=ctx.progress,
+    )
+
+
+JOB_HANDLERS: dict[str, JobHandler] = {
+    JobType.PUZZLE_GENERATION.value: _run_puzzle_generation,
+}
+
+
+def _result_payload(result: Any) -> dict | None:
+    """Normalise a handler's return value for ``Job.result_json``."""
+    if result is None:
+        return None
+    if is_dataclass(result) and not isinstance(result, type):
+        return asdict(result)
+    if isinstance(result, dict):
+        return result
+    raise TypeError(
+        f"job handler returned {type(result).__name__}; "
+        "handlers must return a dataclass, a dict, or None"
+    )
 
 
 class JobWorker:
@@ -221,27 +289,32 @@ class JobWorker:
                 username = job.username
                 # Use params from job if available, otherwise defaults
                 params = job.params or {}
-                # Job params bypass FastAPI validation; clamp to the same
-                # bounds as the endpoint so a stored job can't trigger an
-                # unbounded bulk PGN load.
-                max_games = min(max(int(params.get("max_games", 30)), 1), 2000)
-                max_puzzles = min(max(int(params.get("max_puzzles", 30)), 1), 2000)
+                job_type = job.type
 
-            # Run generation (CPU bound). The generator calls the callback as it
-            # makes progress (between games AND every N plies within a game); we
-            # use it both to check for cancellation AND to bump the heartbeat_at
+            handler = JOB_HANDLERS.get(job_type)
+            if handler is None:
+                # Raised inside the try so it takes the ordinary failure path:
+                # the guarded UPDATE below records FAILED only if the job is
+                # still RUNNING, so a cancel that landed first still wins.
+                raise UnknownJobTypeError(
+                    f"no handler registered for job type {job_type!r}; "
+                    f"known types: {sorted(JOB_HANDLERS)}"
+                )
+
+            # Run the handler (CPU bound). It calls the callbacks as it makes
+            # progress; those check for cancellation AND bump the heartbeat_at
             # lease, so crash recovery can tell a live long job (fresh lease)
             # apart from a crashed one (stale lease).
             result = await asyncio.to_thread(
-                generate_puzzles,
-                username=username,
-                max_games=max_games,
-                max_puzzles=max_puzzles,
-                cancellation_check=lambda: self._heartbeat_and_check_cancellation(
-                    job_id
-                ),
-                progress_callback=lambda done, total: self._write_progress(
-                    job_id, done, total
+                handler,
+                JobContext(
+                    job_id=job_id,
+                    username=username,
+                    params=params,
+                    heartbeat=lambda: self._heartbeat_and_check_cancellation(job_id),
+                    progress=lambda done, total: self._write_progress(
+                        job_id, done, total
+                    ),
                 ),
             )
 
@@ -262,7 +335,7 @@ class JobWorker:
                         status=JobStatus.SUCCEEDED,
                         progress_current=100,
                         progress_total=100,
-                        result_json=asdict(result),
+                        result_json=_result_payload(result),
                         message="Analysis complete",
                         updated_at=now,
                     )
