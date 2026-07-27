@@ -63,6 +63,12 @@ _OPENING_PLY_CEILING = 24
 # excluded: an undefended pawn is ordinary and would drown the real signal.
 _LOOSE_MIN_VALUE = 3
 
+# Minimum value for an enemy piece to count as a target of a move. The king is
+# always a target regardless of this floor — it carries no material value here
+# (see ``_PIECE_VALUE``) but a knight forking king and queen is the archetypal
+# fork, and a value-only test would miss exactly that.
+_ATTACK_TARGET_MIN_VALUE = 3
+
 # Time pressure is relative to the format, with an absolute floor so a long
 # game's 10%% (60s of a 10-minute game) does not read as a crisis while 12
 # seconds of a 2-minute game does.
@@ -163,11 +169,32 @@ class MoveFacts:
 
 
 @dataclass(frozen=True)
+class AttackFacts:
+    """What the moved piece attacks once it lands.
+
+    Measured on the position *after* the move, because that is what makes a
+    fork a fork: the geometry that matters is the one the move creates, not the
+    one it left behind.
+    """
+
+    targets: tuple[str, ...]
+    target_count: int
+    # Targets that nothing defends once the move has landed — the ones that
+    # actually fall. The king is excluded: "undefended" is meaningless for it.
+    loose_target_count: int
+    includes_king: bool
+    is_fork: bool
+
+
+@dataclass(frozen=True)
 class PlayedMoveFacts:
     move: MoveFacts
     # True when the played move recaptures on the square the opponent just
     # captured on — the signature of an automatic, unexamined reply.
     is_recapture: bool
+    # What the user's own move threatened. Distinguishes "they were chasing
+    # their own idea and missed the reply" from "they saw nothing at all".
+    attacks: AttackFacts
 
 
 @dataclass(frozen=True)
@@ -180,6 +207,11 @@ class BestMoveFacts:
     # it; several means the position was forgiving and they still went astray.
     is_only_move: bool
     pv_length: int
+    attacks: AttackFacts
+    # The solution simply takes something nothing can recapture — the "it was
+    # hanging and you didn't take it" case. Measured after the move, so an
+    # x-ray defender that the capture removes is accounted for.
+    captures_undefended: bool
 
 
 @dataclass(frozen=True)
@@ -413,7 +445,47 @@ def _played_facts(
         and context.previous_capture_square is not None
         and move.to_square == context.previous_capture_square
     )
-    return PlayedMoveFacts(move=_move_facts(board, move), is_recapture=is_recapture)
+    return PlayedMoveFacts(
+        move=_move_facts(board, move),
+        is_recapture=is_recapture,
+        attacks=_attack_facts(board, move),
+    )
+
+
+def _attack_facts(board: chess.Board, move: chess.Move) -> AttackFacts:
+    """Enumerate the valuable enemy pieces the moved piece attacks after landing."""
+    mover = board.turn
+    after = board.copy(stack=False)
+    after.push(move)
+    landing = move.to_square
+
+    targets: list[str] = []
+    loose_targets = 0
+    includes_king = False
+
+    for square in after.attacks(landing):
+        piece = after.piece_at(square)
+        if piece is None or piece.color == mover:
+            continue
+        if piece.piece_type == chess.KING:
+            includes_king = True
+        elif _PIECE_VALUE.get(piece.piece_type, 0) < _ATTACK_TARGET_MIN_VALUE:
+            continue
+        targets.append(
+            f"{chess.piece_name(piece.piece_type)} on {chess.square_name(square)}"
+        )
+        # ``not mover`` is the target's own colour, so its attackers are its
+        # defenders.
+        if piece.piece_type != chess.KING and not after.attackers(not mover, square):
+            loose_targets += 1
+
+    return AttackFacts(
+        targets=tuple(sorted(targets)),
+        target_count=len(targets),
+        loose_target_count=loose_targets,
+        includes_king=includes_king,
+        is_fork=len(targets) >= 2,
+    )
 
 
 def _best_facts(
@@ -436,7 +508,24 @@ def _best_facts(
         is_zwischenzug_like=zwischenzug,
         is_only_move=len(puzzle.accept_moves_uci) <= 1,
         pv_length=len(puzzle.solution_pv),
+        attacks=_attack_facts(board, move),
+        captures_undefended=_captures_undefended(board, move),
     )
+
+
+def _captures_undefended(board: chess.Board, move: chess.Move) -> bool:
+    """True when the move takes a piece the opponent cannot recapture.
+
+    Checked on the position *after* the capture, matching the motif classifier
+    in ``puzzles/identity.py``: what makes a piece hanging is that no recapture
+    exists once it has been taken, not merely that it looked undefended before.
+    """
+    if not board.is_capture(move):
+        return False
+    mover = board.turn
+    after = board.copy(stack=False)
+    after.push(move)
+    return not after.attackers(not mover, move.to_square)
 
 
 def _loose_facts(board: chess.Board, user: chess.Color) -> LooseFacts:
@@ -624,6 +713,16 @@ def to_evidence_items(packet: EvidencePacket) -> tuple[EvidenceItem, ...]:
         ),
         EvidenceItem("eval.swing", "Evaluation swing (pawns)", f"{packet.swing:.2f}"),
         EvidenceItem(
+            "eval.before",
+            "Evaluation before the move (pawns)",
+            f"{packet.eval_before:.2f}",
+        ),
+        EvidenceItem(
+            "eval.after",
+            "Evaluation after the move (pawns)",
+            f"{packet.eval_after:.2f}",
+        ),
+        EvidenceItem(
             "threats.legal_checks",
             "Checks available to the user",
             str(packet.threats.legal_checks),
@@ -666,6 +765,46 @@ def to_evidence_items(packet: EvidencePacket) -> tuple[EvidenceItem, ...]:
                 "loose.opponent",
                 "Undefended opponent pieces",
                 ", ".join(f"{p.piece} on {p.square}" for p in packet.loose.opponent),
+            )
+        )
+    if packet.best.attacks.target_count:
+        items.append(
+            EvidenceItem(
+                "best.attacks",
+                "Pieces the solution attacks",
+                ", ".join(packet.best.attacks.targets),
+            )
+        )
+    if packet.best.attacks.is_fork:
+        items.append(
+            EvidenceItem(
+                "best.is_fork",
+                "The solution attacks two or more pieces at once",
+                "true",
+            )
+        )
+    if packet.best.captures_undefended:
+        items.append(
+            EvidenceItem(
+                "best.captures_undefended",
+                "The solution captures a piece that cannot be recaptured",
+                f"{packet.best.move.san} (value {packet.best.move.captured_value})",
+            )
+        )
+    if packet.best.attacks.loose_target_count:
+        items.append(
+            EvidenceItem(
+                "best.loose_targets",
+                "Undefended pieces the solution attacks",
+                str(packet.best.attacks.loose_target_count),
+            )
+        )
+    if packet.played.attacks.target_count:
+        items.append(
+            EvidenceItem(
+                "played.attacks",
+                "Pieces the played move attacks",
+                ", ".join(packet.played.attacks.targets),
             )
         )
     if packet.played.is_recapture:
