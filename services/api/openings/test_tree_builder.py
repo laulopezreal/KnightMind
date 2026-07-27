@@ -53,6 +53,24 @@ PGN_AS_BLACK_LOSS = """[Event "Test Game 5"]
 1. d4 Nf6 2. c4 g6 3. Nc3 Bg7 4. e4 d6 5. Nf3 O-O 6. Be2 e5 1-0
 """
 
+PGN_UNFINISHED = """[Event "Test Game 6"]
+[Site "Chess.com"]
+[White "testplayer"]
+[Black "opponent6"]
+[Result "*"]
+
+1. e4 e5 2. Nf3 Nc6 *
+"""
+
+PGN_PADDED_USERNAME = """[Event "Test Game 7"]
+[Site "Chess.com"]
+[White "  testplayer  "]
+[Black "opponent7"]
+[Result "1-0"]
+
+1. e4 c5 2. Nf3 d6 1-0
+"""
+
 
 class TestOpeningStats:
     """Tests for OpeningStats class."""
@@ -241,6 +259,101 @@ class TestOpeningTreeBuilder:
         assert tree["games_count"] == 4
         assert tree["wins"] == 2  # Sicilian win + Black win
         assert tree["losses"] == 2  # Sicilian loss + Black loss
+
+
+class TestUnfinishedGames:
+    """An unplayed-out game must not contribute half a point to the score."""
+
+    def test_unfinished_game_is_excluded(self):
+        builder = OpeningTreeBuilder(max_ply=6)
+        assert builder.add_game(PGN_UNFINISHED, "testplayer") is False
+
+        tree = builder.build_tree()
+        assert tree["games_count"] == 0
+        assert tree["draws"] == 0
+        assert tree["children"] == []
+
+    def test_unfinished_games_do_not_inflate_score(self):
+        """Three abandoned games used to read as a 50% score."""
+        tree = build_opening_tree([PGN_UNFINISHED] * 3, "testplayer", "both", max_ply=6)
+
+        assert tree["games_count"] == 0
+        assert tree["win_rate"] == 0.0
+
+    def test_unfinished_game_does_not_dilute_real_results(self):
+        builder = OpeningTreeBuilder(max_ply=6)
+        builder.add_game(PGN_SICILIAN_WIN, "testplayer")
+        builder.add_game(PGN_UNFINISHED, "testplayer")
+
+        tree = builder.build_tree()
+        assert tree["games_count"] == 1
+        assert tree["win_rate"] == 100.0
+        assert builder.report.skipped_unfinished == 1
+
+    def test_missing_result_header_is_treated_as_unfinished(self):
+        pgn = '[White "testplayer"]\n[Black "opponent"]\n\n1. e4 e5\n'
+        builder = OpeningTreeBuilder(max_ply=6)
+
+        assert builder.add_game(pgn, "testplayer") is False
+        assert builder.report.skipped_unfinished == 1
+
+
+class TestUsernameMatching:
+    """Header whitespace must not silently drop a game."""
+
+    def test_padded_header_still_matches(self):
+        builder = OpeningTreeBuilder(max_ply=6)
+        assert builder.add_game(PGN_PADDED_USERNAME, "testplayer") is True
+        assert builder.build_tree()["games_count"] == 1
+
+    def test_padded_query_username_still_matches(self):
+        builder = OpeningTreeBuilder(max_ply=6)
+        assert builder.add_game(PGN_SICILIAN_WIN, "  testplayer  ") is True
+        assert builder.build_tree()["games_count"] == 1
+
+
+class TestBuildReport:
+    """The report must explain every game that did not reach the tree."""
+
+    def test_counts_each_exclusion_reason(self):
+        builder = OpeningTreeBuilder(max_ply=6)
+        builder.add_game(PGN_SICILIAN_WIN, "testplayer", "white")  # analyzed
+        builder.add_game(PGN_AS_BLACK_WIN, "testplayer", "white")  # colour filter
+        builder.add_game(PGN_UNFINISHED, "testplayer", "white")  # unfinished
+        builder.add_game(PGN_FRENCH_DRAW, "someoneelse", "white")  # not the player
+        builder.add_game("not a pgn at all", "testplayer", "white")  # unreadable
+
+        report = builder.report
+        assert report.games_seen == 5
+        assert report.games_analyzed == 1
+        assert report.excluded_by_color == 1
+        assert report.skipped_unfinished == 1
+        assert report.skipped_not_player == 1
+        assert report.skipped_unreadable == 1
+        # The colour filter is what the user asked for, so it is not "skipped".
+        assert report.games_skipped == 3
+
+    def test_clean_run_reports_no_losses(self):
+        builder = OpeningTreeBuilder(max_ply=6)
+        builder.add_game(PGN_SICILIAN_WIN, "testplayer")
+        builder.add_game(PGN_FRENCH_DRAW, "testplayer")
+
+        assert builder.report.games_analyzed == 2
+        assert builder.report.games_skipped == 0
+
+    def test_to_dict_is_json_serializable(self):
+        builder = OpeningTreeBuilder(max_ply=6)
+        builder.add_game(PGN_SICILIAN_WIN, "testplayer")
+
+        assert builder.report.to_dict() == {
+            "games_seen": 1,
+            "games_analyzed": 1,
+            "excluded_by_color": 0,
+            "games_skipped": 0,
+            "skipped_unreadable": 0,
+            "skipped_not_player": 0,
+            "skipped_unfinished": 0,
+        }
 
 
 class TestBuildOpeningTree:

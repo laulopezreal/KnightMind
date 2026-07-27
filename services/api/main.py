@@ -62,7 +62,7 @@ from services.api.models import (
     Puzzle as PuzzleModel,
 )
 from services.api.motifs import MotifPerformanceResponse, get_user_motif_performance
-from services.api.openings import build_opening_tree
+from services.api.openings import OpeningTreeBuilder
 from services.api.puzzles.identity import backfill_puzzle_identity
 from services.api.ratelimit import rate_limit
 from services.api.ratings_auto import auto_snapshot, auto_snapshot_throttled
@@ -668,8 +668,10 @@ async def get_openings(
     - ply: Half-move number (1 = white's first, 2 = black's first, etc.)
     - games_count: Number of games reaching this position
     - wins/draws/losses: Results from the player's perspective
-    - win_rate: Win percentage (wins + 0.5*draws) / games
+    - win_rate: Score percentage (wins + 0.5*draws) / games
     - children: Subsequent moves played from this position
+    - analysis: How many stored games actually reached the tree, and why the
+      rest didn't (colour filter vs. unreadable/not-the-player/unfinished)
 
     Args:
         username: The username to build the tree for (must have imported games)
@@ -696,19 +698,12 @@ async def get_openings(
     game_ids = [meta.game_id for meta in metadata_list]
     pgn_count = 0
 
-    def _iter_pgn_texts():
-        nonlocal pgn_count
-        for pgn in game_repository.iter_pgns(username, game_ids):
-            pgn_count += 1
-            yield pgn
-
-    # Build the opening tree
-    tree = build_opening_tree(
-        pgn_texts=_iter_pgn_texts(),
-        player_username=username,
-        color_filter=color,
-        max_ply=max_ply,
-    )
+    # Build the opening tree. The builder (rather than the build_opening_tree
+    # convenience wrapper) is used directly so its per-game report survives.
+    builder = OpeningTreeBuilder(max_ply=max_ply)
+    for pgn in game_repository.iter_pgns(username, game_ids):
+        pgn_count += 1
+        builder.add_game(pgn, username, color)
 
     if metadata_list and pgn_count == 0:
         raise HTTPException(
@@ -716,6 +711,12 @@ async def get_openings(
             detail="Games found but PGN content is missing. Re-import games to populate PGN data.",
         )
 
+    tree = builder.build_tree()
+    # Attached to the root node rather than wrapping the response so existing
+    # clients keep reading the tree at the top level. `games_stored` comes from
+    # the repository, so a tree built from a fraction of a user's games is
+    # reportable instead of silently looking complete.
+    tree["analysis"] = {"games_stored": game_count, **builder.report.to_dict()}
     return tree
 
 
