@@ -1301,7 +1301,12 @@ export default function Puzzles() {
                                         <div className="flex items-center gap-2 min-w-0">
                                             <span className="font-serif text-xl text-primary">
                                                 {currentPuzzle.title || "Puzzle"}
-                                                <span className="text-base font-normal opacity-50 ml-2 font-sans">
+                                                {/* text-primary/70, not opacity-50: axe measured the
+                                                    latter at 3.56:1 on the card tint (needs 4.5).
+                                                    Same fix the sidebar nav already made — an alpha
+                                                    colour also lets tooling compute the ratio, which
+                                                    element opacity defeats. */}
+                                                <span className="text-base font-normal text-primary/70 ml-2 font-sans">
                                                     {currentIndex + 1} / {puzzles.length}
                                                 </span>
                                             </span>
