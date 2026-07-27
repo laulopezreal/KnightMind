@@ -85,26 +85,32 @@ jobs:
             echo "--- Restarting with new code ---"
             ${COMPOSE} up -d
 
-            echo "--- Health check (in-container, with retries) ---"
-            # Probe the app inside the container, matching the image's own
-            # HEALTHCHECK. This avoids the host->published-port path, which is
-            # unreliable on this box (a host curl to 127.0.0.1:8000 connects but
-            # recv-fails), and sidesteps the localhost->::1 (IPv6) vs IPv4-only
-            # publish mismatch. The container app is the thing we actually care
-            # about being up.
+            echo "--- Health check (host published port = the real ingress path) ---"
+            # Probe 127.0.0.1:8000 on the HOST, not inside the container. This is
+            # the exact path Caddy proxies to for public traffic, so a green here
+            # proves real ingress works. An in-container probe would pass even
+            # when host->container port forwarding is broken -- which took
+            # api.guessme.world down on 2026-07-25 while the container stayed
+            # healthy internally. Use 127.0.0.1 explicitly (not 'localhost',
+            # which resolves to ::1/IPv6 first while the publish is IPv4-only)
+            # and a per-attempt timeout so a wedged socket fails fast.
+            ok=0
             for i in $(seq 1 10); do
-              if ${COMPOSE} exec -T api curl -fsS http://localhost:8000/ops/health >/dev/null 2>&1; then
-                echo "Health check passed (attempt ${i})"
+              code=$(curl -s -o /dev/null -m 5 -w "%{http_code}" http://127.0.0.1:8000/ops/health || true)
+              if [ "${code}" = "200" ]; then
+                echo "Health check passed (attempt ${i}, HTTP 200)"
+                ok=1
                 break
               fi
-              if [ "${i}" -eq 10 ]; then
-                echo "Health check failed after ${i} attempts"
-                ${COMPOSE} logs --tail=50 api
-                exit 1
-              fi
-              echo "Health check attempt ${i} failed; retrying in 3s..."
+              echo "Health check attempt ${i}: HTTP ${code:-000}; retrying in 3s..."
               sleep 3
             done
+            if [ "${ok}" -ne 1 ]; then
+              echo "Health check FAILED: api not reachable on host 127.0.0.1:8000 (the path Caddy uses for public ingress)."
+              echo "The container can be healthy internally while host->container forwarding is broken; check the docker port publish / iptables FORWARD rule for the api bridge."
+              ${COMPOSE} logs --tail=50 api
+              exit 1
+            fi
 
       - name: Notify success
         if: success()
