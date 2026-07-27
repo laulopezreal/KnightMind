@@ -81,6 +81,21 @@ class JobStatus(str, Enum):
     CANCELED = "canceled"
 
 
+class JobType(str, Enum):
+    """What a background job actually does.
+
+    Lives here rather than in ``worker`` so the model, the API layer and the
+    worker all name the same constant; ``worker`` imports models, so the
+    dependency can only point this way.
+
+    Every value must have a handler registered in ``worker.JOB_HANDLERS`` — a
+    job whose type has no handler is failed explicitly rather than silently
+    running someone else's work.
+    """
+
+    PUZZLE_GENERATION = "puzzle_generation"
+
+
 class PuzzleResult(str, Enum):
     PASS = "pass"
     FAIL = "fail"
@@ -89,9 +104,16 @@ class PuzzleResult(str, Enum):
 class Job(Base):
     __tablename__ = "jobs"
     __table_args__ = (
+        # One active job per (username, TYPE). Scoping by type is what lets an
+        # analysis job run alongside a puzzle generation for the same user
+        # while still guaranteeing a user can never have two concurrent jobs of
+        # the *same* kind — the invariant this index has always been for.
+        # Widening a unique index is strictly permissive, so no existing row
+        # can conflict with it.
         Index(
             "ix_jobs_active_username",
             "username",
+            "type",
             unique=True,
             postgresql_where=text("status IN ('queued', 'running')"),
             sqlite_where=text("status IN ('queued', 'running')"),
@@ -102,7 +124,11 @@ class Job(Base):
     id: Mapped[str] = mapped_column(
         String, primary_key=True, default=lambda: str(uuid.uuid4())
     )
-    type: Mapped[str] = mapped_column(String, default="puzzle_generation")
+    # NOT NULL since the table was created, so the composite index above can
+    # never be defeated by a NULL (NULLs compare distinct in a unique index).
+    type: Mapped[str] = mapped_column(
+        String, default=JobType.PUZZLE_GENERATION, nullable=False
+    )
     username: Mapped[str] = mapped_column(String, index=True)
     params: Mapped[dict] = mapped_column(JSON, nullable=True)
     status: Mapped[str] = mapped_column(

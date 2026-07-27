@@ -50,6 +50,7 @@ from services.api.models import (
     Account,
     Job,
     JobStatus,
+    JobType,
     PuzzleResult,
     PuzzleReview,
     PuzzleStats,
@@ -815,6 +816,7 @@ async def generate_puzzles_endpoint(
     try:
         new_job = Job(
             username=username,
+            type=JobType.PUZZLE_GENERATION,
             status=JobStatus.QUEUED,
             message="Queued for generation",
             params={"max_games": max_games, "max_puzzles": max_puzzles},
@@ -829,8 +831,14 @@ async def generate_puzzles_endpoint(
 
     except IntegrityError as e:
         db.rollback()
+        # Scope every lookup below to this job TYPE. The active-job index is
+        # unique on (username, type), so the row we collided with is a
+        # generation job specifically -- without the filter, a concurrently
+        # running job of another type could be reported back as the caller's
+        # generation job, handing them an id that will never produce puzzles.
         stmt = select(Job).where(
             Job.username == username,
+            Job.type == JobType.PUZZLE_GENERATION,
             or_(Job.status == JobStatus.QUEUED, Job.status == JobStatus.RUNNING),
         )
         existing_job = db.scalars(stmt).first()
@@ -845,7 +853,10 @@ async def generate_puzzles_endpoint(
         else:
             stmt = (
                 select(Job)
-                .where(Job.username == username)
+                .where(
+                    Job.username == username,
+                    Job.type == JobType.PUZZLE_GENERATION,
+                )
                 .order_by(Job.created_at.desc())
             )
             latest_job = db.scalars(stmt).first()
