@@ -93,6 +93,8 @@ class PuzzleRepository:
         accept_moves_uci: str | None = None,
         confirmed_depth: int | None = None,
         solution_pv: str | None = None,
+        title: str | None = None,
+        primary_motif: str | None = None,
     ) -> tuple[bool, str]:
         """Persist a new puzzle and its identity stats, or return an existing id."""
 
@@ -124,7 +126,14 @@ class PuzzleRepository:
             source_path=source_path,
         )
         self.db.add(puzzle)
-        motif = assign_primary_motif(puzzle)
+        # Use the caller's explicit motif/title when provided (the analysis-save
+        # path already knows them); otherwise derive them from the position (the
+        # generation path). Title falls back to the motif's canonical name only
+        # when the caller does not supply one.
+        motif = (
+            primary_motif if primary_motif is not None else assign_primary_motif(puzzle)
+        )
+        stats_title = title if title is not None else generate_puzzle_title(motif)
         self.db.add(
             PuzzleStats(
                 puzzle_id=puzzle_id,
@@ -134,7 +143,7 @@ class PuzzleRepository:
                 fail_count=0,
                 ease_factor=2.0,
                 primary_motif=motif,
-                title=generate_puzzle_title(motif),
+                title=stats_title,
             )
         )
         try:
