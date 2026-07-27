@@ -12,6 +12,21 @@ from services.api.models import PuzzleStats
 from services.api.puzzles.identity import assign_primary_motif, generate_puzzle_title
 
 
+def normalized_position(fen: str) -> str:
+    """Return the position-identity key for a FEN: its first four fields.
+
+    A FEN's last two fields are the halfmove clock and fullmove number, which
+    depend on the move ORDER that reached a position, not the position itself.
+    Two FENs that describe the same board via different move orders (a
+    transposition) therefore differ only in those counters. Keeping just the
+    first four fields — piece placement, side to move, castling rights, en
+    passant target — yields a key that is stable across transpositions, so the
+    same position dedups to the same puzzle regardless of how it was reached.
+    """
+
+    return " ".join(fen.split()[:4])
+
+
 @dataclass
 class Puzzle:
     """A chess puzzle generated from a user's blunder."""
@@ -111,6 +126,12 @@ class PuzzleRepository:
             source_game_id=source_game_id,
             ply=ply,
             fen=fen,
+            # Position-identity key derived from the SAME fen we store, so the
+            # endpoint's precheck (which queries this column) and the partial
+            # unique index dedup transpositions consistently. Derived here rather
+            # than passed in so callers that override fen (e.g. tests simulating a
+            # concurrent save) can never store a mismatched fen/position pair.
+            normalized_position=normalized_position(fen),
             side_to_move=side_to_move,
             played_move_uci=played_move_uci,
             best_move_uci=best_move_uci,

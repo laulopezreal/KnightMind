@@ -273,6 +273,94 @@ def test_manual_puzzles_count_as_due_for_fresh_user(client):
         assert fen in returned_fens
 
 
+def test_create_manual_puzzle_transposition_dedup(client, db_session):
+    """Finding 1: the SAME board reached via a different move order (a
+    transposition — routine in an analysis tool) has a DIFFERENT raw FEN because
+    the halfmove/fullmove counters differ, but it is the SAME position. It must
+    dedup to ONE puzzle, not insert a second.
+
+    Regression for the duplicate-puzzle defect: the idempotency key was the raw
+    FEN string, so a transposed counter inserted a permanent duplicate (there is
+    no delete path) whose extra PuzzleStats row inflated due_count forever.
+    """
+    # Same first four FEN fields (piece placement + side + castling + en passant)
+    # as VALID_FEN, only the halfmove/fullmove counters differ ("- 3 3" -> "- 1 2").
+    transposed = "r1bqkbnr/pppp1ppp/2n5/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R b KQkq - 1 2"
+    assert transposed != VALID_FEN
+    assert transposed.split()[:4] == VALID_FEN.split()[:4]
+
+    resp1 = client.post("/puzzles/manual", json=_payload())  # VALID_FEN
+    assert resp1.status_code == 200, resp1.text
+    assert resp1.json()["is_new"] is True
+    id1 = resp1.json()["puzzle_id"]
+
+    resp2 = client.post("/puzzles/manual", json=_payload(fen=transposed))
+    assert resp2.status_code == 200, resp2.text
+    # Same position => same puzzle, returned as existing (NOT a second insert).
+    assert resp2.json()["is_new"] is False
+    assert resp2.json()["puzzle_id"] == id1
+
+    manual = db_session.scalars(
+        select(PuzzleModel).where(PuzzleModel.source_game_id == MANUAL_GAME_ID)
+    ).all()
+    assert len(manual) == 1, "transposition inserted a duplicate puzzle"
+
+    stats_count = db_session.scalar(select(func.count()).select_from(PuzzleStats))
+    assert stats_count == 1, "duplicate PuzzleStats row would inflate due_count"
+
+    # The endpoint's "same position => same puzzle" contract also means the
+    # never-reviewed manual save counts as exactly ONE due item, not two.
+    status = client.get("/users/testuser/status")
+    assert status.status_code == 200, status.text
+    assert status.json()["due_count"] == 1
+
+
+def test_concurrent_manual_save_of_same_position_absorbed(
+    client, db_session, monkeypatch
+):
+    """Finding 2: a concurrent duplicate of the SAME position that slips past the
+    app-level precheck (a TOCTOU window) is absorbed by the partial unique index.
+
+    The endpoint's precheck can miss if a concurrent request commits the same
+    position between our read and our insert. We pin that interleave: the first
+    delegated save_puzzle commits the SAME position at a DIFFERENT ply (exactly
+    what a racing request would do), then delegates. The delegated insert then
+    violates the partial unique index on the normalized position AT COMMIT. The
+    endpoint must catch that IntegrityError and return the existing puzzle
+    idempotently — no phantom id, no 500, and exactly one row.
+    """
+    real_save = PuzzleRepository.save_puzzle
+    state = {"stole": False}
+
+    def steal_then_save(self, **kwargs):
+        if not state["stole"]:
+            state["stole"] = True
+            # A "concurrent request" commits our exact position at a DIFFERENT ply
+            # slot, so our own insert's ply precheck stays clear and the collision
+            # lands on the normalized-position unique index instead.
+            thief_kwargs = dict(kwargs)
+            thief_kwargs["ply"] = kwargs["ply"] + 5
+            real_save(self, **thief_kwargs)
+        return real_save(self, **kwargs)
+
+    monkeypatch.setattr(PuzzleRepository, "save_puzzle", steal_then_save)
+
+    resp = client.post("/puzzles/manual", json=_payload())  # VALID_FEN
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["is_new"] is False
+    winner_id = resp.json()["puzzle_id"]
+
+    manual = db_session.scalars(
+        select(PuzzleModel).where(PuzzleModel.source_game_id == MANUAL_GAME_ID)
+    ).all()
+    assert len(manual) == 1, "concurrent same-position save was not absorbed"
+    assert manual[0].id == winner_id
+    assert db_session.get(PuzzleModel, winner_id) is not None  # not a phantom id
+
+    stats_count = db_session.scalar(select(func.count()).select_from(PuzzleStats))
+    assert stats_count == 1
+
+
 def test_concurrent_manual_saves_of_different_positions_both_persist(
     client, db_session, monkeypatch
 ):
