@@ -6,10 +6,11 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 from sqlalchemy import func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from services.api.db import SessionLocal
-from services.api.diagnosis.job import run_diagnosis
+from services.api.diagnosis.job import DIAGNOSIS_BATCH_MAX, run_diagnosis
 from services.api.models import Job, JobStatus, JobType
 from services.api.puzzles.generator import generate_puzzles
 
@@ -278,6 +279,57 @@ class JobWorker:
             )
             db.commit()
 
+    @staticmethod
+    def _enqueue_followup(job_type: str, username: str) -> None:
+        """Queue a diagnosis run after puzzles are generated.
+
+        Fresh puzzles are fresh mistakes, and a mistake with no diagnosis is
+        the feature not existing for that user. Chaining here means importing
+        games is the only thing anyone has to do — nobody needs to discover
+        POST /users/{username}/diagnose.
+
+        Deliberately best-effort. This runs *after* the generation job has
+        already been marked SUCCEEDED, and it is wrapped so that nothing here
+        can turn a successful generation into a failure: a follow-up that does
+        not get queued is a missing enrichment, not lost work, and the next
+        run picks the puzzles up anyway.
+        """
+        if job_type != JobType.PUZZLE_GENERATION.value:
+            # Only generation produces new puzzles. Chaining diagnosis off a
+            # diagnosis run would loop forever.
+            return
+
+        try:
+            with SessionLocal() as db:
+                try:
+                    db.add(
+                        Job(
+                            username=username,
+                            type=JobType.DIAGNOSIS,
+                            status=JobStatus.QUEUED,
+                            message="Queued after puzzle generation",
+                            params={"limit": DIAGNOSIS_BATCH_MAX},
+                        )
+                    )
+                    db.commit()
+                except IntegrityError:
+                    # A diagnosis job is already queued or running for this
+                    # user — the active-job index says so. That job will pick
+                    # up the new puzzles, so there is nothing to do.
+                    #
+                    # Rolled back explicitly rather than relying on the context
+                    # manager: a failed flush leaves the session unusable, and
+                    # this must be safe for a caller that supplied its own
+                    # session rather than a fresh one.
+                    db.rollback()
+                    logger.info(
+                        "Diagnosis already active for %s; not re-queuing", username
+                    )
+                    return
+            logger.info("Queued follow-up diagnosis for %s", username)
+        except Exception as exc:  # noqa: BLE001 - must never fail the generation
+            logger.warning("Could not queue follow-up diagnosis: %s", exc)
+
     async def execute_job(self, job_id: str):
         """Execute the actual job logic."""
         # Re-fetch job to update status
@@ -352,6 +404,7 @@ class JobWorker:
                 )
             else:
                 logger.info(f"Job {job_id} succeeded")
+                self._enqueue_followup(job_type, username)
 
         except Exception as e:
             logger.error(f"Job {job_id} failed: {e}")

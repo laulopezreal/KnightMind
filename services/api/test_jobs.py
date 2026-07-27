@@ -709,3 +709,145 @@ def test_migration_scoped_active_job_index_postgres():
     index = indexes["ix_jobs_active_username"]
     assert index["unique"]
     assert index["column_names"] == ["username", "type"]
+
+
+# ---------------------------------------------------------------------------
+# Follow-up diagnosis after puzzle generation
+# ---------------------------------------------------------------------------
+
+
+class TestFollowUpDiagnosis:
+    """Fresh puzzles are fresh mistakes. Chaining diagnosis off generation
+    means importing games is the only thing a user has to do."""
+
+    def test_a_successful_generation_queues_a_diagnosis_run(self, db_session):
+        from services.api.models import JobType
+        from services.api.worker import JobWorker
+
+        _reset_jobs(db_session)
+        with patch("services.api.worker.SessionLocal") as mock_sl:
+            mock_sl.return_value.__enter__.return_value = db_session
+            mock_sl.return_value.__exit__.return_value = None
+            JobWorker._enqueue_followup(JobType.PUZZLE_GENERATION.value, "chained")
+
+        job = db_session.query(Job).filter_by(username="chained").one()
+        assert job.type == JobType.DIAGNOSIS
+        assert job.status == JobStatus.QUEUED
+        # The whole corpus, not a default batch — this is a backfill.
+        assert job.params["limit"] > 1000
+
+    def test_a_diagnosis_run_does_not_chain_another(self, db_session):
+        """Otherwise every diagnosis queues a diagnosis, forever."""
+        from services.api.models import JobType
+        from services.api.worker import JobWorker
+
+        _reset_jobs(db_session)
+        with patch("services.api.worker.SessionLocal") as mock_sl:
+            mock_sl.return_value.__enter__.return_value = db_session
+            mock_sl.return_value.__exit__.return_value = None
+            JobWorker._enqueue_followup(JobType.DIAGNOSIS.value, "chained")
+
+        assert db_session.query(Job).filter_by(username="chained").count() == 0
+
+    def test_an_already_active_diagnosis_is_not_duplicated(self, db_session):
+        """The active-job index rejects the insert; that job will pick up the
+        new puzzles anyway, so the collision is a no-op, not an error."""
+        from services.api.models import JobType
+        from services.api.worker import JobWorker
+
+        _reset_jobs(db_session)
+        db_session.add(
+            Job(username="busy", type=JobType.DIAGNOSIS, status=JobStatus.RUNNING)
+        )
+        db_session.commit()
+
+        with patch("services.api.worker.SessionLocal") as mock_sl:
+            mock_sl.return_value.__enter__.return_value = db_session
+            mock_sl.return_value.__exit__.return_value = None
+            JobWorker._enqueue_followup(JobType.PUZZLE_GENERATION.value, "busy")
+
+        assert db_session.query(Job).filter_by(username="busy").count() == 1
+        # The session must still be usable — a failed flush that is not rolled
+        # back leaves it poisoned for every later query.
+        assert db_session.query(Job).count() >= 1
+
+    def test_a_failure_to_queue_never_propagates(self, db_session):
+        """This runs after the generation is already marked SUCCEEDED. A
+        follow-up that cannot be queued is a missing enrichment, not lost
+        work — it must never turn a successful generation into a failure."""
+        from services.api.models import JobType
+        from services.api.worker import JobWorker
+
+        with patch(
+            "services.api.worker.SessionLocal", side_effect=RuntimeError("db down")
+        ):
+            JobWorker._enqueue_followup(JobType.PUZZLE_GENERATION.value, "unlucky")
+        # No exception escaped.
+
+
+@patch("services.api.worker.generate_puzzles")
+@patch("asyncio.to_thread", side_effect=run_sync_in_thread)
+@pytest.mark.asyncio
+async def test_generation_success_chains_diagnosis_end_to_end(
+    mock_to_thread, mock_generate, db_session
+):
+    from services.api.models import JobType
+    from services.api.puzzles.generator import GenerationResult
+    from services.api.worker import worker
+
+    _reset_jobs(db_session)
+    job = Job(
+        username="e2e-chain", type=JobType.PUZZLE_GENERATION, status=JobStatus.RUNNING
+    )
+    db_session.add(job)
+    db_session.commit()
+    db_session.refresh(job)
+    mock_generate.return_value = GenerationResult(5, 0, 100)
+
+    with patch("services.api.worker.SessionLocal") as mock_sl:
+        mock_sl.return_value.__enter__.return_value = db_session
+        mock_sl.return_value.__exit__.return_value = None
+        await worker.execute_job(job.id)
+
+    db_session.expire_all()
+    assert db_session.get(Job, job.id).status == JobStatus.SUCCEEDED
+    followup = (
+        db_session.query(Job)
+        .filter_by(username="e2e-chain", type=JobType.DIAGNOSIS)
+        .one()
+    )
+    assert followup.status == JobStatus.QUEUED
+
+
+@patch("services.api.worker.generate_puzzles")
+@patch("asyncio.to_thread", side_effect=run_sync_in_thread)
+@pytest.mark.asyncio
+async def test_a_canceled_generation_chains_nothing(
+    mock_to_thread, mock_generate, db_session
+):
+    """The completion was discarded, so there is nothing to follow up on."""
+    from services.api.models import JobType
+    from services.api.puzzles.generator import GenerationResult
+    from services.api.worker import worker
+
+    _reset_jobs(db_session)
+    job = Job(
+        username="e2e-cancel", type=JobType.PUZZLE_GENERATION, status=JobStatus.CANCELED
+    )
+    db_session.add(job)
+    db_session.commit()
+    db_session.refresh(job)
+    mock_generate.return_value = GenerationResult(5, 0, 100)
+
+    with patch("services.api.worker.SessionLocal") as mock_sl:
+        mock_sl.return_value.__enter__.return_value = db_session
+        mock_sl.return_value.__exit__.return_value = None
+        await worker.execute_job(job.id)
+
+    db_session.expire_all()
+    assert (
+        db_session.query(Job)
+        .filter_by(username="e2e-cancel", type=JobType.DIAGNOSIS)
+        .count()
+        == 0
+    )
