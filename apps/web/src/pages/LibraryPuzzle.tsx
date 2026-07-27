@@ -4,7 +4,8 @@ import { Link, useParams } from 'react-router-dom';
 import { AccessibleChessboard } from '../components/AccessibleChessboard';
 import { Chess } from 'chess.js';
 import { useChessUsername } from '../context/ChessUsernameContext';
-import { getLibraryPuzzle, reviewPuzzle, type LibraryPuzzle as LibraryPuzzleType } from '../api/puzzles';
+import { getLibraryPuzzle, getPuzzleDiagnosis, reviewPuzzle, type LibraryPuzzle as LibraryPuzzleType, type PuzzleDiagnosis } from '../api/puzzles';
+import { MistakeDiagnosisCard } from '../components/MistakeDiagnosisCard';
 import { ApiError } from '../api/core';
 import { DataStateError, DataStateOffline } from '../components/DataState';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
@@ -45,6 +46,11 @@ export default function LibraryPuzzle() {
     const [solveTimeMs, setSolveTimeMs] = useState<number | null>(null);
     const [recordError, setRecordError] = useState<string | null>(null);
 
+    // Post-mortem diagnosis. Fetched only once the puzzle is resolved, because
+    // the evidence names the solution move.
+    const [diagnosis, setDiagnosis] = useState<PuzzleDiagnosis | null>(null);
+    const [diagnosisLoading, setDiagnosisLoading] = useState(false);
+
     const online = useOnlineStatus();
     const request = useLatestRequest();
 
@@ -60,6 +66,7 @@ export default function LibraryPuzzle() {
             if (token.isStale()) return;
             setPuzzle(found);
             setGame(new Chess(found.fen));
+            setDiagnosis(null);
             solveStartRef.current = Date.now();
         } catch (err) {
             if (token.isStale()) return;
@@ -76,6 +83,31 @@ export default function LibraryPuzzle() {
     useEffect(() => {
         fetchPuzzle();
     }, [fetchPuzzle]);
+
+    // The diagnosis is post-mortem content: its evidence names the solution, so
+    // it is not even requested until the puzzle has been solved or revealed.
+    // `reveal` is passed for the same reason getLibraryPuzzle passes it — by
+    // this point the answer is already on screen.
+    const resolved = status === 'correct' || status === 'incorrect' || status === 'revealed';
+
+    useEffect(() => {
+        if (!resolved || !username || !puzzleId || diagnosis) return;
+        let stale = false;
+        setDiagnosisLoading(true);
+        getPuzzleDiagnosis(puzzleId, username, true)
+            .then((result) => {
+                if (!stale) setDiagnosis(result);
+            })
+            // Supplementary content: the page works without it, so a failure
+            // stays silent rather than turning a solved puzzle into an error.
+            .catch(() => undefined)
+            .finally(() => {
+                if (!stale) setDiagnosisLoading(false);
+            });
+        return () => {
+            stale = true;
+        };
+    }, [resolved, username, puzzleId, diagnosis]);
 
     const handleRecordResult = async (result: 'pass' | 'fail') => {
         if (!puzzle || !username || isRecording) return;
@@ -412,6 +444,12 @@ export default function LibraryPuzzle() {
                             </Link>
                         )}
                     </div>
+
+                    <MistakeDiagnosisCard
+                        diagnosis={diagnosis}
+                        revealed={resolved}
+                        loading={diagnosisLoading}
+                    />
                 </div>
             </section>
         </div>

@@ -16,7 +16,7 @@ vi.mock('../context/ChessUsernameContext', () => ({
     useChessUsername: () => ({ username: mockUsername }),
 }));
 
-const { MockApiError, mockGetLibraryPuzzle, mockReviewPuzzle } = vi.hoisted(() => {
+const { MockApiError, mockGetLibraryPuzzle, mockReviewPuzzle, mockGetPuzzleDiagnosis } = vi.hoisted(() => {
     class MockApiError extends Error {
         statusCode: number;
         detail?: string;
@@ -31,6 +31,7 @@ const { MockApiError, mockGetLibraryPuzzle, mockReviewPuzzle } = vi.hoisted(() =
         MockApiError,
         mockGetLibraryPuzzle: vi.fn(),
         mockReviewPuzzle: vi.fn(),
+        mockGetPuzzleDiagnosis: vi.fn(),
     };
 });
 
@@ -41,6 +42,7 @@ vi.mock('../api/core', () => ({
 vi.mock('../api/puzzles', () => ({
     getLibraryPuzzle: (...args: unknown[]) => mockGetLibraryPuzzle(...args),
     reviewPuzzle: (...args: unknown[]) => mockReviewPuzzle(...args),
+    getPuzzleDiagnosis: (...args: unknown[]) => mockGetPuzzleDiagnosis(...args),
 }));
 
 vi.mock('react-chessboard', () => ({
@@ -75,12 +77,32 @@ const MOCK_PUZZLE = {
     created_at: '2026-01-01T00:00:00Z',
 };
 
+// The evidence names the solution — that is exactly why the card is gated.
+const MOCK_DIAGNOSIS = {
+    state: 'ready' as const,
+    puzzle_id: 'puzzle-abc',
+    primary_motif: 'fork',
+    primary_cause: 'loose_piece_awareness',
+    primary_cause_label: 'Loose piece awareness',
+    secondary_causes: [],
+    secondary_cause_labels: [],
+    phase: 'middlegame',
+    evidence: [{ id: 'best.move', label: 'Best move', value: 'e4 (forcing)' }],
+    evidence_withheld: false,
+    explanation: null,
+    training_recommendation: null,
+    user_confirmed_cause: null,
+    source: 'rules',
+    diagnosed_at: '2026-07-27T00:00:00Z',
+};
+
 describe('LibraryPuzzle', () => {
     beforeEach(() => {
         vi.resetAllMocks();
         mockUsername = 'testplayer';
         mockPuzzleId = 'puzzle-abc';
         mockGetLibraryPuzzle.mockResolvedValue(MOCK_PUZZLE);
+        mockGetPuzzleDiagnosis.mockResolvedValue(MOCK_DIAGNOSIS);
         mockReviewPuzzle.mockResolvedValue({
             next_due_at: '2026-02-10T12:00:00Z',
             interval_days: 7,
@@ -322,4 +344,52 @@ describe('LibraryPuzzle', () => {
             expect(mockGetLibraryPuzzle).toHaveBeenCalledWith('puzzle-abc', 'testplayer');
         });
     });
+
+    describe('mistake diagnosis', () => {
+        it('is not shown — or even requested — while the puzzle is unsolved', async () => {
+            // The diagnosis evidence names the solution move, so fetching it
+            // mid-solve would put the answer in the network tab even if the UI
+            // hid it.
+            render(<LibraryPuzzle />);
+            await waitFor(() => expect(screen.getByText('Deadly Fork')).toBeInTheDocument());
+
+            expect(screen.queryByRole('region', { name: /mistake diagnosis/i })).not.toBeInTheDocument();
+            expect(mockGetPuzzleDiagnosis).not.toHaveBeenCalled();
+        });
+
+        it('appears once the solution has been revealed', async () => {
+            render(<LibraryPuzzle />);
+            await waitFor(() => expect(screen.getByText('Deadly Fork')).toBeInTheDocument());
+
+            fireEvent.click(screen.getByRole('button', { name: /reveal/i }));
+
+            await waitFor(() =>
+                expect(screen.getByRole('region', { name: /mistake diagnosis/i })).toBeInTheDocument()
+            );
+            expect(screen.getByText('Loose piece awareness')).toBeInTheDocument();
+        });
+
+        it('opts in to the evidence explicitly when it does fetch', async () => {
+            render(<LibraryPuzzle />);
+            await waitFor(() => expect(screen.getByText('Deadly Fork')).toBeInTheDocument());
+            fireEvent.click(screen.getByRole('button', { name: /reveal/i }));
+
+            await waitFor(() => expect(mockGetPuzzleDiagnosis).toHaveBeenCalled());
+            expect(mockGetPuzzleDiagnosis).toHaveBeenCalledWith('puzzle-abc', 'testplayer', true);
+        });
+
+        it('stays silent when the diagnosis fetch fails', async () => {
+            // Supplementary content: a solved puzzle must not turn into an
+            // error page because an enrichment call failed.
+            mockGetPuzzleDiagnosis.mockRejectedValue(new Error('boom'));
+            render(<LibraryPuzzle />);
+            await waitFor(() => expect(screen.getByText('Deadly Fork')).toBeInTheDocument());
+            fireEvent.click(screen.getByRole('button', { name: /reveal/i }));
+
+            await waitFor(() => expect(mockGetPuzzleDiagnosis).toHaveBeenCalled());
+            expect(screen.queryByText(/boom/i)).not.toBeInTheDocument();
+            expect(screen.getByText('Deadly Fork')).toBeInTheDocument();
+        });
+    });
+
 });

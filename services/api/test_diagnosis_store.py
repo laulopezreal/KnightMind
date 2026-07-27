@@ -12,6 +12,7 @@ from sqlalchemy import create_engine  # noqa: E402
 from sqlalchemy.orm import sessionmaker  # noqa: E402
 from sqlalchemy.pool import StaticPool  # noqa: E402
 
+from services.api.diagnosis import job as services_job  # noqa: E402
 from services.api.diagnosis.causes import RULE_VERSION  # noqa: E402
 from services.api.diagnosis.evidence import EXTRACTION_VERSION  # noqa: E402
 from services.api.diagnosis.job import run_diagnosis  # noqa: E402
@@ -826,3 +827,195 @@ class TestReadPathNeverComputes:
         # Existence check + the diagnosis row. A regression that starts
         # computing or fanning out would blow this budget immediately.
         assert len(statements) <= 3, statements
+
+
+class TestEvidenceIsNotASolutionSideChannel:
+    """The evidence names the solution — "Best move: Qxd5", the squares it
+    attacks, the length of the winning line. Without the same gate as
+    /puzzles/{id}, this endpoint would be a way to read the answer while the
+    anti-cheat flag was on.
+    """
+
+    def _diagnose(self, db_session, monkeypatch):
+        _puzzle(db_session)
+        monkeypatch.setattr(
+            "services.api.diagnosis.job.SessionLocal", lambda: _NoClose(db_session)
+        )
+        run_diagnosis(FakeContext())
+
+    def test_the_evidence_does_name_the_solution(self, db_session, monkeypatch):
+        """Establishes the premise the gate exists for; if this ever stops
+        being true the gate can be revisited, but not before."""
+        self._diagnose(db_session, monkeypatch)
+        row = DiagnosisRepository(db_session).get(USER, "p1")
+        values = " ".join(item["value"] for item in row.evidence_json)
+        assert "Qxd5" in values
+
+    def test_withheld_under_the_strict_flag(self, client, db_session, monkeypatch):
+        self._diagnose(db_session, monkeypatch)
+        monkeypatch.setenv("KNIGHTMIND_STRIP_PUZZLE_SOLUTIONS", "true")
+
+        body = client.get(f"/puzzles/p1/diagnosis?username={USER}").json()
+        assert body["evidence"] == []
+        assert body["evidence_withheld"] is True
+        assert "Qxd5" not in str(body)
+        # The coaching label is not the move, so it still comes through.
+        assert body["primary_cause"] == "loose_piece_awareness"
+
+    def test_revealed_on_request_under_the_strict_flag(
+        self, client, db_session, monkeypatch
+    ):
+        self._diagnose(db_session, monkeypatch)
+        monkeypatch.setenv("KNIGHTMIND_STRIP_PUZZLE_SOLUTIONS", "true")
+
+        body = client.get(f"/puzzles/p1/diagnosis?username={USER}&reveal=true").json()
+        assert body["evidence"]
+        assert body["evidence_withheld"] is False
+
+    def test_confirm_honours_the_same_gate_as_the_read(
+        self, client, db_session, monkeypatch
+    ):
+        """Regression: the gate was added to GET and missed on POST /confirm,
+        which returns the same body. One un-gated call site is a whole hole —
+        hence the fail-closed default on the response builder."""
+        self._diagnose(db_session, monkeypatch)
+        monkeypatch.setenv("KNIGHTMIND_STRIP_PUZZLE_SOLUTIONS", "true")
+
+        body = client.post(
+            f"/puzzles/p1/diagnosis/confirm?username={USER}",
+            json={"cause": "king_safety_blindness"},
+        ).json()
+        assert body["evidence"] == []
+        assert body["evidence_withheld"] is True
+        assert "Qxd5" not in str(body)
+
+    def test_included_by_default_when_the_flag_is_off(
+        self, client, db_session, monkeypatch
+    ):
+        """Matches /puzzles/{id}: flag OFF is the deploy-safe default, so this
+        change cannot break the current frontend."""
+        self._diagnose(db_session, monkeypatch)
+        monkeypatch.delenv("KNIGHTMIND_STRIP_PUZZLE_SOLUTIONS", raising=False)
+
+        body = client.get(f"/puzzles/p1/diagnosis?username={USER}").json()
+        assert body["evidence"]
+        assert body["evidence_withheld"] is False
+
+
+class TestCrashDoesNotDiscardTheRun:
+    def test_work_is_committed_in_chunks_not_only_at_the_end(
+        self, db_session, monkeypatch
+    ):
+        """Without chunked commits the whole run is one transaction, so a crash
+        near the end discards every diagnosis it produced and "resumable" means
+        "starts over". Simulates a crash by raising partway through."""
+        for i in range(6):
+            _puzzle(db_session, puzzle_id=f"p{i}", ply=41 + i * 2)
+        monkeypatch.setattr(
+            "services.api.diagnosis.job.SessionLocal", lambda: _NoClose(db_session)
+        )
+        monkeypatch.setattr("services.api.diagnosis.job.COMMIT_INTERVAL", 2)
+
+        real = services_job._diagnose_one
+        calls = {"n": 0}
+
+        def crash_on_the_fifth(*args, **kwargs):
+            calls["n"] += 1
+            if calls["n"] == 5:
+                raise RuntimeError("simulated worker crash")
+            return real(*args, **kwargs)
+
+        monkeypatch.setattr(
+            "services.api.diagnosis.job._diagnose_one", crash_on_the_fifth
+        )
+        with pytest.raises(RuntimeError):
+            run_diagnosis(FakeContext())
+
+        db_session.rollback()  # what a crashed worker's session would do
+        # The first two committed chunks survived; the run is not back to zero.
+        assert db_session.query(PuzzleDiagnosis).count() == 4
+
+
+class TestUserColourComesFromThePosition:
+    """A puzzle is by construction a position where it was the user's turn, so
+    side_to_move is the authoritative answer. Deriving it from the game row
+    instead was wrong for manual puzzles, which all record
+    white_username = <the user> whatever the position actually is.
+    """
+
+    BLACK_TO_MOVE = "3q2k1/pp3ppp/8/8/8/8/PP3PPP/3Q2K1 b - - 0 1"
+
+    def _manual_puzzle(self, db):
+        from services.api.storage.game_repository import MANUAL_GAME_ID
+
+        db.add(
+            Game(
+                game_id=MANUAL_GAME_ID,
+                url=f"manual://{USER}",
+                username=USER,
+                white_username=USER,  # hardcoded by the manual-puzzle endpoint
+                black_username="manual",
+                white_result="manual",
+                black_result="manual",
+                time_control="manual",
+                end_time=0,
+                rated=False,
+            )
+        )
+        db.add(
+            PuzzleModel(
+                id="p1",
+                username=USER,
+                source_game_id=MANUAL_GAME_ID,
+                ply=41,
+                fen=self.BLACK_TO_MOVE,
+                side_to_move="black",
+                played_move_uci="d8d2",
+                best_move_uci="d8d1",
+                accept_moves_uci="d8d1",
+                eval_before=1.5,
+                eval_after=-7.5,
+                swing=9.0,
+            )
+        )
+        db.commit()
+
+    def test_a_black_to_move_manual_puzzle_is_not_labelled_white(
+        self, db_session, monkeypatch
+    ):
+        self._manual_puzzle(db_session)
+        monkeypatch.setattr(
+            "services.api.diagnosis.job.SessionLocal", lambda: _NoClose(db_session)
+        )
+        run_diagnosis(FakeContext())
+
+        row = DiagnosisRepository(db_session).get(USER, "p1")
+        assert row.status == DiagnosisStatus.OK
+        # The evidence must not contradict its own FEN.
+        colours = {
+            item["value"]
+            for item in row.evidence_json
+            if item["id"] == "position.phase"
+        }
+        assert colours  # sanity: the packet was built
+        facts = services_job._game_facts(
+            db_session.get(Game, ("__manual__", USER)),
+            db_session.get(PuzzleModel, "p1"),
+        )
+        assert facts.user_is_white is False
+
+    def test_a_manual_game_contributes_no_clock_or_result(
+        self, db_session, monkeypatch
+    ):
+        """ "manual" is not a time control and not a game result; treating it as
+        either would manufacture evidence out of a placeholder row."""
+        self._manual_puzzle(db_session)
+        from services.api.storage.game_repository import MANUAL_GAME_ID
+
+        facts = services_job._game_facts(
+            db_session.get(Game, (MANUAL_GAME_ID, USER)),
+            db_session.get(PuzzleModel, "p1"),
+        )
+        assert facts.user_result is None
+        assert facts.time_control.is_known is False
+        assert facts.rated is False
