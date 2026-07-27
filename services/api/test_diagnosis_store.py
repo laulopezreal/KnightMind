@@ -826,3 +826,59 @@ class TestReadPathNeverComputes:
         # Existence check + the diagnosis row. A regression that starts
         # computing or fanning out would blow this budget immediately.
         assert len(statements) <= 3, statements
+
+
+class TestEvidenceIsNotASolutionSideChannel:
+    """The evidence names the solution — "Best move: Qxd5", the squares it
+    attacks, the length of the winning line. Without the same gate as
+    /puzzles/{id}, this endpoint would be a way to read the answer while the
+    anti-cheat flag was on.
+    """
+
+    def _diagnose(self, db_session, monkeypatch):
+        _puzzle(db_session)
+        monkeypatch.setattr(
+            "services.api.diagnosis.job.SessionLocal", lambda: _NoClose(db_session)
+        )
+        run_diagnosis(FakeContext())
+
+    def test_the_evidence_does_name_the_solution(self, db_session, monkeypatch):
+        """Establishes the premise the gate exists for; if this ever stops
+        being true the gate can be revisited, but not before."""
+        self._diagnose(db_session, monkeypatch)
+        row = DiagnosisRepository(db_session).get(USER, "p1")
+        values = " ".join(item["value"] for item in row.evidence_json)
+        assert "Qxd5" in values
+
+    def test_withheld_under_the_strict_flag(self, client, db_session, monkeypatch):
+        self._diagnose(db_session, monkeypatch)
+        monkeypatch.setenv("KNIGHTMIND_STRIP_PUZZLE_SOLUTIONS", "true")
+
+        body = client.get(f"/puzzles/p1/diagnosis?username={USER}").json()
+        assert body["evidence"] == []
+        assert body["evidence_withheld"] is True
+        assert "Qxd5" not in str(body)
+        # The coaching label is not the move, so it still comes through.
+        assert body["primary_cause"] == "loose_piece_awareness"
+
+    def test_revealed_on_request_under_the_strict_flag(
+        self, client, db_session, monkeypatch
+    ):
+        self._diagnose(db_session, monkeypatch)
+        monkeypatch.setenv("KNIGHTMIND_STRIP_PUZZLE_SOLUTIONS", "true")
+
+        body = client.get(f"/puzzles/p1/diagnosis?username={USER}&reveal=true").json()
+        assert body["evidence"]
+        assert body["evidence_withheld"] is False
+
+    def test_included_by_default_when_the_flag_is_off(
+        self, client, db_session, monkeypatch
+    ):
+        """Matches /puzzles/{id}: flag OFF is the deploy-safe default, so this
+        change cannot break the current frontend."""
+        self._diagnose(db_session, monkeypatch)
+        monkeypatch.delenv("KNIGHTMIND_STRIP_PUZZLE_SOLUTIONS", raising=False)
+
+        body = client.get(f"/puzzles/p1/diagnosis?username={USER}").json()
+        assert body["evidence"]
+        assert body["evidence_withheld"] is False

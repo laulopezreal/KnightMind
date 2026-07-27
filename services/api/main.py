@@ -1867,6 +1867,10 @@ class DiagnosisResponse(BaseModel):
     secondary_cause_labels: list[str] = []
     phase: str | None = None
     evidence: list[DiagnosisEvidenceItem] = []
+    # True when a diagnosis has evidence but the caller did not reveal. Lets the
+    # UI say "solve it to see why" instead of rendering an empty section as if
+    # there were nothing to show.
+    evidence_withheld: bool = False
     explanation: str | None = None
     training_recommendation: str | None = None
     user_confirmed_cause: str | None = None
@@ -1883,7 +1887,9 @@ class PendingDiagnosisResponse(BaseModel):
     pending: int
 
 
-def _diagnosis_response(puzzle_id: str, row) -> DiagnosisResponse:
+def _diagnosis_response(
+    puzzle_id: str, row, reveal_solution: bool = True
+) -> DiagnosisResponse:
     from services.api.diagnosis.causes import CAUSE_LABELS
     from services.api.models import DiagnosisStatus
 
@@ -1897,6 +1903,12 @@ def _diagnosis_response(puzzle_id: str, row) -> DiagnosisResponse:
     cause = row.user_confirmed_cause or row.primary_cause
     unclear = row.insufficient_evidence or not cause
     secondary = list(row.secondary_causes or [])
+    # The evidence names the solution — "Best move: Qxd5", the squares it
+    # attacks, the length of the winning line. That makes this endpoint a
+    # side-channel around the anti-cheat gate, so it obeys the same rule as
+    # /puzzles/{id}: withheld unless the caller reveals. The cause and its label
+    # stay, because "loose piece awareness" is a coaching label, not the move.
+    evidence = row.evidence_json or [] if reveal_solution else []
     return DiagnosisResponse(
         state="unclear" if unclear else "ready",
         puzzle_id=puzzle_id,
@@ -1906,7 +1918,8 @@ def _diagnosis_response(puzzle_id: str, row) -> DiagnosisResponse:
         secondary_causes=secondary,
         secondary_cause_labels=[CAUSE_LABELS.get(c, c) for c in secondary],
         phase=row.phase,
-        evidence=[DiagnosisEvidenceItem(**item) for item in (row.evidence_json or [])],
+        evidence=[DiagnosisEvidenceItem(**item) for item in evidence],
+        evidence_withheld=not reveal_solution and bool(row.evidence_json),
         explanation=row.explanation,
         training_recommendation=row.training_recommendation,
         user_confirmed_cause=row.user_confirmed_cause,
@@ -1919,6 +1932,11 @@ def _diagnosis_response(puzzle_id: str, row) -> DiagnosisResponse:
 async def get_puzzle_diagnosis(
     puzzle_id: str,
     username: Annotated[Username, Query(description="Username the puzzle belongs to")],
+    reveal: bool = Query(
+        False,
+        description="Include the evidence, which names the solution move. Off by "
+        "default so the diagnosis cannot be used to read the answer.",
+    ),
     db: Session = Depends(get_db),
     account: Account | None = Depends(require_account),
 ):
@@ -1940,8 +1958,12 @@ async def get_puzzle_diagnosis(
     if not exists:
         raise HTTPException(status_code=404, detail="Puzzle not found")
 
+    # Same gate as /puzzles/{id}: when the strip flag is OFF (default) the
+    # evidence is always included, so this deploys without breaking anything;
+    # when it is ON, ?reveal=true is required.
+    reveal_solution = reveal or not _strip_puzzle_solutions_enabled()
     return _diagnosis_response(
-        puzzle_id, DiagnosisRepository(db).get(username, puzzle_id)
+        puzzle_id, DiagnosisRepository(db).get(username, puzzle_id), reveal_solution
     )
 
 
