@@ -166,7 +166,10 @@ function formatMoveLabel(node: d3.HierarchyNode<OpeningNode>): string {
 function describeNode(node: CollapsibleNode): string {
   const d = node.data;
   const label = d.move_san === 'Start' ? 'Starting position' : formatMoveLabel(node);
-  return `${label}. ${d.games_count} games, ${d.wins} won, ${d.draws} drawn, ${d.losses} lost, score ${d.win_rate}%`;
+  // The opening name goes second: the move identifies the node, the name gives
+  // it meaning, and a sighted user reads both from the panel or tooltip.
+  const opening = d.opening_name ? `${d.opening_name}. ` : '';
+  return `${label}. ${opening}${d.games_count} games, ${d.wins} won, ${d.draws} drawn, ${d.losses} lost, score ${d.win_rate}%`;
 }
 
 interface OpeningGraphProps {

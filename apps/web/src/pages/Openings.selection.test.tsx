@@ -38,6 +38,7 @@ vi.mock('../components/OpeningGraph', () => ({
 function node(move_san: string, over: Partial<OpeningNode> = {}): OpeningNode {
   return {
     move_san, ply: 0, games_count: 21, wins: 6, draws: 3, losses: 12, win_rate: 35.7,
+    eco: null, opening_name: null,
     ...over,
   };
 }
@@ -139,6 +140,38 @@ describe('Openings selection panel', () => {
 
     expect(screen.getByLabelText('Selected line')).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: /analyse in engine/i })).not.toBeInTheDocument();
+  });
+
+  it('names the opening, not just the moves', async () => {
+    // A repertoire shown only as bare SAN is one you cannot search for, study,
+    // or talk about.
+    mockGetOpenings.mockResolvedValue({
+      ...TREE,
+      children: [{
+        ...node('e4', { eco: 'B00', opening_name: "King's Pawn Game" }),
+        children: [node('c5', { eco: 'B20', opening_name: 'Sicilian Defense' })],
+      }],
+    });
+    await selectLine([
+      node('Start'),
+      node('e4', { eco: 'B00', opening_name: "King's Pawn Game" }),
+      node('c5', { eco: 'B20', opening_name: 'Sicilian Defense' }),
+    ]);
+
+    const panel = screen.getByLabelText('Selected line');
+    expect(panel).toHaveTextContent('Sicilian Defense');
+    expect(panel).toHaveTextContent('B20');
+    // The moves stay too — the name identifies the line, the moves define it.
+    expect(panel).toHaveTextContent('1. e4 c5');
+  });
+
+  it('shows only the moves for a line outside the book', async () => {
+    await selectLine(SICILIAN);
+
+    const panel = screen.getByLabelText('Selected line');
+    expect(panel).toHaveTextContent('1. e4 c5 2. Nf3');
+    // No invented name when the classifier has none.
+    expect(panel.textContent).not.toMatch(/Defense|Opening|Game:/);
   });
 
   it('can be dismissed', async () => {

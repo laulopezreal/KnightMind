@@ -244,7 +244,17 @@ export default function Openings() {
       >
         <div className="min-w-[12rem] flex-1">
           <p className="text-xs uppercase tracking-widest text-primary/70 mb-1">Selected line</p>
-          <p className="font-mono text-primary text-sm break-words">{formatLine(selectedPath)}</p>
+          {/* The name leads and the moves follow: a repertoire you can only
+              read as bare SAN is one you cannot search for or talk about. */}
+          {node.opening_name && (
+            <p className="font-serif text-primary text-lg leading-snug">
+              {node.opening_name}
+              {node.eco && (
+                <span className="font-mono text-xs text-primary/70 ml-2 align-middle">{node.eco}</span>
+              )}
+            </p>
+          )}
+          <p className="font-mono text-primary/80 text-sm break-words">{formatLine(selectedPath)}</p>
         </div>
 
         <dl className="flex gap-6 font-sans text-sm">
@@ -552,8 +562,16 @@ export default function Openings() {
               backgroundColor: 'var(--bg-primary)',
             }}
           >
-            <div className="font-serif text-xl text-primary mb-2 border-b border-primary/10 pb-2">
-              {tooltip.data.move_san === 'Start' ? 'Start' : tooltip.data.move_san}
+            <div className="mb-2 border-b border-primary/10 pb-2">
+              <div className="font-serif text-xl text-primary">
+                {tooltip.data.move_san === 'Start' ? 'Start' : tooltip.data.move_san}
+              </div>
+              {tooltip.data.opening_name && (
+                <div className="font-sans text-xs text-primary/70 mt-0.5 max-w-[16rem]">
+                  {tooltip.data.opening_name}
+                  {tooltip.data.eco && <span className="font-mono ml-1.5">{tooltip.data.eco}</span>}
+                </div>
+              )}
             </div>
             <div className="space-y-1 font-sans text-sm text-primary/80">
               <div className="flex justify-between"><span>Games</span> <span>{tooltip.data.games_count}</span></div>

@@ -36,6 +36,14 @@ export interface OpeningNode {
      * surface it to users as "score". See `getScoreColor`.
      */
     win_rate: number;
+    /**
+     * ECO code and opening name for this position, e.g. "B90" / "Sicilian
+     * Defense: Najdorf Variation". Classification is longest-prefix, so a node
+     * with no entry of its own reports the most specific opening above it.
+     * Null on the starting position, and for lines outside the book.
+     */
+    eco: string | null;
+    opening_name: string | null;
     children?: OpeningNode[];
     /** Root node only. */
     analysis?: OpeningAnalysis;

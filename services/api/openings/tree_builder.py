@@ -12,6 +12,8 @@ from typing import Literal
 
 import chess.pgn
 
+from .eco import classify
+
 
 @dataclass
 class OpeningStats:
@@ -88,8 +90,25 @@ class OpeningNode:
     stats: OpeningStats = field(default_factory=OpeningStats)
     children: dict[str, "OpeningNode"] = field(default_factory=dict)
 
-    def to_dict(self) -> dict:
-        """Convert to dictionary for JSON serialization."""
+    def to_dict(
+        self,
+        path: tuple[str, ...] = (),
+        inherited: tuple[str, str] | None = None,
+    ) -> dict:
+        """
+        Convert to dictionary for JSON serialization.
+
+        Args:
+            path: SAN moves leading to this node's parent. Combined with this
+                node's move it forms the ECO lookup key.
+            inherited: the nearest named ancestor's (code, name). ECO naming is
+                longest-prefix, so a node with no entry of its own belongs to
+                the most specific opening above it — twenty plies into the
+                Najdorf you are still in the Najdorf.
+        """
+        here = path + (self.move_san,)
+        named = classify(here) or inherited
+
         result = {
             "move_san": self.move_san,
             "ply": self.ply,
@@ -98,9 +117,13 @@ class OpeningNode:
             "draws": self.stats.draws,
             "losses": self.stats.losses,
             "win_rate": round(self.stats.win_rate, 1),
+            "eco": named[0] if named else None,
+            "opening_name": named[1] if named else None,
         }
         if self.children:
-            result["children"] = [child.to_dict() for child in self.children.values()]
+            result["children"] = [
+                child.to_dict(here, named) for child in self.children.values()
+            ]
         return result
 
 
@@ -264,6 +287,10 @@ class OpeningTreeBuilder:
             "draws": self.root.stats.draws,
             "losses": self.root.stats.losses,
             "win_rate": round(self.root.stats.win_rate, 1),
+            # The starting position belongs to no opening; children begin the
+            # move path, so they are classified from an empty prefix.
+            "eco": None,
+            "opening_name": None,
             "children": [child.to_dict() for child in self.root.children.values()],
         }
 

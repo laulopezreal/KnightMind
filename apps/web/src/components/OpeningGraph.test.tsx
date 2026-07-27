@@ -37,6 +37,8 @@ function node(
     draws,
     losses,
     win_rate: games_count ? Math.round(((wins + 0.5 * draws) / games_count) * 1000) / 10 : 0,
+    eco: null,
+    opening_name: null,
     ...(children ? { children } : {}),
   };
 }

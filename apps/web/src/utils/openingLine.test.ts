@@ -4,7 +4,10 @@ import { pathMoves, formatLine, fenForPath, engineHrefForPath, resolvePath } fro
 import type { OpeningNode } from '../api';
 
 function node(move_san: string): OpeningNode {
-  return { move_san, ply: 0, games_count: 1, wins: 1, draws: 0, losses: 0, win_rate: 100 };
+  return {
+    move_san, ply: 0, games_count: 1, wins: 1, draws: 0, losses: 0, win_rate: 100,
+    eco: null, opening_name: null,
+  };
 }
 
 const path = (...moves: string[]) => [node('Start'), ...moves.map(node)];
