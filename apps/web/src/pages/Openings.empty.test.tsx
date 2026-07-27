@@ -13,7 +13,10 @@ import { ApiError } from '../api';
 let mockUsername = 'alice';
 const mockNavigate = vi.fn();
 
-vi.mock('react-router-dom', () => ({ useNavigate: () => mockNavigate }));
+vi.mock('react-router-dom', () => ({
+  useNavigate: () => mockNavigate,
+  Link: ({ children, to, ...rest }: { children: React.ReactNode; to: string; [key: string]: unknown }) => <a href={to} {...rest}>{children}</a>,
+}));
 vi.mock('../context/ChessUsernameContext', () => ({
   useChessUsername: () => ({ username: mockUsername }),
 }));

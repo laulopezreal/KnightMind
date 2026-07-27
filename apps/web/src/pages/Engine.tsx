@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { AccessibleChessboard } from '../components/AccessibleChessboard';
 import { Chess } from 'chess.js';
 import { evaluateFen, getEngineStatus, ApiError } from '../api';
@@ -21,17 +21,41 @@ const MOTIF_OPTIONS: { value: string; label: string }[] = [
 
 const STARTING_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
 
+/**
+ * Read an optional `?fen=` deep link. Other surfaces (the Opening Explorer)
+ * hand a position over this way, so a user can go from "I score badly here" to
+ * analysing it without retyping a FEN. An unparseable value falls back to the
+ * start position rather than rendering a broken board.
+ */
+function readFenParam(raw: string | null): { fen: string; invalid: boolean } {
+  if (!raw) return { fen: STARTING_FEN, invalid: false };
+  try {
+    new Chess(raw);
+    return { fen: raw, invalid: false };
+  } catch {
+    return { fen: STARTING_FEN, invalid: true };
+  }
+}
+
 export default function Engine() {
   const { username } = useChessUsername();
-  const [fen, setFen] = useState(STARTING_FEN);
-  const [fenInput, setFenInput] = useState(STARTING_FEN);
+  const [searchParams] = useSearchParams();
+  // Read once on mount: the board is user-editable from here on, so later
+  // param changes must not yank the position out from under them.
+  const [initialFen] = useState(() => readFenParam(searchParams.get('fen')));
+  const [fen, setFen] = useState(initialFen.fen);
+  const [fenInput, setFenInput] = useState(initialFen.fen);
   const [evaluation, setEvaluation] = useState<{ bestMove: string; eval: number } | null>(null);
   const [loading, setLoading] = useState(false);
-  const [fenError, setFenError] = useState<string | null>(null);
+  // Seeded from a bad `?fen=` deep link so the fallback to the start position
+  // is explained rather than silently substituted.
+  const [fenError, setFenError] = useState<string | null>(
+    initialFen.invalid ? 'That link carried an invalid FEN — showing the starting position instead.' : null
+  );
   const [evaluationError, setEvaluationError] = useState<string | null>(null);
   const [engineAvailable, setEngineAvailable] = useState<boolean | null>(null);
   const [showBestMove, setShowBestMove] = useState(false);
-  const [fenHistory, setFenHistory] = useState([STARTING_FEN]);
+  const [fenHistory, setFenHistory] = useState([initialFen.fen]);
   const [historyIndex, setHistoryIndex] = useState(0);
   const lastEvaluatedFen = useRef<string | null>(null);
   const autoEvalTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);

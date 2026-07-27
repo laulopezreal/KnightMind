@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState, useCallback, useLayoutEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { getOpenings, ApiError, type OpeningNode, type ColorFilter } from '../api';
 import { useChessUsername } from '../context/ChessUsernameContext';
 import { OpeningGraph, type OpeningGraphHandle, type NodeAnchor } from '../components/OpeningGraph';
 import { getScoreColor } from '../utils/openings';
+import { formatLine, engineHrefForPath } from '../utils/openingLine';
 import { useLocalStorage } from '../hooks/useLocalStorage';
 import { PageHeader } from '../components/PageHeader';
 import {
@@ -60,6 +61,10 @@ export default function Openings() {
   );
   const [treeData, setTreeData] = useState<OpeningNode | null>(null);
   const [tooltip, setTooltip] = useState<{ anchor: NodeAnchor; data: OpeningNode } | null>(null);
+  // Root-to-node path for the activated node. Backs the selection panel, which
+  // is the page's only stable (non-hover) surface for a line's figures and the
+  // only route out of the Opening Explorer into the rest of the app.
+  const [selectedPath, setSelectedPath] = useState<OpeningNode[] | null>(null);
   const tooltipRef = useRef<HTMLDivElement>(null);
   const online = useOnlineStatus();
   const request = useLatestRequest();
@@ -99,9 +104,12 @@ export default function Openings() {
   const hasOpenings = treeData !== null && treeData.games_count > 0;
   const skippedGames = analysis?.games_skipped ?? 0;
 
-  // Before the first response there is nothing to show but a spinner; treating
-  // that as loading avoids a frame of bogus "no data" chrome on mount.
-  const showLoading = loading || (!treeData && !error && !noGamesImported);
+  // Only the *first* load blanks the panel. A refresh keeps the existing tree
+  // on screen — replacing it with a spinner threw away the user's zoom and
+  // every line they had expanded, for a request that usually returns the same
+  // data. See `isRefreshing` for the in-place indicator.
+  const showLoading = (loading && !treeData) || (!treeData && !error && !noGamesImported);
+  const isRefreshing = loading && treeData !== null;
 
   const subtitle = (() => {
     if (showLoading) {
@@ -196,6 +204,70 @@ export default function Openings() {
     };
   })();
 
+  /**
+   * Details for the activated node.
+   *
+   * Two jobs: a stable, non-hover place to read a line's figures (the tooltip
+   * vanishes the moment you move the pointer, and never existed for touch),
+   * and the page's only way out into the rest of the app — the Opening
+   * Explorer used to be a dead end with no outbound link at all.
+   */
+  const selectionPanel = (() => {
+    if (!selectedPath) return null;
+    const node = selectedPath[selectedPath.length - 1];
+    const engineHref = engineHrefForPath(selectedPath);
+
+    return (
+      <section
+        aria-label="Selected line"
+        className="flex flex-wrap items-center gap-x-8 gap-y-4 px-5 py-4 border border-primary/10 rounded-sm bg-primary/5 backdrop-blur-sm"
+      >
+        <div className="min-w-[12rem] flex-1">
+          <p className="text-xs uppercase tracking-widest text-primary/70 mb-1">Selected line</p>
+          <p className="font-mono text-primary text-sm break-words">{formatLine(selectedPath)}</p>
+        </div>
+
+        <dl className="flex gap-6 font-sans text-sm">
+          {[
+            { label: 'Games', value: node.games_count, className: 'text-primary' },
+            { label: 'Won', value: node.wins, className: 'text-positive' },
+            { label: 'Drawn', value: node.draws, className: 'text-primary/70' },
+            { label: 'Lost', value: node.losses, className: 'text-negative' },
+          ].map(stat => (
+            <div key={stat.label}>
+              <dt className="text-xs uppercase tracking-widest text-primary/70">{stat.label}</dt>
+              <dd className={`font-mono ${stat.className}`}>{stat.value}</dd>
+            </div>
+          ))}
+          <div>
+            <dt className="text-xs uppercase tracking-widest text-primary/70">Score</dt>
+            <dd className="font-mono" style={{ color: getScoreColor(node.win_rate) }}>
+              {node.win_rate}%
+            </dd>
+          </div>
+        </dl>
+
+        <div className="flex items-center gap-3">
+          {engineHref && (
+            <Link
+              to={engineHref}
+              className="px-4 py-2 border border-primary/20 text-primary rounded-sm font-serif text-sm km-interactive km-focus-visible transition-all"
+            >
+              Analyse in Engine →
+            </Link>
+          )}
+          <button
+            type="button"
+            onClick={() => setSelectedPath(null)}
+            className="text-xs uppercase tracking-widest text-primary/70 hover:text-primary km-focus-visible transition-colors"
+          >
+            Clear
+          </button>
+        </div>
+      </section>
+    );
+  })();
+
   const graphPanel = (
     // A definite height, not just a min-height: the SVG's height="100%" had no
     // definite parent to resolve against, so it fell back to its viewBox aspect
@@ -203,12 +275,23 @@ export default function Openings() {
     // wasted while the tree was squeezed into the rest.
     <section className="relative h-[60vh] min-h-[360px] max-h-[720px] bg-primary/5 border border-primary/10 rounded-sm overflow-hidden">
       <OpeningGraph
+        // Remounting on a filter change resets the view, which is right for a
+        // different question; a plain Refresh keeps the same instance and so
+        // keeps the user's zoom and expanded lines.
+        key={colorFilter}
         data={treeData as OpeningNode}
         onNodeHover={(anchor, node) => setTooltip({ anchor, data: node })}
         onNodeHoverEnd={() => setTooltip(null)}
+        onNodeSelect={setSelectedPath}
         onError={setError}
         graphRef={graphRef}
       />
+
+      {isRefreshing && (
+        <div className="absolute top-3 left-3 px-3 py-1.5 rounded-sm border border-primary/10" style={{ backgroundColor: 'var(--bg-primary)' }}>
+          <DataStateLoading label="Refreshing…" compact />
+        </div>
+      )}
 
       {/* Toolbar */}
       <div className="absolute top-3 right-3 flex gap-1">
@@ -376,6 +459,8 @@ export default function Openings() {
             graphPanel
           )}
 
+          {selectionPanel}
+
           {/* Legend + Stats — only meaningful alongside a rendered graph. */}
           <section className="flex flex-wrap gap-6 items-center justify-center text-xs font-sans text-primary/70">
             <span className="uppercase tracking-widest mr-2">Score:</span>
@@ -387,6 +472,9 @@ export default function Openings() {
             <div className="flex items-center gap-1"><div className="w-3 h-3 rounded-full bg-red-500"></div> &lt;30%</div>
 
             <span className="border-l border-primary/20 pl-6 ml-2">Node size = games played</span>
+            {/* The ring repeats the score as an angle, so it survives the
+                red/green confusion the fill colours are prone to. */}
+            <span className="border-l border-primary/20 pl-6">Ring = score</span>
 
             {/* Spelled out because a line drawn every time scores 50% while
                 winning none — "win rate" would read as a contradiction. */}
