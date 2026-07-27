@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import Puzzles from './Puzzles';
 import { setupMockLocalStorage } from '../test/helpers';
 
@@ -258,7 +258,13 @@ describe('Puzzles', () => {
       await waitFor(() => {
         expect(screen.getByText('Session in Progress')).toBeInTheDocument();
       });
-      expect(screen.getByText('3 / 5')).toBeInTheDocument();
+      // Two counters are rendered — the desktop panel and the compact mobile
+      // strip — with CSS (not conditional rendering) choosing which is visible,
+      // so both are in the DOM under jsdom.
+      expect(screen.getAllByText('3 / 5')).toHaveLength(2);
+      expect(
+        within(screen.getByTestId('mobile-session-progress')).getByText('3 / 5'),
+      ).toBeInTheDocument();
 
       // Wait for session-state persistence effect to flush before cleanup
       await waitFor(() => {
@@ -408,7 +414,7 @@ describe('Puzzles', () => {
       render(<Puzzles />);
 
       await waitFor(() => {
-        expect(screen.getByText('2 / 5')).toBeInTheDocument();
+        expect(screen.getAllByText('2 / 5').length).toBeGreaterThan(0);
       });
     });
   });

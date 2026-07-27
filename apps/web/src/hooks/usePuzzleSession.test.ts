@@ -165,7 +165,52 @@ describe('usePuzzleSession', () => {
             await result.current.handleStartSession();
         });
 
-        expect(result.current.error).toBe('Loading user status...');
+        expect(result.current.error).toBe('Still loading your training data — try again in a moment.');
+        // The message is only rendered when the state is 'error' too — setting
+        // the text alone made every start-guard failure invisible.
+        expect(result.current.sessionState).toBe('error');
+    });
+
+    it('does not create a session when the puzzles fail to load', async () => {
+        // Regression: the session was POSTed first, so every failed fetch left an
+        // orphaned open session — and the error card's Retry (which calls back
+        // into handleStartSession) minted another on every press, filling Recent
+        // Sessions with empty rows and leaving an activeSessionId that could
+        // neither be trained nor finished.
+        mockedGetDuePuzzles.mockRejectedValue(new Error('Network down'));
+        const setActiveSessionId = vi.fn();
+        const { result } = renderHook(() => usePuzzleSession(makeOpts({ setActiveSessionId })));
+
+        await act(async () => {
+            await result.current.handleStartSession();
+        });
+        await act(async () => {
+            await result.current.handleStartSession(); // the user presses Retry
+        });
+
+        expect(mockedStartSession).not.toHaveBeenCalled();
+        expect(setActiveSessionId).not.toHaveBeenCalled();
+        expect(result.current.sessionState).toBe('error');
+        expect(result.current.error).toBe('Network down');
+    });
+
+    it('explains an empty queue instead of a blank error state', async () => {
+        // Regression: an empty puzzle list set sessionState='error' with no
+        // message, so the error card (which needs both) never rendered — leaving
+        // an unrecoverable screen that told the user to start a session while
+        // hiding the Start button.
+        mockedGetDuePuzzles.mockResolvedValue({
+            due_count: 0, returned_count: 0, now: new Date().toISOString(), puzzles: [],
+        });
+        const { result } = renderHook(() => usePuzzleSession(makeOpts()));
+
+        await act(async () => {
+            await result.current.handleStartSession();
+        });
+
+        expect(mockedStartSession).not.toHaveBeenCalled();
+        expect(result.current.sessionState).toBe('error');
+        expect(result.current.error).toMatch(/nothing is due right now/i);
     });
 
     it('should start session and load puzzles', async () => {
@@ -186,7 +231,10 @@ describe('usePuzzleSession', () => {
             await result.current.handleStartSession();
         });
 
-        expect(mockedStartSession).toHaveBeenCalledWith('testuser', 5, 'standard', undefined, undefined, undefined);
+        // requested_n is the number actually served, not the number asked for:
+        // /puzzles/due no longer pads a short queue with not-yet-due puzzles, so
+        // a 2-puzzle session must report "n / 2" rather than "n / 5".
+        expect(mockedStartSession).toHaveBeenCalledWith('testuser', 2, 'standard', undefined, undefined, undefined);
         expect(setActiveSessionId).toHaveBeenCalledWith('s1');
         expect(result.current.puzzles).toHaveLength(2);
         expect(result.current.currentIndex).toBe(0);

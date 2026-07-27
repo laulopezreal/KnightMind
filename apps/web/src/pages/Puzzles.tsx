@@ -50,6 +50,10 @@ export default function Puzzles() {
     // Legacy single-move puzzles simply solve at ply 0 and complete immediately.
     const [linePlyIndex, setLinePlyIndex] = useState(0);
     const [attemptedLine, setAttemptedLine] = useState<string[]>([]);
+    // Transient "we couldn't reach the server" for a board action (check a move,
+    // reveal, record a review). Deliberately separate from the puzzle `status`:
+    // a failed request is NOT a wrong answer and must never be scored as one.
+    const [actionError, setActionError] = useState<string | null>(null);
 
     // Get motif filter and warmup mode from URL query params
     const [searchParams] = useSearchParams();
@@ -86,7 +90,7 @@ export default function Puzzles() {
         }
     }
 
-    const handleReviewPuzzleRef = useRef<((result: 'pass' | 'fail', timeMs?: number) => Promise<void>)>(async () => { });
+    const handleReviewPuzzleRef = useRef<((result: 'pass' | 'fail', timeMs?: number) => Promise<boolean>)>(async () => false);
     const isAdvancingPuzzle = useRef(false);
 
     const timer = usePuzzleTimer({
@@ -388,12 +392,13 @@ export default function Puzzles() {
     // client ever holding the solver's upcoming answer (audit gate 13). The
     // whole line is recorded (attemptedLine) so a completed solve is verified
     // end-to-end on review. `boardAfterMove` already has the user's move applied.
-    const processUserMove = async (boardAfterMove: Chess, uciMove: string) => {
+    const processUserMove = async (boardAfterMove: Chess, uciMove: string, fenBefore: string) => {
         if (!currentPuzzle) return;
         const normalized = uciMove.toLowerCase();
         // Reflect the user's move immediately.
         setGame(new Chess(boardAfterMove.fen()));
         setUserMove(normalized);
+        setActionError(null);
         try {
             const res = await checkPuzzle(currentPuzzle.id, username, normalized, linePlyIndex);
             if (!res.correct) {
@@ -427,8 +432,15 @@ export default function Puzzles() {
                 setStatus('correct');
             }
         } catch (err) {
+            // A failed REQUEST is not a failed ATTEMPT. Marking it 'incorrect'
+            // told the user they blundered when the network dropped, broke
+            // their streak, and offered "Mark as Failed & Try Again" — which
+            // would have written a real fail. Roll the board back to where they
+            // were and let them try the same move again.
             console.error('Failed to check move:', err);
-            setStatus('incorrect');
+            setGame(new Chess(fenBefore));
+            setUserMove('');
+            setActionError("We couldn't check that move — your attempt wasn't recorded. Check your connection and try again.");
         }
     };
 
@@ -438,7 +450,8 @@ export default function Puzzles() {
         if (!normalizedUserMove) return;
         // Apply the typed move to a working board so a multi-move line can play
         // out its replies just like the drag path does.
-        const board = new Chess(game.fen());
+        const fenBefore = game.fen();
+        const board = new Chess(fenBefore);
         let move;
         try {
             move = board.move({
@@ -454,17 +467,27 @@ export default function Puzzles() {
         }
         clue.reset();
         const uciMove = `${move.from}${move.to}${move.promotion || ''}`;
-        await processUserMove(board, uciMove);
+        await processUserMove(board, uciMove, fenBefore);
     };
 
     const handleRevealSolution = async () => {
+        setActionError(null);
         const { move: bestMove, pv } = await ensureRevealedMove();
+        // Without a solution there is nothing to reveal. Flipping to 'revealed'
+        // anyway printed an empty "Solution …", removed every solving control,
+        // and left the puzzle queued to be recorded as a self-reported fail —
+        // charging the user for a request that never landed. Same guard the
+        // hint ladder already applies at rung 1.
+        if (!bestMove) {
+            setActionError("We couldn't load the solution — you're still on this puzzle. Check your connection and try again.");
+            return;
+        }
         setStatus('revealed');
-        setUserMove(bestMove || '');
+        setUserMove(bestMove);
         // Drop any click-selected piece so its highlight doesn't linger over
         // the solution playback.
         setClickFrom(null);
-        if (currentPuzzle && bestMove) {
+        if (currentPuzzle) {
             // Animate the whole combination (or the single move for legacy
             // puzzles) rather than teleporting one move and printing the rest.
             playSolutionLine(currentPuzzle.fen, pv.length ? pv : [bestMove]);
@@ -509,6 +532,7 @@ export default function Puzzles() {
         setLinePlyIndex(0);
         setAttemptedLine([]);
         setClickFrom(null);
+        setActionError(null);
     }
 
     // Bring the board into view when a session starts: it renders below the
@@ -573,6 +597,9 @@ export default function Puzzles() {
     const onPieceDrop = (sourceSquare: string, targetSquare: string, promotion: string = 'q') => {
         if (!currentPuzzle || status === 'correct' || status === 'revealed') return false;
         try {
+            // `game.move` mutates in place, so capture the position first —
+            // processUserMove needs it to roll back if the check request fails.
+            const fenBefore = game.fen();
             const move = game.move({ from: sourceSquare, to: targetSquare, promotion: promotion || 'q' });
             if (move === null) return false;
             clue.reset();
@@ -581,7 +608,7 @@ export default function Puzzles() {
             // but whether it SOLVES the puzzle — and, for a multi-move line, the
             // opponent's forced reply — is decided server-side so the client
             // never holds the answer ahead of time (audit gate 13).
-            void processUserMove(game, uciMove);
+            void processUserMove(game, uciMove, fenBefore);
             return true;
         } catch { return false; }
     };
@@ -604,6 +631,8 @@ export default function Puzzles() {
 
         isAdvancingPuzzle.current = true;
         try {
+            setActionError(null);
+            let recorded = true;
             if (status === 'correct') {
                 // Send the WHOLE solved line (space-separated UCI) so the SERVER
                 // re-verifies every ply — a puzzle counts as solved only when the
@@ -612,10 +641,19 @@ export default function Puzzles() {
                 const solvedLine = attemptedLine.length > 0
                     ? attemptedLine.join(' ')
                     : (userMove.trim().toLowerCase() || undefined);
-                await handleReviewPuzzle('pass', undefined, solvedLine);
+                recorded = await handleReviewPuzzle('pass', undefined, solvedLine);
             } else if (status === 'revealed') {
                 // Revealed solution: a self-reported fail, no move to verify.
-                await handleReviewPuzzle('fail');
+                recorded = await handleReviewPuzzle('fail');
+            }
+
+            // A review that failed to reach the server must NOT advance the
+            // session: doing so silently discarded the attempt (and, on the last
+            // puzzle, baked the loss into the summary). Stay put and let the
+            // user press again — the idempotency key makes the retry safe.
+            if (!recorded) {
+                setActionError("We couldn't save that result — you're still on this puzzle. Check your connection and try again.");
+                return;
             }
 
             // One step of progress per puzzle finished — so retries (mark-failed
@@ -641,7 +679,11 @@ export default function Puzzles() {
                 <div className="flex justify-between items-end">
                     <div>
                         <h1 className="text-4xl md:text-5xl font-serif text-primary mb-2">
-                            {motifFilter ? `${motifFilter} Puzzles` : 'Daily Puzzles'}
+                            {/* formatMotifName, not the raw query param: the
+                                Dashboard link that sends users here already says
+                                "Back rank mate", so printing "back_rank_mate"
+                                made the two screens disagree mid-flow. */}
+                            {motifFilter ? `${formatMotifName(motifFilter)} Puzzles` : 'Daily Puzzles'}
                         </h1>
                         <div className={`${activeSessionId && currentPuzzle ? 'hidden lg:flex' : 'flex'} items-center gap-2 mb-3`}>
                             <span className="text-xs font-sans uppercase tracking-wider px-2 py-1 rounded-sm border border-primary/20 bg-primary/5 text-primary/80">
@@ -652,8 +694,22 @@ export default function Puzzles() {
                             )}
                         </div>
                         <p className={`${activeSessionId && currentPuzzle ? 'hidden lg:block' : ''} text-lg text-primary/70 font-sans`}>
-                            {motifFilter ? `Practice ${motifFilter} tactical patterns` : 'Tactical patterns from your own games.'}
+                            {motifFilter
+                                ? `Practice ${formatMotifName(motifFilter)} tactical patterns`
+                                : 'Tactical patterns from your own games.'}
                         </p>
+                        {/* A filtered queue can be empty while the unfiltered one
+                            isn't, so the filter needs a visible exit — otherwise
+                            the only way out of a dead-end targeted session is the
+                            browser's back button. */}
+                        {motifFilter && !activeSessionId && (
+                            <Link
+                                to="/puzzles"
+                                className="mt-2 inline-block text-sm font-sans text-primary/70 km-interactive km-focus-visible km-inline-link underline decoration-primary/30 underline-offset-4"
+                            >
+                                Train everything that&apos;s due instead
+                            </Link>
+                        )}
                     </div>
                 </div>
             </section>
@@ -842,17 +898,23 @@ export default function Puzzles() {
                             )}
                         </div>
                     )}
-                    {shouldShowEmptyState && isLoadingStatus && (
-                        <div className="text-center text-primary/70 py-4">
-                            <span className="animate-pulse">Loading training status...</span>
-                        </div>
-                    )}
-                    {shouldShowEmptyState && !userStatus && !isLoadingStatus && !insightsError && !isRefreshingInsights && (
+                    {/* No userStatus and nothing loading or failing means there
+                        is no username yet — every control above is disabled, so
+                        pointing at "Start Session" was a dead instruction. Name
+                        the actual next step instead. */}
+                    {shouldShowEmptyState && !userStatus && !insightsError && !isRefreshingInsights && (
                         <div className="bg-primary/5 border border-primary/10 rounded-sm p-6 backdrop-blur-sm text-center space-y-4">
-                            <h3 className="font-serif text-xl text-primary">Ready to train</h3>
+                            <h3 className="font-serif text-xl text-primary">Connect your account to train</h3>
                             <p className="text-primary/70 font-sans">
-                                Click &quot;Start Session&quot; to begin training, or &quot;Generate New&quot; to create fresh puzzles from your games.
+                                KnightMind builds puzzles from your own Chess.com games. Set your username to get started.
                             </p>
+                            <button
+                                type="button"
+                                onClick={() => setEditorOpen(true)}
+                                className="px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-colors km-interactive km-focus-visible"
+                            >
+                                Set Username
+                            </button>
                         </div>
                     )}
                     {statusLoadFailed && (
@@ -1040,6 +1102,39 @@ export default function Puzzles() {
                             )}
                             <span className="font-mono">{currentIndex + 1}/{puzzles.length}</span>
                         </div>
+
+                        {/* Compact mobile session progress. The full panel below
+                            is `hidden lg:block`, so below 1024px the streak,
+                            hint tally and progress bar — the whole feedback loop
+                            of a session — were invisible. Same numbers, sized
+                            for a phone. */}
+                        {activeSessionId && sessionSummary && (
+                            <div data-testid="mobile-session-progress" className="lg:hidden mt-3 px-1 space-y-1.5">
+                                <div className="flex items-center justify-between text-xs font-sans text-primary/70">
+                                    <span>
+                                        <span aria-hidden="true">🔥</span> Streak {streak}
+                                        <span className="mx-1.5 text-primary/40">|</span>
+                                        <span aria-hidden="true">💡</span> Hints {hintsUsed}
+                                    </span>
+                                    <span className="font-mono">
+                                        {reviewedCount} / {sessionSummary.requested_n}
+                                    </span>
+                                </div>
+                                <div
+                                    className="h-1.5 bg-primary/10 rounded-full overflow-hidden"
+                                    role="progressbar"
+                                    aria-valuenow={reviewedCount}
+                                    aria-valuemin={0}
+                                    aria-valuemax={sessionSummary.requested_n}
+                                    aria-label="Session progress"
+                                >
+                                    <div
+                                        className="h-full bg-primary transition-all duration-500 ease-out"
+                                        style={{ width: `${Math.min(100, (reviewedCount / sessionSummary.requested_n) * 100)}%` }}
+                                    />
+                                </div>
+                            </div>
+                        )}
                     </div>
 
                     {/* Sidebar Controls */}
@@ -1241,6 +1336,20 @@ export default function Puzzles() {
                             )}
                         </div>
 
+                        {/* Connectivity/action failures. Sits outside the status
+                            region (which is polite and describes the puzzle) and
+                            is announced assertively — it means an action the user
+                            just took did NOT happen. */}
+                        {actionError && (
+                            <div
+                                className="bg-red-500/10 border border-red-500/20 rounded-sm p-3 text-sm"
+                                role="alert"
+                                aria-live="assertive"
+                            >
+                                <p className="text-negative font-sans">{actionError}</p>
+                            </div>
+                        )}
+
                         {/* Actions */}
                         <div className="space-y-6">
                             {/* Type Move Toggle */}
@@ -1262,7 +1371,11 @@ export default function Puzzles() {
                                         value={userMove}
                                         onChange={(e) => setUserMove(e.target.value)}
                                         className="w-full bg-primary/5 border border-primary/20 p-3 rounded-sm text-primary font-mono text-center focus:outline-none focus:border-primary/60 transition-colors"
-                                        onKeyPress={(e) => e.key === 'Enter' && handleCheckAnswer()}
+                                        // onKeyDown, not the deprecated onKeyPress — which React no
+                                        // longer fires reliably and which IMEs skip entirely.
+                                        onKeyDown={(e) => {
+                                            if (e.key === 'Enter') handleCheckAnswer();
+                                        }}
                                     />
                                 </div>
                             )}
@@ -1283,7 +1396,9 @@ export default function Puzzles() {
                                         disabled={!currentPuzzle || clue.isExhausted}
                                         aria-label={puzzleActionA11yCopy.hintLabel}
                                         className="px-2 py-3 md:px-6 md:py-4 border border-primary/20 text-primary rounded-sm font-serif text-sm md:text-lg transition-all km-interactive km-focus-visible disabled:opacity-50 disabled:cursor-default">
-                                        {`Hint (${clue.clueStage}/3)`}
+                                        {/* "used of available" — "Hint (0/3)" alone
+                                            read as "no hints available". */}
+                                        {clue.isExhausted ? 'Hints used (3/3)' : `Hint (${clue.clueStage}/3 used)`}
                                     </button>
                                     <button
                                         type="button"
@@ -1358,7 +1473,11 @@ export default function Puzzles() {
                                         <button
                                             type="button"
                                             onClick={async () => {
-                                                await handleReviewPuzzle('fail');
+                                                setActionError(null);
+                                                if (!await handleReviewPuzzle('fail')) {
+                                                    setActionError("We couldn't save that result — nothing was recorded. Check your connection and try again.");
+                                                    return;
+                                                }
                                                 setStatus('solving');
                                                 setUserMove('');
                                                 setGame(new Chess(currentPuzzle.fen));
@@ -1391,7 +1510,13 @@ export default function Puzzles() {
                                                 if (isAdvancingPuzzle.current) return;
                                                 isAdvancingPuzzle.current = true;
                                                 try {
-                                                    await handleReviewPuzzle('fail');
+                                                    setActionError(null);
+                                                    // Don't close the session on an unrecorded
+                                                    // review — the summary would be missing it.
+                                                    if (!await handleReviewPuzzle('fail')) {
+                                                        setActionError("We couldn't save that result — the session is still open. Check your connection and try again.");
+                                                        return;
+                                                    }
                                                     // Finishing the final puzzle (as a fail) ends the session.
                                                     setReviewedCount(prev => prev + 1);
                                                     await handleCompleteSession();
