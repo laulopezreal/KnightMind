@@ -9,7 +9,7 @@ from sqlalchemy.orm import sessionmaker
 
 from services.api.db import Base, get_db
 from services.api.main import app
-from services.api.models import Job, JobStatus
+from services.api.models import Game, Job, JobStatus, Puzzle
 from services.api.worker import JobWorker
 
 # Use a file-based DB for tests to ensure threading works if needed,
@@ -279,6 +279,45 @@ def test_write_progress_never_touches_a_non_running_job(db_session):
 def _reset_jobs(db_session):
     """Clear the shared module-scoped jobs table for claim isolation."""
     db_session.query(Job).delete()
+    db_session.commit()
+
+
+def _insert_pending_puzzle(db_session, username: str, puzzle_id: str) -> None:
+    """Insert a puzzle with no diagnosis so DiagnosisRepository sees work."""
+    game_id = f"{puzzle_id}-game"
+    db_session.add(
+        Game(
+            game_id=game_id,
+            url=f"https://chess.com/game/{game_id}",
+            username=username,
+            white_username=username,
+            black_username="opponent",
+            white_result="resigned",
+            black_result="win",
+            time_control="600+5",
+            end_time=int(datetime.now(timezone.utc).timestamp()),
+            rated=True,
+            pgn_blob='[Event "Test"]\n\n1. e4 e5 *',
+        )
+    )
+    db_session.add(
+        Puzzle(
+            id=puzzle_id,
+            username=username,
+            source_game_id=game_id,
+            ply=3,
+            fen="6k1/pp3ppp/8/3q4/8/8/PP3PPP/3Q2K1 w - - 0 1",
+            side_to_move="white",
+            played_move_uci="d1d2",
+            best_move_uci="d1d5",
+            accept_moves_uci="d1d5",
+            solution_pv="d1d5",
+            eval_before=1.5,
+            eval_after=-7.5,
+            swing=9.0,
+            confirmed_depth=18,
+        )
+    )
     db_session.commit()
 
 
@@ -783,6 +822,86 @@ class TestFollowUpDiagnosis:
         ):
             JobWorker._enqueue_followup(JobType.PUZZLE_GENERATION.value, "unlucky")
         # No exception escaped.
+
+
+@patch("asyncio.to_thread", side_effect=run_sync_in_thread)
+@pytest.mark.asyncio
+async def test_diagnosis_success_with_no_remaining_pending_chains_nothing(
+    mock_to_thread, db_session
+):
+    from services.api.models import JobType
+    from services.api.worker import JOB_HANDLERS, worker
+
+    _reset_jobs(db_session)
+    job = Job(username="diag-empty", type=JobType.DIAGNOSIS, status=JobStatus.RUNNING)
+    db_session.add(job)
+    db_session.commit()
+    db_session.refresh(job)
+
+    def fake_diagnosis(ctx):
+        return {"username": ctx.username, "remaining": 0, "canceled": False}
+
+    original = JOB_HANDLERS[JobType.DIAGNOSIS.value]
+    JOB_HANDLERS[JobType.DIAGNOSIS.value] = fake_diagnosis
+    try:
+        with patch("services.api.worker.SessionLocal") as mock_sl:
+            mock_sl.return_value.__enter__.return_value = db_session
+            mock_sl.return_value.__exit__.return_value = None
+            await worker.execute_job(job.id)
+    finally:
+        JOB_HANDLERS[JobType.DIAGNOSIS.value] = original
+
+    db_session.expire_all()
+    assert db_session.get(Job, job.id).status == JobStatus.SUCCEEDED
+    queued = (
+        db_session.query(Job)
+        .filter_by(
+            username="diag-empty", type=JobType.DIAGNOSIS, status=JobStatus.QUEUED
+        )
+        .count()
+    )
+    assert queued == 0
+
+
+@patch("asyncio.to_thread", side_effect=run_sync_in_thread)
+@pytest.mark.asyncio
+async def test_diagnosis_success_with_late_pending_puzzle_queues_followup(
+    mock_to_thread, db_session
+):
+    from services.api.models import JobType
+    from services.api.worker import JOB_HANDLERS, worker
+
+    _reset_jobs(db_session)
+    job = Job(username="diag-late", type=JobType.DIAGNOSIS, status=JobStatus.RUNNING)
+    db_session.add(job)
+    db_session.commit()
+    db_session.refresh(job)
+
+    def fake_diagnosis(ctx):
+        _insert_pending_puzzle(db_session, ctx.username, "late-pending")
+        return {"username": ctx.username, "remaining": 1, "canceled": False}
+
+    original = JOB_HANDLERS[JobType.DIAGNOSIS.value]
+    JOB_HANDLERS[JobType.DIAGNOSIS.value] = fake_diagnosis
+    try:
+        with patch("services.api.worker.SessionLocal") as mock_sl:
+            mock_sl.return_value.__enter__.return_value = db_session
+            mock_sl.return_value.__exit__.return_value = None
+            await worker.execute_job(job.id)
+    finally:
+        JOB_HANDLERS[JobType.DIAGNOSIS.value] = original
+
+    db_session.expire_all()
+    assert db_session.get(Job, job.id).status == JobStatus.SUCCEEDED
+    followup = (
+        db_session.query(Job)
+        .filter_by(
+            username="diag-late", type=JobType.DIAGNOSIS, status=JobStatus.QUEUED
+        )
+        .one()
+    )
+    assert followup.message == "Queued for remaining diagnosis"
+    assert followup.params["limit"] > 1000
 
 
 @patch("services.api.worker.generate_puzzles")

@@ -13,6 +13,7 @@ from services.api.db import SessionLocal
 from services.api.diagnosis.job import DIAGNOSIS_BATCH_MAX, run_diagnosis
 from services.api.models import Job, JobStatus, JobType
 from services.api.puzzles.generator import generate_puzzles
+from services.api.storage.diagnosis_repository import DiagnosisRepository
 
 logger = logging.getLogger(__name__)
 
@@ -280,25 +281,14 @@ class JobWorker:
             db.commit()
 
     @staticmethod
-    def _enqueue_followup(job_type: str, username: str) -> None:
-        """Queue a diagnosis run after puzzles are generated.
+    def _enqueue_diagnosis(username: str, message: str) -> None:
+        """Queue one diagnosis job for a user, best-effort.
 
-        Fresh puzzles are fresh mistakes, and a mistake with no diagnosis is
-        the feature not existing for that user. Chaining here means importing
-        games is the only thing anyone has to do — nobody needs to discover
-        POST /users/{username}/diagnose.
-
-        Deliberately best-effort. This runs *after* the generation job has
-        already been marked SUCCEEDED, and it is wrapped so that nothing here
-        can turn a successful generation into a failure: a follow-up that does
-        not get queued is a missing enrichment, not lost work, and the next
-        run picks the puzzles up anyway.
+        Deliberately wrapped so a follow-up failure cannot turn already
+        persisted work into a failed job. The active-job unique index still
+        enforces at most one queued/running diagnosis per user; collisions are
+        expected under races and are safe no-ops.
         """
-        if job_type != JobType.PUZZLE_GENERATION.value:
-            # Only generation produces new puzzles. Chaining diagnosis off a
-            # diagnosis run would loop forever.
-            return
-
         try:
             with SessionLocal() as db:
                 try:
@@ -307,7 +297,7 @@ class JobWorker:
                             username=username,
                             type=JobType.DIAGNOSIS,
                             status=JobStatus.QUEUED,
-                            message="Queued after puzzle generation",
+                            message=message,
                             params={"limit": DIAGNOSIS_BATCH_MAX},
                         )
                     )
@@ -329,6 +319,48 @@ class JobWorker:
             logger.info("Queued follow-up diagnosis for %s", username)
         except Exception as exc:  # noqa: BLE001 - must never fail the generation
             logger.warning("Could not queue follow-up diagnosis: %s", exc)
+
+    @staticmethod
+    def _enqueue_followup(job_type: str, username: str) -> None:
+        """Queue a diagnosis run after puzzles are generated.
+
+        Fresh puzzles are fresh mistakes, and a mistake with no diagnosis is
+        the feature not existing for that user. Chaining here means importing
+        games is the only thing anyone has to do — nobody needs to discover
+        POST /users/{username}/diagnose.
+        """
+        if job_type != JobType.PUZZLE_GENERATION.value:
+            # Only generation unconditionally produces new puzzles. Diagnosis
+            # requeues through _enqueue_remaining_diagnosis_if_pending, guarded
+            # by the actual pending-count predicate so it cannot loop forever.
+            return
+
+        JobWorker._enqueue_diagnosis(username, "Queued after puzzle generation")
+
+    @staticmethod
+    def _enqueue_remaining_diagnosis_if_pending(job_type: str, username: str) -> None:
+        """Close the generation-vs-diagnosis race after a diagnosis succeeds.
+
+        A running diagnosis snapshots pending puzzle ids at start. If puzzle
+        generation creates fresh pending puzzles during that run, generation's
+        follow-up insert may collide with the active diagnosis and no queued job
+        is left behind. Once the current diagnosis is marked SUCCEEDED, re-check
+        the storage predicate and queue one more diagnosis only if work remains.
+        """
+        if job_type != JobType.DIAGNOSIS.value:
+            return
+
+        try:
+            with SessionLocal() as db:
+                pending = DiagnosisRepository(db).pending_count(username)
+        except Exception as exc:  # noqa: BLE001 - enrichment must stay best-effort
+            logger.warning("Could not check remaining diagnosis work: %s", exc)
+            return
+
+        if pending <= 0:
+            return
+
+        JobWorker._enqueue_diagnosis(username, "Queued for remaining diagnosis")
 
     async def execute_job(self, job_id: str):
         """Execute the actual job logic."""
@@ -405,6 +437,7 @@ class JobWorker:
             else:
                 logger.info(f"Job {job_id} succeeded")
                 self._enqueue_followup(job_type, username)
+                self._enqueue_remaining_diagnosis_if_pending(job_type, username)
 
         except Exception as e:
             logger.error(f"Job {job_id} failed: {e}")
