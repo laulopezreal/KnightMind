@@ -198,12 +198,19 @@ export function OpeningGraph({ data, onNodeHover, onNodeHoverEnd, onNodeSelect, 
   const expandedKeysRef = useRef<Set<string>>(new Set());
   const transformRef = useRef<d3.ZoomTransform | null>(null);
   const focusedKeyRef = useRef<string | null>(null);
+  /** True once the user has zoomed or panned by hand, rather than us fitting. */
+  const userAdjustedRef = useRef(false);
 
   useImperativeHandle(graphRef, () => ({
     // Actually fits the visible tree to the panel. This used to reset the zoom
     // transform to identity, which left an over-shrunk graph exactly as
     // illegible as before — the one control meant to rescue it did nothing.
-    fitToView: () => fitRef.current(true),
+    fitToView: () => {
+      // Asking to fit is asking to hand the view back to us, so resize-refitting
+      // resumes from here.
+      userAdjustedRef.current = false;
+      fitRef.current(true);
+    },
     zoomIn: () => {
       const svgEl = svgRef.current;
       const zoom = zoomBehaviorRef.current;
@@ -509,6 +516,16 @@ export function OpeningGraph({ data, onNodeHover, onNodeHoverEnd, onNodeSelect, 
           })
           .on('blur', () => callbacksRef.current.onNodeHoverEnd());
 
+        // The roving tab stop must always land somewhere. A refetch can drop
+        // the previously focused line entirely (games removed, archive
+        // re-imported), and every node then scored `tabindex="-1"` — leaving the
+        // whole tree unreachable by Tab, which is the exact failure the ARIA
+        // work set out to fix.
+        if (!nodes.some(d => d.key === focusedKey)) {
+          focusedKey = root.key ?? null;
+          focusedKeyRef.current = focusedKey;
+        }
+
         const nodeUpdate = nodeEnter.merge(nodeSel);
 
         nodeUpdate
@@ -620,6 +637,10 @@ export function OpeningGraph({ data, onNodeHover, onNodeHoverEnd, onNodeSelect, 
           // Remembered so a refresh does not throw away where the user is
           // looking, alongside which lines they had open.
           transformRef.current = event.transform;
+          // `sourceEvent` is null for programmatic transforms (our own fit) and
+          // set for real gestures, which is what distinguishes "the user chose
+          // this view" from "we placed it".
+          if (event.sourceEvent) userAdjustedRef.current = true;
         })
         .on('end', () => d3.select(svgEl).style('cursor', 'grab'));
 
@@ -635,7 +656,22 @@ export function OpeningGraph({ data, onNodeHover, onNodeHoverEnd, onNodeSelect, 
 
       // Refit on container resize, so rotating a phone or opening the sidebar
       // does not strand the tree off-screen.
-      const observer = new ResizeObserver(() => fit(false));
+      //
+      // Two guards, both load-bearing. `observe()` delivers an immediate
+      // callback for the current size, which would have refitted right over the
+      // transform just restored above — silently undoing zoom preservation on
+      // every refresh. And once the user has chosen their own view, a resize
+      // must not yank it away; the Fit control is there when they want it back.
+      let lastSize = svgEl.getBoundingClientRect();
+      const observer = new ResizeObserver(() => {
+        const size = svgEl!.getBoundingClientRect();
+        const unchanged =
+          Math.abs(size.width - lastSize.width) < 1 &&
+          Math.abs(size.height - lastSize.height) < 1;
+        lastSize = size;
+        if (unchanged || userAdjustedRef.current) return;
+        fit(false);
+      });
       observer.observe(svgEl);
       disconnectResize = () => observer.disconnect();
     } catch (e) {

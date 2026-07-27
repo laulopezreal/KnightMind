@@ -5,7 +5,7 @@ import { getOpenings, ApiError, type OpeningNode, type ColorFilter } from '../ap
 import { useChessUsername } from '../context/ChessUsernameContext';
 import { OpeningGraph, type OpeningGraphHandle, type NodeAnchor } from '../components/OpeningGraph';
 import { getScoreColor } from '../utils/openings';
-import { formatLine, engineHrefForPath } from '../utils/openingLine';
+import { formatLine, engineHrefForPath, resolvePath } from '../utils/openingLine';
 import { useLocalStorage } from '../hooks/useLocalStorage';
 import { PageHeader } from '../components/PageHeader';
 import {
@@ -14,6 +14,7 @@ import {
   DataStateLoading,
   DataStateOffline,
   DataStatePartial,
+  DataStateStale,
 } from '../components/DataState';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
 import { useLatestRequest } from '../hooks/useLatestRequest';
@@ -98,6 +99,19 @@ export default function Openings() {
     if (!username) navigate('/');
   }, [username, navigate]);
 
+  // A selection holds nodes from the tree it was made against. Left alone, its
+  // figures go stale on refresh and become plain wrong after a colour-filter
+  // change — the panel would keep showing "1. e4 c5, 31 games" while the graph
+  // beneath it answered a different question. Re-walk the line in the new tree
+  // to pick up current numbers, or drop it when the line is not in this one.
+  useEffect(() => {
+    setSelectedPath(previous => {
+      if (!previous) return previous;
+      if (!treeData) return null;
+      return resolvePath(treeData, previous);
+    });
+  }, [treeData]);
+
   // The API always answers a 200 with a root node, even when nothing matched —
   // so "did anything load" must be judged on the contents, not the container.
   const analysis = treeData?.analysis;
@@ -145,10 +159,12 @@ export default function Openings() {
       setTreeData(data);
     } catch (err) {
       if (token.isStale()) return;
+      let isMissingGames = false;
       if (err instanceof ApiError) {
         // `message` is the user-facing text; `detail` is technical and logged only.
         if (err.detail) console.error('[openings]', err.detail);
         if (err.statusCode === 404) {
+          isMissingGames = true;
           setNoGamesImported(true);
         } else {
           setError(err.message);
@@ -156,7 +172,11 @@ export default function Openings() {
       } else {
         setError(err instanceof Error ? err.message : 'Failed to load openings');
       }
-      setTreeData(null);
+      // A failed *refresh* must not discard the tree the user is looking at —
+      // that loses their zoom and expanded lines to a transient network blip,
+      // which is exactly what keeping the graph mounted during a refresh was
+      // meant to prevent. Only a 404 genuinely means "there is nothing here".
+      setTreeData(previous => (previous && !isMissingGames ? previous : null));
     } finally {
       if (!token.isStale()) setLoading(false);
     }
@@ -397,7 +417,7 @@ export default function Openings() {
       )}
 
       {/* Error */}
-      {error && (
+      {error && !hasOpenings && (
         !online ? (
           // A failed load while the browser is offline is a connectivity problem,
           // not a server error — say so instead of a bare error message.
@@ -446,7 +466,22 @@ export default function Openings() {
 
       {!showLoading && hasOpenings && (
         <>
-          {skippedGames > 0 ? (
+          {/* A failed refresh with a tree still on screen is not a blocking
+              failure — the data below is merely older. Framing it politely
+              (role="status") beats an assertive alert over content the user
+              can still read. It outranks the partial-data notice because it
+              describes the more recent, more actionable problem. */}
+          {error ? (
+            <DataStateStale
+              message={online
+                ? `Couldn’t refresh: ${error}`
+                : 'You appear to be offline, so this could not be refreshed.'}
+              onRefresh={handleFetchClick}
+              refreshPending={loading}
+            >
+              {graphPanel}
+            </DataStateStale>
+          ) : skippedGames > 0 ? (
             <DataStatePartial
               message={`${skippedGames} of ${analysis?.games_stored ?? '?'} stored games could not be analysed (unreadable, unfinished, or played under a different username), so they are missing from this tree.`}
               onRetry={handleFetchClick}

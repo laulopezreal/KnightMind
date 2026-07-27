@@ -50,6 +50,28 @@ export function fenForPath(path: OpeningPath): string | null {
   return game.fen();
 }
 
+/**
+ * Find the same line in a freshly fetched tree.
+ *
+ * A selection holds node objects from the tree it was made against, so after a
+ * refetch its figures are whatever they were then, and after a colour-filter
+ * change they describe a different question entirely. Re-walking the move
+ * sequence returns the *current* nodes, or null when the line is not in this
+ * tree at all — which is the honest answer for "your Sicilian, as White".
+ */
+export function resolvePath(tree: OpeningNode, path: OpeningPath): OpeningPath | null {
+  const resolved: OpeningNode[] = [tree];
+  let current = tree;
+
+  for (const san of pathMoves(path)) {
+    const next = current.children?.find((child) => child.move_san === san);
+    if (!next) return null;
+    resolved.push(next);
+    current = next;
+  }
+  return resolved;
+}
+
 /** Deep link to the Engine for the position a path reaches. */
 export function engineHrefForPath(path: OpeningPath): string | null {
   const fen = fenForPath(path);

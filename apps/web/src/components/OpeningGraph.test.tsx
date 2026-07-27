@@ -360,6 +360,26 @@ describe('OpeningGraph — state across a rebuild', () => {
     expect(labels().some((l) => l.startsWith('2…a4'))).toBe(true);
   });
 
+  it('keeps a tab stop when the focused line vanishes from the refetch', () => {
+    const before = node('Start', [10, 0, 10], [
+      node('e4', [5, 0, 5], [node('c5', [5, 0, 5])]),
+      node('d4', [5, 0, 5]),
+    ]);
+    // The focused line is gone — games removed, or the archive re-imported.
+    const after = node('Start', [5, 0, 5], [node('d4', [5, 0, 5])]);
+
+    const { rerender } = render(
+      <OpeningGraph data={before} onNodeHover={vi.fn()} onNodeHoverEnd={vi.fn()} />
+    );
+    fireEvent.click(byMove('1…c5')!);
+
+    rerender(<OpeningGraph data={after} onNodeHover={vi.fn()} onNodeHoverEnd={vi.fn()} />);
+
+    // Every node scoring tabindex="-1" leaves the tree unreachable by Tab —
+    // the exact failure the ARIA work set out to fix.
+    expect(items().filter((el) => el.getAttribute('tabindex') === '0')).toHaveLength(1);
+  });
+
   it('keeps collapsed lines closed across a refetch', () => {
     const { rerender } = render(
       <OpeningGraph data={TRANSPOSING_TREE} onNodeHover={vi.fn()} onNodeHoverEnd={vi.fn()} />
