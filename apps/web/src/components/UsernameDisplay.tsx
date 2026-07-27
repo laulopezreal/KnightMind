@@ -20,11 +20,16 @@ export default function UsernameDisplay() {
     };
 
     useEffect(() => {
-        if (isEditorOpen) {
-            setInputValue(username);
-            setError(null);
-            setTimeout(() => inputRef.current?.focus(), 100);
-        }
+        if (!isEditorOpen) return;
+        setInputValue(username);
+        setError(null);
+        // Deferred so the input exists and the open transition has begun. The
+        // cleanup is load-bearing: closing inside that 100ms window (Escape and
+        // Save both hand focus back to the trigger synchronously) otherwise left
+        // a live timer that yanked focus onto an input the user had just
+        // dismissed — a keyboard user's focus jumping to a hidden field.
+        const focusTimer = setTimeout(() => inputRef.current?.focus(), 100);
+        return () => clearTimeout(focusTimer);
     }, [isEditorOpen, username]);
 
     useEffect(() => {
