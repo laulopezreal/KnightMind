@@ -51,4 +51,47 @@ describe('evaluateFen()', () => {
         expect(err.statusCode).toBe(400);
         expect(err.message).toBe('Invalid FEN string');
     });
+
+    describe('malformed 200 responses', () => {
+        // A 200 does not guarantee the body matches EvalResult. Callers treat a
+        // resolved promise as "these fields are the right types", and a missing
+        // `eval` reached formatEval's .toFixed() and took the page down.
+        const malformed: [name: string, body: unknown][] = [
+            ['an empty object', {}],
+            ['a missing eval', { best_move_uci: 'e2e4' }],
+            ['a missing best move', { eval: 0.3 }],
+            ['a stringified eval', { best_move_uci: 'e2e4', eval: '0.3' }],
+            ['a null eval', { best_move_uci: 'e2e4', eval: null }],
+            ['NaN', { best_move_uci: 'e2e4', eval: Number.NaN }],
+            ['a non-string best move', { best_move_uci: 1234, eval: 0.3 }],
+            ['null', null],
+            ['an array', []],
+        ];
+
+        it.each(malformed)('rejects %s rather than resolving', async (_name, body) => {
+            mockFetch.mockReturnValue(jsonResponse(body));
+
+            const err = await evaluateFen('startpos').catch((e: unknown) => e) as ApiError;
+            expect(err).toBeInstanceOf(ApiError);
+            expect(err.statusCode).toBe(502);
+            expect(err.message).toMatch(/unexpected response/i);
+        });
+
+        it('keeps the offending payload in detail for developers only', async () => {
+            mockFetch.mockReturnValue(jsonResponse({ best_move_uci: 'e2e4' }));
+
+            const err = await evaluateFen('startpos').catch((e: unknown) => e) as ApiError;
+            expect(err.detail).toMatch(/Malformed \/engine\/eval payload/);
+            expect(err.message).not.toMatch(/payload|JSON/i);
+        });
+
+        it('still accepts a legitimate zero and negative eval', async () => {
+            // Guarding on truthiness rather than type would reject these.
+            mockFetch.mockReturnValue(jsonResponse({ best_move_uci: 'e2e4', eval: 0 }));
+            await expect(evaluateFen('startpos')).resolves.toEqual({ best_move_uci: 'e2e4', eval: 0 });
+
+            mockFetch.mockReturnValue(jsonResponse({ best_move_uci: 'e2e4', eval: -3.5 }));
+            await expect(evaluateFen('startpos')).resolves.toEqual({ best_move_uci: 'e2e4', eval: -3.5 });
+        });
+    });
 });
