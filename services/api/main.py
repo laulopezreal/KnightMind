@@ -34,6 +34,7 @@ from services.api.analytics_confidence import (
 )
 from services.api.auth import require_operator
 from services.api.db import SessionLocal, get_db
+from services.api.diagnosis.job import DIAGNOSIS_BATCH_DEFAULT, DIAGNOSIS_BATCH_MAX
 from services.api.engine import (
     EngineNotAvailableError,
     InvalidFenError,
@@ -70,6 +71,7 @@ from services.api.puzzles.identity import backfill_puzzle_identity
 from services.api.ratelimit import rate_limit
 from services.api.ratings_auto import auto_snapshot, auto_snapshot_throttled
 from services.api.storage import GameRepository, PuzzleRepository
+from services.api.storage.diagnosis_repository import DiagnosisRepository
 from services.api.storage.game_repository import MANUAL_GAME_ID
 from services.api.storage.spaced_repetition import (
     _utcnow_naive,
@@ -111,6 +113,7 @@ RATE_LIMIT_ENGINE_EVAL = 30  # Stockfish CPU; also has a per-process in-flight c
 RATE_LIMIT_IMPORT_CHESSCOM = 5  # heavy Chess.com fetch + bulk DB writes
 RATE_LIMIT_PUZZLES_GENERATE = 5  # enqueues a heavy analysis job
 RATE_LIMIT_RATINGS_SNAPSHOT = 10  # outbound Chess.com call per request
+RATE_LIMIT_DIAGNOSE = 5  # enqueues a whole-corpus analysis job
 
 # A FEN is bounded in length (piece placement + 5 short fields); anything much
 # longer than a legal position is junk. Reject oversized input with 400 before
@@ -1825,6 +1828,222 @@ async def get_puzzle_detail(
         next_due_at=stats.next_due_at if stats else None,
         created_at=puzzle.created_at,
     )
+
+
+# ---------------------------------------------------------------------------
+# Mistake diagnosis
+# ---------------------------------------------------------------------------
+
+
+class DiagnosisEvidenceItem(BaseModel):
+    id: str
+    label: str
+    value: str
+
+
+class DiagnosisResponse(BaseModel):
+    """A diagnosis, or an honest statement that there isn't one yet.
+
+    ``state`` is what the UI renders on, and every value is a real situation
+    rather than an error:
+
+    * ``ready``       — a cause, with the evidence behind it
+    * ``unclear``     — analysed, but no rule found a supported cause
+    * ``pending``     — not analysed yet; a job will get to it
+    * ``unavailable`` — this puzzle cannot be analysed at all
+
+    No cause is ever invented to avoid ``unclear``. There is deliberately no
+    numeric confidence: the rule strength is an ordering prior, not a
+    calibrated probability, and rendering it as a percentage would overstate
+    what the rules know.
+    """
+
+    state: Literal["ready", "unclear", "pending", "unavailable"]
+    puzzle_id: str
+    primary_motif: str | None = None
+    primary_cause: str | None = None
+    primary_cause_label: str | None = None
+    secondary_causes: list[str] = []
+    secondary_cause_labels: list[str] = []
+    phase: str | None = None
+    evidence: list[DiagnosisEvidenceItem] = []
+    explanation: str | None = None
+    training_recommendation: str | None = None
+    user_confirmed_cause: str | None = None
+    source: str | None = None
+    diagnosed_at: datetime | None = None
+
+
+class DiagnosisConfirmRequest(BaseModel):
+    cause: str
+
+
+class PendingDiagnosisResponse(BaseModel):
+    username: str
+    pending: int
+
+
+def _diagnosis_response(puzzle_id: str, row) -> DiagnosisResponse:
+    from services.api.diagnosis.causes import CAUSE_LABELS
+    from services.api.models import DiagnosisStatus
+
+    if row is None:
+        return DiagnosisResponse(state="pending", puzzle_id=puzzle_id)
+    if row.status == DiagnosisStatus.UNAVAILABLE:
+        # The stored ``error`` is a developer detail (an illegal move, an
+        # unparseable FEN) and is deliberately not echoed to the client.
+        return DiagnosisResponse(state="unavailable", puzzle_id=puzzle_id)
+
+    cause = row.user_confirmed_cause or row.primary_cause
+    unclear = row.insufficient_evidence or not cause
+    secondary = list(row.secondary_causes or [])
+    return DiagnosisResponse(
+        state="unclear" if unclear else "ready",
+        puzzle_id=puzzle_id,
+        primary_motif=row.primary_motif,
+        primary_cause=cause,
+        primary_cause_label=CAUSE_LABELS.get(cause) if cause else None,
+        secondary_causes=secondary,
+        secondary_cause_labels=[CAUSE_LABELS.get(c, c) for c in secondary],
+        phase=row.phase,
+        evidence=[DiagnosisEvidenceItem(**item) for item in (row.evidence_json or [])],
+        explanation=row.explanation,
+        training_recommendation=row.training_recommendation,
+        user_confirmed_cause=row.user_confirmed_cause,
+        source=row.source,
+        diagnosed_at=row.updated_at,
+    )
+
+
+@app.get("/puzzles/{puzzle_id}/diagnosis", response_model=DiagnosisResponse)
+async def get_puzzle_diagnosis(
+    puzzle_id: str,
+    username: Annotated[Username, Query(description="Username the puzzle belongs to")],
+    db: Session = Depends(get_db),
+    account: Account | None = Depends(require_account),
+):
+    """Read the stored diagnosis for a puzzle.
+
+    Never computes one. Diagnosis is background work, so a page load stays a
+    single indexed row read whatever else is going on — and stays that way when
+    the AI stage arrives and computing means a model call.
+    """
+    from services.api.models import Puzzle as PuzzleModel
+
+    assert_owns_username(account, username, db)
+
+    exists = db.scalar(
+        select(PuzzleModel.id).where(
+            PuzzleModel.id == puzzle_id, PuzzleModel.username == username
+        )
+    )
+    if not exists:
+        raise HTTPException(status_code=404, detail="Puzzle not found")
+
+    return _diagnosis_response(
+        puzzle_id, DiagnosisRepository(db).get(username, puzzle_id)
+    )
+
+
+@app.get("/users/{username}/diagnosis/pending", response_model=PendingDiagnosisResponse)
+async def get_pending_diagnoses(
+    username: Username,
+    db: Session = Depends(get_db),
+    account: Account | None = Depends(require_account),
+):
+    """How many puzzles still need diagnosing — drives the backfill CTA."""
+    assert_owns_username(account, username, db)
+    return PendingDiagnosisResponse(
+        username=username, pending=DiagnosisRepository(db).pending_count(username)
+    )
+
+
+@app.post(
+    "/users/{username}/diagnose",
+    response_model=JobStatusResponse,
+    dependencies=[Depends(rate_limit("diagnose", default_limit=RATE_LIMIT_DIAGNOSE))],
+)
+async def diagnose_puzzles_endpoint(
+    username: Username,
+    limit: int = Query(
+        DIAGNOSIS_BATCH_DEFAULT,
+        ge=1,
+        le=DIAGNOSIS_BATCH_MAX,
+        description="Maximum puzzles to analyse in this run",
+    ),
+    db: Session = Depends(get_db),
+    account: Account | None = Depends(require_account),
+):
+    """Queue a diagnosis run over the puzzles that still need one.
+
+    Scoped to its own job type, so it can run alongside puzzle generation --
+    that is what the (username, type) active-job index exists for. A duplicate
+    request returns the in-flight job rather than erroring, mirroring
+    /puzzles/generate.
+    """
+    assert_owns_username(account, username, db)
+    try:
+        job = Job(
+            username=username,
+            type=JobType.DIAGNOSIS,
+            status=JobStatus.QUEUED,
+            message="Queued for diagnosis",
+            params={"limit": limit},
+        )
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+        return JobStatusResponse(
+            job_id=job.id, status=job.status, message="Job queued", progress=0
+        )
+    except IntegrityError as e:
+        db.rollback()
+        existing = db.scalars(
+            select(Job).where(
+                Job.username == username,
+                Job.type == JobType.DIAGNOSIS,
+                or_(Job.status == JobStatus.QUEUED, Job.status == JobStatus.RUNNING),
+            )
+        ).first()
+        if existing:
+            return JobStatusResponse(
+                job_id=existing.id,
+                status=existing.status,
+                message="Diagnosis already in progress",
+                progress=existing.progress_current,
+            )
+        raise HTTPException(
+            status_code=500, detail="Could not create diagnosis job"
+        ) from e
+
+
+@app.post("/puzzles/{puzzle_id}/diagnosis/confirm", response_model=DiagnosisResponse)
+async def confirm_puzzle_diagnosis(
+    puzzle_id: str,
+    payload: DiagnosisConfirmRequest,
+    username: Annotated[Username, Query(description="Username the puzzle belongs to")],
+    db: Session = Depends(get_db),
+    account: Account | None = Depends(require_account),
+):
+    """Let the user correct the cause label.
+
+    Stored beside the computed cause, never over it: keeping both is what makes
+    rule accuracy measurable against real feedback, and a later re-run of the
+    rules must not silently discard the correction.
+    """
+    from services.api.diagnosis.causes import CAUSE_LABELS
+
+    assert_owns_username(account, username, db)
+
+    if payload.cause not in CAUSE_LABELS:
+        raise HTTPException(status_code=422, detail="Unknown cause")
+
+    repo = DiagnosisRepository(db)
+    row = repo.confirm_cause(username, puzzle_id, payload.cause)
+    if row is None:
+        raise HTTPException(status_code=404, detail="No diagnosis for this puzzle")
+    db.commit()
+    return _diagnosis_response(puzzle_id, row)
 
 
 def _find_existing_review(db, puzzle_id, username, session_id, client_review_id):
