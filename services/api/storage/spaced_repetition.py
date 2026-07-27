@@ -5,7 +5,7 @@ Handles database operations for puzzle reviews and statistics.
 
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from services.api.models import PuzzleResult, PuzzleReview, PuzzleStats
@@ -327,11 +327,21 @@ def get_due_puzzles(
 
 
 def get_due_puzzle_count(db: Session, username: str) -> int:
-    """Get count of puzzles due for review."""
+    """Get count of puzzles due for review.
+
+    A puzzle is "due" when its ``next_due_at`` has passed OR is NULL. A NULL
+    ``next_due_at`` marks a never-reviewed ("New") puzzle, which the scheduler
+    (``get_adaptive_puzzles``) already surfaces as trainable; counting it here
+    keeps the badge/gate consistent with what a session will actually serve.
+    Eager-on-save stats rows start with ``next_due_at = NULL``, so excluding
+    NULLs would report 0 due for a fresh user who has generated but not yet
+    reviewed any puzzles.
+    """
     # naive-UTC bound: match the naive-UTC storage of next_due_at (see module note)
     now = _utcnow_naive()
     stmt = select(func.count(PuzzleStats.puzzle_id)).where(
-        PuzzleStats.username == username, PuzzleStats.next_due_at <= now
+        PuzzleStats.username == username,
+        or_(PuzzleStats.next_due_at.is_(None), PuzzleStats.next_due_at <= now),
     )
     return db.scalar(stmt) or 0
 
