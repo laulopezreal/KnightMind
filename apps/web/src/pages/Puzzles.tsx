@@ -912,25 +912,12 @@ export default function Puzzles() {
                             )}
                         </div>
                     )}
-                    {/* No userStatus and nothing loading or failing means there
-                        is no username yet — every control above is disabled, so
-                        pointing at "Start Session" was a dead instruction. Name
-                        the actual next step instead. */}
-                    {shouldShowEmptyState && !userStatus && !insightsError && !isRefreshingInsights && (
-                        <div className="bg-primary/5 border border-primary/10 rounded-sm p-6 backdrop-blur-sm text-center space-y-4">
-                            <h3 className="font-serif text-xl text-primary">Connect your account to train</h3>
-                            <p className="text-primary/70 font-sans">
-                                KnightMind builds puzzles from your own Chess.com games. Set your username to get started.
-                            </p>
-                            <button
-                                type="button"
-                                onClick={() => setEditorOpen(true)}
-                                className="px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-colors km-interactive km-focus-visible"
-                            >
-                                Set Username
-                            </button>
-                        </div>
-                    )}
+                    {/* No card for the no-username case. This slot used to say
+                        "Ready to train — click Start Session", which was a dead
+                        instruction (every control above is disabled without a
+                        username). The fix is not a second card: the panel above
+                        already states the problem AND offers "Set Username", so
+                        anything here is a duplicate of the control beside it. */}
                     {statusLoadFailed && (
                         <div className="bg-negative-soft border border-negative-soft rounded-sm p-6 text-center space-y-4" role="alert" aria-live="assertive">
                             <h3 className="font-serif text-xl text-primary">Couldn&apos;t load your training data</h3>
