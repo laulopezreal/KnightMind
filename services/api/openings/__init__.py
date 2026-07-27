@@ -1,3 +1,4 @@
+from .cache import OpeningTreeCache, make_key, tree_cache
 from .tree_builder import (
     BuildReport,
     OpeningNode,
@@ -9,7 +10,10 @@ from .tree_builder import (
 __all__ = [
     "BuildReport",
     "OpeningTreeBuilder",
+    "OpeningTreeCache",
     "OpeningNode",
     "OpeningStats",
     "build_opening_tree",
+    "make_key",
+    "tree_cache",
 ]

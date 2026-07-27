@@ -22,6 +22,7 @@ from services.api.models import (
 from services.api.models import (
     Puzzle as PuzzleModel,
 )
+from services.api.storage.game_repository import GameRepository
 
 
 @pytest.fixture
@@ -239,6 +240,86 @@ def test_get_openings_analysis_reports_color_exclusions(
     assert analysis["games_stored"] == 2
     assert analysis["games_analyzed"] + analysis["excluded_by_color"] == 2
     assert analysis["games_skipped"] == 0
+
+
+@patch("services.api.main.import_all_games")
+def test_get_openings_serves_a_repeat_request_from_cache(
+    mock_import_games, client_with_db
+):
+    """A refetch must not re-parse every stored PGN."""
+
+    async def mock_generator(username, since=None):
+        from services.ingest import ChessGame
+
+        for game_data in MOCK_GAMES:
+            yield ChessGame(
+                url=game_data["url"],
+                pgn=game_data["pgn"],
+                time_control=game_data["time_control"],
+                end_time=game_data["end_time"],
+                rated=game_data["rated"],
+                white_username=game_data["white"]["username"],
+                black_username=game_data["black"]["username"],
+                white_result=game_data["white"]["result"],
+                black_result=game_data["black"]["result"],
+            )
+
+    mock_import_games.side_effect = mock_generator
+    client_with_db.post("/import/chesscom?username=testuser")
+
+    first = client_with_db.get("/openings?username=testuser")
+    assert first.status_code == 200
+
+    # The second request must not touch the PGN blobs at all.
+    with patch.object(
+        GameRepository, "iter_pgns", side_effect=AssertionError("rebuilt from PGNs")
+    ):
+        second = client_with_db.get("/openings?username=testuser")
+
+    assert second.status_code == 200
+    assert second.json() == first.json()
+
+    # A different colour filter is a different tree, so it must be built.
+    with patch.object(GameRepository, "iter_pgns", return_value=iter([])) as rebuilt:
+        client_with_db.get("/openings?username=testuser&color=white")
+    assert rebuilt.called
+
+
+@patch("services.api.main.import_all_games")
+def test_get_openings_cache_invalidates_when_games_change(
+    mock_import_games, client_with_db
+):
+    """Importing more games must not serve the older, smaller tree."""
+
+    def generator_for(games):
+        async def gen(username, since=None):
+            from services.ingest import ChessGame
+
+            for game_data in games:
+                yield ChessGame(
+                    url=game_data["url"],
+                    pgn=game_data["pgn"],
+                    time_control=game_data["time_control"],
+                    end_time=game_data["end_time"],
+                    rated=game_data["rated"],
+                    white_username=game_data["white"]["username"],
+                    black_username=game_data["black"]["username"],
+                    white_result=game_data["white"]["result"],
+                    black_result=game_data["black"]["result"],
+                )
+
+        return gen
+
+    mock_import_games.side_effect = generator_for(MOCK_GAMES[:1])
+    client_with_db.post("/import/chesscom?username=testuser")
+    first = client_with_db.get("/openings?username=testuser").json()
+
+    mock_import_games.side_effect = generator_for(MOCK_GAMES)
+    client_with_db.post("/import/chesscom?username=testuser")
+    second = client_with_db.get("/openings?username=testuser").json()
+
+    assert first["games_count"] == 1
+    assert second["games_count"] == len(MOCK_GAMES)
 
 
 def test_get_openings_no_games(client_with_db):
