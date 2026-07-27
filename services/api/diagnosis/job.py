@@ -48,6 +48,7 @@ from services.api.storage.diagnosis_repository import (
     DiagnosisRepository,
     DiagnosisWrite,
 )
+from services.api.storage.game_repository import MANUAL_GAME_ID
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +63,12 @@ DIAGNOSIS_BATCH_MAX = 5000
 # puzzle would generate more write traffic than the analysis itself — the
 # generator bounds them the same way.
 HEARTBEAT_INTERVAL = 25
+
+# Commit cadence. Without it the whole run is one transaction, so a crash at
+# puzzle 4,999 of 5,000 would discard every diagnosis it had produced —
+# "resumable" would then mean "starts over". Committing in chunks makes
+# progress real and bounds how much a crash can cost.
+COMMIT_INTERVAL = 50
 
 MOTIF_HISTORY_DAYS = 30
 
@@ -110,8 +117,12 @@ def run_diagnosis(ctx) -> dict:
             else:
                 unavailable += 1
 
-        # One commit for the run. A crash before it loses the batch but leaves
-        # the store consistent, and the next run re-finds exactly this work.
+            if (index + 1) % COMMIT_INTERVAL == 0:
+                db.commit()
+
+        # Flush whatever the last partial chunk produced, including on the
+        # cancellation path — a cancel must keep the work already done, not
+        # roll it back.
         db.commit()
         return _result(username, db, repo, diagnosed, unchanged, unavailable, canceled)
 
@@ -156,8 +167,8 @@ def _diagnose_one(
     try:
         packet = extract_evidence(
             _puzzle_facts(puzzle),
-            _game_facts(game, username),
-            _game_context(game, puzzle, username),
+            _game_facts(game, puzzle),
+            _game_context(game, puzzle),
             _history_facts(stats, motif, motif_rates),
         )
     except EvidenceUnavailable as exc:
@@ -219,12 +230,23 @@ def _puzzle_facts(puzzle: Puzzle) -> PuzzleFacts:
     )
 
 
-def _game_facts(game: Game | None, username: str) -> GameFacts:
-    if game is None:
-        # A manual puzzle, or a game since removed. The FEN still carries the
-        # position, so the diagnosis degrades rather than failing.
-        return GameFacts(user_is_white=True)
-    user_is_white = (game.white_username or "").lower() == username.lower()
+def _game_facts(game: Game | None, puzzle: Puzzle) -> GameFacts:
+    """Assemble the game-level facts.
+
+    ``user_is_white`` comes from the PUZZLE, not from matching the username
+    against the game's players. A puzzle is by construction a position where it
+    was the user's turn, so ``side_to_move`` is the authoritative answer, and it
+    stays correct where the game row is not: manually added puzzles all record
+    ``white_username = <the user>`` regardless of the position, so a
+    black-to-move manual puzzle was being labelled as played with white — a fact
+    contradicting its own FEN.
+    """
+    user_is_white = puzzle.side_to_move == "white"
+    if game is None or game.game_id == MANUAL_GAME_ID:
+        # No real game behind this position: no clock, no result, not rated.
+        # The FEN still carries everything the board analysis needs, so the
+        # diagnosis degrades rather than failing.
+        return GameFacts(user_is_white=user_is_white)
     return GameFacts(
         user_is_white=user_is_white,
         time_control=parse_time_control(game.time_control),
@@ -251,14 +273,14 @@ def _user_result(game: Game, user_is_white: bool) -> str | None:
     return None
 
 
-def _game_context(game: Game | None, puzzle: Puzzle, username: str):
+def _game_context(game: Game | None, puzzle: Puzzle):
     if game is None or not game.pgn_blob:
         return EMPTY_GAME_CONTEXT
-    user_is_white = (game.white_username or "").lower() == username.lower()
     return extract_game_context(
         game.pgn_blob,
         ply=puzzle.ply,
-        user_is_white=user_is_white,
+        # Same authority as _game_facts: the puzzle position, not the game row.
+        user_is_white=puzzle.side_to_move == "white",
         time_control=parse_time_control(game.time_control),
     )
 

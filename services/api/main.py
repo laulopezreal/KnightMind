@@ -1888,8 +1888,16 @@ class PendingDiagnosisResponse(BaseModel):
 
 
 def _diagnosis_response(
-    puzzle_id: str, row, reveal_solution: bool = True
+    puzzle_id: str, row, reveal_solution: bool = False
 ) -> DiagnosisResponse:
+    """Build the client payload.
+
+    ``reveal_solution`` defaults to False deliberately: the evidence names the
+    solution move, so a call site that forgets to pass the gate withholds
+    rather than leaks. The first version defaulted to True and POST /confirm —
+    which returns this same body — silently bypassed the gate that GET
+    enforced.
+    """
     from services.api.diagnosis.causes import CAUSE_LABELS
     from services.api.models import DiagnosisStatus
 
@@ -2044,6 +2052,10 @@ async def confirm_puzzle_diagnosis(
     puzzle_id: str,
     payload: DiagnosisConfirmRequest,
     username: Annotated[Username, Query(description="Username the puzzle belongs to")],
+    reveal: bool = Query(
+        False,
+        description="Include the evidence, which names the solution move.",
+    ),
     db: Session = Depends(get_db),
     account: Account | None = Depends(require_account),
 ):
@@ -2065,7 +2077,10 @@ async def confirm_puzzle_diagnosis(
     if row is None:
         raise HTTPException(status_code=404, detail="No diagnosis for this puzzle")
     db.commit()
-    return _diagnosis_response(puzzle_id, row)
+    # Same gate as the read: this returns the identical body, evidence and all.
+    return _diagnosis_response(
+        puzzle_id, row, reveal or not _strip_puzzle_solutions_enabled()
+    )
 
 
 def _find_existing_review(db, puzzle_id, username, session_id, client_review_id):
