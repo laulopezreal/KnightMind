@@ -272,20 +272,12 @@ async def get_user_status(
     due_count = 0
     next_due_at = None
     if puzzles_count > 0:
+        # get_due_puzzle_count now counts never-reviewed ("New", NULL
+        # next_due_at) stats as due, so it is correct on its own: a fresh user
+        # whose puzzles all have eager NULL-next_due_at stats gets due_count ==
+        # trainable count without a special-case fallback.
         due_count = get_due_puzzle_count(db, username)
         next_due_at = get_next_due_date(db, username)
-
-        # If no stats exist, all puzzles are due
-        total_stats = (
-            db.scalar(
-                select(func.count(PuzzleStats.puzzle_id)).where(
-                    PuzzleStats.username == username
-                )
-            )
-            or 0
-        )
-        if total_stats == 0:
-            due_count = puzzles_count
 
     return UserStatusResponse(
         username=username,
@@ -1070,13 +1062,14 @@ async def get_due_puzzles_endpoint(
         result_puzzles.append(_strip_solution(p_dict))
 
     # 4. Total due count for metadata
-    # 4. Total due count for metadata
-    # We can calculate this from all_stats since it contains all stats for the user's puzzles
+    # We can calculate this from all_stats since it contains all stats for the user's puzzles.
+    # A NULL next_due_at marks a never-reviewed ("New") puzzle, which is
+    # trainable and therefore counts as due (mirrors get_due_puzzle_count).
     now = datetime.now(timezone.utc)
     due_count = sum(
         1
         for s in all_stats.values()
-        if s.next_due_at and s.next_due_at.replace(tzinfo=timezone.utc) <= now
+        if s.next_due_at is None or s.next_due_at.replace(tzinfo=timezone.utc) <= now
     )
 
     return {
