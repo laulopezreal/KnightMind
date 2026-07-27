@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from services.api.day_boundary import utc_today
 from services.api.models import Puzzle as PuzzleModel
+from services.api.models import PuzzleStats
 
 
 @dataclass
@@ -78,6 +79,8 @@ class PuzzleRepository:
         accept_moves_uci: str | None = None,
         confirmed_depth: int | None = None,
         solution_pv: str | None = None,
+        title: str | None = None,
+        primary_motif: str | None = None,
     ) -> tuple[bool, str]:
         username_lower = username.lower()
         puzzle_id = puzzle_id or str(uuid.uuid4())
@@ -103,6 +106,18 @@ class PuzzleRepository:
             source_path=source_path,
         )
         self.db.add(puzzle)
+        self.db.add(
+            PuzzleStats(
+                puzzle_id=puzzle_id,
+                username=username_lower,
+                attempts=0,
+                pass_count=0,
+                fail_count=0,
+                ease_factor=2.0,
+                title=title,
+                primary_motif=primary_motif,
+            )
+        )
         try:
             self.db.commit()
             return True, puzzle_id
