@@ -42,13 +42,22 @@ function node(move_san: string, over: Partial<OpeningNode> = {}): OpeningNode {
   };
 }
 
+const ANALYSIS = {
+  games_stored: 40, games_seen: 40, games_analyzed: 40, excluded_by_color: 0,
+  games_skipped: 0, skipped_unreadable: 0, skipped_not_player: 0, skipped_unfinished: 0,
+};
+
+// The tree must actually contain the line the tests select. The graph only ever
+// reports paths from the tree it rendered, and the page re-resolves a selection
+// against the current tree — so a fixture whose tree lacks the selected line
+// makes the panel vanish the moment the fetch settles, which is a race, not a
+// scenario a user can reach.
 const TREE: OpeningNode = {
   ...node('Start', { games_count: 40, wins: 20, draws: 4, losses: 16, win_rate: 55 }),
-  children: [node('e4')],
-  analysis: {
-    games_stored: 40, games_seen: 40, games_analyzed: 40, excluded_by_color: 0,
-    games_skipped: 0, skipped_unreadable: 0, skipped_not_player: 0, skipped_unfinished: 0,
-  },
+  children: [
+    { ...node('e4'), children: [{ ...node('c5'), children: [node('Nf3')] }] },
+  ],
+  analysis: ANALYSIS,
 };
 
 const SICILIAN = [node('Start'), node('e4'), node('c5'), node('Nf3')];
