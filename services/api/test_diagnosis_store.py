@@ -4,7 +4,7 @@ import os
 
 os.environ["KNIGHTMIND_WORKER_DISABLED"] = "true"
 
-from datetime import datetime, timezone  # noqa: E402
+from datetime import datetime, timedelta, timezone  # noqa: E402
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
@@ -120,6 +120,7 @@ def _puzzle(
     game_id="g1",
     ply=41,
     motif="hanging_queen",
+    created_at=None,
 ):
     _game(db, game_id, username)
     db.add(
@@ -128,6 +129,7 @@ def _puzzle(
             username=username,
             source_game_id=game_id,
             ply=ply,
+            created_at=created_at or datetime.now(timezone.utc).replace(tzinfo=None),
             fen=fen,
             side_to_move="white",
             played_move_uci=played,
@@ -617,3 +619,210 @@ class TestConfirm:
             json={"cause": "king_safety_blindness"},
         )
         assert response.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Guards for the four properties this feature is documented as having.
+# Each was asserted in prose before it was enforced anywhere.
+# ---------------------------------------------------------------------------
+
+
+class TestNoScoreEscapesToTheClient:
+    """Rule strength is an ordering prior, not a calibrated probability.
+
+    The risk is not that today's payload leaks it — it is that someone later
+    adds it in good faith and a UI renders it as "82% confident". These guards
+    are on the schema, so that addition fails here rather than in a design
+    review nobody runs.
+    """
+
+    FORBIDDEN = {"confidence", "primary_strength", "score", "strength", "certainty"}
+
+    def test_no_scoring_field_is_declared(self):
+        from services.api.main import DiagnosisResponse
+
+        assert not self.FORBIDDEN & set(DiagnosisResponse.model_fields)
+
+    def test_no_numeric_field_is_declared_at_all(self):
+        """A float on this model has no honest meaning today, so the absence of
+        one is the invariant worth pinning rather than a denylist of names."""
+        from services.api.main import DiagnosisResponse
+
+        for name, field in DiagnosisResponse.model_fields.items():
+            annotation = str(field.annotation)
+            assert "float" not in annotation, f"{name} exposes a numeric score"
+
+    def test_a_stored_strength_still_never_reaches_the_client(
+        self, client, db_session, monkeypatch
+    ):
+        _puzzle(db_session)
+        monkeypatch.setattr(
+            "services.api.diagnosis.job.SessionLocal", lambda: _NoClose(db_session)
+        )
+        run_diagnosis(FakeContext())
+        assert DiagnosisRepository(db_session).get(USER, "p1").primary_strength
+
+        body = client.get(f"/puzzles/p1/diagnosis?username={USER}").json()
+        assert not self.FORBIDDEN & set(body)
+
+
+class TestUnanalysablePuzzlesSettle:
+    def test_a_failure_is_not_re_examined_on_the_next_run(
+        self, db_session, monkeypatch
+    ):
+        """The whole point of storing the negative result: without it every
+        backfill run would re-attempt the same broken puzzle forever."""
+        _puzzle(db_session, played="a1a8")  # illegal in this position
+        monkeypatch.setattr(
+            "services.api.diagnosis.job.SessionLocal", lambda: _NoClose(db_session)
+        )
+        first = run_diagnosis(FakeContext())
+        assert first["unavailable"] == 1
+
+        second = run_diagnosis(FakeContext())
+        assert second["unavailable"] == 0
+        assert second["diagnosed"] == 0
+        assert second["remaining"] == 0
+
+    def test_the_stored_error_is_never_echoed_to_the_client(
+        self, client, db_session, monkeypatch
+    ):
+        """Checked against the actual stored text, not a guessed substring."""
+        _puzzle(db_session, played="a1a8")
+        monkeypatch.setattr(
+            "services.api.diagnosis.job.SessionLocal", lambda: _NoClose(db_session)
+        )
+        run_diagnosis(FakeContext())
+
+        stored = DiagnosisRepository(db_session).get(USER, "p1").error
+        assert stored  # kept for debugging
+        body = client.get(f"/puzzles/p1/diagnosis?username={USER}").json()
+        assert body["state"] == "unavailable"
+        assert stored not in str(body)
+
+
+class TestResumability:
+    def _many(self, db_session, n=4):
+        base = datetime(2026, 1, 1)
+        for i in range(n):
+            _puzzle(
+                db_session,
+                puzzle_id=f"p{i}",
+                ply=41 + i * 2,
+                created_at=base + timedelta(days=i),
+            )
+
+    def test_pending_work_is_ordered_most_recent_first(self, db_session):
+        """A run that only gets partway through should have done the mistakes
+        that say most about how the user plays now."""
+        self._many(db_session, 3)
+        assert DiagnosisRepository(db_session).pending_puzzle_ids(USER) == [
+            "p2",
+            "p1",
+            "p0",
+        ]
+
+    def test_a_limited_run_takes_the_most_recent_first(self, db_session):
+        self._many(db_session, 3)
+        assert DiagnosisRepository(db_session).pending_puzzle_ids(USER, 1) == ["p2"]
+
+    def test_a_canceled_run_commits_its_work_and_the_next_run_finishes_it(
+        self, db_session, monkeypatch
+    ):
+        """The claim that the work query IS the resume cursor. A canceled run
+        must keep what it finished — otherwise cancelling would be a rollback
+        and a long backfill could never make progress under repeated cancels."""
+        self._many(db_session, 4)
+        monkeypatch.setattr(
+            "services.api.diagnosis.job.SessionLocal", lambda: _NoClose(db_session)
+        )
+        monkeypatch.setattr("services.api.diagnosis.job.HEARTBEAT_INTERVAL", 1)
+
+        first = run_diagnosis(FakeContext(cancel_after=2))
+        assert first["canceled"]
+        done_after_cancel = db_session.query(PuzzleDiagnosis).count()
+        assert 0 < done_after_cancel < 4  # kept partial work
+        assert first["remaining"] == 4 - done_after_cancel
+
+        second = run_diagnosis(FakeContext())
+        assert not second["canceled"]
+        assert second["remaining"] == 0
+        # Every puzzle diagnosed exactly once — none skipped, none redone.
+        assert db_session.query(PuzzleDiagnosis).count() == 4
+
+    def test_no_progress_state_is_stored_anywhere(self, db_session, monkeypatch):
+        """Resumption is derived from the diagnosis rows themselves. Deleting
+        them must restore the work exactly, with no cursor left behind to
+        disagree."""
+        self._many(db_session, 3)
+        monkeypatch.setattr(
+            "services.api.diagnosis.job.SessionLocal", lambda: _NoClose(db_session)
+        )
+        run_diagnosis(FakeContext())
+        repo = DiagnosisRepository(db_session)
+        assert repo.pending_count(USER) == 0
+
+        db_session.query(PuzzleDiagnosis).delete()
+        db_session.commit()
+        assert repo.pending_count(USER) == 3
+
+
+class TestReadPathNeverComputes:
+    def test_a_get_does_not_extract_or_classify(self, client, db_session, monkeypatch):
+        """Diagnosis is background work so a page load stays one indexed row
+        read — and stays that way when computing means a model call. This is a
+        regression guard against a well-meaning compute-on-read shortcut."""
+        _puzzle(db_session)
+
+        def explode(*args, **kwargs):
+            raise AssertionError("the read path must not compute a diagnosis")
+
+        monkeypatch.setattr("services.api.diagnosis.evidence.extract_evidence", explode)
+        monkeypatch.setattr("services.api.diagnosis.causes.classify_causes", explode)
+
+        body = client.get(f"/puzzles/p1/diagnosis?username={USER}").json()
+        assert body["state"] == "pending"
+
+    def test_a_get_writes_nothing_and_queues_nothing(self, client, db_session):
+        """ "Never computes" also means never quietly enqueuing work: a page
+        view must not be able to schedule a job the user did not ask for."""
+        _puzzle(db_session)
+        client.get(f"/puzzles/p1/diagnosis?username={USER}")
+        client.get(f"/users/{USER}/diagnosis/pending")
+
+        assert db_session.query(PuzzleDiagnosis).count() == 0
+        assert db_session.query(Job).count() == 0
+
+    def test_a_get_issues_only_reads_and_a_bounded_number_of_them(
+        self, client, db_session, monkeypatch
+    ):
+        """A structural guard, because patching a module only catches a compute
+        path that imports at call time. Counting statements catches any shape:
+        computing a diagnosis and caching it necessarily writes, and doing real
+        work necessarily costs queries.
+        """
+        from sqlalchemy import event
+
+        _puzzle(db_session)
+        monkeypatch.setattr(
+            "services.api.diagnosis.job.SessionLocal", lambda: _NoClose(db_session)
+        )
+        run_diagnosis(FakeContext())
+
+        statements = []
+        engine = db_session.get_bind()
+
+        def record(conn, cursor, statement, *args):
+            statements.append(statement.strip().split()[0].upper())
+
+        event.listen(engine, "before_cursor_execute", record)
+        try:
+            body = client.get(f"/puzzles/p1/diagnosis?username={USER}").json()
+        finally:
+            event.remove(engine, "before_cursor_execute", record)
+
+        assert body["state"] == "ready"
+        assert not {"INSERT", "UPDATE", "DELETE"} & set(statements)
+        # Existence check + the diagnosis row. A regression that starts
+        # computing or fanning out would blow this budget immediately.
+        assert len(statements) <= 3, statements
