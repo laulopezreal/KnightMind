@@ -438,12 +438,16 @@ export default function Engine() {
 
                   <div className="space-y-1">
                     <label htmlFor="save-solution" className="block text-[10px] font-sans uppercase tracking-widest text-primary/60">Solution line</label>
+                    <p id="save-solution-help" className="text-primary/50 text-xs font-sans">
+                      UCI PV, include opponent replies, e.g. e2e4 e7e5 g1f3
+                    </p>
                     <input
                       id="save-solution"
                       type="text"
                       value={saveSolution}
                       onChange={(e) => setSaveSolution(e.target.value)}
-                      placeholder="e.g. e2e4"
+                      aria-describedby="save-solution-help"
+                      placeholder="e.g. e2e4 e7e5 g1f3"
                       className="w-full bg-transparent border-b border-primary/20 pb-1 outline-none text-primary font-mono text-sm placeholder-primary/30 focus:border-primary/60 transition-colors"
                     />
                   </div>

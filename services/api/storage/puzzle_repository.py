@@ -131,8 +131,8 @@ class PuzzleRepository:
                 )
             ).first()
             if existing:
-                puzzle_id = existing
-            return False, puzzle_id
+                return False, existing
+            raise
 
     def get_puzzle(self, username: str, puzzle_id: str) -> Puzzle | None:
         puzzle = self.db.get(PuzzleModel, puzzle_id)

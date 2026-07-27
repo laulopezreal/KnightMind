@@ -67,6 +67,7 @@ from services.api.puzzles.identity import backfill_puzzle_identity
 from services.api.ratelimit import rate_limit
 from services.api.ratings_auto import auto_snapshot, auto_snapshot_throttled
 from services.api.storage import GameRepository, PuzzleRepository
+from services.api.storage.game_repository import MANUAL_GAME_ID
 from services.api.storage.spaced_repetition import (
     _utcnow_naive,
     get_adaptive_puzzles,
@@ -939,12 +940,13 @@ async def create_manual_puzzle(
     source_path = (request.source or "").strip() or None
 
     # Ensure synthetic game row exists; commit separately so the FK is in place
-    # before the puzzle insert. end_time=0 keeps it out of get_latest_game_time.
-    game = db.get(GameModel, ("__manual__", username_lower))
+    # before the puzzle insert. GameRepository excludes MANUAL_GAME_ID from
+    # corpus queries so this FK sentinel cannot look like an imported game.
+    game = db.get(GameModel, (MANUAL_GAME_ID, username_lower))
     if not game:
         db.add(
             GameModel(
-                game_id="__manual__",
+                game_id=MANUAL_GAME_ID,
                 username=username_lower,
                 url=f"manual://{username_lower}",
                 white_username=username_lower,
@@ -965,7 +967,7 @@ async def create_manual_puzzle(
     existing = db.scalars(
         select(PuzzleModel).where(
             PuzzleModel.username == username_lower,
-            PuzzleModel.source_game_id == "__manual__",
+            PuzzleModel.source_game_id == MANUAL_GAME_ID,
             PuzzleModel.fen == request.fen,
         )
     ).first()
@@ -976,7 +978,7 @@ async def create_manual_puzzle(
     max_ply = db.scalar(
         select(func.max(PuzzleModel.ply)).where(
             PuzzleModel.username == username_lower,
-            PuzzleModel.source_game_id == "__manual__",
+            PuzzleModel.source_game_id == MANUAL_GAME_ID,
         )
     )
     ply = (max_ply + 1) if max_ply is not None else 0
@@ -984,7 +986,7 @@ async def create_manual_puzzle(
     puzzle_repo = PuzzleRepository(db)
     is_new, puzzle_id = puzzle_repo.save_puzzle(
         username=username_lower,
-        source_game_id="__manual__",
+        source_game_id=MANUAL_GAME_ID,
         ply=ply,
         fen=request.fen,
         side_to_move=side_to_move,
@@ -1005,7 +1007,7 @@ async def create_manual_puzzle(
         existing = db.scalars(
             select(PuzzleModel).where(
                 PuzzleModel.username == username_lower,
-                PuzzleModel.source_game_id == "__manual__",
+                PuzzleModel.source_game_id == MANUAL_GAME_ID,
                 PuzzleModel.fen == request.fen,
             )
         ).first()

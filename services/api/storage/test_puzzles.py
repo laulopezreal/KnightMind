@@ -6,6 +6,7 @@ from datetime import date
 
 import pytest
 from sqlalchemy import create_engine
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
 from scripts.backfill_storage import validate_puzzle_data
@@ -106,6 +107,8 @@ def test_puzzle_repository_deduplication(repository, db_session):
         eval_before=0.5,
         eval_after=-1.5,
         swing=2.0,
+        title="Original title",
+        primary_motif="fork",
     )
     is_new2, pid2 = repository.save_puzzle(
         username="testuser",
@@ -118,6 +121,8 @@ def test_puzzle_repository_deduplication(repository, db_session):
         eval_before=1.0,
         eval_after=-2.0,
         swing=3.0,
+        title="Overwritten title",
+        primary_motif="pin",
     )
 
     assert is_new1 is True
@@ -125,6 +130,32 @@ def test_puzzle_repository_deduplication(repository, db_session):
     assert pid1 == pid2
     assert repository.get_puzzle_count("testuser") == 1
     assert db_session.query(PuzzleStats).count() == 1
+    stats = db_session.get(PuzzleStats, pid1)
+    assert stats.title == "Original title"
+    assert stats.primary_motif == "fork"
+
+
+def test_puzzle_repository_reraises_non_duplicate_integrity_error(
+    repository, db_session, monkeypatch
+):
+    def raise_integrity_error():
+        raise IntegrityError("commit failed", {}, Exception("synthetic failure"))
+
+    monkeypatch.setattr(db_session, "commit", raise_integrity_error)
+
+    with pytest.raises(IntegrityError):
+        repository.save_puzzle(
+            username="testuser",
+            source_game_id="game123",
+            ply=99,
+            fen="fen-integrity-error",
+            side_to_move="white",
+            played_move_uci="e2e4",
+            best_move_uci="d2d4",
+            eval_before=0.5,
+            eval_after=-1.5,
+            swing=2.0,
+        )
 
 
 def test_puzzle_repository_can_store_identity_metadata(repository, db_session):

@@ -9,6 +9,8 @@ from sqlalchemy.orm import Session
 
 from services.api.models import Game
 
+MANUAL_GAME_ID = "__manual__"
+
 # Max number of game ids per IN clause when bulk-loading PGNs. Postgres copes
 # with much larger IN lists, but capping the batch keeps each statement small
 # and bounds memory to roughly one batch of PGN blobs at a time.
@@ -118,7 +120,12 @@ class GameRepository:
         return True, game_id
 
     def get_users(self) -> list[str]:
-        stmt = select(Game.username).distinct().order_by(Game.username.asc())
+        stmt = (
+            select(Game.username)
+            .where(Game.game_id != MANUAL_GAME_ID)
+            .distinct()
+            .order_by(Game.username.asc())
+        )
         return [row[0] for row in self.db.execute(stmt).all()]
 
     def get_game_count(self, username: str) -> int:
@@ -126,7 +133,7 @@ class GameRepository:
         stmt = (
             select(func.count())
             .select_from(Game)
-            .where(Game.username == username_lower)
+            .where(Game.username == username_lower, Game.game_id != MANUAL_GAME_ID)
         )
         return self.db.scalar(stmt) or 0
 
@@ -148,7 +155,7 @@ class GameRepository:
                 Game.rated,
                 Game.imported_at,
             )
-            .where(Game.username == username_lower)
+            .where(Game.username == username_lower, Game.game_id != MANUAL_GAME_ID)
             .order_by(Game.end_time.desc())
         )
         return [self._to_metadata(row) for row in self.db.execute(stmt)]
@@ -156,11 +163,15 @@ class GameRepository:
     def get_latest_game_time(self, username: str) -> datetime | None:
         """Get the timestamp of the most recent game for a user."""
         username_lower = username.lower()
-        stmt = select(func.max(Game.end_time)).where(Game.username == username_lower)
+        stmt = select(func.max(Game.end_time)).where(
+            Game.username == username_lower, Game.game_id != MANUAL_GAME_ID
+        )
         max_time = self.db.scalar(stmt)
         return datetime.fromtimestamp(max_time, tz=timezone.utc) if max_time else None
 
     def get_pgn(self, username: str, game_id: str) -> str | None:
+        if game_id == MANUAL_GAME_ID:
+            return None
         game = self.db.get(Game, (game_id, username.lower()))
         if game and game.pgn_blob:
             return game.pgn_blob
@@ -203,6 +214,7 @@ class GameRepository:
         username_lower = username.lower()
         stmt = select(Game.game_id, Game.pgn_blob).where(
             Game.username == username_lower,
+            Game.game_id != MANUAL_GAME_ID,
             Game.game_id.in_(game_ids),
         )
         return {game_id: pgn for game_id, pgn in self.db.execute(stmt) if pgn}

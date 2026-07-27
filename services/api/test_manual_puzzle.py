@@ -207,3 +207,23 @@ def test_create_manual_puzzle_appears_in_library_motif_filter(client):
     assert data["puzzles"][0]["id"] == puzzle_id
     assert data["puzzles"][0]["title"] == "Sicilian Fork"
     assert data["puzzles"][0]["primary_motif"] == "fork"
+
+
+def test_create_manual_puzzle_does_not_count_as_imported_game(client):
+    create_resp = client.post("/puzzles/manual", json=_payload())
+    assert create_resp.status_code == 200, create_resp.text
+
+    status_resp = client.get("/users/testuser/status")
+    assert status_resp.status_code == 200, status_resp.text
+    status = status_resp.json()
+    assert status["games_count"] == 0
+    assert status["puzzles_count"] == 1
+
+
+def test_create_manual_puzzle_keeps_openings_in_no_games_state(client):
+    create_resp = client.post("/puzzles/manual", json=_payload())
+    assert create_resp.status_code == 200, create_resp.text
+
+    openings_resp = client.get("/openings?username=testuser")
+    assert openings_resp.status_code == 404
+    assert "no games" in openings_resp.json()["detail"].lower()

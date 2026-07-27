@@ -415,6 +415,20 @@ describe('Engine - Clue Functionality', () => {
         expect(screen.queryByText('Reveal squares')).not.toBeInTheDocument();
       });
     });
+
+    it('explains solution line expects a full UCI PV', async () => {
+      renderEngine();
+
+      await evaluatePosition();
+
+      expect(
+        await screen.findByText('UCI PV, include opponent replies, e.g. e2e4 e7e5 g1f3')
+      ).toBeInTheDocument();
+      expect(screen.getByLabelText('Solution line')).toHaveAttribute(
+        'aria-describedby',
+        'save-solution-help'
+      );
+    });
   });
 
   describe('Error Handling', () => {
