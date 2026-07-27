@@ -1,0 +1,256 @@
+/**
+ * Regression tests for honest failure handling on the puzzle surface.
+ *
+ * The bugs these guard against all shared one shape: a failed *request* was
+ * presented as a failed *attempt*, so a network blip cost the user real
+ * spaced-repetition progress.
+ *   - a failed move check rendered "Not this one — take another look."
+ *   - a failed reveal flipped the puzzle to 'revealed' with an empty solution,
+ *     queueing it to be recorded as a self-reported fail
+ *   - a failed review was swallowed, and the session advanced anyway
+ *
+ * The real chess.js and useClue are used so the board rollback is exercised
+ * end to end.
+ */
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import Puzzles from './Puzzles';
+import { setupMockLocalStorage } from '../test/helpers';
+import { checkPuzzle, revealPuzzle } from '../api';
+import type { UsePuzzleSessionReturn } from '../hooks/usePuzzleSession';
+
+let mockSearchParams = new URLSearchParams();
+
+vi.mock('react-router-dom', () => ({
+    useNavigate: () => vi.fn(),
+    useSearchParams: () => [mockSearchParams, vi.fn()],
+    Link: ({ children, to, ...props }: { children: React.ReactNode; to: string;[key: string]: unknown }) => (
+        <a href={to} {...props}>{children}</a>
+    ),
+}));
+
+vi.mock('../context/ChessUsernameContext', () => ({
+    useChessUsername: () => ({ username: 'testplayer', setEditorOpen: vi.fn() }),
+}));
+
+vi.mock('../context/PuzzleModeContext', () => ({
+    usePuzzleMode: () => ({
+        sessionType: 'standard',
+        targetAccuracy: 80,
+        setTargetAccuracy: vi.fn(),
+        targetTimeMinutes: 10,
+        setTargetTimeMinutes: vi.fn(),
+    }),
+}));
+
+vi.mock('../hooks/useJobPolling', () => ({
+    useJobPolling: () => ({ job: null, isPolling: false }),
+}));
+
+vi.mock('../api', () => ({
+    generatePuzzles: vi.fn(),
+    getDailyPuzzles: vi.fn().mockResolvedValue([]),
+    getDuePuzzles: vi.fn().mockResolvedValue({ due_count: 0, returned_count: 0, now: '', puzzles: [] }),
+    startSession: vi.fn(),
+    completeSession: vi.fn(),
+    reviewPuzzle: vi.fn().mockResolvedValue({}),
+    checkPuzzle: vi.fn().mockResolvedValue({ correct: true, result: 'pass' }),
+    revealPuzzle: vi.fn().mockResolvedValue({ best_move_uci: 'e2e4', solution_pv: ['e2e4'] }),
+    getSession: vi.fn().mockRejectedValue(new Error('No session')),
+    useHint: vi.fn().mockResolvedValue({ hints_used: 1 }),
+    getUserStatus: vi.fn().mockResolvedValue({ games_count: 10, puzzles_count: 5, due_count: 3, has_new_games: false }),
+    getRecentSessions: vi.fn().mockResolvedValue([]),
+    getMotifPerformance: vi.fn().mockResolvedValue({ motifs: [], weakest_motifs: [] }),
+    cancelJob: vi.fn(),
+    ApiError: class extends Error { detail?: string },
+}));
+
+vi.mock('../hooks/useAchievements', () => ({
+    useAchievements: () => ({ achievements: [], checkAchievements: vi.fn(), checkSessionAchievements: vi.fn() }),
+}));
+
+vi.mock('../hooks/usePuzzleInsights', () => ({
+    usePuzzleInsights: () => ({
+        userStatus: { games_count: 10, puzzles_count: 5, due_count: 3, has_new_games: false },
+        isLoadingStatus: false,
+        motifPerformance: null,
+        recentSessions: [],
+        insightsError: null,
+        isRefreshingInsights: false,
+        refreshUserStatus: vi.fn().mockResolvedValue(undefined),
+        refreshRecentSessions: vi.fn().mockResolvedValue(undefined),
+        refreshMotifPerformance: vi.fn().mockResolvedValue(undefined),
+        handleRefreshInsights: vi.fn(),
+    }),
+}));
+
+vi.mock('../hooks/usePuzzleTimer', () => {
+    const stub = {
+        startPuzzleTimer: () => { },
+        startSessionTimer: () => { },
+        cleanup: () => { },
+        currentPuzzleTime: 5,
+        puzzleStartTime: null,
+        timeRemaining: 0,
+    };
+    return { usePuzzleTimer: () => stub };
+});
+
+vi.mock('../components/JobStatusCard', () => ({ JobStatusCard: () => null }));
+vi.mock('../components/SessionSummaryCard', () => ({ SessionSummaryCard: () => <div /> }));
+vi.mock('../components/WarmupSummary', () => ({ WarmupSummary: () => <div /> }));
+vi.mock('../components/AchievementsList', () => ({ AchievementsList: () => null }));
+vi.mock('../components/RecentSessionsCard', () => ({ RecentSessionsCard: () => null }));
+vi.mock('react-chessboard', () => ({ Chessboard: () => <div data-testid="chessboard" /> }));
+
+const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+
+const puzzle = {
+    id: 'p1',
+    username: 'testplayer',
+    source_game_id: 'g1',
+    ply: 10,
+    fen: START_FEN,
+    side_to_move: 'white',
+    played_move_uci: 'e2e3',
+    best_move_uci: 'e2e4',
+    eval_before: 0.5,
+    eval_after: -0.5,
+    swing: 1.0,
+    created_at: '2025-01-01T00:00:00Z',
+    used_on: null,
+    attempts: 0,
+    pass_count: 0,
+};
+
+const mockHandleReviewPuzzle = vi.fn<UsePuzzleSessionReturn['handleReviewPuzzle']>();
+const mockHandleCompleteSession = vi.fn().mockResolvedValue(undefined);
+const mockSetCurrentIndex = vi.fn();
+
+function makeSessionReturn(): UsePuzzleSessionReturn {
+    return {
+        sessionState: 'active',
+        sessionSummary: null,
+        isResumingSession: false,
+        streak: 0,
+        bestStreak: 0,
+        hintsUsed: 0,
+        reviewedCount: 0,
+        performanceHistory: [],
+        puzzles: [puzzle, { ...puzzle, id: 'p2' }],
+        currentIndex: 0,
+        isLoading: false,
+        error: null,
+        lastFeedback: '',
+        setPuzzles: vi.fn(),
+        setCurrentIndex: mockSetCurrentIndex,
+        setError: vi.fn(),
+        setLastFeedback: vi.fn(),
+        setSessionSummary: vi.fn(),
+        setSessionState: vi.fn(),
+        setReviewedCount: vi.fn(),
+        setIsLoading: vi.fn(),
+        handleStartSession: vi.fn().mockResolvedValue(undefined),
+        handleCompleteSession: mockHandleCompleteSession,
+        handleReviewPuzzle: mockHandleReviewPuzzle,
+        handleUseHint: vi.fn().mockResolvedValue(undefined),
+        calculateRecentPerformance: vi.fn().mockReturnValue(0),
+        getPerformanceTrend: vi.fn().mockReturnValue('stable'),
+    };
+}
+
+vi.mock('../hooks/usePuzzleSession', () => ({
+    usePuzzleSession: () => makeSessionReturn(),
+}));
+
+const typeAndCheck = async (user: ReturnType<typeof userEvent.setup>, move: string) => {
+    await user.click(screen.getByRole('button', { name: /type move manually/i }));
+    await user.type(screen.getByPlaceholderText('e.g. e2e4'), move);
+    await user.click(screen.getByRole('button', { name: /check entered move/i }));
+};
+
+describe('Puzzles — honest failure handling', () => {
+    beforeEach(() => {
+        setupMockLocalStorage();
+        mockSearchParams = new URLSearchParams();
+        mockHandleReviewPuzzle.mockReset().mockResolvedValue(true);
+        mockHandleCompleteSession.mockClear();
+        mockSetCurrentIndex.mockClear();
+        vi.mocked(revealPuzzle).mockResolvedValue({ best_move_uci: 'e2e4', solution_pv: ['e2e4'] } as never);
+        vi.mocked(checkPuzzle).mockResolvedValue({ correct: true, result: 'pass' } as never);
+    });
+
+    it('does not score a network failure as a wrong answer', async () => {
+        vi.mocked(checkPuzzle).mockRejectedValue(new Error('Failed to fetch'));
+        const user = userEvent.setup();
+        render(<Puzzles />);
+
+        await typeAndCheck(user, 'e2e4');
+
+        await waitFor(() =>
+            expect(screen.getByRole('alert')).toHaveTextContent(/couldn't check that move/i),
+        );
+        expect(screen.queryByText('Not this one — take another look.')).not.toBeInTheDocument();
+        // Still solving: the hint ladder and Reveal are available, and the
+        // "Mark as Failed & Try Again" control (which WOULD write a fail) is not.
+        expect(screen.getByRole('button', { name: /hint/i })).toBeInTheDocument();
+        expect(screen.queryByText(/Mark as Failed/i)).not.toBeInTheDocument();
+    });
+
+    it('keeps the user on the puzzle when the solution cannot be loaded', async () => {
+        vi.mocked(revealPuzzle).mockRejectedValue(new Error('network down'));
+        const user = userEvent.setup();
+        render(<Puzzles />);
+
+        await user.click(screen.getByRole('button', { name: /reveal/i }));
+
+        await waitFor(() =>
+            expect(screen.getByRole('alert')).toHaveTextContent(/couldn't load the solution/i),
+        );
+        // Never flips to the revealed state (which would queue a self-reported
+        // fail) and never prints an empty solution.
+        expect(screen.queryByText('Solution')).not.toBeInTheDocument();
+        expect(screen.getByRole('button', { name: /hint/i })).toBeInTheDocument();
+    });
+
+    it('does not advance the session when a review fails to record', async () => {
+        mockHandleReviewPuzzle.mockResolvedValue(false);
+        const user = userEvent.setup();
+        render(<Puzzles />);
+
+        await typeAndCheck(user, 'e2e4');
+        await waitFor(() => expect(screen.getByText('Correct! Excellent.')).toBeInTheDocument());
+
+        await user.click(screen.getByRole('button', { name: /next puzzle/i }));
+
+        await waitFor(() =>
+            expect(screen.getByRole('alert')).toHaveTextContent(/couldn't save that result/i),
+        );
+        expect(mockSetCurrentIndex).not.toHaveBeenCalled();
+        expect(mockHandleCompleteSession).not.toHaveBeenCalled();
+    });
+
+    it('advances normally once the review is recorded', async () => {
+        const user = userEvent.setup();
+        render(<Puzzles />);
+
+        await typeAndCheck(user, 'e2e4');
+        await waitFor(() => expect(screen.getByText('Correct! Excellent.')).toBeInTheDocument());
+
+        await user.click(screen.getByRole('button', { name: /next puzzle/i }));
+
+        await waitFor(() => expect(mockSetCurrentIndex).toHaveBeenCalledWith(1));
+        expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
+
+    it('renders a motif filter with its display name, plus a way to clear it', async () => {
+        mockSearchParams = new URLSearchParams('motif=back_rank_mate');
+        render(<Puzzles />);
+
+        await waitFor(() =>
+            expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Back Rank Mate Puzzles'),
+        );
+        expect(screen.queryByText(/back_rank_mate/)).not.toBeInTheDocument();
+    });
+});

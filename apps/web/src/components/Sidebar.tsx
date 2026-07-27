@@ -51,7 +51,13 @@ const SubNavItem = ({
     <button
         onClick={onClick}
         title={tooltip}
-        className={`flex items-center min-h-11 text-sm transition-all duration-300 km-focus-visible rounded-sm px-2 -mx-1 text-left outline-none ${
+        // `title` never surfaces on touch and is inconsistent for keyboard users,
+        // so it can't be the only place the mode is explained — the sr-only
+        // description below carries it into the accessible name.
+        aria-label={tooltip ? `${label} — ${tooltip}` : undefined}
+        // whitespace-nowrap: "Accuracy Goal" wrapped to two lines in the narrow
+        // sub-nav column, leaving the badge floating beside a ragged label.
+        className={`flex items-center gap-1 whitespace-nowrap min-h-11 text-sm transition-all duration-300 km-focus-visible rounded-sm px-2 -mx-1 text-left outline-none ${
             isActive
                 ? 'opacity-100 font-medium km-interactive'
                 : 'opacity-70 font-light km-interactive hover:opacity-90'
@@ -62,7 +68,7 @@ const SubNavItem = ({
             AA). Full text-primary rides the button opacity (0.7 inactive / 1.0
             active), which clears 4.5:1 while the badge stays visually distinct via
             size + tracking. */}
-        {badge && <span className="text-xs text-primary ml-1 uppercase tracking-wider">{badge}</span>}
+        {badge && <span className="text-[10px] text-primary uppercase tracking-wider">{badge}</span>}
     </button>
 );
 
@@ -221,14 +227,14 @@ export default function Sidebar({ mobileOpen = false, onMobileClose }: SidebarPr
                                     />
                                     <SubNavItem
                                         label="Timed"
-                                        badge="BETA"
+                                        badge="SOON"
                                         isActive={sessionType === 'timed'}
                                         onClick={() => setSessionType('timed')}
                                         tooltip="Coming soon: Race against the clock"
                                     />
                                     <SubNavItem
                                         label="Accuracy Goal"
-                                        badge="BETA"
+                                        badge="SOON"
                                         isActive={sessionType === 'accuracy_goal'}
                                         onClick={() => setSessionType('accuracy_goal')}
                                         tooltip="Coming soon: Focus on precision"

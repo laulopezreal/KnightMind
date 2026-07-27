@@ -60,7 +60,13 @@ export interface UsePuzzleSessionReturn {
     setIsLoading: Dispatch<SetStateAction<boolean>>;
     handleStartSession: () => Promise<void>;
     handleCompleteSession: () => Promise<void>;
-    handleReviewPuzzle: (result: 'pass' | 'fail', timeMs?: number, attemptedMove?: string) => Promise<void>;
+    /**
+     * Submit one review. Resolves `true` when the review is safely recorded (or
+     * when a concurrent submission already owns it) and `false` when it failed —
+     * the caller MUST NOT advance past the puzzle on `false`, or the attempt is
+     * silently lost.
+     */
+    handleReviewPuzzle: (result: 'pass' | 'fail', timeMs?: number, attemptedMove?: string) => Promise<boolean>;
     handleUseHint: () => Promise<void>;
     calculateRecentPerformance: (history: Array<{ time: number; result: 'pass' | 'fail' }>, minutes?: number) => number;
     getPerformanceTrend: (history: Array<{ time: number; result: 'pass' | 'fail' }>) => 'improving' | 'declining' | 'stable';
@@ -252,6 +258,16 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
                         setSessionState('active');
                         setError(null);
                     } else {
+                        // Resumed a session whose puzzles are no longer
+                        // trainable (finished in another tab, or they came due
+                        // and were reviewed elsewhere). Drop the stale pointer
+                        // so the page isn't left holding an activeSessionId it
+                        // can neither train nor finish, and say what happened.
+                        localStorage.removeItem(`knightmind:session:${username}`);
+                        localStorage.removeItem(`knightmind:sessionState:${username}`);
+                        setActiveSessionId(null);
+                        setSessionSummary(null);
+                        setError('That session has no puzzles left to review. Start a new one when something is due.');
                         setSessionState('error');
                     }
                 } catch (err) {
@@ -312,9 +328,12 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
     // cleared after success so the next distinct submission gets a fresh key.
     const reviewKeyRef = useRef<string | null>(null);
     const currentPuzzle = puzzles[currentIndex];
-    const handleReviewPuzzle = useCallback(async (result: 'pass' | 'fail', timeMs?: number, attemptedMove?: string) => {
-        if (!currentPuzzle || !username.trim()) return;
-        if (isReviewingRef.current) return; // block concurrent double-submit
+    const handleReviewPuzzle = useCallback(async (result: 'pass' | 'fail', timeMs?: number, attemptedMove?: string): Promise<boolean> => {
+        if (!currentPuzzle || !username.trim()) return false;
+        // A concurrent submission already owns this review (e.g. the timer fired
+        // as the user clicked). Report success so the caller still advances —
+        // the review IS being recorded, just not by this call.
+        if (isReviewingRef.current) return true;
         isReviewingRef.current = true;
 
         if (!reviewKeyRef.current) {
@@ -372,10 +391,12 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
             // try again" or a revealed solution (both of which re-review the same
             // puzzle) inflate the count and end the session before the last
             // puzzle, stranding a dead "Next Puzzle" button.
+            return true;
         } catch (err) {
             console.error('Failed to review puzzle:', err);
             setError(err instanceof Error ? err.message : 'Failed to review puzzle');
             // Keep reviewKeyRef so a manual retry replays idempotently server-side.
+            return false;
         } finally {
             isReviewingRef.current = false;
         }
@@ -398,43 +419,74 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
 
     // ── handleStartSession ──
     const handleStartSession = useCallback(async () => {
-        if (!username.trim()) {
-            setError('Please enter a username');
-            return;
-        }
+        // Every guard below sets BOTH `error` and `sessionState`. The error card
+        // only renders when the state is 'error', so setting the message alone
+        // (as this used to) made the failure invisible — the Start button and
+        // the summary card's "Start New Session" would simply do nothing.
+        const fail = (message: string) => {
+            setError(message);
+            setSessionState('error');
+        };
 
-        if (!userStatus) {
-            setError('Loading user status...');
-            return;
-        }
-
-        if (userStatus.puzzles_count === 0) {
-            setError('No puzzles available. Generate puzzles first.');
-            return;
-        }
-
+        if (!username.trim()) return fail('Please enter a username');
+        if (!userStatus) return fail('Still loading your training data — try again in a moment.');
+        if (userStatus.puzzles_count === 0) return fail('No puzzles available. Generate puzzles first.');
         if (userStatus.due_count === 0) {
-            setError('No puzzles are due for review right now. Check back later or generate more puzzles.');
-            return;
+            return fail('No puzzles are due for review right now. Check back later or generate more puzzles.');
         }
 
         setSessionState('loading');
         setError(null);
         setLastFeedback('');
 
+        let targetAccuracyParam: number | undefined = undefined;
+        let targetTimeMinutesParam: number | undefined = undefined;
+
+        if (sessionType === 'accuracy_goal') {
+            targetAccuracyParam = targetAccuracy;
+        } else if (sessionType === 'timed') {
+            targetTimeMinutesParam = targetTimeMinutes;
+        }
+
+        // Load the puzzles BEFORE creating the session. Creating it first meant
+        // every failed fetch left an orphaned open session on the server — and
+        // the error card's Retry (which calls straight back into here) minted a
+        // new one on every press, so a flaky connection filled Recent Sessions
+        // with empty rows and left the page with an activeSessionId it could
+        // neither train nor finish.
+        setIsLoading(true);
+        let puzzles: Puzzle[];
         try {
-            let targetAccuracyParam: number | undefined = undefined;
-            let targetTimeMinutesParam: number | undefined = undefined;
-
-            if (sessionType === 'accuracy_goal') {
-                targetAccuracyParam = targetAccuracy;
-            } else if (sessionType === 'timed') {
-                targetTimeMinutesParam = targetTimeMinutes;
-            }
-
-            const { session_id } = await startSession(
+            const response = await getDuePuzzles(
                 username.trim(),
                 5,
+                sessionType,
+                sessionType === 'accuracy_goal' ? targetAccuracy : undefined,
+                motifFilter || undefined,
+            );
+            puzzles = response.puzzles;
+        } catch (puzErr) {
+            fail(puzErr instanceof Error ? puzErr.message : 'Failed to load session puzzles');
+            return;
+        } finally {
+            setIsLoading(false);
+        }
+
+        if (puzzles.length === 0) {
+            // The status count and the served set can disagree briefly (another
+            // tab trained them, or the last one came due seconds ago). Say so
+            // instead of dropping into a blank 'error' state with no message.
+            return fail(
+                motifFilter
+                    ? "No puzzles for that pattern are ready right now. Clear the filter to train everything that's due."
+                    : 'Nothing is due right now — your puzzles are all scheduled for later.',
+            );
+        }
+
+        try {
+            const { session_id } = await startSession(
+                username.trim(),
+                puzzles.length,
                 sessionType,
                 targetAccuracyParam,
                 targetTimeMinutesParam,
@@ -453,35 +505,13 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
             setHintsUsed(0);
             setPerformanceHistory([]);
 
-            setIsLoading(true);
-            try {
-                const response = await getDuePuzzles(
-                    username.trim(),
-                    5,
-                    sessionType,
-                    sessionType === 'accuracy_goal' ? targetAccuracy : undefined,
-                    motifFilter || undefined,
-                );
-                setPuzzles(response.puzzles);
-                setCurrentIndex(0);
-                setStatus('solving');
-                if (response.puzzles.length > 0) {
-                    setSessionState('active');
-                    setError(null);
-                } else {
-                    setSessionState('error');
-                }
-            } catch (puzErr) {
-                const message = puzErr instanceof Error ? puzErr.message : 'Failed to load session puzzles';
-                setSessionState('error');
-                setError(message);
-            } finally {
-                setIsLoading(false);
-            }
+            setPuzzles(puzzles);
+            setCurrentIndex(0);
+            setStatus('solving');
+            setSessionState('active');
+            setError(null);
         } catch (err) {
-            const message = err instanceof Error ? err.message : 'Failed to start session';
-            setSessionState('error');
-            setError(message);
+            fail(err instanceof Error ? err.message : 'Failed to start session');
         }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- use timer.startSessionTimer, not the unstable timer object
     }, [

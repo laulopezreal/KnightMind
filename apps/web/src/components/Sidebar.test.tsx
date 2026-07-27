@@ -1,5 +1,5 @@
-import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, screen, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import Sidebar from './Sidebar';
 
@@ -184,5 +184,104 @@ describe('Sidebar', () => {
 
     const standardBtn = screen.getByRole('button', { name: /standard/i });
     expect(standardBtn).toHaveClass('min-h-11');
+  });
+});
+
+/**
+ * Viewport-driven behaviour: the `inert` guard and the grow-to-desktop
+ * auto-close. Both hang off `matchMedia`, which jsdom does not implement — so
+ * without the stub below the component takes its `typeof matchMedia !==
+ * 'function'` bail-out and neither path was ever exercised.
+ *
+ * These are also the two behaviours that cannot be checked by driving a real
+ * browser from the Claude Browser pane: it never fires `matchMedia` change
+ * events on a viewport resize, and native Tab traversal is suppressed while the
+ * document is hidden. Covering them here is the only place they get enforced.
+ */
+describe('Sidebar viewport behaviour', () => {
+  type Listener = (e: { matches: boolean }) => void;
+  let queries: Array<{ query: string; listeners: Set<Listener> }> = [];
+  let isMobileWidth = true;
+
+  const evaluate = (query: string) =>
+    query.includes('max-width: 767px') ? isMobileWidth : !isMobileWidth;
+
+  const installMatchMedia = () => {
+    queries = [];
+    window.matchMedia = ((query: string) => {
+      const entry = { query, listeners: new Set<Listener>() };
+      queries.push(entry);
+      return {
+        get matches() { return evaluate(query); },
+        media: query,
+        addEventListener: (_: string, cb: Listener) => entry.listeners.add(cb),
+        removeEventListener: (_: string, cb: Listener) => entry.listeners.delete(cb),
+        addListener: (cb: Listener) => entry.listeners.add(cb),
+        removeListener: (cb: Listener) => entry.listeners.delete(cb),
+        dispatchEvent: () => true,
+        onchange: null,
+      } as unknown as MediaQueryList;
+    }) as typeof window.matchMedia;
+  };
+
+  /** Flip the viewport and deliver `change` to every live listener, as a browser would. */
+  const setViewport = (mobile: boolean) => {
+    isMobileWidth = mobile;
+    act(() => {
+      for (const q of queries) {
+        for (const cb of q.listeners) cb({ matches: evaluate(q.query) });
+      }
+    });
+  };
+
+  beforeEach(() => {
+    isMobileWidth = true;
+    installMatchMedia();
+  });
+
+  afterEach(() => {
+    // @ts-expect-error - restore jsdom's (absent) implementation
+    delete window.matchMedia;
+  });
+
+  it('marks the closed drawer inert on mobile so its links are not phantom tab stops', () => {
+    render(<Sidebar mobileOpen={false} />);
+    expect(document.getElementById('primary-sidebar')).toHaveAttribute('inert');
+  });
+
+  it('never marks the sidebar inert on desktop, where it is the real navigation', () => {
+    isMobileWidth = false;
+    render(<Sidebar mobileOpen={false} />);
+    expect(document.getElementById('primary-sidebar')).not.toHaveAttribute('inert');
+  });
+
+  it('leaves the open drawer interactive on mobile', () => {
+    render(<Sidebar mobileOpen={true} />);
+    expect(document.getElementById('primary-sidebar')).not.toHaveAttribute('inert');
+  });
+
+  it('closes the drawer when the viewport grows to desktop', () => {
+    // Otherwise the focus trap stays active on the now-static sidebar and the
+    // close button it would return focus to is md:hidden.
+    const onMobileClose = vi.fn();
+    render(<Sidebar mobileOpen={true} onMobileClose={onMobileClose} />);
+    expect(onMobileClose).not.toHaveBeenCalled();
+
+    setViewport(false);
+    expect(onMobileClose).toHaveBeenCalled();
+  });
+
+  it('closes immediately when opened while already at desktop width', () => {
+    isMobileWidth = false;
+    const onMobileClose = vi.fn();
+    render(<Sidebar mobileOpen={true} onMobileClose={onMobileClose} />);
+    expect(onMobileClose).toHaveBeenCalled();
+  });
+
+  it('does not close on a viewport change while the drawer is shut', () => {
+    const onMobileClose = vi.fn();
+    render(<Sidebar mobileOpen={false} onMobileClose={onMobileClose} />);
+    setViewport(false);
+    expect(onMobileClose).not.toHaveBeenCalled();
   });
 });

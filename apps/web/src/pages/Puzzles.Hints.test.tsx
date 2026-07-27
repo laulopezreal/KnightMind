@@ -201,17 +201,17 @@ describe('Puzzle hint ladder', () => {
         render(<Puzzles />);
 
         const hintButton = () => screen.getByRole('button', { name: /hint/i });
-        expect(hintButton()).toHaveTextContent('Hint (0/3)');
+        expect(hintButton()).toHaveTextContent('Hint 0/3');
 
         // Rung 1: name the piece to move.
         await user.click(hintButton());
         await waitFor(() => expect(screen.getByText('Move the pawn')).toBeInTheDocument());
-        expect(hintButton()).toHaveTextContent('Hint (1/3)');
+        expect(hintButton()).toHaveTextContent('Hint 1/3');
 
         // Rung 2: name the destination square.
         await user.click(hintButton());
         await waitFor(() => expect(screen.getByText('Move the pawn to e4')).toBeInTheDocument());
-        expect(hintButton()).toHaveTextContent('Hint (2/3)');
+        expect(hintButton()).toHaveTextContent('Hint 2/3');
     });
 
     it('reveals the full solution on the third press', async () => {

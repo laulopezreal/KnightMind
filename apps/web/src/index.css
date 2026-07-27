@@ -89,6 +89,18 @@
 @utility bg-positive-fill { background-color: var(--color-positive-fill); }
 @utility bg-negative-fill { background-color: var(--color-negative-fill); }
 
+/* Matching hairline borders for the -soft tinted panels. Without these a tinted
+   panel had to reach for a raw palette border (border-red-500/20), which is a
+   single fixed colour and so cannot track the theme — the whole reason the
+   -soft/status tokens exist. Alpha sits above the fill so the edge reads as a
+   defined boundary rather than a second wash of the same tint. */
+@utility border-positive-soft { border-color: var(--color-positive-border); }
+@utility border-negative-soft { border-color: var(--color-negative-border); }
+@utility border-status-due-soft { border-color: var(--color-status-due-border); }
+@utility border-status-new-soft { border-color: var(--color-status-new-border); }
+@utility border-status-learning-soft { border-color: var(--color-status-learning-border); }
+@utility border-status-mastered-soft { border-color: var(--color-status-mastered-border); }
+
 :root {
   /* Day Mode (White Pieces) */
   --bg-primary: var(--color-chess-cream-100);
@@ -121,6 +133,14 @@
   /* Bare-swatch fills (Momentum cells): assertive enough to read as green/red. */
   --color-positive-fill: color-mix(in srgb, var(--color-positive) 30%, transparent);
   --color-negative-fill: color-mix(in srgb, var(--color-negative) 28%, transparent);
+  /* Panel edges: above the 12% fill so the boundary is legible, well below the
+     text colour so it stays a hairline and not a frame. */
+  --color-status-due-border: color-mix(in srgb, var(--color-status-due) 28%, transparent);
+  --color-status-new-border: color-mix(in srgb, var(--color-status-new) 28%, transparent);
+  --color-status-learning-border: color-mix(in srgb, var(--color-status-learning) 28%, transparent);
+  --color-status-mastered-border: color-mix(in srgb, var(--color-status-mastered) 28%, transparent);
+  --color-positive-border: color-mix(in srgb, var(--color-positive) 28%, transparent);
+  --color-negative-border: color-mix(in srgb, var(--color-negative) 28%, transparent);
 }
 
 body.night {
@@ -152,6 +172,14 @@ body.night {
      near-black bg while staying calm. */
   --color-positive-fill: color-mix(in srgb, var(--color-positive) 26%, transparent);
   --color-negative-fill: color-mix(in srgb, var(--color-negative) 24%, transparent);
+  /* Night borders sit lower: the -400 shades are far brighter against the
+     near-black bg, so 28% would read as a glowing frame rather than a hairline. */
+  --color-status-due-border: color-mix(in srgb, var(--color-status-due) 20%, transparent);
+  --color-status-new-border: color-mix(in srgb, var(--color-status-new) 20%, transparent);
+  --color-status-learning-border: color-mix(in srgb, var(--color-status-learning) 20%, transparent);
+  --color-status-mastered-border: color-mix(in srgb, var(--color-status-mastered) 20%, transparent);
+  --color-positive-border: color-mix(in srgb, var(--color-positive) 20%, transparent);
+  --color-negative-border: color-mix(in srgb, var(--color-negative) 20%, transparent);
 }
 
 body {

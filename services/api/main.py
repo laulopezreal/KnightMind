@@ -72,9 +72,10 @@ from services.api.storage.spaced_repetition import (
     _utcnow_naive,
     get_adaptive_puzzles,
     get_all_puzzle_stats,
-    get_due_puzzle_count,
     get_next_due_date,
     get_puzzle_stats,
+    get_trainable_puzzle_count,
+    get_trainable_puzzle_ids,
     insert_puzzle_review,
     update_puzzle_stats,
 )
@@ -275,24 +276,17 @@ async def get_user_status(
         if latest_puzzle_time is None or latest_game_time > latest_puzzle_time:
             has_new_games = True
 
-    # Use efficient count queries
+    # Use efficient count queries. `due_count` is the *trainable* count — due
+    # plus never-reviewed — because that is what the Train page gates on. The
+    # strict due-only count used to report 0 for a user whose puzzles had all
+    # just been generated but who also had older scheduled puzzles, disabling
+    # "Start Session" on a pile of untouched puzzles. (The previous
+    # `total_stats == 0` special case only covered the all-or-nothing case.)
     due_count = 0
     next_due_at = None
     if puzzles_count > 0:
-        due_count = get_due_puzzle_count(db, username)
+        due_count = get_trainable_puzzle_count(db, username)
         next_due_at = get_next_due_date(db, username)
-
-        # If no stats exist, all puzzles are due
-        total_stats = (
-            db.scalar(
-                select(func.count(PuzzleStats.puzzle_id)).where(
-                    PuzzleStats.username == username
-                )
-            )
-            or 0
-        )
-        if total_stats == 0:
-            due_count = puzzles_count
 
     return UserStatusResponse(
         username=username,
@@ -1193,7 +1187,13 @@ async def get_due_puzzles_endpoint(
 
         puzzle_ids = list(filtered_ids)
 
-    # 3. Get prioritized IDs and their stats using adaptive selection
+    # 3. Drop puzzles that are scheduled for a future date. Topping a session up
+    #    with not-yet-due puzzles used to make "N puzzles due" a lie AND corrupt
+    #    the intervals (an early review re-anchors next_due_at on today).
+    #    See get_trainable_puzzle_ids.
+    puzzle_ids = get_trainable_puzzle_ids(db, username, puzzle_ids)
+
+    # 4. Get prioritized IDs and their stats using adaptive selection
     due_ids, all_stats = get_adaptive_puzzles(
         db, username, puzzle_ids, n, session_type, target_accuracy
     )
@@ -1241,15 +1241,12 @@ async def get_due_puzzles_endpoint(
         # SCORED training path: never ship the solution up front.
         result_puzzles.append(_strip_solution(p_dict))
 
-    # 4. Total due count for metadata
-    # 4. Total due count for metadata
-    # We can calculate this from all_stats since it contains all stats for the user's puzzles
+    # 5. Trainable count for metadata. `puzzle_ids` is already the trainable set
+    #    (scoped to the motif filter when one was given), so this is the honest
+    #    "how many could this request have served" number — the same predicate
+    #    the /users/{username}/status due_count uses.
     now = datetime.now(timezone.utc)
-    due_count = sum(
-        1
-        for s in all_stats.values()
-        if s.next_due_at and s.next_due_at.replace(tzinfo=timezone.utc) <= now
-    )
+    due_count = len(puzzle_ids)
 
     return {
         "due_count": due_count,
