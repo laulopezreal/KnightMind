@@ -46,7 +46,10 @@ from services.api.identity import (
     claim_username_if_unowned,
     require_account,
 )
-from services.api.jobs.cleanup_sessions import cleanup_abandoned_sessions
+from services.api.jobs.cleanup_sessions import (
+    cleanup_abandoned_sessions,
+    purge_expired_ai_audit,
+)
 from services.api.models import (
     Account,
     Job,
@@ -141,7 +144,13 @@ DRAW_RESULTS = frozenset(
 
 
 async def run_session_cleanup():
-    """Background task to cleanup abandoned sessions periodically."""
+    """Background task for periodic housekeeping.
+
+    Session cleanup and AI-audit retention run in separate try blocks on
+    purpose: a failure in one must not skip the other, and a stalled retention
+    sweep would let prompt/response blobs accumulate past their window
+    silently.
+    """
     while True:
         try:
             # Run cleanup
@@ -149,6 +158,12 @@ async def run_session_cleanup():
                 await asyncio.to_thread(cleanup_abandoned_sessions, db)
         except Exception as e:
             print(f"Error in session cleanup: {e}")
+
+        try:
+            with SessionLocal() as db:
+                await asyncio.to_thread(purge_expired_ai_audit, db)
+        except Exception as e:
+            print(f"Error in AI audit purge: {e}")
 
         # Sleep for defined interval
         await asyncio.sleep(CLEANUP_INTERVAL_SECONDS)
