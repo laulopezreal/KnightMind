@@ -23,6 +23,32 @@ export function DataStateLoading({ label, compact = false }: DataStateLoadingPro
   );
 }
 
+interface DataStateSkeletonProps {
+  /** Screen-reader announcement, e.g. "Analyzing games..." — also findable by tests via getByText. */
+  label: string;
+  /** Layout classes for the block container, e.g. "space-y-12 animate-teedin". */
+  className?: string;
+  /** Pulse blocks (`animate-pulse` divs) mirroring the loaded layout. */
+  children: ReactNode;
+}
+
+/**
+ * Layout-mirroring loading skeleton. Callers supply pulse blocks that
+ * approximate the loaded layout; the wrapper provides the `role="status"` +
+ * sr-only announcement so every skeleton reads as "loading" to assistive
+ * tech instead of a silent page of empty boxes.
+ */
+export function DataStateSkeleton({ label, className, children }: DataStateSkeletonProps) {
+  return (
+    <div role="status" aria-live="polite">
+      <span className="sr-only">{label}</span>
+      <div aria-hidden="true" className={className}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
 interface DataStateErrorProps {
   message: string;
   onRetry: () => void;

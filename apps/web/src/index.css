@@ -21,6 +21,9 @@
   --animate-switchedin: switchedin 0.35s ease-out forwards;
   --animate-switchedout: switchedout 0.35s ease-out forwards;
   --animate-teedin: teedin 0.45s ease-out forwards;
+  /* Streak-milestone pop: brief scale pulse when an in-session streak grows.
+     Neutralized automatically by the global prefers-reduced-motion rule. */
+  --animate-streakpop: streakpop 0.4s ease-out;
   --animate-teedout: teedout 0.45s ease-out forwards;
 }
 
@@ -79,6 +82,13 @@
 @utility bg-positive-soft { background-color: var(--color-positive-bg); }
 @utility bg-negative-soft { background-color: var(--color-negative-bg); }
 
+/* Stronger positive/negative fills for text-free swatches (e.g. the Momentum
+   win/loss cells). The -soft tints are tuned to sit *under* text without eroding
+   contrast; a bare swatch has no such constraint and needs a more assertive fill
+   to read as green/red at a glance rather than near-neutral. */
+@utility bg-positive-fill { background-color: var(--color-positive-fill); }
+@utility bg-negative-fill { background-color: var(--color-negative-fill); }
+
 :root {
   /* Day Mode (White Pieces) */
   --bg-primary: var(--color-chess-cream-100);
@@ -108,6 +118,9 @@
   --color-status-mastered-bg: color-mix(in srgb, var(--color-status-mastered) 12%, transparent);
   --color-positive-bg: color-mix(in srgb, var(--color-positive) 12%, transparent);
   --color-negative-bg: color-mix(in srgb, var(--color-negative) 12%, transparent);
+  /* Bare-swatch fills (Momentum cells): assertive enough to read as green/red. */
+  --color-positive-fill: color-mix(in srgb, var(--color-positive) 30%, transparent);
+  --color-negative-fill: color-mix(in srgb, var(--color-negative) 28%, transparent);
 }
 
 body.night {
@@ -135,6 +148,10 @@ body.night {
   --color-status-mastered-bg: color-mix(in srgb, var(--color-status-mastered) 8%, transparent);
   --color-positive-bg: color-mix(in srgb, var(--color-positive) 8%, transparent);
   --color-negative-bg: color-mix(in srgb, var(--color-negative) 8%, transparent);
+  /* Night uses lighter -400 shades; a slightly higher alpha reads clearly on the
+     near-black bg while staying calm. */
+  --color-positive-fill: color-mix(in srgb, var(--color-positive) 26%, transparent);
+  --color-negative-fill: color-mix(in srgb, var(--color-negative) 24%, transparent);
 }
 
 body {
@@ -167,6 +184,12 @@ body {
   to {
     background-color: var(--color-chess-brown-700);
   }
+}
+
+@keyframes streakpop {
+  0% { transform: scale(1); }
+  40% { transform: scale(1.25); }
+  100% { transform: scale(1); }
 }
 
 @keyframes teedin {
@@ -206,6 +229,15 @@ nav,
 .brand-text {
   font-family: var(--font-serif);
 }
+
+/* Rating-trend line colors. SVG presentation attributes cannot consume var(),
+   so recharts' stroke/fill props can't take theme tokens directly — these
+   class-scoped rules resolve at paint time instead, which also means a theme
+   switch (body.night) restyles the chart without a React re-render. */
+.km-trend-up .recharts-line-curve { stroke: var(--color-positive); }
+.km-trend-down .recharts-line-curve { stroke: var(--color-negative); }
+.km-trend-up .recharts-active-dot circle { fill: var(--color-positive); stroke: var(--color-positive); }
+.km-trend-down .recharts-active-dot circle { fill: var(--color-negative); stroke: var(--color-negative); }
 
 /* Global interaction affordance (cursor + hover + focus-visible) */
 .km-interactive {

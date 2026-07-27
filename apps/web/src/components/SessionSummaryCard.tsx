@@ -1,5 +1,6 @@
 import { LOCALE } from '../utils/locale';
 import { type SessionSummary } from '../api';
+import { AnimatedNumber } from './AnimatedNumber';
 
 interface Achievement {
     id: string;
@@ -26,6 +27,18 @@ export function SessionSummaryCard({
     achievements,
     onStartNewSession
 }: SessionSummaryCardProps) {
+    // The finish is the session's emotional peak — headline it like a result,
+    // not a database receipt ("Successfully Recorded"). Tone tracks accuracy so
+    // a rough session isn't greeted with false cheer.
+    const total = sessionSummary.pass_count + sessionSummary.fail_count;
+    const accuracy = total > 0 ? sessionSummary.pass_count / total : 0;
+    const headline = total === 0
+        ? 'Session complete'
+        : accuracy >= 0.8
+        ? 'Sharp session!'
+        : accuracy >= 0.5
+        ? 'Session complete — solid work'
+        : 'Session complete — tough one, keep at it';
     return (
         <section className="bg-primary/5 border border-green-500/30 rounded-sm p-8 backdrop-blur-sm animate-teedin">
             <div className="flex items-center mb-6">
@@ -34,7 +47,7 @@ export function SessionSummaryCard({
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                     </svg>
                 </div>
-                <h2 className="text-2xl font-serif text-primary">Session Successfully Recorded!</h2>
+                <h2 className="text-2xl font-serif text-primary">{headline}</h2>
             </div>
 
             {sessionSummary.completed_at && (
@@ -45,16 +58,16 @@ export function SessionSummaryCard({
 
             <div className="grid grid-cols-2 md:grid-cols-4 gap-6 mb-6">
                 <div className="text-center">
-                    <div className="text-3xl font-serif text-positive">{sessionSummary.pass_count}</div>
+                    <div className="text-3xl font-serif text-positive"><AnimatedNumber value={sessionSummary.pass_count} /></div>
                     <div className="text-xs uppercase tracking-widest text-primary/70 mt-1">Passed</div>
                 </div>
                 <div className="text-center">
-                    <div className="text-3xl font-serif text-negative">{sessionSummary.fail_count}</div>
+                    <div className="text-3xl font-serif text-negative"><AnimatedNumber value={sessionSummary.fail_count} /></div>
                     <div className="text-xs uppercase tracking-widest text-primary/70 mt-1">Failed</div>
                 </div>
                 <div className="text-center">
                     <div className="text-3xl font-serif text-primary">
-                        {calculateAccuracy(sessionSummary.pass_count, sessionSummary.fail_count)}%
+                        <AnimatedNumber value={calculateAccuracy(sessionSummary.pass_count, sessionSummary.fail_count)} suffix="%" />
                     </div>
                     <div className="text-xs uppercase tracking-widest text-primary/70 mt-1">Accuracy</div>
                 </div>
@@ -69,11 +82,11 @@ export function SessionSummaryCard({
             {/* Enhanced Session Stats */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-6 mb-6">
                 <div className="text-center">
-                    <div className="text-3xl font-serif text-primary">{sessionSummary.best_streak}</div>
+                    <div className="text-3xl font-serif text-primary"><AnimatedNumber value={sessionSummary.best_streak} /></div>
                     <div className="text-xs uppercase tracking-widest text-primary/70 mt-1">Best Streak</div>
                 </div>
                 <div className="text-center">
-                    <div className="text-3xl font-serif text-primary">{sessionSummary.hints_used}</div>
+                    <div className="text-3xl font-serif text-primary"><AnimatedNumber value={sessionSummary.hints_used} /></div>
                     <div className="text-xs uppercase tracking-widest text-primary/70 mt-1">Hints Used</div>
                 </div>
                 {sessionSummary.session_type && sessionSummary.session_type !== 'standard' && (

@@ -213,6 +213,64 @@ async def test_cancel_in_success_window_is_not_overwritten(mock_to_thread, db_se
     assert final.result_json is None  # completion result discarded
 
 
+def test_write_progress_updates_running_job(db_session):
+    """Mid-run progress writes percent + a per-game message, capped below the
+    terminal write's 100 so 'done' can only come from the completion path."""
+    from services.api.worker import worker
+
+    job = Job(username="progress-test", status=JobStatus.RUNNING)
+    db_session.add(job)
+    db_session.commit()
+    db_session.refresh(job)
+
+    with patch("services.api.worker.SessionLocal") as mock_sl:
+        mock_sl.return_value.__enter__.return_value = db_session
+        mock_sl.return_value.__exit__.return_value = None
+
+        worker._write_progress(job.id, done=3, total=12)
+
+    db_session.expire_all()
+    updated = db_session.get(Job, job.id)
+    assert updated.progress_current == 25  # 3/12
+    assert updated.progress_total == 100
+    assert updated.message == "Analyzing game 4 of 12"
+
+    # Last game of the batch stays below 100 (99 cap).
+    with patch("services.api.worker.SessionLocal") as mock_sl:
+        mock_sl.return_value.__enter__.return_value = db_session
+        mock_sl.return_value.__exit__.return_value = None
+        worker._write_progress(job.id, done=12, total=12)
+    db_session.expire_all()
+    assert db_session.get(Job, job.id).progress_current == 99
+
+
+def test_write_progress_never_touches_a_non_running_job(db_session):
+    """Same invariant as the success write: a late progress write must not
+    resurrect or mutate a job that has left RUNNING (cancel is terminal)."""
+    from services.api.worker import worker
+
+    job = Job(
+        username="progress-canceled",
+        status=JobStatus.CANCELED,
+        progress_current=40,
+        message="canceled by user",
+    )
+    db_session.add(job)
+    db_session.commit()
+    db_session.refresh(job)
+
+    with patch("services.api.worker.SessionLocal") as mock_sl:
+        mock_sl.return_value.__enter__.return_value = db_session
+        mock_sl.return_value.__exit__.return_value = None
+
+        worker._write_progress(job.id, done=5, total=10)
+
+    db_session.expire_all()
+    final = db_session.get(Job, job.id)
+    assert final.progress_current == 40  # untouched
+    assert final.message == "canceled by user"
+
+
 # ---------------------------------------------------------------------------
 # AUDIT GATE 5: atomic job claim (QUEUED -> RUNNING)
 # ---------------------------------------------------------------------------

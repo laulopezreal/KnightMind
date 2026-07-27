@@ -7,7 +7,10 @@ import Dashboard from './Dashboard';
 const mockNavigate = vi.fn();
 let mockUsername = 'alice';
 
-vi.mock('react-router-dom', () => ({ useNavigate: () => mockNavigate }));
+vi.mock('react-router-dom', () => ({
+    useNavigate: () => mockNavigate,
+    Link: ({ children }: { children: React.ReactNode }) => <a>{children}</a>,
+}));
 vi.mock('../context/ChessUsernameContext', () => ({
     useChessUsername: () => ({ username: mockUsername }),
 }));
@@ -15,10 +18,18 @@ vi.mock('../context/ChessUsernameContext', () => ({
 const mockGetDashboardSummary = vi.fn();
 const mockGetTrickyPuzzles = vi.fn();
 const mockGetRecentSessions = vi.fn();
+const mockGetMotifPerformance = vi.fn();
+const mockGetUserStatus = vi.fn();
+const mockGetRatingExplain = vi.fn();
 
 vi.mock('../api/users', () => ({
     getDashboardSummary: (...a: unknown[]) => mockGetDashboardSummary(...a),
     getTrickyPuzzles: (...a: unknown[]) => mockGetTrickyPuzzles(...a),
+    getMotifPerformance: (...a: unknown[]) => mockGetMotifPerformance(...a),
+    getUserStatus: (...a: unknown[]) => mockGetUserStatus(...a),
+}));
+vi.mock('../api/ratings', () => ({
+    getRatingExplain: (...a: unknown[]) => mockGetRatingExplain(...a),
 }));
 vi.mock('../api/sessions', () => ({
     getRecentSessions: (...a: unknown[]) => mockGetRecentSessions(...a),
@@ -29,6 +40,8 @@ vi.mock('../components/RecentlyTrickyCard', () => ({ RecentlyTrickyCard: () => <
 vi.mock('../components/MomentumCard', () => ({ MomentumCard: () => <div /> }));
 vi.mock('../components/StreakCard', () => ({ StreakCard: () => <div /> }));
 vi.mock('../components/RecentSessionsCard', () => ({ RecentSessionsCard: () => <div /> }));
+vi.mock('../components/WeakestMotifCard', () => ({ WeakestMotifCard: () => <div data-testid="weakest-card" /> }));
+vi.mock('../components/RatingDeltaCard', () => ({ RatingDeltaCard: () => <div data-testid="rating-card" /> }));
 
 const SUMMARY = {
     schedule: { due_now: 0, next_review_at: null },
@@ -50,8 +63,74 @@ describe('Dashboard data states', () => {
         mockUsername = 'alice';
         mockGetRecentSessions.mockResolvedValue([]);
         mockGetTrickyPuzzles.mockResolvedValue({ puzzles: [], total_count: 0 });
+        // Secondary strip fetches — resolve to empty so they never interfere with
+        // the core-dashboard assertions below.
+        mockGetMotifPerformance.mockResolvedValue({ motifs: [], weakest_motifs: [], total_motifs_practiced: 0 });
+        mockGetUserStatus.mockResolvedValue({ has_new_games: false });
+        mockGetRatingExplain.mockResolvedValue({ rating: { net_change: null, start: null, end: null }, stats: { games: 0 }, confidence: 'low' });
     });
     afterEach(() => setOnline(true));
+
+    it('announces a loading status via the shared skeleton while the fetch is in flight', () => {
+        // Dashboard summary never resolves -> the page stays in its loading state.
+        // The shared DataStateSkeleton must announce it as a role="status" region
+        // named by the sr-only label (accessible loading state, not a bare spinner).
+        mockGetDashboardSummary.mockReturnValue(new Promise(() => {}));
+
+        render(<Dashboard />);
+
+        // status is a live region, so the sr-only label is text content, not the
+        // accessible name — assert both the region and its announcement.
+        const status = screen.getByRole('status');
+        expect(status).toHaveTextContent(/loading dashboard/i);
+    });
+
+    it('omits both improvement tiles for a brand-new user (no games, no motifs)', async () => {
+        mockGetDashboardSummary.mockResolvedValue(SUMMARY);
+        // beforeEach defaults: motifs empty, rating games 0 — the first-run case.
+        render(<Dashboard />);
+
+        await waitFor(() => expect(screen.getByTestId('hero-card')).toBeInTheDocument());
+        expect(screen.queryByTestId('rating-card')).not.toBeInTheDocument();
+        expect(screen.queryByTestId('weakest-card')).not.toBeInTheDocument();
+    });
+
+    it('shows the improvement tiles once there is data to show', async () => {
+        mockGetDashboardSummary.mockResolvedValue(SUMMARY);
+        mockGetMotifPerformance.mockResolvedValue({
+            motifs: [{ name: 'fork', total_puzzles: 10, passed: 8, accuracy: 0.8, rank: 'learning', attempts: 10, insufficient_data: false }],
+            weakest_motifs: ['fork'], total_motifs_practiced: 1,
+        });
+        mockGetRatingExplain.mockResolvedValue({
+            rating: { net_change: 10, start: 1500, end: 1510 }, stats: { games: 12 }, confidence: 'high', chart_series: [],
+        });
+
+        render(<Dashboard />);
+
+        await waitFor(() => expect(screen.getByTestId('rating-card')).toBeInTheDocument());
+        expect(screen.getByTestId('weakest-card')).toBeInTheDocument();
+    });
+
+    it('shows the "new games to import" nudge only when status reports new games', async () => {
+        mockGetDashboardSummary.mockResolvedValue(SUMMARY);
+        mockGetUserStatus.mockResolvedValue({ has_new_games: true });
+
+        render(<Dashboard />);
+
+        await waitFor(() => {
+            expect(screen.getByText(/new games are ready to import/i)).toBeInTheDocument();
+        });
+    });
+
+    it('omits the new-games nudge when there are none', async () => {
+        mockGetDashboardSummary.mockResolvedValue(SUMMARY);
+        mockGetUserStatus.mockResolvedValue({ has_new_games: false });
+
+        render(<Dashboard />);
+
+        await waitFor(() => expect(screen.getByTestId('hero-card')).toBeInTheDocument());
+        expect(screen.queryByText(/new games are ready to import/i)).not.toBeInTheDocument();
+    });
 
     it('shows an offline affordance (not a generic error) when a fetch fails while offline', async () => {
         setOnline(false);

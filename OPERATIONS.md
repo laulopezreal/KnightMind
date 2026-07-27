@@ -1,5 +1,5 @@
 ---
-last_edited_at: 2026-07-10T14:45:00+02:00
+last_edited_at: 2026-07-20T15:03:00+02:00
 ---
 # KnightMind Operations
 
@@ -75,7 +75,7 @@ Live containers:
   - Docker healthcheck: `curl -f http://localhost:8000/ops/health || exit 1`
 - `knightmind-db-1`
   - image: `postgres:16-alpine`
-  - host mapping: `0.0.0.0:5432 -> 5432/tcp`
+  - host mapping: `127.0.0.1:5432 -> 5432/tcp`
   - Docker volume: `knightmind_pgdata -> /var/lib/postgresql/data`
 
 Known live database contents at restoration time:
@@ -120,6 +120,21 @@ Most recent restoration safety backup:
 
 - `/home/lauureal/backups/knightmind/knightmind-db-20260710T113350+0200.dump`
 - SHA256: `80797430297a808f54f97ba364f818f65c676350f4a5470c86772fb4e26660d6`
+
+Most recent hardening safety backup before the 2026-07-20 DB/API recreation:
+
+- `/home/lauureal/backups/knightmind/knightmind-db-20260720T145709+0200.dump`
+- SHA256 recorded in `/home/lauureal/backups/knightmind/knightmind-db-20260720T145709+0200.dump.sha256` and verified with `sha256sum -c` before Compose changes.
+
+## Security hardening status
+
+Applied on 2026-07-20 after taking and verifying the backup above:
+
+- Postgres is now loopback-only: `ss -tlnp | grep 5432` shows only `127.0.0.1:5432`, and `docker compose --env-file .env.docker ps db` shows `127.0.0.1:5432->5432/tcp`.
+- Public Caddy strips spoofed Tailscale identity headers. Public probe `curl -H 'Tailscale-User-Login: spoof@x' https://api.guessme.world/ops/status` returns `404 {"detail":"Not Found"}`.
+- API image was rebuilt and recreated with the unprivileged Docker user `knightmind`; `docker compose --env-file .env.docker exec -T api id` returns `uid=100(knightmind) gid=101(knightmind)`.
+- API and DB are healthy after recreation; public `https://api.guessme.world/ops/ping` returns `200 {"status":"pong"}`.
+- Multi-user auth remains intentionally disabled until Lau provisions the account and flips `KNIGHTMIND_REQUIRE_AUTH=true` in `.env.docker`.
 
 ## Health checks
 

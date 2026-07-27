@@ -59,6 +59,7 @@ from services.api.motifs import MotifPerformanceResponse, get_user_motif_perform
 from services.api.openings import build_opening_tree
 from services.api.puzzles.identity import backfill_puzzle_identity
 from services.api.ratelimit import rate_limit
+from services.api.ratings_auto import auto_snapshot, auto_snapshot_throttled
 from services.api.storage import GameRepository, PuzzleRepository
 from services.api.storage.spaced_repetition import (
     _utcnow_naive,
@@ -423,6 +424,13 @@ async def import_chesscom_games(
         await asyncio.to_thread(
             game_repository.record_import_summary, username, new_games
         )
+
+        # Fresh games are on file — record the current ratings alongside them
+        # so rating history never depends on a manual snapshot (best-effort).
+        # A sync that found nothing new can't have moved the rating, so skip
+        # the Chess.com round-trip entirely on no-op re-imports.
+        if new_games > 0:
+            await auto_snapshot(username, db)
 
         return ImportResponse(
             message=f"Successfully processed {count} games for {username}",
@@ -1933,9 +1941,8 @@ async def reveal_puzzle(
 # --- Rating Drivers Explainer Support ---
 
 
-def get_opponent_rating_from_pgn(pgn: str, user_is_white: bool) -> int | None:
-    """Extract opponent rating from PGN headers."""
-    tag = "BlackElo" if user_is_white else "WhiteElo"
+def _rating_from_pgn(pgn: str, tag: str) -> int | None:
+    """Extract a numeric Elo header (WhiteElo/BlackElo) from PGN headers."""
     match = re.search(f'\\[{tag} "(\\d+)"\\]', pgn)
     if match:
         try:
@@ -1943,6 +1950,21 @@ def get_opponent_rating_from_pgn(pgn: str, user_is_white: bool) -> int | None:
         except ValueError:
             return None
     return None
+
+
+def get_opponent_rating_from_pgn(pgn: str, user_is_white: bool) -> int | None:
+    """Extract opponent rating from PGN headers."""
+    return _rating_from_pgn(pgn, "BlackElo" if user_is_white else "WhiteElo")
+
+
+def get_player_rating_from_pgn(pgn: str, user_is_white: bool) -> int | None:
+    """Extract the player's own rating from PGN headers.
+
+    Chess.com writes each side's post-game rating into the Elo headers, so
+    across a window of games these values form the player's actual rating
+    trajectory — no manual snapshots required.
+    """
+    return _rating_from_pgn(pgn, "WhiteElo" if user_is_white else "BlackElo")
 
 
 def calculate_expected_score(player_rating: int, opponent_rating: int) -> float:
@@ -1985,6 +2007,24 @@ async def create_rating_snapshot(
             raise HTTPException(
                 status_code=502,
                 detail=f"Could not find rating for {request.time_control} in Chess.com response",
+            )
+
+        # Same-rating dedupe, mirroring ratings_auto.auto_snapshot: a repeat
+        # call with an unchanged rating answers from the stored row instead of
+        # writing a duplicate flat entry into the history the chart reads.
+        latest_stmt = (
+            select(RatingSnapshot)
+            .where(
+                RatingSnapshot.username == request.username,
+                RatingSnapshot.time_control == request.time_control,
+            )
+            .order_by(RatingSnapshot.recorded_at.desc())
+            .limit(1)
+        )
+        latest = db.scalars(latest_stmt).first()
+        if latest and latest.rating == rating:
+            return SnapshotResponse(
+                rating=latest.rating, recorded_at=latest.recorded_at
             )
 
         snapshot = RatingSnapshot(
@@ -2052,6 +2092,7 @@ async def get_rating_history(
 
 class HighlightGame(BaseModel):
     opponent_rating: int | None
+    opponent_username: str | None = None
     result: str
     expected_score: float
     rating_diff: int | None
@@ -2075,8 +2116,25 @@ class RatingInfo(BaseModel):
     start: int | None
     end: int | None
     net_change: int | None
+    # True when start/end were estimated from the player's own per-game Elo
+    # headers (post-game ratings) rather than recorded snapshots. Kept for
+    # older clients; new clients should read the per-anchor flags below.
+    is_estimated: bool = False
+    start_is_estimated: bool = False
+    end_is_estimated: bool = False
     reference_rating: int
     reference_is_approx: bool
+
+
+class TrajectoryPoint(BaseModel):
+    played_at: datetime
+    rating: int
+
+
+class ChartPoint(BaseModel):
+    at: datetime
+    rating: int
+    source: Literal["game", "snapshot"]
 
 
 class DriverStats(BaseModel):
@@ -2089,6 +2147,10 @@ class DriverStats(BaseModel):
     actual_total: float | None
     actual_minus_expected: float | None
     missing_opponent_rating_games: int
+    # In-window games of this time control skipped because they were casual
+    # (unrated) — casual games never move the Chess.com rating, so counting
+    # them would corrupt the attribution.
+    casual_games_excluded: int = 0
 
 
 class Driver(BaseModel):
@@ -2104,6 +2166,16 @@ class ExplainResponse(BaseModel):
     stats: DriverStats
     drivers: list[Driver]
     highlights: Highlights
+    # Player's own rating over the window, from per-game PGN Elo headers
+    # (chronological). Lets the frontend chart real rating movement without
+    # manual snapshots. Kept for older clients; chart_series supersedes it.
+    trajectory: list[TrajectoryPoint] = []
+    # Chart-ready fusion of per-game Elo points and the snapshot anchors that
+    # won the start/end contests, in time order. Its endpoints always match
+    # rating.start/rating.end, so clients must render this instead of picking
+    # a source themselves. Empty when the window has no game points (clients
+    # fall back to recorded snapshot history).
+    chart_series: list[ChartPoint] = []
     # Canonical uncertainty signal (rated games in window). Drivers are
     # descriptive, not causal; below MIN_GAMES_FOR_RATING_DRIVERS no directional
     # driver is emitted and insufficient_data is True.
@@ -2125,6 +2197,11 @@ async def explain_rating_changes(
     from services.api.models import TrainingSession
 
     assert_owns_username(account, username, db)
+
+    # Viewing insights is itself a reason to refresh the rating record:
+    # snapshot opportunistically (throttled per username, best-effort) so the
+    # end anchor stays fresh without the user ever pressing a button.
+    await auto_snapshot_throttled(username, db)
 
     # 1. Determine Window
     now = datetime.now(timezone.utc)
@@ -2166,6 +2243,7 @@ async def explain_rating_changes(
 
     start_ts = int(window_start.timestamp())
     relevant_games = []
+    casual_excluded = 0
 
     count = 0
     for meta in all_metadata:
@@ -2175,6 +2253,11 @@ async def explain_rating_changes(
             continue
         if meta.end_time < start_ts:
             break
+        # Casual games never move the Chess.com rating: excluding them keeps
+        # wins/losses, expected-score totals, and drivers about rated play only.
+        if not meta.rated:
+            casual_excluded += 1
+            continue
 
         relevant_games.append(meta)
         count += 1
@@ -2257,65 +2340,88 @@ async def explain_rating_changes(
             losses += 1
 
         opp_rating = get_opponent_rating_from_pgn(pgn, user_is_white)
+        player_rating = get_player_rating_from_pgn(pgn, user_is_white)
 
         if opp_rating is None:
             missing_ratings += 1
-            game_details.append(
-                {
-                    "meta": meta,
-                    "opp_rating": None,
-                    "actual": result_score,
-                    "expected": None,
-                }
-            )
         else:
             total_opp_rating += opp_rating
             opp_rating_count += 1
             opp_ratings.append(opp_rating)
-            game_details.append(
-                {
-                    "meta": meta,
-                    "opp_rating": opp_rating,
-                    "actual": result_score,
-                    "expected": None,
-                }
-            )
+
+        game_details.append(
+            {
+                "meta": meta,
+                "opp_rating": opp_rating,
+                # Player's own post-game Elo from the PGN — the most accurate
+                # per-game reference for expected-score math.
+                "player_rating": player_rating,
+                "opponent_username": (
+                    meta.black_username if user_is_white else meta.white_username
+                ),
+                "actual": result_score,
+            }
+        )
+
+    player_ratings = [
+        g["player_rating"] for g in game_details if g["player_rating"] is not None
+    ]
 
     if reference_rating == 0:
-        if opp_rating_count > 0:
+        if player_ratings:
+            # The player's own Elo headers beat any proxy. Averaging opponent
+            # ratings instead would force expected scores toward 0.5 by
+            # construction (you are your opponents' average only by accident).
+            reference_rating = int(sum(player_ratings) / len(player_ratings))
+        elif opp_rating_count > 0:
             reference_rating = int(total_opp_rating / opp_rating_count)
         else:
             reference_rating = 1200
         reference_is_approx = True
 
+    # One owner for the per-game self-rating fallback: the player's own Elo at
+    # that game when the PGN has it, else the window reference. Used by the
+    # expected-score math and both vs-higher/vs-lower driver counts.
+    for g in game_details:
+        g["r_self"] = g["player_rating"] or reference_rating
+
     expected_total = 0.0
     actual_total_rated = 0.0
-    surprises = []
+    # (surprise value, game) pairs — ranked on the unrounded value so ties
+    # aren't manufactured by the 2-decimal display rounding.
+    surprises: list[tuple[float, HighlightGame]] = []
 
     for item in game_details:
         if item["opp_rating"] is not None:
             r_opp = item["opp_rating"]
-            expected = calculate_expected_score(reference_rating, r_opp)
-            item["expected"] = expected
+            # Prefer the player's own Elo at that game over the single
+            # window-wide reference: expected score then reflects the actual
+            # matchup, not an anchor that may be days stale.
+            r_self = item["r_self"]
+            expected = calculate_expected_score(r_self, r_opp)
 
             expected_total += expected
             actual_total_rated += item["actual"]
 
             surprises.append(
-                HighlightGame(
-                    opponent_rating=r_opp,
-                    result=(
-                        "Win"
-                        if item["actual"] == 1.0
-                        else "Draw" if item["actual"] == 0.5 else "Loss"
+                (
+                    item["actual"] - expected,
+                    HighlightGame(
+                        opponent_rating=r_opp,
+                        opponent_username=item["opponent_username"],
+                        result=(
+                            "Win"
+                            if item["actual"] == 1.0
+                            else "Draw" if item["actual"] == 0.5 else "Loss"
+                        ),
+                        expected_score=round(expected, 2),
+                        rating_diff=r_opp - r_self,
+                        game_id=item["meta"].game_id,
+                        played_at=datetime.fromtimestamp(
+                            item["meta"].end_time, tz=timezone.utc
+                        ),
+                        url=item["meta"].url,
                     ),
-                    expected_score=round(expected, 2),
-                    rating_diff=r_opp - reference_rating,
-                    game_id=item["meta"].game_id,
-                    played_at=datetime.fromtimestamp(
-                        item["meta"].end_time, tz=timezone.utc
-                    ),
-                    url=item["meta"].url,
                 )
             )
 
@@ -2350,7 +2456,10 @@ async def explain_rating_changes(
         )
         drivers.append(
             Driver(
-                text=f"You outperformed expectations by {diff:+.1f} points (upward pressure).",
+                text=(
+                    f"You outperformed expectations by {diff:+.1f} points "
+                    f"over {opp_rating_count} rated games (upward pressure)."
+                ),
                 severity=severity,
                 direction="up",
             )
@@ -2361,7 +2470,10 @@ async def explain_rating_changes(
         )
         drivers.append(
             Driver(
-                text=f"You underperformed expectations by {diff:+.1f} points (downward pressure).",
+                text=(
+                    f"You underperformed expectations by {diff:+.1f} points "
+                    f"over {opp_rating_count} rated games (downward pressure)."
+                ),
                 severity=severity,
                 direction="down",
             )
@@ -2373,7 +2485,7 @@ async def explain_rating_changes(
             1
             for g in game_details
             if g["opp_rating"]
-            and g["opp_rating"] >= reference_rating + RATING_DIFFERENCE_THRESHOLD
+            and g["opp_rating"] >= g["r_self"] + RATING_DIFFERENCE_THRESHOLD
             and g["actual"] == 1.0
         )
         if wins_vs_higher >= SIGNIFICANT_WINS_VS_HIGHER_THRESHOLD:
@@ -2389,7 +2501,7 @@ async def explain_rating_changes(
             1
             for g in game_details
             if g["opp_rating"]
-            and g["opp_rating"] <= reference_rating - RATING_DIFFERENCE_THRESHOLD
+            and g["opp_rating"] <= g["r_self"] - RATING_DIFFERENCE_THRESHOLD
             and g["actual"] == 0.0
         )
         if losses_vs_lower >= SIGNIFICANT_LOSSES_VS_LOWER_THRESHOLD:
@@ -2417,21 +2529,49 @@ async def explain_rating_changes(
     severity_order = {"major": 0, "moderate": 1, "minor": 2}
     drivers.sort(key=lambda d: severity_order[d.severity])
 
-    def get_surprise_val(h: HighlightGame):
-        act = 1.0 if h.result == "Win" else 0.5 if h.result == "Draw" else 0.0
-        return act - h.expected_score
-
-    surprises.sort(key=get_surprise_val, reverse=True)
-    best_surprises = [s for s in surprises if get_surprise_val(s) > 0][:3]
-    worst_surprises = [s for s in surprises if get_surprise_val(s) < 0][-3:]
+    surprises.sort(key=lambda pair: pair[0], reverse=True)
+    best_surprises = [g for val, g in surprises if val > 0][:3]
+    worst_surprises = [g for val, g in surprises if val < 0][-3:]
     worst_surprises.reverse()
 
-    # Start: prefer pre-window snapshot, fall back to earliest in-window
-    start_rating_val = (
-        pre_window_snapshot.rating
-        if pre_window_snapshot
-        else earliest_snapshot.rating if earliest_snapshot else None
-    )
+    # Player's own rating over the window from PGN Elo headers (game_details is
+    # chronological). Powers the chart + start/end estimates below.
+    trajectory = [
+        TrajectoryPoint(
+            played_at=datetime.fromtimestamp(g["meta"].end_time, tz=timezone.utc),
+            rating=g["player_rating"],
+        )
+        for g in game_details
+        if g["player_rating"] is not None
+    ]
+
+    def _snapshot_at(snapshot: RatingSnapshot) -> datetime:
+        at = snapshot.recorded_at
+        return at.replace(tzinfo=timezone.utc) if at.tzinfo is None else at
+
+    # Start: prefer the pre-window snapshot (always the earliest evidence),
+    # then the earliest in-window snapshot — but only if no game finished
+    # before it (a snapshot recorded after games began is not the window's
+    # starting rating) — then the first game's own Elo (estimated: it's the
+    # rating *after* that game, so the first game's delta is not captured).
+    start_is_estimated = False
+    start_anchor_snapshot = None
+    if pre_window_snapshot is not None:
+        start_anchor_snapshot = pre_window_snapshot
+    elif earliest_snapshot is not None and (
+        not trajectory or _snapshot_at(earliest_snapshot) <= trajectory[0].played_at
+    ):
+        start_anchor_snapshot = earliest_snapshot
+
+    if start_anchor_snapshot is not None:
+        start_rating_val = start_anchor_snapshot.rating
+    elif trajectory:
+        start_rating_val = trajectory[0].rating
+        start_is_estimated = True
+    else:
+        start_rating_val = (
+            earliest_snapshot.rating if earliest_snapshot is not None else None
+        )
 
     # End: latest snapshot within the window period
     stmt = (
@@ -2444,11 +2584,76 @@ async def explain_rating_changes(
         .order_by(RatingSnapshot.recorded_at.desc())
     )
     latest_in_window = db.scalars(stmt).first()
-    end_rating_val = latest_in_window.rating if latest_in_window else None
+
+    # Use whichever evidence is fresher: an in-window snapshot or the last
+    # game's own Elo. A snapshot recorded before the last game is stale.
+    end_is_estimated = False
+    end_anchor_snapshot = None
+    if latest_in_window is not None and (
+        not trajectory or _snapshot_at(latest_in_window) >= trajectory[-1].played_at
+    ):
+        end_rating_val = latest_in_window.rating
+        end_anchor_snapshot = latest_in_window
+    elif trajectory:
+        end_rating_val = trajectory[-1].rating
+        end_is_estimated = True
+    else:
+        end_rating_val = None
 
     net_change = None
     if start_rating_val is not None and end_rating_val is not None:
         net_change = end_rating_val - start_rating_val
+
+    # Fused, chart-ready series: game points plus the snapshot anchors chosen
+    # above, time-ordered. Built from the same anchor decisions as the card so
+    # the line's endpoints always equal rating.start/rating.end. Only emitted
+    # when the window has game points — with no games there is nothing to
+    # fuse, and clients chart their recorded snapshot history instead.
+    chart_series: list[ChartPoint] = []
+    if trajectory:
+        if start_anchor_snapshot is not None:
+            chart_series.append(
+                ChartPoint(
+                    at=_snapshot_at(start_anchor_snapshot),
+                    rating=start_anchor_snapshot.rating,
+                    source="snapshot",
+                )
+            )
+        chart_series.extend(
+            ChartPoint(at=p.played_at, rating=p.rating, source="game")
+            for p in trajectory
+        )
+        # Append even when the same snapshot also won the start contest (a
+        # timestamp tie with every game): dropping it would leave the last
+        # game's Elo as the series endpoint while the card shows the snapshot
+        # rating. A duplicate point at the same timestamp is harmless.
+        if end_anchor_snapshot is not None:
+            chart_series.append(
+                ChartPoint(
+                    at=_snapshot_at(end_anchor_snapshot),
+                    rating=end_anchor_snapshot.rating,
+                    source="snapshot",
+                )
+            )
+        # Stable sort: on equal timestamps the start anchor stays first and
+        # the end anchor stays last, preserving endpoint agreement.
+        chart_series.sort(key=lambda p: p.at)
+        # Self-check the contract clients rely on instead of trusting
+        # construction: a divergence here means a card/chart mismatch shipped.
+        if chart_series and (
+            chart_series[0].rating != start_rating_val
+            or chart_series[-1].rating != end_rating_val
+        ):
+            logger.warning(
+                "chart_series endpoints diverge from rating anchors: "
+                "series %s..%s vs start=%s end=%s (username=%s tc=%s)",
+                chart_series[0].rating,
+                chart_series[-1].rating,
+                start_rating_val,
+                end_rating_val,
+                username,
+                time_control,
+            )
 
     return ExplainResponse(
         time_control=time_control,
@@ -2457,6 +2662,9 @@ async def explain_rating_changes(
             start=start_rating_val,
             end=end_rating_val,
             net_change=net_change,
+            is_estimated=start_is_estimated or end_is_estimated,
+            start_is_estimated=start_is_estimated,
+            end_is_estimated=end_is_estimated,
             reference_rating=reference_rating,
             reference_is_approx=reference_is_approx,
         ),
@@ -2470,11 +2678,14 @@ async def explain_rating_changes(
             actual_total=actual_total_rated if opp_rating_count > 0 else None,
             actual_minus_expected=diff if opp_rating_count > 0 else None,
             missing_opponent_rating_games=missing_ratings,
+            casual_games_excluded=casual_excluded,
         ),
         drivers=drivers,
         highlights=Highlights(
             best_surprises=best_surprises, worst_surprises=worst_surprises
         ),
+        trajectory=trajectory,
+        chart_series=chart_series,
         confidence=confidence,
         insufficient_data=insufficient_data,
     )

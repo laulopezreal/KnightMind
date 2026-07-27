@@ -34,10 +34,24 @@ describe('SessionSummaryCard', () => {
       />
     );
 
-    expect(screen.getByText('Session Successfully Recorded!')).toBeInTheDocument();
+    // 8/2 = 80% accuracy → the celebratory headline (tone tracks the result,
+    // never the old "Successfully Recorded" database receipt).
+    expect(screen.getByText('Sharp session!')).toBeInTheDocument();
   });
 
-  it('should display pass and fail counts', () => {
+  it('keeps the headline honest on a rough session', () => {
+    render(
+      <SessionSummaryCard
+        sessionSummary={{ ...mockSessionSummary, pass_count: 2, fail_count: 8 }}
+        achievements={mockAchievements}
+        onStartNewSession={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText(/tough one, keep at it/i)).toBeInTheDocument();
+  });
+
+  it('should display pass and fail counts', async () => {
     render(
       <SessionSummaryCard
         sessionSummary={mockSessionSummary}
@@ -46,11 +60,12 @@ describe('SessionSummaryCard', () => {
       />
     );
 
-    expect(screen.getByText('8')).toBeInTheDocument();
-    expect(screen.getByText('2')).toBeInTheDocument();
+    // findByText: the stats count up to their final value.
+    expect(await screen.findByText('8', undefined, { timeout: 4000 })).toBeInTheDocument();
+    expect(await screen.findByText('2', undefined, { timeout: 4000 })).toBeInTheDocument();
   });
 
-  it('should display accuracy percentage', () => {
+  it('should display accuracy percentage', async () => {
     render(
       <SessionSummaryCard
         sessionSummary={mockSessionSummary}
@@ -59,7 +74,7 @@ describe('SessionSummaryCard', () => {
       />
     );
 
-    expect(screen.getByText('80%')).toBeInTheDocument();
+    expect(await screen.findByText('80%', undefined, { timeout: 4000 })).toBeInTheDocument();
   });
 
   it('should display total time', () => {
@@ -74,7 +89,7 @@ describe('SessionSummaryCard', () => {
     expect(screen.getByText('2m 5s')).toBeInTheDocument();
   });
 
-  it('should display best streak and hints used', () => {
+  it('should display best streak and hints used', async () => {
     render(
       <SessionSummaryCard
         sessionSummary={mockSessionSummary}
@@ -83,8 +98,8 @@ describe('SessionSummaryCard', () => {
       />
     );
 
-    expect(screen.getByText('5')).toBeInTheDocument(); // best streak
-    expect(screen.getByText('1')).toBeInTheDocument(); // hints used
+    expect(await screen.findByText('5', undefined, { timeout: 4000 })).toBeInTheDocument(); // best streak
+    expect(await screen.findByText('1', undefined, { timeout: 4000 })).toBeInTheDocument(); // hints used
   });
 
   it('should display earned achievements only', () => {

@@ -25,6 +25,7 @@ except ImportError:
 from sqlalchemy.exc import IntegrityError
 
 from services.api.db import SessionLocal
+from services.api.envutil import env_int
 from services.api.models import FenEvalCache
 
 logger = logging.getLogger(__name__)
@@ -125,35 +126,22 @@ def get_search_depth() -> int:
     return 12
 
 
-def _get_env_int(name: str, default: int) -> int:
-    """Read a positive integer env var, falling back to ``default`` on error."""
-    raw = os.environ.get(name)
-    if raw:
-        try:
-            value = int(raw)
-            if value > 0:
-                return value
-        except ValueError:
-            logger.warning("Invalid %s=%r, using default %s", name, raw, default)
-    return default
-
-
 def get_engine_threads() -> int:
     """Number of engine threads (Stockfish 'Threads' option). Default matches
     the ``stockfish`` package default of 1."""
-    return _get_env_int("STOCKFISH_THREADS", 1)
+    return env_int("STOCKFISH_THREADS", 1, min_value=1, log_invalid=True)
 
 
 def get_engine_hash_mb() -> int:
     """Engine transposition-table size in MB (Stockfish 'Hash' option). Default
     matches the ``stockfish`` package default of 16."""
-    return _get_env_int("STOCKFISH_HASH_MB", 16)
+    return env_int("STOCKFISH_HASH_MB", 16, min_value=1, log_invalid=True)
 
 
 def get_engine_multipv() -> int:
     """Number of principal variations (Stockfish 'MultiPV' option). Single-line
     evaluation uses 1; a different value can change which move is 'best'."""
-    return _get_env_int("STOCKFISH_MULTIPV", 1)
+    return env_int("STOCKFISH_MULTIPV", 1, min_value=1, log_invalid=True)
 
 
 def create_engine() -> "StockfishEngine":

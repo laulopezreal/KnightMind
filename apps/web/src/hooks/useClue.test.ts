@@ -127,4 +127,79 @@ describe('useClue', () => {
         expect(result.current.advance).toBe(firstAdvance);
         expect(result.current.reset).toBe(firstReset);
     });
+
+    it('should expose from/to squares once known', () => {
+        const { result } = renderHook(() => useClue('e2e4', STARTING_FEN));
+
+        expect(result.current.fromSquare).toBe('e2');
+        expect(result.current.toSquare).toBe('e4');
+    });
+
+    it('should not emit a move hint before stage 2', () => {
+        const { result } = renderHook(() => useClue('e2e4', STARTING_FEN));
+
+        expect(result.current.moveHint).toBe('');
+        act(() => result.current.advance());
+        expect(result.current.moveHint).toBe('');
+    });
+
+    describe('3-rung ladder (maxStage: 3)', () => {
+        const opts = { maxStage: 3 } as const;
+
+        it('should treat stage 2 as not yet exhausted', () => {
+            const { result } = renderHook(() => useClue('e2e4', STARTING_FEN, opts));
+
+            act(() => result.current.advance());
+            act(() => result.current.advance());
+
+            expect(result.current.clueStage).toBe(2);
+            expect(result.current.isExhausted).toBe(false);
+            expect(result.current.isDisabled).toBe(false);
+        });
+
+        it('should expose a move hint naming the destination at stage 2', () => {
+            const { result } = renderHook(() => useClue('e2e4', STARTING_FEN, opts));
+
+            act(() => result.current.advance());
+            act(() => result.current.advance());
+
+            expect(result.current.moveHint).toBe('Move the pawn to e4');
+        });
+
+        it('should advance to stage 3 and become exhausted', () => {
+            const { result } = renderHook(() => useClue('e2e4', STARTING_FEN, opts));
+
+            act(() => result.current.advance());
+            act(() => result.current.advance());
+            act(() => result.current.advance());
+
+            expect(result.current.clueStage).toBe(3);
+            expect(result.current.isExhausted).toBe(true);
+            expect(result.current.isDisabled).toBe(true);
+        });
+
+        it('should keep both squares highlighted at stage 3', () => {
+            const { result } = renderHook(() => useClue('e2e4', STARTING_FEN, opts));
+
+            act(() => result.current.advance());
+            act(() => result.current.advance());
+            act(() => result.current.advance());
+
+            expect(result.current.squareStyles).toEqual({
+                e2: { backgroundColor: 'rgba(255, 235, 59, 0.45)' },
+                e4: { backgroundColor: 'rgba(255, 235, 59, 0.45)' },
+            });
+        });
+
+        it('should not advance past stage 3', () => {
+            const { result } = renderHook(() => useClue('e2e4', STARTING_FEN, opts));
+
+            act(() => result.current.advance());
+            act(() => result.current.advance());
+            act(() => result.current.advance());
+            act(() => result.current.advance());
+
+            expect(result.current.clueStage).toBe(3);
+        });
+    });
 });

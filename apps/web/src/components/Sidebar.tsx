@@ -9,6 +9,19 @@ interface SidebarProps {
     onMobileClose?: () => void;
 }
 
+// Group wrapper: labels a cluster of related destinations so the nav reads as
+// the app's loop (set up → train → see progress) plus standalone study tools,
+// instead of eight equal doors. aria-labelledby ties the group to its visible
+// caption — announced once, no duplicate label.
+const NavGroup = ({ id, label, children }: { id: string; label: string; children: React.ReactNode }) => (
+    <div role="group" aria-labelledby={id} className="space-y-1">
+        <div id={id} className="text-[10px] font-sans uppercase tracking-widest text-primary/70 mb-2">
+            {label}
+        </div>
+        {children}
+    </div>
+);
+
 const NavItem = ({ to, label, isActive }: { to: string; label: string; isActive: boolean }) => (
     <Link
         to={to}
@@ -187,45 +200,55 @@ export default function Sidebar({ mobileOpen = false, onMobileClose }: SidebarPr
                     <div className="w-8 h-8 rounded-full bg-current opacity-80" />
                 </Link>
 
-                {/* Navigation */}
-                <nav className="space-y-6 font-sans" aria-label="Primary navigation">
+                {/* Navigation — ordered as the app's loop: the door (Home), the
+                    daily action (Training), the read-only overview (Progress),
+                    and the anytime tools (Study). Grouping tells a first-time
+                    user where to start instead of offering eight equal doors. */}
+                <nav className="space-y-8 font-sans" aria-label="Primary navigation">
                     <div onClick={handleLinkClick}><NavItem to="/" label="Home" isActive={location.pathname === '/'} /></div>
-                    <div onClick={handleLinkClick}><NavItem to="/dashboard" label="Dashboard" isActive={location.pathname === '/dashboard'} /></div>
-                    <div onClick={handleLinkClick}><NavItem to="/openings" label="Openings" isActive={location.pathname === '/openings'} /></div>
-                    <div onClick={handleLinkClick}><NavItem to="/engine" label="Engine" isActive={location.pathname === '/engine'} /></div>
-                    <div onClick={handleLinkClick}><NavItem to="/library" label="Library" isActive={location.pathname.startsWith('/library')} /></div>
 
-                    {/* Train (formerly Puzzles) with sub-items */}
-                    <div>
-                        <div onClick={handleLinkClick}><NavItem to="/puzzles" label="Train" isActive={location.pathname === '/puzzles'} /></div>
-                        {isPuzzlesRoute && (
-                            <div className="ml-6 mt-2 space-y-1 border-l border-primary/10 pl-2">
-                                <SubNavItem
-                                    label="Standard"
-                                    isActive={sessionType === 'standard'}
-                                    onClick={() => setSessionType('standard')}
-                                    tooltip="Classic puzzle solving - fully available now"
-                                />
-                                <SubNavItem
-                                    label="Timed"
-                                    badge="BETA"
-                                    isActive={sessionType === 'timed'}
-                                    onClick={() => setSessionType('timed')}
-                                    tooltip="Coming soon: Race against the clock"
-                                />
-                                <SubNavItem
-                                    label="Accuracy Goal"
-                                    badge="BETA"
-                                    isActive={sessionType === 'accuracy_goal'}
-                                    onClick={() => setSessionType('accuracy_goal')}
-                                    tooltip="Coming soon: Focus on precision"
-                                />
-                            </div>
-                        )}
-                    </div>
+                    <NavGroup id="nav-group-training" label="Training">
+                        {/* Train (formerly Puzzles) with sub-items */}
+                        <div>
+                            <div onClick={handleLinkClick}><NavItem to="/puzzles" label="Train" isActive={location.pathname === '/puzzles'} /></div>
+                            {isPuzzlesRoute && (
+                                <div className="ml-6 mt-2 space-y-1 border-l border-primary/10 pl-2">
+                                    <SubNavItem
+                                        label="Standard"
+                                        isActive={sessionType === 'standard'}
+                                        onClick={() => setSessionType('standard')}
+                                        tooltip="Classic puzzle solving - fully available now"
+                                    />
+                                    <SubNavItem
+                                        label="Timed"
+                                        badge="BETA"
+                                        isActive={sessionType === 'timed'}
+                                        onClick={() => setSessionType('timed')}
+                                        tooltip="Coming soon: Race against the clock"
+                                    />
+                                    <SubNavItem
+                                        label="Accuracy Goal"
+                                        badge="BETA"
+                                        isActive={sessionType === 'accuracy_goal'}
+                                        onClick={() => setSessionType('accuracy_goal')}
+                                        tooltip="Coming soon: Focus on precision"
+                                    />
+                                </div>
+                            )}
+                        </div>
+                        <div onClick={handleLinkClick}><NavItem to="/library" label="Library" isActive={location.pathname.startsWith('/library')} /></div>
+                    </NavGroup>
 
-                    <div onClick={handleLinkClick}><NavItem to="/insights" label="Insights" isActive={location.pathname === '/insights'} /></div>
-                    <div onClick={handleLinkClick}><NavItem to="/rating-insights" label="Ratings" isActive={location.pathname === '/rating-insights'} /></div>
+                    <NavGroup id="nav-group-progress" label="Progress">
+                        <div onClick={handleLinkClick}><NavItem to="/dashboard" label="Dashboard" isActive={location.pathname === '/dashboard'} /></div>
+                        <div onClick={handleLinkClick}><NavItem to="/insights" label="Insights" isActive={location.pathname === '/insights'} /></div>
+                        <div onClick={handleLinkClick}><NavItem to="/rating-insights" label="Ratings" isActive={location.pathname === '/rating-insights'} /></div>
+                    </NavGroup>
+
+                    <NavGroup id="nav-group-study" label="Study">
+                        <div onClick={handleLinkClick}><NavItem to="/openings" label="Openings" isActive={location.pathname === '/openings'} /></div>
+                        <div onClick={handleLinkClick}><NavItem to="/engine" label="Engine" isActive={location.pathname === '/engine'} /></div>
+                    </NavGroup>
                 </nav>
             </div>
 

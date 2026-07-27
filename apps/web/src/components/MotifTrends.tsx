@@ -1,6 +1,8 @@
 import { useMemo } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { type MotifTrend } from '../api/users';
+import { Sparkline } from './Sparkline';
+import { formatMotifName } from '../utils/motif';
 
 interface MotifTrendsProps {
     trends: MotifTrend[];
@@ -128,6 +130,8 @@ export function MotifTrends({ trends, windowDays }: MotifTrendsProps) {
                                 key={trend.motif}
                                 type="monotone"
                                 dataKey={trend.motif}
+                                // Legend/tooltip show the human name, not the raw key.
+                                name={formatMotifName(trend.motif)}
                                 stroke={motifColors[trend.motif]}
                                 strokeWidth={2}
                                 dot={false}
@@ -138,28 +142,44 @@ export function MotifTrends({ trends, windowDays }: MotifTrendsProps) {
                 </ResponsiveContainer>
             </div>
 
-            {/* Trend Summary */}
-            <div className="mt-6 grid grid-cols-1 md:grid-cols-3 gap-4">
-                {trends.slice(0, 3).map(trend => (
-                    <div key={trend.motif} className="text-center">
-                        <p className="text-sm text-primary/70 mb-1">{trend.motif}</p>
-                        {trend.insufficient_data ? (
-                            <p
-                                className="text-lg font-serif text-primary/70"
-                                title={`Only ${trend.total_reviews} review${trend.total_reviews === 1 ? '' : 's'} in this window — too few to show a trend.`}
-                            >
-                                → Limited data
-                            </p>
-                        ) : (
-                            <p className={`text-lg font-serif ${
-                                trend.trend === 'up' ? 'text-positive' :
-                                trend.trend === 'down' ? 'text-negative' :
-                                'text-primary/70'
-                            }`}>
-                                {trend.trend === 'up' ? '↗' : trend.trend === 'down' ? '↘' : '→'}
-                                {' '}
-                                {trend.change > 0 ? '+' : ''}{(trend.change * 100).toFixed(1)}%
-                            </p>
+            {/* Per-motif tiles: every motif, named for humans, with its own
+                accuracy sparkline — not a 3-motif sample labelled by raw keys. */}
+            <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+                {trends.map(trend => (
+                    <div key={trend.motif} className="p-3 bg-primary/5 border border-primary/10 rounded-sm">
+                        <div className="flex items-baseline justify-between gap-2">
+                            <p className="text-sm font-serif text-primary">{formatMotifName(trend.motif)}</p>
+                            {trend.insufficient_data ? (
+                                <p
+                                    className="text-xs font-sans text-primary/70"
+                                    title={`Only ${trend.total_reviews} review${trend.total_reviews === 1 ? '' : 's'} in this window — too few to show a trend.`}
+                                >
+                                    → Limited data
+                                </p>
+                            ) : (
+                                <p className={`text-sm font-serif ${
+                                    trend.trend === 'up' ? 'text-positive' :
+                                    trend.trend === 'down' ? 'text-negative' :
+                                    'text-primary/70'
+                                }`}>
+                                    {trend.trend === 'up' ? '↗' : trend.trend === 'down' ? '↘' : '→'}
+                                    {' '}
+                                    {trend.change > 0 ? '+' : ''}{(trend.change * 100).toFixed(1)}%
+                                </p>
+                            )}
+                        </div>
+                        {trend.data_points.length >= 2 && (
+                            <div className="mt-2">
+                                <Sparkline
+                                    points={trend.data_points.map(p => p.accuracy)}
+                                    // Colour only asserts a direction the badge asserts too:
+                                    // steady and insufficient-data series stay neutral ink.
+                                    trend={trend.insufficient_data || trend.trend === 'steady' ? 'flat' : trend.trend}
+                                    width={140}
+                                    height={24}
+                                    ariaLabel={`${formatMotifName(trend.motif)} accuracy trend, ${trend.data_points.length} days`}
+                                />
+                            </div>
                         )}
                     </div>
                 ))}
