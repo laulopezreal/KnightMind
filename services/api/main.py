@@ -55,6 +55,12 @@ from services.api.models import (
     PuzzleStats,
     RatingSnapshot,
 )
+from services.api.models import (
+    Game as GameModel,
+)
+from services.api.models import (
+    Puzzle as PuzzleModel,
+)
 from services.api.motifs import MotifPerformanceResponse, get_user_motif_performance
 from services.api.openings import build_opening_tree
 from services.api.puzzles.identity import backfill_puzzle_identity
@@ -861,7 +867,15 @@ async def generate_puzzles_endpoint(
 
 
 _VALID_MOTIFS = frozenset(
-    {"back_rank", "hanging_queen", "hanging_piece", "fork", "pin", "mate_threat", "blunder"}
+    {
+        "back_rank",
+        "hanging_queen",
+        "hanging_piece",
+        "fork",
+        "pin",
+        "mate_threat",
+        "blunder",
+    }
 )
 
 
@@ -872,18 +886,18 @@ async def create_manual_puzzle(
     account: Account | None = Depends(require_account),
 ):
     """Create a puzzle from an arbitrary position (Engine Analysis → Save as puzzle)."""
-    from services.api.models import Game as GameModel, Puzzle as PuzzleModel
-
     assert_owns_username(account, request.username, db)
     username_lower = request.username.lower()
 
     # Validate FEN
     try:
         board = chess.Board(request.fen)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid FEN")
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail="Invalid FEN") from err
     if board.is_game_over():
-        raise HTTPException(status_code=400, detail="Position is already terminal — no puzzle possible")
+        raise HTTPException(
+            status_code=400, detail="Position is already terminal — no puzzle possible"
+        )
     if not list(board.legal_moves):
         raise HTTPException(status_code=400, detail="No legal moves in position")
 
@@ -907,10 +921,14 @@ async def create_manual_puzzle(
     for move_uci in moves:
         try:
             m = chess.Move.from_uci(move_uci)
-        except ValueError:
-            raise HTTPException(status_code=400, detail=f"Invalid UCI move in solution: {move_uci}")
+        except ValueError as err:
+            raise HTTPException(
+                status_code=400, detail=f"Invalid UCI move in solution: {move_uci}"
+            ) from err
         if m not in test_board.legal_moves:
-            raise HTTPException(status_code=400, detail=f"Illegal move in solution: {move_uci}")
+            raise HTTPException(
+                status_code=400, detail=f"Illegal move in solution: {move_uci}"
+            )
         test_board.push(m)
     best_move_uci = moves[0]
 

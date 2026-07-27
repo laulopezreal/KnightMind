@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import Engine from './Engine';
+import { ChessUsernameProvider } from '../context/ChessUsernameContext';
 
 // Mock dependencies
 vi.mock('../api', () => ({
@@ -56,6 +57,14 @@ const mockGetEngineStatus = vi.mocked(getEngineStatus);
 const STARTING_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
 const ALT_FEN = 'rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1';
 
+function renderEngine() {
+  return render(
+    <ChessUsernameProvider>
+      <Engine />
+    </ChessUsernameProvider>
+  );
+}
+
 describe('Engine - Clue Functionality', () => {
   let user: ReturnType<typeof userEvent.setup>;
 
@@ -82,7 +91,7 @@ describe('Engine - Clue Functionality', () => {
 
   describe('Clue Stage Transitions', () => {
     it('should start with clueStage = 0', async () => {
-      render(<Engine />);
+      renderEngine();
 
       await evaluatePosition();
 
@@ -92,7 +101,7 @@ describe('Engine - Clue Functionality', () => {
     });
 
     it('should transition from stage 0 to stage 1 on first clue click', async () => {
-      render(<Engine />);
+      renderEngine();
 
       await evaluatePosition();
 
@@ -108,7 +117,7 @@ describe('Engine - Clue Functionality', () => {
     });
 
     it('should transition from stage 1 to stage 2 on second clue click', async () => {
-      render(<Engine />);
+      renderEngine();
 
       await evaluatePosition();
 
@@ -130,7 +139,7 @@ describe('Engine - Clue Functionality', () => {
     });
 
     it('should cycle back to stage 0 from stage 2 on click', async () => {
-      render(<Engine />);
+      renderEngine();
 
       await evaluatePosition();
 
@@ -160,7 +169,7 @@ describe('Engine - Clue Functionality', () => {
 
   describe('Button States', () => {
     it('should not disable clue button in any stage', async () => {
-      render(<Engine />);
+      renderEngine();
 
       await evaluatePosition();
 
@@ -185,7 +194,7 @@ describe('Engine - Clue Functionality', () => {
 
   describe('Piece Name Display', () => {
     it('should show hint prompt in stage 0', async () => {
-      render(<Engine />);
+      renderEngine();
 
       await evaluatePosition();
 
@@ -195,7 +204,7 @@ describe('Engine - Clue Functionality', () => {
     });
 
     it('should display correct piece name in stage 1', async () => {
-      render(<Engine />);
+      renderEngine();
 
       await evaluatePosition();
 
@@ -211,7 +220,7 @@ describe('Engine - Clue Functionality', () => {
     });
 
     it('should not show piece name in stage 2', async () => {
-      render(<Engine />);
+      renderEngine();
 
       await evaluatePosition();
 
@@ -232,7 +241,7 @@ describe('Engine - Clue Functionality', () => {
     it('should show default hint when piece cannot be determined', async () => {
       mockEvaluateFen.mockResolvedValue({ best_move_uci: 'x9y0', eval: 0.5 });
 
-      render(<Engine />);
+      renderEngine();
 
       await evaluatePosition();
 
@@ -250,7 +259,7 @@ describe('Engine - Clue Functionality', () => {
 
   describe('Board Highlighting', () => {
     it('should highlight only source square in stage 1', async () => {
-      render(<Engine />);
+      renderEngine();
 
       await evaluatePosition();
 
@@ -270,7 +279,7 @@ describe('Engine - Clue Functionality', () => {
     });
 
     it('should highlight both source and target squares in stage 2', async () => {
-      render(<Engine />);
+      renderEngine();
 
       await evaluatePosition();
 
@@ -297,7 +306,7 @@ describe('Engine - Clue Functionality', () => {
     });
 
     it('should clear highlighting when position is reset', async () => {
-      render(<Engine />);
+      renderEngine();
 
       await evaluatePosition();
 
@@ -331,13 +340,13 @@ describe('Engine - Clue Functionality', () => {
 
   describe('UI Integration', () => {
     it('should not show clue button when no evaluation is available', () => {
-      render(<Engine />);
+      renderEngine();
 
       expect(screen.queryByText('Clue')).not.toBeInTheDocument();
     });
 
     it('should show waiting text when no evaluation', async () => {
-      render(<Engine />);
+      renderEngine();
 
       await waitFor(() => {
         expect(screen.getByText('Waiting for position')).toBeInTheDocument();
@@ -349,7 +358,7 @@ describe('Engine - Clue Functionality', () => {
       // Make evaluateFen hang indefinitely so we can observe the loading state
       mockEvaluateFen.mockReturnValue(new Promise(() => {}));
 
-      render(<Engine />);
+      renderEngine();
 
       // Load a new FEN to trigger auto-evaluation
       const fenInput = screen.getByDisplayValue(STARTING_FEN);
@@ -362,7 +371,7 @@ describe('Engine - Clue Functionality', () => {
     });
 
     it('should reset clues when new positions are loaded', async () => {
-      render(<Engine />);
+      renderEngine();
 
       await evaluatePosition();
 
@@ -388,7 +397,7 @@ describe('Engine - Clue Functionality', () => {
     });
 
     it('should reset clues when reloading position', async () => {
-      render(<Engine />);
+      renderEngine();
 
       await evaluatePosition();
 
@@ -412,7 +421,7 @@ describe('Engine - Clue Functionality', () => {
     it('should handle empty bestMove gracefully', async () => {
       mockEvaluateFen.mockResolvedValue({ best_move_uci: '', eval: 0.5 });
 
-      render(<Engine />);
+      renderEngine();
 
       // Load position to trigger eval
       const fenInput = screen.getByDisplayValue(STARTING_FEN);
@@ -437,7 +446,7 @@ describe('Engine - Clue Functionality', () => {
     it('should handle malformed UCI strings gracefully', async () => {
       mockEvaluateFen.mockResolvedValue({ best_move_uci: 'invalid', eval: 0.5 });
 
-      render(<Engine />);
+      renderEngine();
 
       await evaluatePosition();
 
@@ -455,7 +464,7 @@ describe('Engine - Clue Functionality', () => {
     it('should reset clues on evaluation errors', async () => {
       mockEvaluateFen.mockResolvedValueOnce({ best_move_uci: 'e2e4', eval: 0.5 });
 
-      render(<Engine />);
+      renderEngine();
 
       await evaluatePosition();
 
@@ -485,7 +494,7 @@ describe('Engine - Clue Functionality', () => {
 
   describe('Accessibility', () => {
     it('should have proper button roles and labels', async () => {
-      render(<Engine />);
+      renderEngine();
 
       await evaluatePosition();
 
@@ -496,7 +505,7 @@ describe('Engine - Clue Functionality', () => {
     });
 
     it('should maintain keyboard focus during clue transitions', async () => {
-      render(<Engine />);
+      renderEngine();
 
       await evaluatePosition();
 
@@ -518,7 +527,7 @@ describe('Engine - Clue Functionality', () => {
 
   describe('Invalid FEN accessibility', () => {
     it('exposes the FEN validation error to assistive tech', async () => {
-      render(<Engine />);
+      renderEngine();
 
       const fenInput = screen.getByDisplayValue(STARTING_FEN);
       fireEvent.change(fenInput, { target: { value: 'not a valid fen' } });
