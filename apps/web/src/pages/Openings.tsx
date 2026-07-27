@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, useLayoutEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { getOpenings, ApiError, type OpeningNode, type ColorFilter } from '../api';
 import { useChessUsername } from '../context/ChessUsernameContext';
-import { OpeningGraph, type OpeningGraphHandle } from '../components/OpeningGraph';
+import { OpeningGraph, type OpeningGraphHandle, type NodeAnchor } from '../components/OpeningGraph';
 import { getScoreColor } from '../utils/openings';
 import { useLocalStorage } from '../hooks/useLocalStorage';
 import { PageHeader } from '../components/PageHeader';
@@ -31,6 +31,11 @@ const SCOPE_NOUN: Record<ColorFilter, string> = {
   black: 'games as Black',
 };
 
+/** Modifier key d3-zoom listens for, named the way the user's keyboard labels it. */
+const ZOOM_MODIFIER = /Mac|iPhone|iPad/i.test(
+  typeof navigator === 'undefined' ? '' : navigator.userAgent
+) ? '⌘' : 'Ctrl';
+
 function countAllNodes(node: OpeningNode): number {
   let count = 1;
   if (node.children) {
@@ -54,9 +59,34 @@ export default function Openings() {
     'both'
   );
   const [treeData, setTreeData] = useState<OpeningNode | null>(null);
-  const [tooltip, setTooltip] = useState<{ x: number; y: number; data: OpeningNode } | null>(null);
+  const [tooltip, setTooltip] = useState<{ anchor: NodeAnchor; data: OpeningNode } | null>(null);
+  const tooltipRef = useRef<HTMLDivElement>(null);
   const online = useOnlineStatus();
   const request = useLatestRequest();
+
+  // Clamp the tooltip into the viewport after it renders. Anchoring it blindly
+  // to the node put up to 180px of it off-screen for any node in the lower
+  // right — reachable simply by panning.
+  useLayoutEffect(() => {
+    const el = tooltipRef.current;
+    if (!tooltip || !el) return;
+    const { width, height } = el.getBoundingClientRect();
+    const margin = 8;
+    const clamp = (value: number, max: number) =>
+      Math.min(Math.max(margin, value), Math.max(margin, max - margin));
+
+    // Prefer the right of the node; flip to its left when that would overflow.
+    // Both axes are then hard-clamped, so the card is on screen even for a node
+    // panned right to the edge.
+    const preferredX = tooltip.anchor.x + width + margin > window.innerWidth
+      ? tooltip.anchor.x - width - 24
+      : tooltip.anchor.x;
+    const x = clamp(preferredX, window.innerWidth - width);
+    const y = clamp(tooltip.anchor.y - height / 2, window.innerHeight - height);
+    el.style.left = `${x}px`;
+    el.style.top = `${y}px`;
+    el.style.visibility = 'visible';
+  }, [tooltip]);
 
   // Redirect if no username (username is set during onboarding)
   useEffect(() => {
@@ -167,14 +197,14 @@ export default function Openings() {
   })();
 
   const graphPanel = (
-    <section className="relative min-h-[300px] md:min-h-[500px] max-h-[70vh] bg-primary/5 border border-primary/10 rounded-sm overflow-hidden">
+    // A definite height, not just a min-height: the SVG's height="100%" had no
+    // definite parent to resolve against, so it fell back to its viewBox aspect
+    // ratio and rendered 231px tall inside a 500px panel — over half the panel
+    // wasted while the tree was squeezed into the rest.
+    <section className="relative h-[60vh] min-h-[360px] max-h-[720px] bg-primary/5 border border-primary/10 rounded-sm overflow-hidden">
       <OpeningGraph
         data={treeData as OpeningNode}
-        onNodeHover={(event, node) => setTooltip({
-          x: event.clientX + 10,
-          y: event.clientY - 10,
-          data: node,
-        })}
+        onNodeHover={(anchor, node) => setTooltip({ anchor, data: node })}
         onNodeHoverEnd={() => setTooltip(null)}
         onError={setError}
         graphRef={graphRef}
@@ -217,17 +247,27 @@ export default function Openings() {
         </button>
       </div>
 
+      {/* A real button, so the controls are readable without a mouse — this was
+          a bare div revealed only by CSS :hover. */}
       <div className="absolute bottom-3 left-3 group">
-        <div
-          className="w-6 h-6 rounded-full border border-primary/20 flex items-center justify-center text-primary/70 hover:text-primary/70 hover:border-primary/40 transition-colors cursor-help"
+        <button
+          type="button"
+          aria-describedby="opening-graph-help"
+          aria-label="Graph controls help"
+          className="w-6 h-6 rounded-full border border-primary/20 flex items-center justify-center text-primary/70 hover:text-primary hover:border-primary/40 focus-visible:border-primary/40 transition-colors cursor-help km-focus-visible"
           style={{ backgroundColor: 'var(--bg-primary)' }}
         >
-          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden="true">
             <path d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
           </svg>
-        </div>
-        <div className="absolute bottom-8 left-0 hidden group-hover:block text-xs text-primary/70 font-sans px-3 py-2 rounded-sm border border-primary/10 shadow-lg whitespace-nowrap" style={{ backgroundColor: 'var(--bg-primary)' }}>
-          Scroll to zoom · Drag to pan · Click nodes to expand
+        </button>
+        <div
+          id="opening-graph-help"
+          role="tooltip"
+          className="absolute bottom-8 left-0 hidden group-hover:block group-focus-within:block text-xs text-primary/70 font-sans px-3 py-2 rounded-sm border border-primary/10 shadow-lg whitespace-nowrap"
+          style={{ backgroundColor: 'var(--bg-primary)' }}
+        >
+          Drag to pan · {ZOOM_MODIFIER}+scroll to zoom · Click or press Enter to expand · Arrow keys to navigate
         </div>
       </div>
     </section>
@@ -375,8 +415,19 @@ export default function Openings() {
       {tooltip &&
         createPortal(
           <div
+            ref={tooltipRef}
+            // The graph node carries the same figures in its aria-label, so this
+            // visual echo is hidden from assistive tech rather than announced twice.
+            aria-hidden="true"
             className="fixed z-[9999] border border-primary/20 p-4 shadow-2xl rounded-sm pointer-events-none min-w-[200px]"
-            style={{ left: tooltip.x, top: tooltip.y, backgroundColor: 'var(--bg-primary)' }}
+            style={{
+              left: tooltip.anchor.x,
+              top: tooltip.anchor.y,
+              // Positioned precisely by the layout effect above; kept hidden for
+              // the first frame so it never flashes at an unclamped position.
+              visibility: 'hidden',
+              backgroundColor: 'var(--bg-primary)',
+            }}
           >
             <div className="font-serif text-xl text-primary mb-2 border-b border-primary/10 pb-2">
               {tooltip.data.move_san === 'Start' ? 'Start' : tooltip.data.move_san}

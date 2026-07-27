@@ -1,5 +1,16 @@
 import '@testing-library/jest-dom';
 
+// jsdom ships no ResizeObserver. Components that refit on container resize
+// (e.g. OpeningGraph) construct one at mount, so provide an inert stub —
+// jsdom never lays out, so a resize would never fire anyway.
+if (typeof globalThis.ResizeObserver === 'undefined') {
+    globalThis.ResizeObserver = class {
+        observe() { }
+        unobserve() { }
+        disconnect() { }
+    } as unknown as typeof ResizeObserver;
+}
+
 // Provide a minimal localStorage polyfill for jsdom environments where
 // window.localStorage may not be fully functional (jsdom v28+).
 if (typeof window !== 'undefined' && (!window.localStorage || typeof window.localStorage.getItem !== 'function')) {
