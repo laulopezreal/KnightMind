@@ -410,10 +410,12 @@ crash recovery work unchanged.
 automatically once after the first puzzle-generation job succeeds, so a new user's
 history is diagnosed without them knowing the endpoint exists.
 
-> ⚠️ **Operator note before enabling:** measure the real corpus size per user on prod
-> and set the global daily cap against it. Pass A is free; Pass B over a multi-year
-> chess.com history is the one genuinely unbounded cost in this design, and the cap is
-> the only thing standing between it and a surprise bill.
+> **Sizing, resolved 2026-07-28:** prod holds **238 puzzles**, so Pass B over the whole
+> corpus is a one-time run of roughly **$8** at Opus 5 rates — see *Resolved decisions*
+> §4 for the arithmetic and the agreed caps. The "enriches over days" behaviour the
+> two-pass design allows for simply won't trigger at this size; Pass B finishes in one
+> run. The split still earns its keep as the failure mode: if the model is unavailable
+> or the budget is exhausted, Pass A has already left every puzzle diagnosed.
 
 ## Stage 6 — Insights: top mistake causes
 
@@ -512,11 +514,37 @@ functions and should review quickly.
    failing. Note the scoping correction — every puzzle already *is* a real game
    mistake, so the corpus is larger than "failed puzzles". See **Stage 5b**.
 
+4. **AI daily caps — resolved 2026-07-28.** Prod corpus is **238 puzzles**, which
+   settles the one genuinely unbounded cost in this design: a full AI backfill is a
+   one-time run in the single-digit dollars, not an open-ended bill.
+
+   Sizing, at Opus 5 rates ($5/MTok in, $25/MTok out). Per diagnosis the input is the
+   evidence packet plus taxonomy, schema and system prompt; the output is the
+   structured JSON. **Thinking is on by default on Opus 5 and bills as output**, so the
+   output estimate must budget for it rather than just the JSON:
+
+   | Per-call shape | $/puzzle | Full 238-puzzle backfill |
+   | --- | --- | --- |
+   | lean (1.5k in / 0.6k out) | $0.023 | **$5.36** |
+   | mid (2.0k in / 1.0k out) | $0.035 | **$8.33** |
+   | heavy (3.0k in / 1.8k out) | $0.060 | **$14.28** |
+
+   **Caps: 500 diagnoses/user/day, 1,000/day globally** (~$17 and ~$35 at the mid
+   shape). Generous enough that a full backfill finishes in one run, low enough that a
+   runaway loop is capped at tens of dollars rather than thousands. Steady state is a
+   handful of new puzzles per import — pennies.
+
+   Two notes for implementation:
+   - **Cache the shared prefix.** Taxonomy, schema and system prompt are byte-identical
+     across every call, and Opus 5's cache minimum is 512 tokens (halved from 1024 on
+     Opus 4.8), so even a modest prefix caches. Worth ~15% ($8.33 → $7.04 on a full
+     backfill) — small in absolute terms here, but free.
+   - **Re-measure before trusting these.** The numbers above are estimates from the
+     packet's shape. Run `client.messages.count_tokens()` on a real packet during PR 6
+     and reset the caps from the measurement rather than from this table.
+
 ### Still open
 
-- **Global daily AI cap value.** Cannot be chosen responsibly without measuring real
-  per-user corpus size on prod (no local dataset exists to size it against). Needs a
-  count before PR 6 merges; until then the cap should be set deliberately low.
 - **Per-account AI opt-out.** With the flag ON globally, is a per-account override
   needed, or is the env kill switch sufficient for now? Deferred — not needed for the
   single-user deployment, revisit if `KNIGHTMIND_REQUIRE_AUTH` is turned on.
