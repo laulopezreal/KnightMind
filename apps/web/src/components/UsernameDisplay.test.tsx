@@ -162,9 +162,12 @@ describe('UsernameDisplay', () => {
     await user.keyboard('{Escape}');
 
     expect(mockSetEditorOpen).toHaveBeenCalledWith(false);
-    // Let the close reach the component, as the real context would. This also
-    // disarms the deferred auto-focus, so the assertion below is a fact about
-    // where focus rests rather than a race against a 100ms timer.
+    // Sit past the 100ms auto-focus timer armed on open, THEN let the close
+    // reach the component as the real context would. A close that only disarms
+    // that timer on re-render leaves it live across this gap: it pulls focus to
+    // the input, and the re-render unmounts that input and drops focus to
+    // <body>. Waiting here turns a race into a fact.
+    await new Promise((r) => setTimeout(r, 150));
     rerender(<UsernameDisplay />);
 
     const trigger = screen.getByRole('button', { name: /chess\.com/i });
