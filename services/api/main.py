@@ -55,12 +55,19 @@ from services.api.models import (
     PuzzleStats,
     RatingSnapshot,
 )
+from services.api.models import (
+    Game as GameModel,
+)
+from services.api.models import (
+    Puzzle as PuzzleModel,
+)
 from services.api.motifs import MotifPerformanceResponse, get_user_motif_performance
 from services.api.openings import build_opening_tree
 from services.api.puzzles.identity import backfill_puzzle_identity
 from services.api.ratelimit import rate_limit
 from services.api.ratings_auto import auto_snapshot, auto_snapshot_throttled
 from services.api.storage import GameRepository, PuzzleRepository
+from services.api.storage.game_repository import MANUAL_GAME_ID
 from services.api.storage.spaced_repetition import (
     _utcnow_naive,
     get_adaptive_puzzles,
@@ -626,6 +633,20 @@ class RevealResponse(BaseModel):
     solution_pv: list[str] = []
 
 
+class ManualPuzzleRequest(BaseModel):
+    username: str
+    fen: str
+    title: str
+    motif: str
+    source: str | None = None
+    solution_pv: str | None = None
+
+
+class ManualPuzzleResponse(BaseModel):
+    puzzle_id: str
+    is_new: bool
+
+
 @app.get("/")
 async def root():
     return {"message": "KnightMind API", "version": "0.1.0"}
@@ -844,6 +865,157 @@ async def generate_puzzles_endpoint(
             raise HTTPException(
                 status_code=500, detail="Could not create job or find existing one"
             ) from e
+
+
+_VALID_MOTIFS = frozenset(
+    {
+        "back_rank",
+        "hanging_queen",
+        "hanging_piece",
+        "fork",
+        "pin",
+        "mate_threat",
+        "blunder",
+    }
+)
+
+
+@app.post("/puzzles/manual", response_model=ManualPuzzleResponse)
+async def create_manual_puzzle(
+    request: ManualPuzzleRequest,
+    db: Session = Depends(get_db),
+    account: Account | None = Depends(require_account),
+):
+    """Create a puzzle from an arbitrary position (Engine Analysis → Save as puzzle)."""
+    assert_owns_username(account, request.username, db)
+    username_lower = request.username.lower()
+
+    # Validate FEN
+    try:
+        board = chess.Board(request.fen)
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail="Invalid FEN") from err
+    if board.is_game_over():
+        raise HTTPException(
+            status_code=400, detail="Position is already terminal — no puzzle possible"
+        )
+    if not list(board.legal_moves):
+        raise HTTPException(status_code=400, detail="No legal moves in position")
+
+    # Derive side_to_move from FEN (don't trust client field)
+    side_to_move = "white" if board.turn == chess.WHITE else "black"
+
+    # Normalize and validate motif
+    motif = request.motif.strip().lower()
+    if motif not in _VALID_MOTIFS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid motif. Must be one of: {', '.join(sorted(_VALID_MOTIFS))}",
+        )
+
+    # Validate and parse solution line (required; at least one UCI move)
+    solution_pv_raw = (request.solution_pv or "").strip()
+    if not solution_pv_raw:
+        raise HTTPException(status_code=400, detail="Solution line is required")
+    moves = solution_pv_raw.split()
+    test_board = board.copy()
+    for move_uci in moves:
+        try:
+            m = chess.Move.from_uci(move_uci)
+        except ValueError as err:
+            raise HTTPException(
+                status_code=400, detail=f"Invalid UCI move in solution: {move_uci}"
+            ) from err
+        if m not in test_board.legal_moves:
+            raise HTTPException(
+                status_code=400, detail=f"Illegal move in solution: {move_uci}"
+            )
+        test_board.push(m)
+    best_move_uci = moves[0]
+
+    title = request.title.strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="Title is required")
+
+    source_path = (request.source or "").strip() or None
+
+    # Ensure synthetic game row exists; commit separately so the FK is in place
+    # before the puzzle insert. GameRepository excludes MANUAL_GAME_ID from
+    # corpus queries so this FK sentinel cannot look like an imported game.
+    game = db.get(GameModel, (MANUAL_GAME_ID, username_lower))
+    if not game:
+        db.add(
+            GameModel(
+                game_id=MANUAL_GAME_ID,
+                username=username_lower,
+                url=f"manual://{username_lower}",
+                white_username=username_lower,
+                black_username="manual",
+                white_result="manual",
+                black_result="manual",
+                time_control="manual",
+                end_time=0,
+                rated=False,
+            )
+        )
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()  # Another concurrent request created it first
+
+    # Idempotent: same FEN returns same puzzle
+    existing = db.scalars(
+        select(PuzzleModel).where(
+            PuzzleModel.username == username_lower,
+            PuzzleModel.source_game_id == MANUAL_GAME_ID,
+            PuzzleModel.fen == request.fen,
+        )
+    ).first()
+    if existing:
+        return ManualPuzzleResponse(puzzle_id=existing.id, is_new=False)
+
+    # Collision-free ply: each manual position gets the next sequential slot
+    max_ply = db.scalar(
+        select(func.max(PuzzleModel.ply)).where(
+            PuzzleModel.username == username_lower,
+            PuzzleModel.source_game_id == MANUAL_GAME_ID,
+        )
+    )
+    ply = (max_ply + 1) if max_ply is not None else 0
+
+    puzzle_repo = PuzzleRepository(db)
+    is_new, puzzle_id = puzzle_repo.save_puzzle(
+        username=username_lower,
+        source_game_id=MANUAL_GAME_ID,
+        ply=ply,
+        fen=request.fen,
+        side_to_move=side_to_move,
+        played_move_uci=best_move_uci,
+        best_move_uci=best_move_uci,
+        accept_moves_uci=best_move_uci,
+        eval_before=0.0,
+        eval_after=0.0,
+        swing=0.0,
+        solution_pv=solution_pv_raw,
+        source_path=source_path,
+        title=title,
+        primary_motif=motif,
+    )
+
+    if not is_new:
+        # Race: find by FEN to return the correct id
+        existing = db.scalars(
+            select(PuzzleModel).where(
+                PuzzleModel.username == username_lower,
+                PuzzleModel.source_game_id == MANUAL_GAME_ID,
+                PuzzleModel.fen == request.fen,
+            )
+        ).first()
+        return ManualPuzzleResponse(
+            puzzle_id=existing.id if existing else puzzle_id, is_new=False
+        )
+
+    return ManualPuzzleResponse(puzzle_id=puzzle_id, is_new=True)
 
 
 @app.get("/jobs/{job_id}", response_model=JobStatusResponse)

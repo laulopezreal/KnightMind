@@ -1,5 +1,19 @@
 import { request, ApiError } from './core';
 
+export interface ManualPuzzlePayload {
+    username: string;
+    fen: string;
+    title: string;
+    motif: string;
+    source?: string;
+    solution_pv: string;
+}
+
+export interface ManualPuzzleResult {
+    puzzle_id: string;
+    is_new: boolean;
+}
+
 export interface Puzzle {
     id: string;
     username: string;
@@ -316,5 +330,15 @@ export async function reviewPuzzle(
             // for no-move outcomes (timeout, "mark failed", revealed solution).
             attempted_move: attemptedMove,
         }),
+    });
+}
+
+export async function createManualPuzzle(
+    payload: ManualPuzzlePayload
+): Promise<ManualPuzzleResult> {
+    return await request<ManualPuzzleResult>('/puzzles/manual', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
     });
 }

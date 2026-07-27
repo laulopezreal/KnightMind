@@ -6,11 +6,12 @@ from datetime import date
 
 import pytest
 from sqlalchemy import create_engine
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
 from scripts.backfill_storage import validate_puzzle_data
 from services.api.db import Base
-from services.api.models import Game
+from services.api.models import Game, PuzzleStats
 from services.api.storage.puzzle_repository import PuzzleRepository
 
 
@@ -67,7 +68,7 @@ def _add_game(db_session, game_id: str, username: str = "testuser"):
         db_session.flush()
 
 
-def test_puzzle_repository_database_mode_stores_and_updates(repository):
+def test_puzzle_repository_database_mode_stores_and_updates(repository, db_session):
     is_new, puzzle_id = repository.save_puzzle(
         username="testuser",
         source_game_id="game123",
@@ -84,6 +85,9 @@ def test_puzzle_repository_database_mode_stores_and_updates(repository):
     assert is_new is True
     puzzle = repository.get_puzzle("testuser", puzzle_id)
     assert puzzle is not None
+    stats = db_session.get(PuzzleStats, puzzle_id)
+    assert stats is not None
+    assert stats.username == "testuser"
 
     marked = repository.mark_puzzles_used("testuser", [puzzle_id])
     assert marked == 1
@@ -91,7 +95,7 @@ def test_puzzle_repository_database_mode_stores_and_updates(repository):
     assert updated.used_on is not None
 
 
-def test_puzzle_repository_deduplication(repository):
+def test_puzzle_repository_deduplication(repository, db_session):
     is_new1, pid1 = repository.save_puzzle(
         username="testuser",
         source_game_id="game123",
@@ -103,6 +107,8 @@ def test_puzzle_repository_deduplication(repository):
         eval_before=0.5,
         eval_after=-1.5,
         swing=2.0,
+        title="Original title",
+        primary_motif="fork",
     )
     is_new2, pid2 = repository.save_puzzle(
         username="testuser",
@@ -115,12 +121,64 @@ def test_puzzle_repository_deduplication(repository):
         eval_before=1.0,
         eval_after=-2.0,
         swing=3.0,
+        title="Overwritten title",
+        primary_motif="pin",
     )
 
     assert is_new1 is True
     assert is_new2 is False
     assert pid1 == pid2
     assert repository.get_puzzle_count("testuser") == 1
+    assert db_session.query(PuzzleStats).count() == 1
+    stats = db_session.get(PuzzleStats, pid1)
+    assert stats.title == "Original title"
+    assert stats.primary_motif == "fork"
+
+
+def test_puzzle_repository_reraises_non_duplicate_integrity_error(
+    repository, db_session, monkeypatch
+):
+    def raise_integrity_error():
+        raise IntegrityError("commit failed", {}, Exception("synthetic failure"))
+
+    monkeypatch.setattr(db_session, "commit", raise_integrity_error)
+
+    with pytest.raises(IntegrityError):
+        repository.save_puzzle(
+            username="testuser",
+            source_game_id="game123",
+            ply=99,
+            fen="fen-integrity-error",
+            side_to_move="white",
+            played_move_uci="e2e4",
+            best_move_uci="d2d4",
+            eval_before=0.5,
+            eval_after=-1.5,
+            swing=2.0,
+        )
+
+
+def test_puzzle_repository_can_store_identity_metadata(repository, db_session):
+    is_new, puzzle_id = repository.save_puzzle(
+        username="testuser",
+        source_game_id="game123",
+        ply=16,
+        fen="fen-metadata",
+        side_to_move="black",
+        played_move_uci="g8f6",
+        best_move_uci="g8f6",
+        eval_before=0.2,
+        eval_after=0.7,
+        swing=0.5,
+        title="Manual Fork",
+        primary_motif="fork",
+    )
+
+    assert is_new is True
+    stats = db_session.get(PuzzleStats, puzzle_id)
+    assert stats is not None
+    assert stats.title == "Manual Fork"
+    assert stats.primary_motif == "fork"
 
 
 def test_puzzle_repository_different_ply_not_duplicate(repository):
