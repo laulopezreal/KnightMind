@@ -15,12 +15,11 @@ vi.mock('../context/ChessUsernameContext', () => ({
 }));
 
 const mockGetOpenings = vi.fn();
-vi.mock('../api', () => ({
+// Spread the real module and override only the call under test. A hand-listed
+// mock breaks every time the page imports something new from `../api`.
+vi.mock('../api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../api')>()),
   getOpenings: (...a: unknown[]) => mockGetOpenings(...a),
-  ApiError: class extends Error {
-    statusCode!: number;
-    detail?: string;
-  },
 }));
 
 // Capture the graph's hover callback so a node anchor can be simulated at any

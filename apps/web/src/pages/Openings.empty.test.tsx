@@ -22,19 +22,12 @@ vi.mock('../context/ChessUsernameContext', () => ({
 }));
 
 const mockGetOpenings = vi.fn();
-vi.mock('../api', () => {
-  class ApiError extends Error {
-    statusCode: number;
-    detail?: string;
-    constructor(message: string, statusCode: number, detail?: string) {
-      super(message);
-      this.name = 'ApiError';
-      this.statusCode = statusCode;
-      this.detail = detail;
-    }
-  }
-  return { getOpenings: (...a: unknown[]) => mockGetOpenings(...a), ApiError };
-});
+// Spread the real module and override only the call under test. A hand-listed
+// mock breaks every time the page imports something new from `../api`.
+vi.mock('../api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../api')>()),
+  getOpenings: (...a: unknown[]) => mockGetOpenings(...a),
+}));
 
 vi.mock('../components/OpeningGraph', () => ({
   OpeningGraph: () => <div data-testid="opening-graph" />,
@@ -132,7 +125,7 @@ describe('Openings — a 200 with an empty tree', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Show all games' }));
 
     await waitFor(() =>
-      expect(mockGetOpenings).toHaveBeenLastCalledWith('alice', 'both')
+      expect(mockGetOpenings).toHaveBeenLastCalledWith('alice', 'both', 12)
     );
   });
 

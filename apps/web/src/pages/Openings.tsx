@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState, useCallback, useLayoutEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { Link, useNavigate } from 'react-router-dom';
-import { getOpenings, ApiError, type OpeningNode, type ColorFilter } from '../api';
+import {
+  getOpenings, ApiError, DEPTH_OPTIONS, DEFAULT_MAX_PLY,
+  type OpeningNode, type ColorFilter,
+} from '../api';
 import { useChessUsername } from '../context/ChessUsernameContext';
 import { OpeningGraph, type OpeningGraphHandle, type NodeAnchor } from '../components/OpeningGraph';
 import { getScoreColor } from '../utils/openings';
@@ -38,6 +41,17 @@ const ZOOM_MODIFIER = /Mac|iPhone|iPad/i.test(
   typeof navigator === 'undefined' ? '' : navigator.userAgent
 ) ? '⌘' : 'Ctrl';
 
+/**
+ * Signed difference against the baseline, e.g. "−35.6" or "+4.2".
+ * A true minus sign, not a hyphen — this sits beside percentages in a serif
+ * layout where the hyphen reads as a dash.
+ */
+function formatDelta(delta: number): string {
+  const rounded = Math.round(delta * 10) / 10;
+  if (rounded === 0) return 'level with';
+  return `${rounded > 0 ? '+' : '−'}${Math.abs(rounded)}`;
+}
+
 function countAllNodes(node: OpeningNode): number {
   let count = 1;
   if (node.children) {
@@ -59,6 +73,12 @@ export default function Openings() {
   const [colorFilter, setColorFilter] = useLocalStorage<ColorFilter>(
     'knightmind:openings:color_filter',
     'both'
+  );
+  // Depth was hardcoded at 12 ply with no control, while the API accepts 40 —
+  // the explorer simply refused to follow games past six moves.
+  const [maxPly, setMaxPly] = useLocalStorage<number>(
+    'knightmind:openings:max_ply',
+    DEFAULT_MAX_PLY
   );
   const [treeData, setTreeData] = useState<OpeningNode | null>(null);
   const [tooltip, setTooltip] = useState<{ anchor: NodeAnchor; data: OpeningNode } | null>(null);
@@ -117,6 +137,9 @@ export default function Openings() {
   const analysis = treeData?.analysis;
   const hasOpenings = treeData !== null && treeData.games_count > 0;
   const skippedGames = analysis?.games_skipped ?? 0;
+  // The root aggregates every analysed game, so its score is the user's overall
+  // average — the baseline any individual line is judged against.
+  const baseline = hasOpenings ? treeData.win_rate : null;
 
   // Only the *first* load blanks the panel. A refresh keeps the existing tree
   // on screen — replacing it with a spinner threw away the user's zoom and
@@ -141,7 +164,7 @@ export default function Openings() {
     return 'Load your games to build your opening knowledge graph.';
   })();
 
-  const fetchOpenings = useCallback(async (user: string, color: ColorFilter) => {
+  const fetchOpenings = useCallback(async (user: string, color: ColorFilter, plies: number) => {
     // The route guard above redirects when there is no username, so there is
     // nothing actionable to say here.
     if (!user.trim()) return;
@@ -154,7 +177,7 @@ export default function Openings() {
     setNoGamesImported(false);
 
     try {
-      const data = await getOpenings(user, color);
+      const data = await getOpenings(user, color, plies);
       if (token.isStale()) return;
       setTreeData(data);
     } catch (err) {
@@ -183,15 +206,15 @@ export default function Openings() {
   }, [request]);
 
   const handleFetchClick = () => {
-    fetchOpenings(username, colorFilter);
+    fetchOpenings(username, colorFilter, maxPly);
   };
 
   // Auto-fetch when page loads with username or when username/color filter changes
   useEffect(() => {
     if (username.trim()) {
-      fetchOpenings(username, colorFilter);
+      fetchOpenings(username, colorFilter, maxPly);
     }
-  }, [username, colorFilter, fetchOpenings]);
+  }, [username, colorFilter, maxPly, fetchOpenings]);
 
   /**
    * A 200 with an empty tree has several distinct causes; each needs a
@@ -274,6 +297,15 @@ export default function Openings() {
             <dd className="font-mono" style={{ color: getScoreColor(node.win_rate) }}>
               {node.win_rate}%
             </dd>
+            {/* A score with no baseline is not an insight: 41% means nothing
+                until you know whether you usually score better or worse. The
+                root node is exactly the user's overall average, so the
+                comparison needs no data the page does not already have. */}
+            {baseline !== null && (
+              <dd className="font-sans text-xs text-primary/70 mt-0.5 whitespace-nowrap">
+                {formatDelta(node.win_rate - baseline)} vs your {baseline}%
+              </dd>
+            )}
           </div>
         </dl>
 
@@ -404,6 +436,19 @@ export default function Openings() {
               <option value="both">All games</option>
               <option value="white">As white</option>
               <option value="black">As black</option>
+            </select>
+          </div>
+
+          <div>
+            <select
+              value={maxPly}
+              onChange={(e) => setMaxPly(Number(e.target.value))}
+              aria-label="Tree depth in moves"
+              className="bg-transparent border-b border-primary/20 py-1 text-primary focus:outline-none focus:border-primary/60 transition-colors font-serif text-lg cursor-pointer"
+            >
+              {DEPTH_OPTIONS.map(option => (
+                <option key={option.plies} value={option.plies}>{option.label} deep</option>
+              ))}
             </select>
           </div>
 
@@ -582,6 +627,12 @@ export default function Openings() {
                 <span>Score</span>
                 <span style={{ color: getScoreColor(tooltip.data.win_rate) }}>{tooltip.data.win_rate}%</span>
               </div>
+              {baseline !== null && (
+                <div className="flex justify-between text-xs text-primary/70">
+                  <span>vs your {baseline}%</span>
+                  <span>{formatDelta(tooltip.data.win_rate - baseline)}</span>
+                </div>
+              )}
             </div>
           </div>,
           document.body

@@ -51,6 +51,21 @@ export interface OpeningNode {
 
 export type ColorFilter = 'white' | 'black' | 'both';
 
+/**
+ * Tree depth in half-moves. The API accepts 1-40; these are the choices worth
+ * offering — your games go deeper than six moves, and the explorer used to
+ * refuse to follow them.
+ */
+export const DEPTH_OPTIONS = [
+    { plies: 8, label: '4 moves' },
+    { plies: 12, label: '6 moves' },
+    { plies: 16, label: '8 moves' },
+    { plies: 24, label: '12 moves' },
+    { plies: 40, label: '20 moves' },
+] as const;
+
+export const DEFAULT_MAX_PLY = 12;
+
 export async function getOpenings(
     username: string,
     color: ColorFilter = 'both',
