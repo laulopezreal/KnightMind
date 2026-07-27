@@ -106,8 +106,12 @@ class AIAuditRepository:
         self.db.add(row)
         return row
 
-    def budget_today(self, username: str) -> Budget:
-        """Calls already billed today, per-user and globally.
+    def budget_last_24h(self, username: str) -> Budget:
+        """Calls billed in the last rolling 24 hours, per-user and globally.
+
+        Rolling rather than calendar-day on purpose: a calendar reset gives a
+        midnight cliff where a capped backfill suddenly gets a full new
+        allowance, which is exactly when nobody is watching.
 
         Only ``accepted`` and ``rejected`` rows count: both made a model call
         and cost money. ``skipped`` never called, and ``error`` covers failures

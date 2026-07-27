@@ -114,7 +114,7 @@ def run_diagnosis(ctx) -> dict:
         # database count per puzzle would be hundreds of queries for a number
         # that moves by one each time; re-reading at each commit bounds how far
         # the local view can drift when another user's job runs concurrently.
-        budget = audit.budget_today(username)
+        budget = audit.budget_last_24h(username)
 
         for index, puzzle_id in enumerate(pending):
             # Bounded cadence: the lease still refreshes often enough that
@@ -142,7 +142,7 @@ def run_diagnosis(ctx) -> dict:
                 db.commit()
                 # Re-anchor on what is actually stored; another user's job may
                 # have spent against the global cap since the last read.
-                budget = audit.budget_today(username)
+                budget = audit.budget_last_24h(username)
 
         # Flush whatever the last partial chunk produced, including on the
         # cancellation path — a cancel must keep the work already done, not
@@ -220,13 +220,18 @@ def _diagnose_one(
 
     digest = evidence_hash(packet)
     assessment = classify_causes(packet)
-    primary = next(
-        (c for c in assessment.candidates if c.cause == assessment.primary_cause),
-        None,
-    )
     ai = _enrich(db, audit, username, puzzle_id, packet, assessment, digest, budget)
     if ai.attempted:
         budget = budget.spend(1)
+
+    # The model may re-rank within the candidate set, so the strength has to be
+    # looked up for whichever cause is actually stored. Reading it from the
+    # rules' own pick would leave a row asserting one cause with a different
+    # cause's strength.
+    stored_cause = ai.primary_cause or assessment.primary_cause
+    strength = next(
+        (c.strength for c in assessment.candidates if c.cause == stored_cause), None
+    )
 
     _, changed = repo.upsert(
         DiagnosisWrite(
@@ -234,7 +239,7 @@ def _diagnose_one(
             username=username,
             status=DiagnosisStatus.OK,
             primary_motif=motif,
-            primary_strength=primary.strength if primary else None,
+            primary_strength=strength,
             insufficient_evidence=assessment.insufficient_evidence,
             phase=packet.position.phase,
             evidence=tuple(
@@ -250,11 +255,14 @@ def _diagnose_one(
             training_recommendation=ai.recommendation,
             # The model may re-rank within the rules' candidate set — that is
             # its whole remit. When it does, its ordering is what gets stored.
-            primary_cause=ai.primary_cause or assessment.primary_cause,
+            primary_cause=stored_cause,
             secondary_causes=ai.secondary_causes or assessment.secondary_causes,
         )
     )
-    return ("diagnosed" if changed else "unchanged"), budget, ai.attempted
+    # Reported as "enriched" only when the model's output was actually accepted
+    # and stored. Counting attempts here would report a run of pure rejections
+    # as fully enriched.
+    return ("diagnosed" if changed else "unchanged"), budget, ai.source == "llm"
 
 
 @dataclass(frozen=True)
@@ -286,9 +294,12 @@ def _enrich(db, audit, username, puzzle_id, packet, assessment, digest, budget):
     is already complete at this point; the model can only add prose and
     re-rank, never block.
     """
-    if not ai_config.is_enabled():
-        # Kill switch: no call, and no audit row either. A disabled feature
-        # should leave no trace, not fill the table with skip records.
+    if not ai_config.is_enabled() or not ai_config.api_key():
+        # Nothing can run: the kill switch is off, or there is no key. Either
+        # way write no audit row — a feature that cannot run should leave no
+        # trace, rather than one identical skip row per puzzle for the life of
+        # the retention window. /ops/status reports api_key_present, which is
+        # where "why are the cards bare" gets answered.
         return _RULES_ONLY
 
     base = dict(

@@ -174,7 +174,7 @@ class TestBudget:
             repo.record(AuditWrite(username=USER, status=status))
         db_session.commit()
 
-        budget = repo.budget_today(USER)
+        budget = repo.budget_last_24h(USER)
         assert budget.user_used == 2  # accepted + rejected only
 
     def test_another_users_spend_counts_globally_but_not_per_user(self, db_session):
@@ -183,7 +183,7 @@ class TestBudget:
         repo.record(AuditWrite(username="someone-else", status="accepted"))
         db_session.commit()
 
-        budget = repo.budget_today(USER)
+        budget = repo.budget_last_24h(USER)
         assert budget.user_used == 1
         assert budget.global_used == 2
 
@@ -195,7 +195,7 @@ class TestBudget:
             days=2
         )
         db_session.commit()
-        assert repo.budget_today(USER).user_used == 0
+        assert repo.budget_last_24h(USER).user_used == 0
 
     def test_the_lower_of_the_two_caps_binds(self):
         from services.api.ai import config
@@ -351,3 +351,136 @@ class TestAgreementMetric:
         repo.record(AuditWrite(username=USER, status="skipped", reason="no_api_key"))
         db_session.commit()
         assert AIAuditRepository(db_session).agreement_stats()["attempts"] == 0
+
+
+class TestRowStaysInternallyConsistent:
+    def test_strength_describes_the_cause_actually_stored(
+        self, db_session, monkeypatch
+    ):
+        """Regression: primary_strength was read from the rules' own pick while
+        primary_cause could be the model's re-rank, leaving a row asserting one
+        cause with a different cause's strength."""
+        from services.api.diagnosis.causes import classify_causes
+        from services.api.diagnosis.evidence import (
+            GameFacts,
+            PuzzleFacts,
+            extract_evidence,
+        )
+
+        _puzzle(db_session)
+        patch_session(monkeypatch, db_session)
+        patch_ai(monkeypatch, accepted(cause="forcing_move_blindness", agreed=False))
+        run_diagnosis(FakeContext())
+
+        row = DiagnosisRepository(db_session).get(USER, "p1")
+        assessment = classify_causes(
+            extract_evidence(
+                PuzzleFacts(
+                    fen="6k1/pp3ppp/8/3q4/8/8/PP3PPP/3Q2K1 w - - 0 1",
+                    played_move_uci="d1d2",
+                    best_move_uci="d1d5",
+                    ply=41,
+                    eval_before=1.5,
+                    eval_after=-7.5,
+                    swing=9.0,
+                    accept_moves_uci=("d1d5",),
+                    solution_pv=("d1d5",),
+                ),
+                GameFacts(user_is_white=True),
+            )
+        )
+        expected = next(
+            c.strength for c in assessment.candidates if c.cause == row.primary_cause
+        )
+        assert row.primary_cause == "forcing_move_blindness"
+        assert row.primary_strength == expected
+        # And specifically NOT the rules' own top pick's strength.
+        rules_top = next(
+            c.strength
+            for c in assessment.candidates
+            if c.cause == assessment.primary_cause
+        )
+        assert row.primary_strength != rules_top
+
+
+class TestEnrichedCounterIsHonest:
+    def test_rejected_attempts_are_not_counted_as_enriched(
+        self, db_session, monkeypatch
+    ):
+        """Regression: the counter tracked "a call happened", so a run in which
+        every response was rejected reported itself as fully enriched."""
+        _puzzle(db_session)
+        patch_session(monkeypatch, db_session)
+        patch_ai(
+            monkeypatch,
+            ai_client.EnrichmentOutcome(
+                ai_client.REJECTED, reason="cause_not_supported:x"
+            ),
+        )
+        result = run_diagnosis(FakeContext())
+        assert result["diagnosed"] == 1
+        assert result["enriched"] == 0
+
+    def test_accepted_attempts_are_counted(self, db_session, monkeypatch):
+        _puzzle(db_session)
+        patch_session(monkeypatch, db_session)
+        patch_ai(monkeypatch, accepted())
+        assert run_diagnosis(FakeContext())["enriched"] == 1
+
+    def test_a_rejected_attempt_still_spends_budget(self, db_session, monkeypatch):
+        """It was billed even though it was unusable — the counter and the
+        ledger measure different things and must not be conflated."""
+        _puzzle(db_session)
+        patch_session(monkeypatch, db_session)
+        patch_ai(
+            monkeypatch,
+            ai_client.EnrichmentOutcome(ai_client.REJECTED, reason="truncated"),
+        )
+        run_diagnosis(FakeContext())
+        assert AIAuditRepository(db_session).budget_last_24h(USER).user_used == 1
+
+
+class TestKeylessDeploymentLeavesNoTrace:
+    def test_no_audit_rows_are_written_without_a_key(self, db_session, monkeypatch):
+        """Regression: a keyless deployment wrote one identical skip row per
+        puzzle, so a 238-puzzle backfill left 238 rows of noise living for the
+        full retention window. /ops/status reports api_key_present instead."""
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        for i in range(3):
+            _puzzle(db_session, puzzle_id=f"p{i}", ply=41 + i * 2)
+        patch_session(monkeypatch, db_session)
+
+        def explode(*a, **k):
+            raise AssertionError("the model must not be called")
+
+        monkeypatch.setattr(diagnosis_job.ai_client, "enrich", explode)
+
+        result = run_diagnosis(FakeContext())
+        assert result["diagnosed"] == 3
+        assert result["enriched"] == 0
+        assert db_session.query(DiagnosisAuditLog).count() == 0
+        assert DiagnosisRepository(db_session).get(USER, "p0").source == "rules"
+
+
+class TestBudgetWindowIsRolling:
+    def test_a_call_23_hours_ago_still_counts(self, db_session):
+        """Rolling, not calendar-day: a midnight reset would hand a capped
+        backfill a fresh allowance at exactly the hour nobody is watching."""
+        repo = AIAuditRepository(db_session)
+        row = repo.record(AuditWrite(username=USER, status="accepted"))
+        db_session.commit()
+        row.created_at = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
+            hours=23
+        )
+        db_session.commit()
+        assert repo.budget_last_24h(USER).user_used == 1
+
+    def test_a_call_25_hours_ago_does_not(self, db_session):
+        repo = AIAuditRepository(db_session)
+        row = repo.record(AuditWrite(username=USER, status="accepted"))
+        db_session.commit()
+        row.created_at = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
+            hours=25
+        )
+        db_session.commit()
+        assert repo.budget_last_24h(USER).user_used == 0
