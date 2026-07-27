@@ -21,6 +21,20 @@ import { getModeLabels, getPuzzleActionA11yCopy, getSessionDetailsA11yCopy } fro
 import { formatMotifName } from '../utils/motif';
 import { uciLineToSan } from '../utils/chess';
 
+// Mastery ranks, styled from one lookup. The panel tint, the percentage and the
+// bar used to be three parallel ternaries — the figure already used the theme
+// tokens while the tint and bar were on raw palette colours, so the card read as
+// three different greens. The bar takes `bg-current` from the figure's own
+// colour, which makes drift impossible by construction.
+const MOTIF_RANK_STYLE = {
+    mastered: { panel: 'bg-status-mastered-soft border-status-mastered-soft', figure: 'text-positive' },
+    learning: { panel: 'bg-status-learning-soft border-status-learning-soft', figure: 'text-warning' },
+    needs_work: { panel: 'bg-negative-soft border-negative-soft', figure: 'text-negative' },
+} as const;
+
+const motifRankStyle = (rank: string) =>
+    MOTIF_RANK_STYLE[rank as keyof typeof MOTIF_RANK_STYLE] ?? MOTIF_RANK_STYLE.needs_work;
+
 export default function Puzzles() {
     const { username, setEditorOpen } = useChessUsername();
     const { sessionType, targetAccuracy, setTargetAccuracy, targetTimeMinutes, setTargetTimeMinutes } = usePuzzleMode();
@@ -797,7 +811,7 @@ export default function Puzzles() {
                         ) : (
                             <div className="p-4 bg-primary/5 border border-primary/20 rounded-sm">
                                 <p className="text-sm text-primary/70 font-sans mb-3">
-                                    🚧 <strong className="font-medium">{sessionType === 'timed' ? 'Timed' : 'Accuracy Goal'} mode</strong> is currently in development.
+                                    <strong className="font-medium">{sessionType === 'timed' ? 'Timed' : 'Accuracy Goal'} mode</strong> is currently in development.
                                     Try it out by adjusting the settings, but sessions can only be started in Standard mode for now.
                                 </p>
                                 {sessionType === 'timed' && (
@@ -918,7 +932,7 @@ export default function Puzzles() {
                         </div>
                     )}
                     {statusLoadFailed && (
-                        <div className="bg-red-500/5 border border-red-500/20 rounded-sm p-6 text-center space-y-4" role="alert" aria-live="assertive">
+                        <div className="bg-negative-soft border border-negative-soft rounded-sm p-6 text-center space-y-4" role="alert" aria-live="assertive">
                             <h3 className="font-serif text-xl text-primary">Couldn&apos;t load your training data</h3>
                             <p className="text-primary/70 font-sans">
                                 We couldn&apos;t load your puzzles right now. Please try again.
@@ -1011,7 +1025,7 @@ export default function Puzzles() {
                         {motifPerformance.motifs
                             .filter(m => m.rank === 'needs_work')
                             .map(motif => (
-                                <div key={motif.name} className="flex justify-between items-center p-3 bg-red-500/10 rounded-sm">
+                                <div key={motif.name} className="flex justify-between items-center p-3 bg-negative-soft rounded-sm">
                                     <div>
                                         <span className="font-serif text-primary">{formatMotifName(motif.name)}</span>
                                         <span className="text-xs text-primary/70 ml-2">
@@ -1033,12 +1047,15 @@ export default function Puzzles() {
             {/* Warmup Diagnostic Banner */}
             {warmupMode && sessionState === 'active' && (
                 <div
-                    className="bg-blue-500/10 border border-blue-500/20 rounded-sm p-4 mb-6 text-center animate-teedin"
+                    className="bg-status-new-soft border border-status-new-soft rounded-sm p-4 mb-6 text-center animate-teedin"
                     role="status"
                     aria-live="polite"
                 >
-                    <p className="text-primary font-serif">
-                        🎯 Warmup Diagnostic Session
+                    <p className="text-xs font-sans uppercase tracking-widest text-primary/70 mb-1">
+                        Warmup
+                    </p>
+                    <p className="text-primary font-serif text-lg">
+                        Diagnostic session
                     </p>
                     <p className="text-primary/70 text-sm font-sans">
                         Complete 5 puzzles to see what stuck while you were away
@@ -1111,10 +1128,10 @@ export default function Puzzles() {
                         {activeSessionId && sessionSummary && (
                             <div data-testid="mobile-session-progress" className="lg:hidden mt-3 px-1 space-y-1.5">
                                 <div className="flex items-center justify-between text-xs font-sans text-primary/70">
-                                    <span>
-                                        <span aria-hidden="true">🔥</span> Streak {streak}
-                                        <span className="mx-1.5 text-primary/40">|</span>
-                                        <span aria-hidden="true">💡</span> Hints {hintsUsed}
+                                    <span className="uppercase tracking-wide">
+                                        Streak <span className="font-mono text-primary/80">{streak}</span>
+                                        <span className="mx-2 text-primary/30">·</span>
+                                        Hints <span className="font-mono text-primary/80">{hintsUsed}</span>
                                     </span>
                                     <span className="font-mono">
                                         {reviewedCount} / {sessionSummary.requested_n}
@@ -1140,10 +1157,16 @@ export default function Puzzles() {
                     {/* Sidebar Controls */}
                     <div className="lg:order-2 space-y-8 flex flex-col justify-center">
                         <div className="hidden lg:block space-y-2">
-                            <div className="flex justify-between items-center bg-primary/5 p-4 rounded-sm border-l-2 border-primary">
-                                <div className="flex flex-col w-full">
+                            {/* `w-full` on the inner column left no room for the
+                                side-to-move caption, which overflowed the card and
+                                collided with the session panel. The column now
+                                flexes and the caption lives with the puzzle title,
+                                which is where it belongs — it describes the
+                                position, not the session. */}
+                            <div className="bg-primary/5 p-4 rounded-sm border-l-2 border-primary">
+                                <div className="flex flex-col">
                                     {activeSessionId && sessionSummary && (
-                                        <div className="bg-primary/5 border border-primary/20 rounded-lg p-4 mb-4 w-full">
+                                        <div className="bg-primary/5 border border-primary/10 rounded-sm p-4 mb-4 w-full">
                                             <div className="flex justify-between items-center mb-2">
                                                 <span className="font-serif text-primary font-medium">
                                                     Session in Progress
@@ -1164,26 +1187,39 @@ export default function Puzzles() {
                                                 />
                                             </div>
 
-                                            {/* Core Session Stats */}
-                                            <div className="flex justify-between mt-3 text-xs">
-                                                <div className="flex items-center">
-                                                    <span className="text-primary/70 mr-1">🔥</span>
-                                                    {/* key={streak} re-triggers the pop on every increase;
-                                                        milestones (3+) also gain weight. Reduced-motion
-                                                        users get the weight change without the pulse. */}
-                                                    <span
-                                                        key={streak}
-                                                        className={`text-primary/80 inline-block ${streak >= 3 ? 'animate-streakpop font-medium' : ''}`}
-                                                    >
-                                                        Streak: {streak}
-                                                    </span>
-                                                    <span className="text-primary/70 mx-1">|</span>
-                                                    <span className="text-primary/70 mr-1">🏆</span>
-                                                    <span className="text-primary/80">Best: {bestStreak}</span>
+                                            {/* Core session stats. Typographic, not emoji: the
+                                                harmonised Dashboard cards (Consistency, Momentum)
+                                                label their figures with small-caps sans and let the
+                                                mono numeral carry the emphasis, which is the calm,
+                                                intellectual register the design guide asks for. */}
+                                            <div className="flex justify-between items-end mt-3 gap-4">
+                                                <div className="flex items-end gap-4">
+                                                    <div data-testid="session-stat-streak">
+                                                        {/* key={streak} re-triggers the pop on every increase;
+                                                            milestones (3+) also gain weight. Reduced-motion
+                                                            users get the weight change without the pulse. */}
+                                                        <p
+                                                            key={streak}
+                                                            className={`font-mono text-primary leading-none inline-block ${streak >= 3 ? 'animate-streakpop font-medium' : ''}`}
+                                                        >
+                                                            {streak}
+                                                        </p>
+                                                        <p className="text-[10px] uppercase tracking-widest text-primary/70 font-sans mt-1">
+                                                            Streak
+                                                        </p>
+                                                    </div>
+                                                    <div data-testid="session-stat-best">
+                                                        <p className="font-mono text-primary/80 leading-none">{bestStreak}</p>
+                                                        <p className="text-[10px] uppercase tracking-widest text-primary/70 font-sans mt-1">
+                                                            Best
+                                                        </p>
+                                                    </div>
                                                 </div>
-                                                <div className="flex items-center">
-                                                    <span className="text-primary/70 mr-1">💡</span>
-                                                    <span className="text-primary/80">Hints: {hintsUsed}</span>
+                                                <div className="text-right" data-testid="session-stat-hints">
+                                                    <p className="font-mono text-primary/80 leading-none">{hintsUsed}</p>
+                                                    <p className="text-[10px] uppercase tracking-widest text-primary/70 font-sans mt-1">
+                                                        Hints
+                                                    </p>
                                                 </div>
                                             </div>
 
@@ -1220,7 +1256,7 @@ export default function Puzzles() {
                                                                 {performanceHistory.slice(-10).map((item, index) => (
                                                                     <div
                                                                         key={index}
-                                                                        className={`flex-1 ${item.result === 'pass' ? 'bg-green-500' : 'bg-red-500'}`}
+                                                                        className={`flex-1 ${item.result === 'pass' ? 'bg-positive-fill' : 'bg-negative-fill'}`}
                                                                         title={`${item.result.toUpperCase()} - ${new Date(item.time).toLocaleTimeString(LOCALE)}`}
                                                                     />
                                                                 ))}
@@ -1261,8 +1297,8 @@ export default function Puzzles() {
                                         </div>
                                     )}
 
-                                    <div className="flex justify-between items-center">
-                                        <div className="flex items-center gap-2">
+                                    <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+                                        <div className="flex items-center gap-2 min-w-0">
                                             <span className="font-serif text-xl text-primary">
                                                 {currentPuzzle.title || "Puzzle"}
                                                 <span className="text-base font-normal opacity-50 ml-2 font-sans">
@@ -1275,11 +1311,11 @@ export default function Puzzles() {
                                                 </span>
                                             )}
                                         </div>
+                                        <span className="font-sans text-xs tracking-widest uppercase text-primary/70 shrink-0">
+                                            {currentPuzzle.side_to_move === 'white' ? 'White to Move' : 'Black to Move'}
+                                        </span>
                                     </div>
                                 </div>
-                                <span className="font-sans text-sm tracking-wide uppercase text-primary/70">
-                                    {currentPuzzle.side_to_move === 'white' ? 'White to Move' : 'Black to Move'}
-                                </span>
                             </div>
                         </div>
 
@@ -1342,7 +1378,7 @@ export default function Puzzles() {
                             just took did NOT happen. */}
                         {actionError && (
                             <div
-                                className="bg-red-500/10 border border-red-500/20 rounded-sm p-3 text-sm"
+                                className="bg-negative-soft border border-negative-soft rounded-sm p-3 text-sm"
                                 role="alert"
                                 aria-live="assertive"
                             >
@@ -1396,9 +1432,10 @@ export default function Puzzles() {
                                         disabled={!currentPuzzle || clue.isExhausted}
                                         aria-label={puzzleActionA11yCopy.hintLabel}
                                         className="px-2 py-3 md:px-6 md:py-4 border border-primary/20 text-primary rounded-sm font-serif text-sm md:text-lg transition-all km-interactive km-focus-visible disabled:opacity-50 disabled:cursor-default">
-                                        {/* "used of available" — "Hint (0/3)" alone
-                                            read as "no hints available". */}
-                                        {clue.isExhausted ? 'Hints used (3/3)' : `Hint (${clue.clueStage}/3 used)`}
+                                        {/* Short enough to stay on one line in the
+                                            three-up action grid; the full "Hint 1 of 3:
+                                            …" phrasing lives in the aria-label. */}
+                                        {clue.isExhausted ? 'Hints used' : `Hint ${clue.clueStage}/3`}
                                     </button>
                                     <button
                                         type="button"
@@ -1440,7 +1477,7 @@ export default function Puzzles() {
                                         ) : (
                                             <Link
                                                 to="/dashboard"
-                                                className="w-full block text-center px-6 py-4 bg-green-600 text-white rounded-sm font-serif text-lg transition-all km-interactive km-focus-visible shadow-lg shadow-green-900/20">
+                                                className="w-full block text-center px-6 py-4 bg-primary text-bg-primary rounded-sm font-serif text-lg transition-opacity km-interactive km-focus-visible">
                                                 Back to Dashboard
                                             </Link>
                                         )
@@ -1449,10 +1486,14 @@ export default function Puzzles() {
                                             type="button"
                                             onClick={handleAdvancePuzzle}
                                             disabled={finishButtonDisabled}
-                                            className={`w-full px-6 py-4 bg-green-600 text-white rounded-sm font-serif text-lg transition-all shadow-lg shadow-green-900/20 km-focus-visible ${finishButtonDisabled ? 'km-interactive-disabled' : 'km-interactive'} flex items-center justify-center`}>
+                                            // The page's one primary action, styled like every other
+                                            // primary action in the app. It used to be bg-green-600 +
+                                            // text-white — a colour that exists nowhere else, and a
+                                            // fixed pair that cannot clear contrast in both themes.
+                                            className={`w-full px-6 py-4 bg-primary text-bg-primary rounded-sm font-serif text-lg transition-opacity km-focus-visible ${finishButtonDisabled ? 'km-interactive-disabled' : 'km-interactive'} flex items-center justify-center`}>
                                             {sessionState === 'completing' ? (
                                                 <>
-                                                    <span className="animate-spin h-5 w-5 border-2 border-white/20 border-t-white rounded-full mr-2"></span>
+                                                    <span className="animate-spin h-5 w-5 border-2 border-current/20 border-t-current rounded-full mr-2"></span>
                                                     Recording Session...
                                                 </>
                                             ) : isFinalPuzzle ? 'All Done' : 'Next Puzzle →'}
@@ -1464,7 +1505,7 @@ export default function Puzzles() {
                                 <div className="space-y-4">
                                     {/* Detailed feedback for incorrect answers */}
                                     {lastFeedback && (
-                                        <div className="bg-red-500/10 border border-red-500/20 p-3 rounded-sm text-sm">
+                                        <div className="bg-negative-soft border border-negative-soft p-3 rounded-sm text-sm">
                                             <p className="text-negative font-sans">{lastFeedback}</p>
                                         </div>
                                     )}
@@ -1494,7 +1535,12 @@ export default function Puzzles() {
                                             type="button"
                                             onClick={handleRevealSolution}
                                             aria-label={puzzleActionA11yCopy.showSolutionLabel}
-                                            className="px-2 py-3 md:px-6 md:py-4 bg-primary text-bg-primary rounded-sm font-serif text-sm md:text-lg transition-all km-interactive km-focus-visible">
+                                            // One primary per state. On the final puzzle "Finish
+                                            // Session" below is the primary action, so this steps
+                                            // down to the outline treatment rather than competing
+                                            // with it (previously they were solid-ink and orange,
+                                            // three button identities on one screen).
+                                            className={`px-2 py-3 md:px-6 md:py-4 rounded-sm font-serif text-sm md:text-lg transition-all km-interactive km-focus-visible ${isFinalPuzzle ? 'border border-primary/20 text-primary' : 'bg-primary text-bg-primary'}`}>
                                             Show Solution
                                         </button>
                                     </div>
@@ -1525,10 +1571,10 @@ export default function Puzzles() {
                                                 }
                                             }}
                                             disabled={sessionState === 'completing'}
-                                            className="w-full px-6 py-4 bg-orange-600 text-white rounded-sm font-serif text-lg transition-all km-focus-visible km-interactive mt-4">
+                                            className="w-full px-6 py-4 bg-primary text-bg-primary rounded-sm font-serif text-lg transition-opacity km-focus-visible km-interactive mt-4">
                                             {sessionState === 'completing' ? (
                                                 <>
-                                                    <span className="animate-spin h-5 w-5 border-2 border-white/20 border-t-white rounded-full mr-2 inline-block"></span>
+                                                    <span className="animate-spin h-5 w-5 border-2 border-current/20 border-t-current rounded-full mr-2 inline-block"></span>
                                                     Recording Session...
                                                 </>
                                             ) : (
@@ -1579,44 +1625,31 @@ export default function Puzzles() {
                 <section className="lg:order-10 bg-primary/5 border border-primary/10 rounded-sm p-6 backdrop-blur-sm">
                     <h3 className="text-lg font-serif text-primary mb-4">Chess Pattern Mastery</h3>
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                        {motifPerformance.motifs.map(motif => (
-                            <div
-                                key={motif.name}
-                                className={`p-4 rounded-sm border ${
-                                    motif.rank === 'mastered'
-                                        ? 'bg-green-500/10 border-green-500/30'
-                                        : motif.rank === 'learning'
-                                        ? 'bg-yellow-500/10 border-yellow-500/30'
-                                        : 'bg-red-500/10 border-red-500/30'
-                                }`}
-                            >
-                                <h4 className="font-serif text-primary mb-1">{formatMotifName(motif.name)}</h4>
-                                <div className="flex justify-between text-sm">
-                                    <span className="text-primary/70">
-                                        {motif.passed}/{motif.total_puzzles} solved
-                                    </span>
-                                    <span className={`font-mono ${
-                                        motif.rank === 'mastered' ? 'text-positive' :
-                                        motif.rank === 'learning' ? 'text-warning' :
-                                        'text-negative'
-                                    }`}>
-                                        {Math.round(motif.accuracy * 100)}%
-                                    </span>
-                                </div>
+                        {motifPerformance.motifs.map(motif => {
+                            const rank = motifRankStyle(motif.rank);
+                            return (
+                                <div key={motif.name} className={`p-4 rounded-sm border ${rank.panel}`}>
+                                    <h4 className="font-serif text-primary mb-1">{formatMotifName(motif.name)}</h4>
+                                    <div className="flex justify-between text-sm">
+                                        <span className="text-primary/70">
+                                            {motif.passed}/{motif.total_puzzles} solved
+                                        </span>
+                                        <span className={`font-mono ${rank.figure}`}>
+                                            {Math.round(motif.accuracy * 100)}%
+                                        </span>
+                                    </div>
 
-                                {/* Progress bar */}
-                                <div className="mt-2 h-2 bg-primary/10 rounded-full overflow-hidden">
-                                    <div
-                                        className={`h-full ${
-                                            motif.rank === 'mastered' ? 'bg-green-500' :
-                                            motif.rank === 'learning' ? 'bg-yellow-500' :
-                                            'bg-red-500'
-                                        }`}
-                                        style={{ width: `${motif.accuracy * 100}%` }}
-                                    />
+                                    {/* Progress bar — bg-current inherits the rank colour set on
+                                        the track, so the bar can never disagree with the figure. */}
+                                    <div className={`mt-2 h-2 bg-primary/10 rounded-full overflow-hidden ${rank.figure}`}>
+                                        <div
+                                            className="h-full bg-current"
+                                            style={{ width: `${motif.accuracy * 100}%` }}
+                                        />
+                                    </div>
                                 </div>
-                            </div>
-                        ))}
+                            );
+                        })}
                     </div>
                 </section>
             )}

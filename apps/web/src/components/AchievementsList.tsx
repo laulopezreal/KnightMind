@@ -14,7 +14,7 @@ export function AchievementsList({ achievements }: AchievementsListProps) {
                     <div
                         key={achievement.id}
                         className={`p-4 rounded-sm border ${achievement.earned
-                            ? 'bg-green-500/10 border-green-500/30'
+                            ? 'bg-status-mastered-soft border-status-mastered-soft'
                             : 'bg-primary/5 border-primary/20'
                             }`}
                     >

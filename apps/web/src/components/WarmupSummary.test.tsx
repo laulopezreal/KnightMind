@@ -22,7 +22,7 @@ describe('WarmupSummary', () => {
   it('should display warmup complete heading', () => {
     render(<WarmupSummary sessionSummary={mockSessionSummary} onContinue={vi.fn()} />);
 
-    expect(screen.getByText(/Warmup Complete!/)).toBeInTheDocument();
+    expect(screen.getByText(/Warmup complete/i)).toBeInTheDocument();
   });
 
   it('should display accuracy percentage', () => {

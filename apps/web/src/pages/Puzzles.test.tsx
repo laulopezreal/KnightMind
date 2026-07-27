@@ -324,7 +324,10 @@ describe('Puzzles', () => {
       await waitFor(() => {
         expect(screen.getByText('Session in Progress')).toBeInTheDocument();
       });
-      expect(screen.getByText(/Streak: 3/)).toBeInTheDocument();
+      // Stats are a mono figure above a small-caps label, not "Streak: 3" prose.
+      const streak = screen.getByTestId('session-stat-streak');
+      expect(within(streak).getByText('3')).toBeInTheDocument();
+      expect(within(streak).getByText('Streak')).toBeInTheDocument();
     });
   });
 
@@ -400,7 +403,9 @@ describe('Puzzles', () => {
       render(<Puzzles />);
 
       await waitFor(() => {
-        expect(screen.getByText(/Hints: 2/)).toBeInTheDocument();
+        const hints = screen.getByTestId('session-stat-hints');
+        expect(within(hints).getByText('2')).toBeInTheDocument();
+        expect(within(hints).getByText('Hints')).toBeInTheDocument();
       });
     });
 

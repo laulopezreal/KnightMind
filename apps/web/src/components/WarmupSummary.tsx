@@ -26,13 +26,13 @@ export function WarmupSummary({ sessionSummary, onContinue }: WarmupSummaryProps
 
   return (
     <section
-      className="bg-primary/5 border border-blue-500/20 rounded-sm p-8 animate-teedin"
+      className="bg-primary/5 border border-status-new-soft rounded-sm p-8 animate-teedin"
       role="region"
       aria-labelledby="warmup-summary-heading"
     >
       <div className="text-center mb-6">
         <h2 id="warmup-summary-heading" className="text-3xl font-serif text-primary mb-2">
-          Warmup Complete! 🎯
+          Warmup complete
         </h2>
         <p className="text-primary/70 font-sans">
           Here's how you did after your break

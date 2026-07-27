@@ -39,11 +39,15 @@ export function SessionSummaryCard({
         : accuracy >= 0.5
         ? 'Session complete — solid work'
         : 'Session complete — tough one, keep at it';
+    // Token-only success treatment: a raw green-500 fill with a white tick is a
+    // fixed pair that cannot clear contrast in both themes, and it was the only
+    // green of its kind in the app. The soft tint + positive ink reads as
+    // "complete" in day and night alike.
     return (
-        <section className="bg-primary/5 border border-green-500/30 rounded-sm p-8 backdrop-blur-sm animate-teedin">
+        <section className="bg-primary/5 border border-positive-soft rounded-sm p-8 backdrop-blur-sm animate-teedin">
             <div className="flex items-center mb-6">
-                <div className="flex-shrink-0 h-8 w-8 rounded-full bg-green-500 flex items-center justify-center mr-3">
-                    <svg className="h-5 w-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <div className="flex-shrink-0 h-8 w-8 rounded-full bg-positive-fill flex items-center justify-center mr-3">
+                    <svg className="h-5 w-5 text-positive" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                     </svg>
                 </div>
