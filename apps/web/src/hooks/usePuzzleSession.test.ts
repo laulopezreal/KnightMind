@@ -272,6 +272,17 @@ describe('usePuzzleSession', () => {
     });
 
     it('should handle startSession API error', async () => {
+        // Puzzles load fine here — the session POST is what fails. Stating that
+        // explicitly matters: `beforeEach` calls clearAllMocks, which resets
+        // recorded calls but NOT implementations, so without this line the test
+        // inherits whatever the previously-run test left on getDuePuzzles and
+        // asserts the wrong error message whenever the order changes.
+        mockedGetDuePuzzles.mockResolvedValue({
+            due_count: 1,
+            returned_count: 1,
+            now: new Date().toISOString(),
+            puzzles: [mockPuzzle],
+        });
         mockedStartSession.mockRejectedValue(new Error('Server down'));
 
         const opts = makeOpts();

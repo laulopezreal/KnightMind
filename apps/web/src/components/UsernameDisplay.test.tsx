@@ -31,6 +31,10 @@ describe('UsernameDisplay', () => {
     vi.resetAllMocks();
     mockUsername = '';
     mockIsEditorOpen = false;
+    // Model the real context: closing the editor actually closes it. A setter
+    // that only recorded the call left the component permanently "open", so its
+    // deferred auto-focus stayed armed and could steal focus back mid-assertion.
+    mockSetEditorOpen.mockImplementation((open: boolean) => { mockIsEditorOpen = open; });
     mockValidateChessComUser.mockResolvedValue({ valid: true, username: 'player1' });
   });
 
@@ -151,13 +155,21 @@ describe('UsernameDisplay', () => {
   it('returns focus to the trigger when the editor closes via Escape', async () => {
     mockUsername = 'testplayer';
     mockIsEditorOpen = true;
-    render(<UsernameDisplay />);
+    const { rerender } = render(<UsernameDisplay />);
 
     const input = screen.getByLabelText('Chess.com Username');
     input.focus();
     await user.keyboard('{Escape}');
 
     expect(mockSetEditorOpen).toHaveBeenCalledWith(false);
+    // Sit past the 100ms auto-focus timer armed on open, THEN let the close
+    // reach the component as the real context would. A close that only disarms
+    // that timer on re-render leaves it live across this gap: it pulls focus to
+    // the input, and the re-render unmounts that input and drops focus to
+    // <body>. Waiting here turns a race into a fact.
+    await new Promise((r) => setTimeout(r, 150));
+    rerender(<UsernameDisplay />);
+
     const trigger = screen.getByRole('button', { name: /chess\.com/i });
     expect(document.activeElement).toBe(trigger);
   });
