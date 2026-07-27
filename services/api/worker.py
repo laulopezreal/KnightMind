@@ -9,6 +9,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from services.api.db import SessionLocal
+from services.api.diagnosis.job import run_diagnosis
 from services.api.models import Job, JobStatus, JobType
 from services.api.puzzles.generator import generate_puzzles
 
@@ -65,6 +66,7 @@ def _run_puzzle_generation(ctx: JobContext) -> Any:
 
 JOB_HANDLERS: dict[str, JobHandler] = {
     JobType.PUZZLE_GENERATION.value: _run_puzzle_generation,
+    JobType.DIAGNOSIS.value: run_diagnosis,
 }
 
 

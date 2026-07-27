@@ -94,6 +94,7 @@ class JobType(str, Enum):
     """
 
     PUZZLE_GENERATION = "puzzle_generation"
+    DIAGNOSIS = "diagnosis"
 
 
 class PuzzleResult(str, Enum):
@@ -218,6 +219,114 @@ class PuzzleStats(Base):
     next_due_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
     interval_days: Mapped[int] = mapped_column(Integer, nullable=True)
     ease_factor: Mapped[float] = mapped_column(Float, default=2.0)
+
+
+class DiagnosisStatus(str, Enum):
+    """Whether a diagnosis could be produced at all.
+
+    ``UNAVAILABLE`` rows exist on purpose: a puzzle whose stored move is
+    illegal for its FEN can never be analysed, and without a row recording
+    that, every backfill run would re-attempt it forever. The row is the
+    negative result, not the absence of one.
+    """
+
+    OK = "ok"
+    UNAVAILABLE = "unavailable"
+
+
+class PuzzleDiagnosis(Base):
+    """Why the user probably made this mistake, and the facts behind that.
+
+    Keyed on (puzzle_id, username). This is deliberately *stronger* than
+    :class:`PuzzleStats`, which is keyed on puzzle_id alone: a puzzle id already
+    belongs to exactly one user by construction, so the username adds no rows,
+    but putting it in the key makes a cross-tenant row unrepresentable rather
+    than merely unlikely.
+
+    Staleness is a predicate over the version columns rather than a flag: a row
+    is stale when ``extraction_version`` or ``rule_version`` no longer match the
+    code, or when re-extraction yields a different ``evidence_hash``. That is
+    also the backfill's resume cursor — a crashed or budget-exhausted run
+    re-queries and continues, with no separate progress state to drift out of
+    sync with reality.
+    """
+
+    __tablename__ = "puzzle_diagnoses"
+    __table_args__ = (
+        # Drives the Insights "top mistake causes" aggregate and the Library
+        # cause filter.
+        Index("ix_puzzle_diagnoses_username_cause", "username", "primary_cause"),
+        # Drives the backfill's "what still needs work" scan.
+        Index(
+            "ix_puzzle_diagnoses_username_versions",
+            "username",
+            "extraction_version",
+            "rule_version",
+        ),
+        {"extend_existing": True},
+    )
+
+    puzzle_id: Mapped[str] = mapped_column(
+        String, ForeignKey("puzzles.id"), primary_key=True
+    )
+    username: Mapped[str] = mapped_column(String, primary_key=True, index=True)
+
+    status: Mapped[str] = mapped_column(
+        String, nullable=False, default=DiagnosisStatus.OK
+    )
+    # Why extraction failed, for UNAVAILABLE rows. Never shown to the user.
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Denormalised from PuzzleStats so the detail read is a single row lookup.
+    primary_motif: Mapped[str | None] = mapped_column(String, nullable=True)
+    primary_cause: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    secondary_causes: Mapped[list] = mapped_column(JSON, nullable=True, default=list)
+    # The winning rule's hand-assigned strength. Deliberately NOT named
+    # "confidence": it is an ordering prior, not a calibrated probability, and
+    # must never reach the user as a percentage (see diagnosis/causes.py).
+    # A model confidence is a separate column added with the AI stage.
+    primary_strength: Mapped[float | None] = mapped_column(Float, nullable=True)
+    insufficient_evidence: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+
+    phase: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Needs an ECO mapping that does not exist yet; NULL until then rather than
+    # guessed at.
+    opening_family: Mapped[str | None] = mapped_column(String, nullable=True)
+
+    # The citable facts (id/label/value), i.e. exactly what the UI renders and
+    # what an AI citation is validated against. The full packet is not stored:
+    # evidence_hash already pins its identity, and the packet is reproducible
+    # from the puzzle at a given extraction_version.
+    evidence_json: Mapped[list] = mapped_column(JSON, nullable=True, default=list)
+    evidence_hash: Mapped[str | None] = mapped_column(String, nullable=True)
+
+    # "rules" today; "llm" once the AI stage ranks and writes prose. Never
+    # blended — a row says which produced it.
+    source: Mapped[str] = mapped_column(String, nullable=False, default="rules")
+    extraction_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    rule_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    model_version: Mapped[str | None] = mapped_column(String, nullable=True)
+
+    # Populated by the AI stage; NULL for a rules-only diagnosis.
+    explanation: Mapped[str | None] = mapped_column(Text, nullable=True)
+    training_recommendation: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Manual correction. Kept alongside the computed cause rather than
+    # overwriting it, so rule accuracy stays measurable against user feedback.
+    user_confirmed_cause: Mapped[str | None] = mapped_column(String, nullable=True)
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
 
 
 class PuzzleReview(Base):
