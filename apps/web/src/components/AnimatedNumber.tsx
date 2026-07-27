@@ -38,16 +38,29 @@ export function AnimatedNumber({ value, duration = 700, suffix = '' }: AnimatedN
     if (!animatable) return;
     const start = performance.now();
     const tick = (now: number) => {
-      const t = Math.min((now - start) / duration, 1);
+      // A frame timestamp can trail the `start` just read from performance.now()
+      // — jsdom under load does exactly that. Unclamped, a negative t sends the
+      // eased cubic far outside 0..1 (at t = -6 the multiplier is -342, which
+      // rendered a session stat as "-27635%"). Clamping costs a lagging clock a
+      // few frames parked at 0; it can never show a number the user's data
+      // doesn't support.
+      const t = Math.min(Math.max((now - start) / duration, 0), 1);
       const eased = 1 - Math.pow(1 - t, 3); // ease-out cubic
       setDisplay(Math.round(eased * value));
-      if (t < 1) rafRef.current = requestAnimationFrame(tick);
+      rafRef.current = t < 1 ? requestAnimationFrame(tick) : null;
     };
     rafRef.current = requestAnimationFrame(tick);
-    // Settle guarantee: rAF can be throttled or never fire (hidden tabs,
-    // headless jsdom in CI). A plain timer snaps to the exact final value
-    // shortly after the animation window no matter what rAF did.
-    const settle = setTimeout(() => setDisplay(value), duration + 80);
+    // Settle guarantee: rAF can be throttled, never fire (hidden tabs, headless
+    // jsdom in CI), or report a clock that never reaches the end of the window.
+    // A plain timer snaps to the exact final value shortly after the animation
+    // window — and must STOP the frame loop to do it, because a t that never
+    // reaches 1 keeps re-arming and would overwrite the settled value on the
+    // very next frame.
+    const settle = setTimeout(() => {
+      if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+      setDisplay(value);
+    }, duration + 80);
     return () => {
       if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
       clearTimeout(settle);
