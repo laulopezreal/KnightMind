@@ -123,6 +123,30 @@ describe('OpeningGraph — assistive technology', () => {
     expect(e4).toHaveAttribute('aria-level', '2');
   });
 
+  it('keeps every treeitem an owned child of the tree', () => {
+    // Scoped to this render's own container rather than the document: a
+    // document-wide role query can pick up another test's leftovers and turn a
+    // structural assertion into a flake.
+    const { container } = render(
+      <OpeningGraph data={TRANSPOSING_TREE} onNodeHover={vi.fn()} onNodeHoverEnd={vi.fn()} />
+    );
+    const tree = container.querySelector('svg[role="tree"]')!;
+    const treeitems = [...container.querySelectorAll('[role="treeitem"]')];
+    expect(treeitems.length).toBeGreaterThan(0);
+
+    // A tree's owned elements should be treeitems; three plain <g> wrappers sit
+    // between the two here for zoom and layering, so they are marked
+    // transparent rather than left for each assistive technology to collapse.
+    for (const item of treeitems) {
+      let ancestor = item.parentElement;
+      while (ancestor && ancestor !== tree) {
+        expect(ancestor.getAttribute('role')).toBe('presentation');
+        ancestor = ancestor.parentElement;
+      }
+      expect(ancestor).toBe(tree);
+    }
+  });
+
   it('hides the link layer from the tree', () => {
     const { container } = render(
       <OpeningGraph data={TRANSPOSING_TREE} onNodeHover={vi.fn()} onNodeHoverEnd={vi.fn()} />

@@ -257,11 +257,16 @@ export function OpeningGraph({ data, onNodeHover, onNodeHoverEnd, onNodeSelect, 
         collectExpanded(root, expandedKeysRef.current);
       }
 
-      const contentG = gSelection.append('g');
+      // `role="presentation"` on the plumbing groups. A tree's owned elements
+      // are supposed to be treeitems (or groups of them), and three plain <g>
+      // wrappers sit between the two here for zoom and layering. Chromium
+      // collapses them, but marking them transparent states the intent rather
+      // than relying on every assistive technology to do the same.
+      const contentG = gSelection.append('g').attr('role', 'presentation');
       // The link layer carries no information of its own and would otherwise be
       // an invalid non-treeitem child of role="tree".
       contentG.append('g').attr('class', 'links').attr('aria-hidden', 'true');
-      contentG.append('g').attr('class', 'nodes');
+      contentG.append('g').attr('class', 'nodes').attr('role', 'presentation');
 
       // nodeSize (not size) keeps spacing constant as the tree grows; the zoom
       // transform, not a rescaled viewBox, decides how much is on screen.
@@ -697,7 +702,8 @@ export function OpeningGraph({ data, onNodeHover, onNodeHoverEnd, onNodeSelect, 
       role="tree"
       aria-label="Opening repertoire tree. Use the arrow keys to move between moves and expand lines."
     >
-      <g ref={gRef} />
+      {/* Carries the zoom transform only — see the presentation roles below it. */}
+      <g ref={gRef} role="presentation" />
     </svg>
   );
 }

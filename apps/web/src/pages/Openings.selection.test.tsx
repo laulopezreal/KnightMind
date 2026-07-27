@@ -127,7 +127,14 @@ describe('Openings selection panel', () => {
   });
 
   it('offers no Engine link when the line cannot be replayed', async () => {
-    // A corrupt import must not send a broken FEN on to another page.
+    // A corrupt import must not send a broken FEN on to another page. The tree
+    // has to contain the bad line too — the page re-resolves a selection
+    // against the current tree, so a line only the selection knows about would
+    // be dropped on timing rather than judged on legality.
+    mockGetOpenings.mockResolvedValue({
+      ...TREE,
+      children: [{ ...node('e4'), children: [node('Qxf7')] }],
+    });
     await selectLine([node('Start'), node('e4'), node('Qxf7')]);
 
     expect(screen.getByLabelText('Selected line')).toBeInTheDocument();
