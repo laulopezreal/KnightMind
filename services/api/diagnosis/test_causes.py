@@ -12,6 +12,7 @@ Two kinds of test here:
 """
 
 import dataclasses
+import itertools
 
 import chess
 import pytest
@@ -377,6 +378,39 @@ class TestInvariants:
             for candidate in classify_causes(packet).candidates:
                 missing = set(candidate.evidence_ids) - available
                 assert not missing, f"{name}/{candidate.cause} cites {missing}"
+
+    def test_rules_only_cite_carried_evidence_across_clock_states_too(self):
+        """The corpus carries no clock, so the sweep above cannot reach the
+        clock-dependent rule. A time-pressure verdict built on a reading the
+        packet did not make citable is exactly the gap this covers — it was a
+        real defect, found by fuzzing and fixed in the evidence layer."""
+        from services.api.diagnosis.pgn_context import parse_time_control
+
+        clocks = [(None, None), (9.0, None), (None, 7.0), (40.0, 32.0), (600.0, 12.0)]
+        controls = ["600", "60", "1/86400", None]
+        for (before, after), raw in itertools.product(clocks, controls):
+            context = dataclasses.replace(
+                EMPTY_GAME_CONTEXT,
+                clock_before_move_seconds=before,
+                clock_after_move_seconds=after,
+                move_time_seconds=(
+                    before - after if before and after and before >= after else None
+                ),
+            )
+            packet = build(
+                FORK_TWO_LOOSE,
+                "c3e2",
+                "c3d5",
+                ply=51,
+                context=context,
+                time_control=parse_time_control(raw),
+            )
+            available = {item.id for item in to_evidence_items(packet)}
+            for candidate in classify_causes(packet).candidates:
+                missing = set(candidate.evidence_ids) - available
+                assert (
+                    not missing
+                ), f"{raw}/{before}/{after}: {candidate.cause} cites {missing}"
 
     def test_every_candidate_cites_at_least_one_fact(self):
         for name, packet in self.all_packets():
