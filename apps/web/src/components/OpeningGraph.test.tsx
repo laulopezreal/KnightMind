@@ -253,6 +253,133 @@ describe('OpeningGraph — progressive disclosure', () => {
   });
 });
 
+describe('OpeningGraph — score encoding', () => {
+  it('draws a ring per node so score is not carried by colour alone', () => {
+    const { container } = render(
+      <OpeningGraph data={TRANSPOSING_TREE} onNodeHover={vi.fn()} onNodeHoverEnd={vi.fn()} />
+    );
+
+    // The palette runs red to green — the worst pairing for the most common
+    // colour blindness — so the same figure is also an angle.
+    expect(container.querySelectorAll('path.score-ring')).toHaveLength(items().length);
+    expect(container.querySelectorAll('path.score-track')).toHaveLength(items().length);
+  });
+
+  it('sweeps the ring in proportion to the score', () => {
+    // Same games played, so same radius — any difference in the ring is the
+    // score and nothing else.
+    render(
+      <OpeningGraph
+        data={node('Start', [10, 0, 10], [node('good', [10, 0, 0]), node('bad', [0, 0, 10])])}
+        onNodeHover={vi.fn()}
+        onNodeHoverEnd={vi.fn()}
+      />
+    );
+
+    const ringOf = (label: string) =>
+      byMove(label)!.querySelector('path.score-ring')!.getAttribute('d');
+    const trackOf = (label: string) =>
+      byMove(label)!.querySelector('path.score-track')!.getAttribute('d');
+
+    expect(ringOf('1. good')).not.toBe(ringOf('1. bad'));
+    // A 100% score sweeps the whole circle, so ring and track coincide.
+    expect(ringOf('1. good')).toBe(trackOf('1. good'));
+    expect(ringOf('1. bad')).not.toBe(trackOf('1. bad'));
+  });
+
+  it('keeps the rings out of the accessibility tree', () => {
+    const { container } = render(
+      <OpeningGraph data={TRANSPOSING_TREE} onNodeHover={vi.fn()} onNodeHoverEnd={vi.fn()} />
+    );
+
+    // The figure is already in each treeitem's name; announcing the decoration
+    // too would just be noise.
+    for (const ring of container.querySelectorAll('path.score-ring, path.score-track')) {
+      expect(ring).toHaveAttribute('aria-hidden', 'true');
+    }
+  });
+});
+
+describe('OpeningGraph — selection', () => {
+  it('reports the whole root-to-node path on click', () => {
+    const onNodeSelect = vi.fn();
+    renderGraph(TRANSPOSING_TREE, { onNodeSelect });
+
+    fireEvent.click(byMove('2. Nf3')!);
+
+    expect(onNodeSelect).toHaveBeenCalledTimes(1);
+    expect(onNodeSelect.mock.calls[0][0].map((n: OpeningNode) => n.move_san))
+      .toEqual(['Start', 'e4', 'c5', 'Nf3']);
+  });
+
+  it('reports a selection on Enter, so the line’s actions are keyboard-reachable', () => {
+    const onNodeSelect = vi.fn();
+    renderGraph(TRANSPOSING_TREE, { onNodeSelect });
+
+    const e4 = byMove('1. e4')!;
+    e4.focus();
+    fireEvent.keyDown(e4, { key: 'Enter' });
+
+    expect(onNodeSelect).toHaveBeenCalledWith(
+      expect.arrayContaining([expect.objectContaining({ move_san: 'e4' })])
+    );
+  });
+
+  it('selects a leaf even though there is nothing to expand', () => {
+    const onNodeSelect = vi.fn();
+    renderGraph(TRANSPOSING_TREE, { onNodeSelect });
+
+    const leaf = byMove('3…cxd4')!;
+    leaf.focus();
+    fireEvent.keyDown(leaf, { key: 'Enter' });
+
+    expect(onNodeSelect).toHaveBeenCalled();
+  });
+});
+
+describe('OpeningGraph — state across a rebuild', () => {
+  it('keeps expanded lines open when the same tree is refetched', () => {
+    const { rerender } = render(
+      <OpeningGraph data={BIG_TREE} onNodeHover={vi.fn()} onNodeHoverEnd={vi.fn()} />
+    );
+
+    fireEvent.click(byMove('2. a3')!);
+    const afterExpand = labels();
+    expect(afterExpand.some((l) => l.startsWith('2…a4'))).toBe(true);
+
+    // A refresh hands down a new object with the same content; it used to
+    // snap every expanded line shut.
+    rerender(
+      <OpeningGraph
+        data={JSON.parse(JSON.stringify(BIG_TREE))}
+        onNodeHover={vi.fn()}
+        onNodeHoverEnd={vi.fn()}
+      />
+    );
+
+    expect(labels().some((l) => l.startsWith('2…a4'))).toBe(true);
+  });
+
+  it('keeps collapsed lines closed across a refetch', () => {
+    const { rerender } = render(
+      <OpeningGraph data={TRANSPOSING_TREE} onNodeHover={vi.fn()} onNodeHoverEnd={vi.fn()} />
+    );
+
+    fireEvent.click(byMove('1. e4')!);
+    expect(byMove('1. e4')).toHaveAttribute('aria-expanded', 'false');
+
+    rerender(
+      <OpeningGraph
+        data={JSON.parse(JSON.stringify(TRANSPOSING_TREE))}
+        onNodeHover={vi.fn()}
+        onNodeHoverEnd={vi.fn()}
+      />
+    );
+
+    expect(byMove('1. e4')).toHaveAttribute('aria-expanded', 'false');
+  });
+});
+
 describe('OpeningGraph — page scrolling', () => {
   it('leaves an unmodified wheel event to the page', () => {
     const { container } = render(

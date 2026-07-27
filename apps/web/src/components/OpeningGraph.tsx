@@ -21,6 +21,8 @@ const LAYOUT = {
    * readable tree beats seeing an illegible whole.
    */
   minFitScale: 0.72,
+  /** Score ring geometry, in layout units, measured out from the node edge. */
+  ring: { gap: 2.5, width: 2 },
   linkStrokeWidth: 1.5,
   linkStrokeOpacity: 0.2,
   labelFontSize: '13px',
@@ -91,6 +93,41 @@ function collapseFrom(node: CollapsibleNode, depth: number): void {
   }
 }
 
+/**
+ * Record which nodes are currently open, so the state can be reapplied after a
+ * rebuild. Only visible branches need walking: `collapseFrom` works
+ * depth-first, so anything under a collapsed node is collapsed too.
+ */
+function collectExpanded(node: CollapsibleNode, out: Set<string>): void {
+  if (!node.children?.length) return;
+  if (node.key) out.add(node.key);
+  for (const child of node.children) collectExpanded(child as CollapsibleNode, out);
+}
+
+/**
+ * Reapply a recorded expansion state to a freshly built hierarchy. Descends
+ * through collapsed branches as well, so deep state is preserved even where it
+ * is not currently on screen.
+ */
+function applyExpansion(node: CollapsibleNode, keys: Set<string>): void {
+  const children = node.children ?? node._children;
+  if (!children?.length) return;
+
+  if (node.key && keys.has(node.key)) {
+    node.children = children;
+    node._children = undefined;
+  } else {
+    node._children = children;
+    node.children = undefined;
+  }
+  for (const child of children) applyExpansion(child as CollapsibleNode, keys);
+}
+
+/** Node radius — area tracks games played, clamped so the extremes stay usable. */
+function radiusFor(node: CollapsibleNode): number {
+  return Math.max(6, Math.min(16, Math.sqrt(node.data.games_count) * 1.5 + 4));
+}
+
 /** Visible nodes in top-to-bottom reading order (also the arrow-key order). */
 function visibleNodes(root: CollapsibleNode): CollapsibleNode[] {
   const out: CollapsibleNode[] = [];
@@ -137,17 +174,30 @@ interface OpeningGraphProps {
   /** Fired on pointer hover *and* keyboard focus, so the stats are not hover-only. */
   onNodeHover: (anchor: NodeAnchor, node: OpeningNode) => void;
   onNodeHoverEnd: () => void;
+  /**
+   * Fired when a node is activated (click or Enter/Space) with the whole
+   * root-to-node path, so the page can name the line and offer actions on it.
+   * Called with null when the selection is cleared.
+   */
+  onNodeSelect?: (path: OpeningNode[] | null) => void;
   onError?: (message: string) => void;
   graphRef?: React.RefObject<OpeningGraphHandle | null>;
 }
 
-export function OpeningGraph({ data, onNodeHover, onNodeHoverEnd, onError, graphRef }: OpeningGraphProps) {
+export function OpeningGraph({ data, onNodeHover, onNodeHoverEnd, onNodeSelect, onError, graphRef }: OpeningGraphProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const gRef = useRef<SVGGElement>(null);
   const zoomBehaviorRef = useRef<d3.ZoomBehavior<SVGSVGElement, unknown> | null>(null);
   const fitRef = useRef<(animate?: boolean) => void>(() => {});
-  const callbacksRef = useRef({ onNodeHover, onNodeHoverEnd, onError });
-  callbacksRef.current = { onNodeHover, onNodeHoverEnd, onError };
+  const callbacksRef = useRef({ onNodeHover, onNodeHoverEnd, onNodeSelect, onError });
+  callbacksRef.current = { onNodeHover, onNodeHoverEnd, onNodeSelect, onError };
+
+  // Survive a rebuild. A refresh or colour-filter change hands down new `data`,
+  // which re-runs the effect from scratch; without carrying these across, every
+  // refresh silently threw away the user's expanded lines and their zoom.
+  const expandedKeysRef = useRef<Set<string>>(new Set());
+  const transformRef = useRef<d3.ZoomTransform | null>(null);
+  const focusedKeyRef = useRef<string | null>(null);
 
   useImperativeHandle(graphRef, () => ({
     // Actually fits the visible tree to the panel. This used to reset the zoom
@@ -186,8 +236,18 @@ export function OpeningGraph({ data, onNodeHover, onNodeHoverEnd, onError, graph
       const root = d3.hierarchy(data) as CollapsibleNode;
       assignKeys(root);
 
-      if (root.descendants().length >= LAYOUT.autoCollapseThreshold) {
-        collapseFrom(root, LAYOUT.autoCollapseDepth);
+      // A refresh or filter change re-runs this effect with new data. On the
+      // first build, auto-collapse decides what is open and we record it; on a
+      // rebuild the recorded set is authoritative, so the user's expanded lines
+      // survive instead of snapping back to the default three plies.
+      const isRebuild = expandedKeysRef.current.size > 0;
+      if (isRebuild) {
+        applyExpansion(root, expandedKeysRef.current);
+      } else {
+        if (root.descendants().length >= LAYOUT.autoCollapseThreshold) {
+          collapseFrom(root, LAYOUT.autoCollapseDepth);
+        }
+        collectExpanded(root, expandedKeysRef.current);
       }
 
       const contentG = gSelection.append('g');
@@ -209,8 +269,30 @@ export function OpeningGraph({ data, onNodeHover, onNodeHoverEnd, onError, graph
         .x(d => d.y)
         .y(d => d.x);
 
+      /**
+       * Ring around each node whose sweep is the score. Redundant with fill
+       * colour on purpose: the palette runs red to green, the worst possible
+       * pairing for the most common colour blindness, so the same figure is
+       * also carried by an angle that does not depend on hue at all.
+       */
+      const scoreArc = d3.arc<{ inner: number; outer: number; end: number }>()
+        .innerRadius(d => d.inner)
+        .outerRadius(d => d.outer)
+        .startAngle(0)
+        .endAngle(d => d.end);
+
+      function ringPath(d: CollapsibleNode, full: boolean): string {
+        const r = radiusFor(d);
+        const score = Math.min(100, Math.max(0, d.data.win_rate));
+        return scoreArc({
+          inner: r + LAYOUT.ring.gap,
+          outer: r + LAYOUT.ring.gap + LAYOUT.ring.width,
+          end: full ? 2 * Math.PI : (2 * Math.PI * score) / 100,
+        }) ?? '';
+      }
+
       /** Node owning the single tab stop (roving tabindex). */
-      let focusedKey: string | null = root.key ?? null;
+      let focusedKey: string | null = focusedKeyRef.current ?? root.key ?? null;
 
       function anchorFor(group: SVGGElement): NodeAnchor {
         const rect = group.getBoundingClientRect();
@@ -221,15 +303,25 @@ export function OpeningGraph({ data, onNodeHover, onNodeHoverEnd, onError, graph
         if (d._children) {
           d.children = d._children;
           d._children = undefined;
+          if (d.key) expandedKeysRef.current.add(d.key);
         } else if (d.children) {
           d._children = d.children;
           d.children = undefined;
+          if (d.key) expandedKeysRef.current.delete(d.key);
         }
+      }
+
+      /** Root-to-node path as plain data, for the page's selection panel. */
+      function reportSelection(d: CollapsibleNode): void {
+        callbacksRef.current.onNodeSelect?.(
+          d.ancestors().reverse().map(ancestor => ancestor.data)
+        );
       }
 
       function focusNode(target: CollapsibleNode | undefined): void {
         if (!target?.key) return;
         focusedKey = target.key;
+        focusedKeyRef.current = focusedKey;
         update(target);
         // Matched on the bound datum rather than a `[data-key=...]` selector:
         // SAN carries `+`, `#` and `=`, which need escaping in a selector.
@@ -281,10 +373,12 @@ export function OpeningGraph({ data, onNodeHover, onNodeHoverEnd, onError, graph
             break;
           case 'Enter':
           case ' ':
-            if (isExpandable(d)) {
-              toggleNode(d);
-              focusNode(d);
-            }
+            // Selecting works on any node; expanding only where there is more
+            // to show. Keeping them on one key means keyboard users reach the
+            // line's actions the same way pointer users do.
+            if (isExpandable(d)) toggleNode(d);
+            focusNode(d);
+            reportSelection(d);
             break;
           default:
             handled = false;
@@ -349,6 +443,22 @@ export function OpeningGraph({ data, onNodeHover, onNodeHoverEnd, onError, graph
           .attr('stroke', 'var(--bg-primary)')
           .attr('stroke-width', 2);
 
+        // Full-circle track, so a short sweep reads as "low score" rather than
+        // as a rendering glitch.
+        nodeEnter.append('path')
+          .attr('class', 'score-track')
+          .attr('fill', 'currentColor')
+          .attr('fill-opacity', 0.12)
+          .attr('pointer-events', 'none')
+          .attr('aria-hidden', 'true');
+
+        nodeEnter.append('path')
+          .attr('class', 'score-ring')
+          .attr('fill', 'currentColor')
+          .attr('fill-opacity', 0.75)
+          .attr('pointer-events', 'none')
+          .attr('aria-hidden', 'true');
+
         nodeEnter.append('text')
           .attr('class', 'node-label')
           .attr('dy', 5)
@@ -381,8 +491,10 @@ export function OpeningGraph({ data, onNodeHover, onNodeHoverEnd, onError, graph
             event.stopPropagation();
             if (isExpandable(d)) toggleNode(d);
             focusedKey = d.key ?? null;
+            focusedKeyRef.current = focusedKey;
             update(d);
             (this as SVGGElement).focus();
+            reportSelection(d);
           })
           .on('keydown', function (event: KeyboardEvent, d) {
             onKeyDown(event, d);
@@ -413,10 +525,13 @@ export function OpeningGraph({ data, onNodeHover, onNodeHoverEnd, onError, graph
           .style('opacity', 1);
 
         nodeUpdate.select('circle.node-dot')
-          .attr('r', d => Math.max(6, Math.min(16, Math.sqrt(d.data.games_count) * 1.5 + 4)))
+          .attr('r', d => radiusFor(d))
           .attr('fill', d => getScoreColor(d.data.win_rate))
           .attr('stroke', d => (d.key === focusedKey ? 'var(--text-primary)' : 'var(--bg-primary)'))
           .attr('stroke-width', d => (d.key === focusedKey ? 3 : 2));
+
+        nodeUpdate.select('path.score-track').attr('d', d => ringPath(d, true));
+        nodeUpdate.select('path.score-ring').attr('d', d => ringPath(d, false));
 
         nodeUpdate.select('text.collapse-indicator')
           .text(d => (hasHiddenChildren(d) ? '+' : ''));
@@ -502,6 +617,9 @@ export function OpeningGraph({ data, onNodeHover, onNodeHoverEnd, onError, graph
         .on('start', () => d3.select(svgEl).style('cursor', 'grabbing'))
         .on('zoom', (event: d3.D3ZoomEvent<SVGSVGElement, unknown>) => {
           gSelection.attr('transform', event.transform.toString());
+          // Remembered so a refresh does not throw away where the user is
+          // looking, alongside which lines they had open.
+          transformRef.current = event.transform;
         })
         .on('end', () => d3.select(svgEl).style('cursor', 'grab'));
 
@@ -509,7 +627,11 @@ export function OpeningGraph({ data, onNodeHover, onNodeHoverEnd, onError, graph
       d3.select(svgEl).call(zoomBehavior);
 
       update(root);
-      fit(false);
+      if (isRebuild && transformRef.current) {
+        d3.select(svgEl).call(zoomBehavior.transform as never, transformRef.current);
+      } else {
+        fit(false);
+      }
 
       // Refit on container resize, so rotating a phone or opening the sidebar
       // does not strand the tree off-screen.

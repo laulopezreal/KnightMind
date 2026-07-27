@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { getMotifPerformance, getMotifTrends, getTrickyPuzzles, type MotifPerformanceResponse, type TrendsResponse, type TrickyPuzzlesResponse } from '../api/users';
 import { useChessUsername } from '../context/ChessUsernameContext';
 import { TacticalRadar } from '../components/TacticalRadar';
@@ -152,6 +152,21 @@ export default function Insights() {
                             )}
                         </div>
                     )}
+
+                    {/* These insights are tactical; where the mistakes start is
+                        an opening question, and the Explorer had no inbound
+                        route from anywhere but Home and the sidebar. */}
+                    <section className="flex flex-wrap items-center justify-between gap-3 border-t border-primary/10 pt-6">
+                        <p className="text-sm font-sans text-primary/70">
+                            Patterns above are tactical. See which openings they keep coming from.
+                        </p>
+                        <Link
+                            to="/openings"
+                            className="km-interactive km-focus-visible text-sm font-serif px-4 py-1.5 border border-primary/20 text-primary rounded-sm transition-all shrink-0"
+                        >
+                            Opening Explorer →
+                        </Link>
+                    </section>
                 </>
             )}
         </div>

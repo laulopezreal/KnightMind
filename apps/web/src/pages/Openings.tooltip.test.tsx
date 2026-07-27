@@ -6,7 +6,10 @@ import type { NodeAnchor } from '../components/OpeningGraph';
 // The tooltip was anchored blindly to the hovered node, putting up to 180px of
 // it off-screen for any node in the lower right — reachable just by panning.
 
-vi.mock('react-router-dom', () => ({ useNavigate: () => vi.fn() }));
+vi.mock('react-router-dom', () => ({
+  useNavigate: () => vi.fn(),
+  Link: ({ children, to, ...rest }: { children: React.ReactNode; to: string; [key: string]: unknown }) => <a href={to} {...rest}>{children}</a>,
+}));
 vi.mock('../context/ChessUsernameContext', () => ({
   useChessUsername: () => ({ username: 'alice' }),
 }));
