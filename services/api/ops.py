@@ -6,10 +6,12 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
+from services.api.ai import config as ai_config
 from services.api.auth import require_operator
 from services.api.db import get_db
 from services.api.engine import is_engine_available
 from services.api.models import Job, JobStatus
+from services.api.storage.ai_audit_repository import AIAuditRepository
 from services.api.worker import worker
 
 router = APIRouter(prefix="/ops", tags=["ops"])
@@ -162,6 +164,17 @@ def get_ops_status(db: Session = Depends(get_db)):
         "active_job": active_job,
         "recent_jobs": recent_jobs,
         "last_recovery": worker.recovery_stats,
+        # Rule/model agreement over the last week. This is the earliest signal
+        # that a prompt or model change regressed — the feature ships with the
+        # AI flag ON, so there was no quiet period in which to measure it.
+        "ai_diagnosis": {
+            "enabled": ai_config.is_enabled(),
+            "model": ai_config.MODEL,
+            # Reported so "the cards went bare" resolves to a missing key
+            # rather than a bug hunt. The key itself is never exposed.
+            "api_key_present": ai_config.api_key() is not None,
+            **AIAuditRepository(db).agreement_stats(days=7),
+        },
         "metrics": {
             "last_24h": {
                 "jobs_succeeded": succeeded_count,

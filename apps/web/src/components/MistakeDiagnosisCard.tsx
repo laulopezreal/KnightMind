@@ -17,6 +17,11 @@ interface MistakeDiagnosisCardProps {
  *    line is), so rendering it mid-solve would hand over the answer. The card is
  *    post-mortem content and the caller gates it on `revealed`.
  *
+ * The prose (`explanation`, `training_recommendation`) is present only on rows the
+ * AI stage enriched. A rules-only row renders the cause and its evidence and nothing
+ * else — which is a complete diagnosis, not a degraded one, so there is no placeholder
+ * or "unavailable" treatment for its absence.
+ *
  * 2. **Every state is a real answer, never an error.** A missing diagnosis is
  *    "not analysed yet", not a failure; an unsupported one says so plainly
  *    rather than inventing the least-bad cause. There is deliberately no
@@ -86,6 +91,23 @@ export function MistakeDiagnosisCard({
                     )}
                 </div>
 
+                {diagnosis.explanation && (
+                    <p className="font-serif text-lg text-primary/90 leading-relaxed">
+                        {diagnosis.explanation}
+                    </p>
+                )}
+
+                {diagnosis.training_recommendation && (
+                    <div className="border-l-2 border-primary/30 pl-4">
+                        <h3 className="font-sans text-xs uppercase tracking-widest text-primary/60 mb-1">
+                            Next time
+                        </h3>
+                        <p className="font-sans text-sm text-primary/80">
+                            {diagnosis.training_recommendation}
+                        </p>
+                    </div>
+                )}
+
                 {secondary_cause_labels.length > 0 && (
                     <div className="flex flex-wrap gap-2">
                         {secondary_cause_labels.map((label) => (
@@ -102,7 +124,7 @@ export function MistakeDiagnosisCard({
                 {evidence.length > 0 && (
                     <div>
                         <h3 className="font-sans text-xs uppercase tracking-widest text-primary/60 mb-2">
-                            Why
+                            {diagnosis.explanation ? 'Evidence' : 'Why'}
                         </h3>
                         <dl className="space-y-1">
                             {evidence.map((item) => (

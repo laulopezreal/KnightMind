@@ -145,4 +145,57 @@ describe('MistakeDiagnosisCard', () => {
             screen.getByRole('region', { name: /mistake diagnosis/i })
         ).toBeInTheDocument();
     });
+
+    describe('AI-enriched rows', () => {
+        it('leads with the explanation and shows the recommendation', () => {
+            render(
+                <MistakeDiagnosisCard
+                    revealed
+                    diagnosis={diagnosis({
+                        explanation: 'You left the queen takeable while chasing your own threat.',
+                        training_recommendation: 'Scan for loose pieces before calculating.',
+                    })}
+                />
+            );
+            expect(screen.getByText(/left the queen takeable/i)).toBeInTheDocument();
+            expect(screen.getByText('Next time')).toBeInTheDocument();
+            expect(screen.getByText(/scan for loose pieces/i)).toBeInTheDocument();
+        });
+
+        it('demotes the evidence heading once prose carries the explanation', () => {
+            const { rerender } = render(
+                <MistakeDiagnosisCard diagnosis={diagnosis()} revealed />
+            );
+            expect(screen.getByText('Why')).toBeInTheDocument();
+
+            rerender(
+                <MistakeDiagnosisCard
+                    revealed
+                    diagnosis={diagnosis({ explanation: 'Because the queen was loose.' })}
+                />
+            );
+            expect(screen.getByText('Evidence')).toBeInTheDocument();
+            expect(screen.queryByText('Why')).not.toBeInTheDocument();
+        });
+
+        it('renders a rules-only row as complete, not degraded', () => {
+            // No prose is the normal state for a rules-only diagnosis — it must
+            // not read as something missing or broken.
+            render(<MistakeDiagnosisCard diagnosis={diagnosis()} revealed />);
+            expect(screen.getByText('Loose piece awareness')).toBeInTheDocument();
+            expect(screen.queryByText('Next time')).not.toBeInTheDocument();
+            expect(screen.queryByText(/unavailable|missing|pending/i)).not.toBeInTheDocument();
+        });
+
+        it('still renders no percentage when the model reported confidence', () => {
+            const { container } = render(
+                <MistakeDiagnosisCard
+                    revealed
+                    diagnosis={diagnosis({ explanation: 'Loose queen.' })}
+                />
+            );
+            expect(container.textContent).not.toMatch(/\d+%/);
+        });
+    });
+
 });

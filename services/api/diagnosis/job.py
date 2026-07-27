@@ -14,11 +14,15 @@ early simply leaves rows undone, and the next run finds them again.
 """
 
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
+from services.api.ai import client as ai_client
+from services.api.ai import config as ai_config
+from services.api.ai.prompts import build_user_prompt
 from services.api.analytics_confidence import MIN_ATTEMPTS_FOR_MOTIF_RANK
 from services.api.db import SessionLocal
 from services.api.diagnosis.causes import classify_causes
@@ -43,6 +47,11 @@ from services.api.models import (
     PuzzleResult,
     PuzzleReview,
     PuzzleStats,
+)
+from services.api.storage.ai_audit_repository import (
+    AIAuditRepository,
+    AuditWrite,
+    prompt_hash,
 )
 from services.api.storage.diagnosis_repository import (
     DiagnosisRepository,
@@ -90,14 +99,22 @@ def run_diagnosis(ctx) -> dict:
     diagnosed = unchanged = unavailable = 0
     canceled = False
 
+    enriched = 0
+
     with SessionLocal() as db:
         repo = DiagnosisRepository(db)
+        audit = AIAuditRepository(db)
         pending = repo.pending_puzzle_ids(username, limit)
         total = len(pending)
         if not total:
-            return _result(username, db, repo, 0, 0, 0, False)
+            return _result(username, db, repo, 0, 0, 0, False, 0)
 
         motif_rates = _motif_fail_rates(db, username)
+        # Read the day's spend once, then track locally between commits. A
+        # database count per puzzle would be hundreds of queries for a number
+        # that moves by one each time; re-reading at each commit bounds how far
+        # the local view can drift when another user's job runs concurrently.
+        budget = audit.budget_last_24h(username)
 
         for index, puzzle_id in enumerate(pending):
             # Bounded cadence: the lease still refreshes often enough that
@@ -109,30 +126,42 @@ def run_diagnosis(ctx) -> dict:
                     break
                 ctx.progress(index, total)
 
-            outcome = _diagnose_one(db, repo, username, puzzle_id, motif_rates)
+            outcome, budget, used_ai = _diagnose_one(
+                db, repo, audit, username, puzzle_id, motif_rates, budget
+            )
             if outcome == "diagnosed":
                 diagnosed += 1
             elif outcome == "unchanged":
                 unchanged += 1
             else:
                 unavailable += 1
+            if used_ai:
+                enriched += 1
 
             if (index + 1) % COMMIT_INTERVAL == 0:
                 db.commit()
+                # Re-anchor on what is actually stored; another user's job may
+                # have spent against the global cap since the last read.
+                budget = audit.budget_last_24h(username)
 
         # Flush whatever the last partial chunk produced, including on the
         # cancellation path — a cancel must keep the work already done, not
         # roll it back.
         db.commit()
-        return _result(username, db, repo, diagnosed, unchanged, unavailable, canceled)
+        return _result(
+            username, db, repo, diagnosed, unchanged, unavailable, canceled, enriched
+        )
 
 
-def _result(username, db, repo, diagnosed, unchanged, unavailable, canceled) -> dict:
+def _result(
+    username, db, repo, diagnosed, unchanged, unavailable, canceled, enriched
+) -> dict:
     return {
         "username": username,
         "diagnosed": diagnosed,
         "unchanged": unchanged,
         "unavailable": unavailable,
+        "enriched": enriched,
         "remaining": repo.pending_count(username),
         "canceled": canceled,
     }
@@ -148,17 +177,20 @@ def _clamp(value, low: int, high: int) -> int:
 def _diagnose_one(
     db: Session,
     repo: DiagnosisRepository,
+    audit: AIAuditRepository,
     username: str,
     puzzle_id: str,
     motif_rates: dict[str, tuple[float, int]],
-) -> str:
+    budget,
+) -> tuple[str, object, bool]:
+    """Diagnose one puzzle. Returns (outcome, budget, used_ai)."""
     # Puzzle and PuzzleStats are keyed on puzzle_id alone (a puzzle id belongs
     # to exactly one user by construction); Game is keyed on (game_id, username)
     # because the same canonical game is imported once per participant.
     puzzle = db.get(Puzzle, puzzle_id)
     if puzzle is None or puzzle.username != username:
         # Deleted between the scan and now, or never this user's to begin with.
-        return "unavailable"
+        return "unavailable", budget, False
 
     stats = db.get(PuzzleStats, puzzle_id)
     motif = stats.primary_motif if stats else None
@@ -184,23 +216,30 @@ def _diagnose_one(
                 insufficient_evidence=True,
             )
         )
-        return "unavailable"
+        return "unavailable", budget, False
 
     digest = evidence_hash(packet)
     assessment = classify_causes(packet)
-    primary = next(
-        (c for c in assessment.candidates if c.cause == assessment.primary_cause),
-        None,
+    ai = _enrich(db, audit, username, puzzle_id, packet, assessment, digest, budget)
+    if ai.attempted:
+        budget = budget.spend(1)
+
+    # The model may re-rank within the candidate set, so the strength has to be
+    # looked up for whichever cause is actually stored. Reading it from the
+    # rules' own pick would leave a row asserting one cause with a different
+    # cause's strength.
+    stored_cause = ai.primary_cause or assessment.primary_cause
+    strength = next(
+        (c.strength for c in assessment.candidates if c.cause == stored_cause), None
     )
+
     _, changed = repo.upsert(
         DiagnosisWrite(
             puzzle_id=puzzle_id,
             username=username,
             status=DiagnosisStatus.OK,
             primary_motif=motif,
-            primary_cause=assessment.primary_cause,
-            secondary_causes=assessment.secondary_causes,
-            primary_strength=primary.strength if primary else None,
+            primary_strength=strength,
             insufficient_evidence=assessment.insufficient_evidence,
             phase=packet.position.phase,
             evidence=tuple(
@@ -208,9 +247,110 @@ def _diagnose_one(
                 for item in to_evidence_items(packet)
             ),
             evidence_hash=digest,
+            source=ai.source,
+            model_version=ai.model_version,
+            model_confidence=ai.confidence,
+            agreed_with_rules=ai.agreed_with_rules,
+            explanation=ai.explanation,
+            training_recommendation=ai.recommendation,
+            # The model may re-rank within the rules' candidate set — that is
+            # its whole remit. When it does, its ordering is what gets stored.
+            primary_cause=stored_cause,
+            secondary_causes=ai.secondary_causes or assessment.secondary_causes,
         )
     )
-    return "diagnosed" if changed else "unchanged"
+    # Reported as "enriched" only when the model's output was actually accepted
+    # and stored. Counting attempts here would report a run of pure rejections
+    # as fully enriched.
+    return ("diagnosed" if changed else "unchanged"), budget, ai.source == "llm"
+
+
+@dataclass(frozen=True)
+class _Enrichment:
+    """What the AI stage contributed, if anything."""
+
+    attempted: bool = False
+    source: str = "rules"
+    model_version: str | None = None
+    confidence: float | None = None
+    agreed_with_rules: bool | None = None
+    explanation: str | None = None
+    recommendation: str | None = None
+    primary_cause: str | None = None
+    secondary_causes: tuple[str, ...] = ()
+
+
+_RULES_ONLY = _Enrichment()
+
+
+def _enrich(db, audit, username, puzzle_id, packet, assessment, digest, budget):
+    """Attempt AI enrichment for one diagnosis, recording the attempt.
+
+    Every outcome is audited, including the ones that never call the model —
+    "we skipped 200 puzzles because the budget was exhausted" is exactly the
+    kind of thing that is invisible until someone asks why the cards are bare.
+
+    Returns rules-only enrichment on any non-accepted path. The rules diagnosis
+    is already complete at this point; the model can only add prose and
+    re-rank, never block.
+    """
+    if not ai_config.is_enabled() or not ai_config.api_key():
+        # Nothing can run: the kill switch is off, or there is no key. Either
+        # way write no audit row — a feature that cannot run should leave no
+        # trace, rather than one identical skip row per puzzle for the life of
+        # the retention window. /ops/status reports api_key_present, which is
+        # where "why are the cards bare" gets answered.
+        return _RULES_ONLY
+
+    base = dict(
+        username=username,
+        puzzle_id=puzzle_id,
+        rule_version=assessment.rule_version,
+        extraction_version=packet.extraction_version,
+        evidence_hash=digest,
+    )
+
+    if budget.exhausted:
+        # Recorded, not raised: a spent budget is a normal end-state for a big
+        # backfill, and the next day's run picks up where this one stopped.
+        audit.record(
+            AuditWrite(status=ai_client.SKIPPED, reason="budget_exhausted", **base)
+        )
+        return _RULES_ONLY
+
+    outcome = ai_client.enrich(packet, assessment)
+
+    audit.record(
+        AuditWrite(
+            status=outcome.status,
+            reason=outcome.reason,
+            agreed_with_rules=outcome.agreed_with_rules,
+            model_version=outcome.model_version,
+            prompt_hash=prompt_hash(build_user_prompt(packet, assessment)),
+            response_json=outcome.raw_response,
+            input_tokens=outcome.input_tokens,
+            output_tokens=outcome.output_tokens,
+            **base,
+        )
+    )
+
+    if not outcome.usable:
+        # Rejected, refused, malformed, or unreachable — all land here, and all
+        # leave the rules diagnosis exactly as it was.
+        return _Enrichment(attempted=outcome.status != ai_client.SKIPPED)
+
+    d = outcome.diagnosis
+    return _Enrichment(
+        attempted=True,
+        source="llm",
+        model_version=outcome.model_version,
+        confidence=d.confidence,
+        agreed_with_rules=outcome.agreed_with_rules,
+        explanation=d.explanation.strip(),
+        recommendation=d.training_recommendation.strip(),
+        primary_cause=d.primary_cause,
+        secondary_causes=tuple(d.secondary_causes),
+    )
 
 
 def _puzzle_facts(puzzle: Puzzle) -> PuzzleFacts:

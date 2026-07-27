@@ -10,9 +10,10 @@ name = "knightmind"
 version = "0.1.0"
 description = "Personal Chess Intelligence Platform"
 requires-python = ">=3.11"
-# All deps below are installed together. Rough mapping: API (services/api) — alembic, chess, fastapi, pydantic*, psycopg, python-dotenv, sqlalchemy, stockfish, uvicorn. Ingest (services/ingest) — httpx, truststore. Some are shared.
+# All deps below are installed together. Rough mapping: API (services/api) — alembic, anthropic, chess, fastapi, pydantic*, psycopg, python-dotenv, sqlalchemy, stockfish, uvicorn. Ingest (services/ingest) — httpx, truststore. Some are shared.
 dependencies = [
     "alembic>=1.13.0",
+    "anthropic>=0.100.0",
     "chess>=1.10.0",
     "fastapi>=0.109.0",
     "httpx>=0.26.0",

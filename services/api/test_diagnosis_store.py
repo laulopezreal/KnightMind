@@ -441,6 +441,7 @@ class TestJob:
             "diagnosed": 0,
             "unchanged": 0,
             "unavailable": 0,
+            "enriched": 0,
             "remaining": 0,
             "canceled": False,
         }

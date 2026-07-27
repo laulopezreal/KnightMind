@@ -35,6 +35,11 @@ class DiagnosisWrite:
     evidence: tuple[dict, ...] = ()
     evidence_hash: str | None = None
     source: str = "rules"
+    model_version: str | None = None
+    model_confidence: float | None = None
+    agreed_with_rules: bool | None = None
+    explanation: str | None = None
+    training_recommendation: str | None = None
 
 
 class DiagnosisRepository:
@@ -114,6 +119,10 @@ class DiagnosisRepository:
             and row.primary_strength == write.primary_strength
             and row.insufficient_evidence == write.insufficient_evidence
             and row.evidence_hash == write.evidence_hash
+            # Prose is part of the diagnosis the user reads, so a re-run that
+            # only changes the wording is still a change.
+            and row.explanation == write.explanation
+            and row.training_recommendation == write.training_recommendation
         )
 
     # -- writes --------------------------------------------------------
@@ -148,6 +157,11 @@ class DiagnosisRepository:
         row.evidence_json = list(write.evidence)
         row.evidence_hash = write.evidence_hash
         row.source = write.source
+        row.model_version = write.model_version
+        row.model_confidence = write.model_confidence
+        row.agreed_with_rules = write.agreed_with_rules
+        row.explanation = write.explanation
+        row.training_recommendation = write.training_recommendation
         row.extraction_version = EXTRACTION_VERSION
         row.rule_version = RULE_VERSION
         if changed:

@@ -4,6 +4,7 @@ from sqlalchemy import update
 from sqlalchemy.orm import Session
 
 from services.api.models import TrainingSession
+from services.api.storage.ai_audit_repository import AIAuditRepository
 
 
 def cleanup_abandoned_sessions(db: Session, hours_threshold: int = 24) -> int:
@@ -37,3 +38,20 @@ def cleanup_abandoned_sessions(db: Session, hours_threshold: int = 24) -> int:
         print(f"Auto-completed {count} abandoned session(s)")
 
     return count
+
+
+def purge_expired_ai_audit(db: Session) -> int:
+    """Drop AI diagnosis audit rows past the retention window.
+
+    Rides the existing cleanup loop rather than introducing a scheduler: that
+    loop already runs hourly from the app lifespan, and a retention sweep is
+    exactly the kind of low-frequency housekeeping it exists for.
+
+    Retention is deliberate, not incidental — prompts and responses are kept
+    long enough to investigate an incident and no longer.
+    """
+    removed = AIAuditRepository(db).purge_older_than()
+    if removed:
+        db.commit()
+        print(f"Purged {removed} expired AI audit row(s)")
+    return removed
