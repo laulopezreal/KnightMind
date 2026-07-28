@@ -27,7 +27,7 @@ from typing import Any
 
 # Bump when the serialized tree's shape changes, so old entries cannot be
 # served against new client expectations.
-SCHEME_VERSION = "v1"
+SCHEME_VERSION = "v2"
 
 # Trees are the largest thing held here; a few dozen covers a single user
 # flipping filters plus a handful of concurrent users without unbounded growth.

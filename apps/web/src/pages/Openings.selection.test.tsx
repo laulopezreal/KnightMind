@@ -18,12 +18,11 @@ vi.mock('../context/ChessUsernameContext', () => ({
 }));
 
 const mockGetOpenings = vi.fn();
-vi.mock('../api', () => ({
+// Spread the real module and override only the call under test. A hand-listed
+// mock breaks every time the page imports something new from `../api`.
+vi.mock('../api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../api')>()),
   getOpenings: (...a: unknown[]) => mockGetOpenings(...a),
-  ApiError: class extends Error {
-    statusCode!: number;
-    detail?: string;
-  },
 }));
 
 // Capture the graph's selection callback so a node activation can be simulated.
@@ -38,6 +37,7 @@ vi.mock('../components/OpeningGraph', () => ({
 function node(move_san: string, over: Partial<OpeningNode> = {}): OpeningNode {
   return {
     move_san, ply: 0, games_count: 21, wins: 6, draws: 3, losses: 12, win_rate: 35.7,
+    eco: null, opening_name: null,
     ...over,
   };
 }
@@ -146,6 +146,106 @@ describe('Openings selection panel', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Clear' }));
 
     expect(screen.queryByLabelText('Selected line')).not.toBeInTheDocument();
+  });
+});
+
+describe('Openings depth control', () => {
+  it('requests the default depth on load', async () => {
+    render(<Openings />);
+    await screen.findByTestId('opening-graph');
+
+    expect(mockGetOpenings).toHaveBeenCalledWith('alice', 'both', 12);
+  });
+
+  it('refetches deeper when asked', async () => {
+    // Depth was hardcoded at 12 ply with no control, so the explorer refused to
+    // follow games past six moves however deep they actually went.
+    render(<Openings />);
+    await screen.findByTestId('opening-graph');
+
+    await userEvent.selectOptions(screen.getByLabelText('Tree depth in moves'), '24');
+
+    await waitFor(() =>
+      expect(mockGetOpenings).toHaveBeenLastCalledWith('alice', 'both', 24)
+    );
+  });
+
+  it('remembers the chosen depth', async () => {
+    localStorage.setItem('knightmind:openings:max_ply', JSON.stringify(16));
+    render(<Openings />);
+    await screen.findByTestId('opening-graph');
+
+    expect(mockGetOpenings).toHaveBeenCalledWith('alice', 'both', 16);
+  });
+
+  it('repairs invalid persisted depth before the first fetch', async () => {
+    localStorage.setItem('knightmind:openings:max_ply', JSON.stringify(999));
+
+    render(<Openings />);
+
+    await screen.findByTestId('opening-graph');
+    expect(mockGetOpenings.mock.calls[0]).toEqual(['alice', 'both', 12]);
+    expect(screen.getByLabelText('Tree depth in moves')).toHaveValue('12');
+    expect(localStorage.getItem('knightmind:openings:max_ply')).toBe(JSON.stringify(12));
+  });
+});
+
+describe('Openings score baseline', () => {
+  it('compares a line against the player’s overall score', async () => {
+    // A score with no baseline is not an insight: 35.7% means nothing until you
+    // know the player averages 55%.
+    await selectLine(SICILIAN);
+
+    const panel = screen.getByLabelText('Selected line');
+    expect(panel).toHaveTextContent('35.7%');
+    expect(panel).toHaveTextContent('vs your 55%');
+    expect(panel).toHaveTextContent('−19.3');
+  });
+
+  it('marks a line that beats the average with a plus', async () => {
+    await selectLine([node('Start'), node('e4', { win_rate: 70 })]);
+
+    expect(screen.getByLabelText('Selected line')).toHaveTextContent('+15');
+  });
+
+  it('says "level with" rather than a signed zero', async () => {
+    await selectLine([node('Start'), node('e4', { win_rate: 55 })]);
+
+    expect(screen.getByLabelText('Selected line')).toHaveTextContent('level with');
+  });
+});
+
+describe('Openings opening names', () => {
+  it('names the opening, not just the moves', async () => {
+    // A repertoire shown only as bare SAN is one you cannot search for, study,
+    // or talk about.
+    mockGetOpenings.mockResolvedValue({
+      ...TREE,
+      children: [{
+        ...node('e4', { eco: 'B00', opening_name: "King's Pawn Game" }),
+        children: [node('c5', { eco: 'B20', opening_name: 'Sicilian Defense' })],
+      }],
+    });
+    await selectLine([
+      node('Start'),
+      node('e4', { eco: 'B00', opening_name: "King's Pawn Game" }),
+      node('c5', { eco: 'B20', opening_name: 'Sicilian Defense' }),
+    ]);
+
+    const panel = screen.getByLabelText('Selected line');
+    expect(panel).toHaveTextContent('Sicilian Defense');
+    expect(panel).toHaveTextContent('B20');
+    // The moves stay too — the name identifies the line, the moves define it.
+    expect(panel).toHaveTextContent('1. e4 c5');
+  });
+
+  it('shows only the moves for a line outside the book', async () => {
+    await selectLine(SICILIAN);
+
+    const panel = screen.getByLabelText('Selected line');
+    expect(panel).toHaveTextContent('1. e4 c5 2. Nf3');
+    // No invented name when the classifier has none.
+    expect(panel.textContent).not.toMatch(/Defense|Opening|Game:/);
   });
 });
 

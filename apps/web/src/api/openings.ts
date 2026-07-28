@@ -36,12 +36,35 @@ export interface OpeningNode {
      * surface it to users as "score". See `getScoreColor`.
      */
     win_rate: number;
+    /**
+     * ECO code and opening name for this position, e.g. "B90" / "Sicilian
+     * Defense: Najdorf Variation". Classification is longest-prefix, so a node
+     * with no entry of its own reports the most specific opening above it.
+     * Null on the starting position, and for lines outside the book.
+     */
+    eco: string | null;
+    opening_name: string | null;
     children?: OpeningNode[];
     /** Root node only. */
     analysis?: OpeningAnalysis;
 }
 
 export type ColorFilter = 'white' | 'black' | 'both';
+
+/**
+ * Tree depth in half-moves. The API accepts 1-40; these are the choices worth
+ * offering — your games go deeper than six moves, and the explorer used to
+ * refuse to follow them.
+ */
+export const DEPTH_OPTIONS = [
+    { plies: 8, label: '4 moves' },
+    { plies: 12, label: '6 moves' },
+    { plies: 16, label: '8 moves' },
+    { plies: 24, label: '12 moves' },
+    { plies: 40, label: '20 moves' },
+] as const;
+
+export const DEFAULT_MAX_PLY = 12;
 
 export async function getOpenings(
     username: string,

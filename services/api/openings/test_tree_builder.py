@@ -397,6 +397,8 @@ GOLDEN_TREE_ALL_FIXTURES = {
     "draws": 1,
     "losses": 2,
     "win_rate": 50.0,
+    "eco": None,
+    "opening_name": None,
     "children": [
         {
             "move_san": "e4",
@@ -406,6 +408,8 @@ GOLDEN_TREE_ALL_FIXTURES = {
             "draws": 1,
             "losses": 1,
             "win_rate": 50.0,
+            "eco": "B00",
+            "opening_name": "King's Pawn Game",
             "children": [
                 {
                     "move_san": "c5",
@@ -415,6 +419,8 @@ GOLDEN_TREE_ALL_FIXTURES = {
                     "draws": 0,
                     "losses": 1,
                     "win_rate": 50.0,
+                    "eco": "B20",
+                    "opening_name": "Sicilian Defense",
                     "children": [
                         {
                             "move_san": "Nf3",
@@ -424,6 +430,8 @@ GOLDEN_TREE_ALL_FIXTURES = {
                             "draws": 0,
                             "losses": 1,
                             "win_rate": 50.0,
+                            "eco": "B27",
+                            "opening_name": "Sicilian Defense",
                             "children": [
                                 {
                                     "move_san": "d6",
@@ -433,6 +441,11 @@ GOLDEN_TREE_ALL_FIXTURES = {
                                     "draws": 0,
                                     "losses": 1,
                                     "win_rate": 50.0,
+                                    "eco": "B50",
+                                    "opening_name": "Sicilian "
+                                    "Defense: "
+                                    "Modern "
+                                    "Variations",
                                     "children": [
                                         {
                                             "move_san": "d4",
@@ -442,6 +455,8 @@ GOLDEN_TREE_ALL_FIXTURES = {
                                             "draws": 0,
                                             "losses": 1,
                                             "win_rate": 50.0,
+                                            "eco": "B50",
+                                            "opening_name": "Sicilian Defense",
                                             "children": [
                                                 {
                                                     "move_san": "cxd4",
@@ -451,6 +466,8 @@ GOLDEN_TREE_ALL_FIXTURES = {
                                                     "draws": 0,
                                                     "losses": 1,
                                                     "win_rate": 50.0,
+                                                    "eco": "B50",
+                                                    "opening_name": "Sicilian Defense",
                                                 }
                                             ],
                                         }
@@ -468,6 +485,8 @@ GOLDEN_TREE_ALL_FIXTURES = {
                     "draws": 1,
                     "losses": 0,
                     "win_rate": 50.0,
+                    "eco": "C00",
+                    "opening_name": "French Defense",
                     "children": [
                         {
                             "move_san": "d4",
@@ -477,6 +496,8 @@ GOLDEN_TREE_ALL_FIXTURES = {
                             "draws": 1,
                             "losses": 0,
                             "win_rate": 50.0,
+                            "eco": "C00",
+                            "opening_name": "French Defense: Normal Variation",
                             "children": [
                                 {
                                     "move_san": "d5",
@@ -486,6 +507,8 @@ GOLDEN_TREE_ALL_FIXTURES = {
                                     "draws": 1,
                                     "losses": 0,
                                     "win_rate": 50.0,
+                                    "eco": "C00",
+                                    "opening_name": "French Defense",
                                     "children": [
                                         {
                                             "move_san": "Nc3",
@@ -495,6 +518,11 @@ GOLDEN_TREE_ALL_FIXTURES = {
                                             "draws": 1,
                                             "losses": 0,
                                             "win_rate": 50.0,
+                                            "eco": "C10",
+                                            "opening_name": "French "
+                                            "Defense: "
+                                            "Paulsen "
+                                            "Variation",
                                             "children": [
                                                 {
                                                     "move_san": "Bb4",
@@ -504,6 +532,11 @@ GOLDEN_TREE_ALL_FIXTURES = {
                                                     "draws": 1,
                                                     "losses": 0,
                                                     "win_rate": 50.0,
+                                                    "eco": "C15",
+                                                    "opening_name": "French "
+                                                    "Defense: "
+                                                    "Winawer "
+                                                    "Variation",
                                                 }
                                             ],
                                         }
@@ -523,6 +556,8 @@ GOLDEN_TREE_ALL_FIXTURES = {
             "draws": 0,
             "losses": 1,
             "win_rate": 50.0,
+            "eco": "A40",
+            "opening_name": "Queen's Pawn Game",
             "children": [
                 {
                     "move_san": "Nf6",
@@ -532,6 +567,8 @@ GOLDEN_TREE_ALL_FIXTURES = {
                     "draws": 0,
                     "losses": 1,
                     "win_rate": 50.0,
+                    "eco": "A45",
+                    "opening_name": "Indian Defense",
                     "children": [
                         {
                             "move_san": "c4",
@@ -541,6 +578,8 @@ GOLDEN_TREE_ALL_FIXTURES = {
                             "draws": 0,
                             "losses": 1,
                             "win_rate": 50.0,
+                            "eco": "A50",
+                            "opening_name": "Indian Defense: Normal Variation",
                             "children": [
                                 {
                                     "move_san": "e6",
@@ -550,6 +589,8 @@ GOLDEN_TREE_ALL_FIXTURES = {
                                     "draws": 0,
                                     "losses": 0,
                                     "win_rate": 100.0,
+                                    "eco": "A50",
+                                    "opening_name": "Indian Defense: Normal Variation",
                                     "children": [
                                         {
                                             "move_san": "Nc3",
@@ -559,6 +600,11 @@ GOLDEN_TREE_ALL_FIXTURES = {
                                             "draws": 0,
                                             "losses": 0,
                                             "win_rate": 100.0,
+                                            "eco": "A50",
+                                            "opening_name": "Indian "
+                                            "Defense: "
+                                            "Normal "
+                                            "Variation",
                                             "children": [
                                                 {
                                                     "move_san": "Bb4",
@@ -568,6 +614,9 @@ GOLDEN_TREE_ALL_FIXTURES = {
                                                     "draws": 0,
                                                     "losses": 0,
                                                     "win_rate": 100.0,
+                                                    "eco": "E20",
+                                                    "opening_name": "Nimzo-Indian "
+                                                    "Defense",
                                                 }
                                             ],
                                         }
@@ -581,6 +630,12 @@ GOLDEN_TREE_ALL_FIXTURES = {
                                     "draws": 0,
                                     "losses": 1,
                                     "win_rate": 0.0,
+                                    "eco": "E60",
+                                    "opening_name": "Indian "
+                                    "Defense: "
+                                    "West "
+                                    "Indian "
+                                    "Defense",
                                     "children": [
                                         {
                                             "move_san": "Nc3",
@@ -590,6 +645,8 @@ GOLDEN_TREE_ALL_FIXTURES = {
                                             "draws": 0,
                                             "losses": 1,
                                             "win_rate": 0.0,
+                                            "eco": "E61",
+                                            "opening_name": "King's Indian Defense",
                                             "children": [
                                                 {
                                                     "move_san": "Bg7",
@@ -599,6 +656,10 @@ GOLDEN_TREE_ALL_FIXTURES = {
                                                     "draws": 0,
                                                     "losses": 1,
                                                     "win_rate": 0.0,
+                                                    "eco": "E61",
+                                                    "opening_name": "King's "
+                                                    "Indian "
+                                                    "Defense",
                                                 }
                                             ],
                                         }
