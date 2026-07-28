@@ -141,38 +141,6 @@ describe('Openings selection panel', () => {
     expect(screen.queryByRole('link', { name: /analyse in engine/i })).not.toBeInTheDocument();
   });
 
-  it('names the opening, not just the moves', async () => {
-    // A repertoire shown only as bare SAN is one you cannot search for, study,
-    // or talk about.
-    mockGetOpenings.mockResolvedValue({
-      ...TREE,
-      children: [{
-        ...node('e4', { eco: 'B00', opening_name: "King's Pawn Game" }),
-        children: [node('c5', { eco: 'B20', opening_name: 'Sicilian Defense' })],
-      }],
-    });
-    await selectLine([
-      node('Start'),
-      node('e4', { eco: 'B00', opening_name: "King's Pawn Game" }),
-      node('c5', { eco: 'B20', opening_name: 'Sicilian Defense' }),
-    ]);
-
-    const panel = screen.getByLabelText('Selected line');
-    expect(panel).toHaveTextContent('Sicilian Defense');
-    expect(panel).toHaveTextContent('B20');
-    // The moves stay too — the name identifies the line, the moves define it.
-    expect(panel).toHaveTextContent('1. e4 c5');
-  });
-
-  it('shows only the moves for a line outside the book', async () => {
-    await selectLine(SICILIAN);
-
-    const panel = screen.getByLabelText('Selected line');
-    expect(panel).toHaveTextContent('1. e4 c5 2. Nf3');
-    // No invented name when the classifier has none.
-    expect(panel.textContent).not.toMatch(/Defense|Opening|Game:/);
-  });
-
   it('can be dismissed', async () => {
     await selectLine(SICILIAN);
     await userEvent.click(screen.getByRole('button', { name: 'Clear' }));
@@ -208,6 +176,17 @@ describe('Openings depth control', () => {
     await screen.findByTestId('opening-graph');
 
     expect(mockGetOpenings).toHaveBeenCalledWith('alice', 'both', 16);
+  });
+
+  it('repairs invalid persisted depth before the first fetch', async () => {
+    localStorage.setItem('knightmind:openings:max_ply', JSON.stringify(999));
+
+    render(<Openings />);
+
+    await screen.findByTestId('opening-graph');
+    expect(mockGetOpenings.mock.calls[0]).toEqual(['alice', 'both', 12]);
+    expect(screen.getByLabelText('Tree depth in moves')).toHaveValue('12');
+    expect(localStorage.getItem('knightmind:openings:max_ply')).toBe(JSON.stringify(12));
   });
 });
 

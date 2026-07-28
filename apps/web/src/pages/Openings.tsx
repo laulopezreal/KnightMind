@@ -36,6 +36,29 @@ const SCOPE_NOUN: Record<ColorFilter, string> = {
   black: 'games as Black',
 };
 
+const MAX_PLY_STORAGE_KEY = 'knightmind:openings:max_ply';
+const VALID_MAX_PLY = new Set<number>(DEPTH_OPTIONS.map(option => option.plies));
+
+function normalizeMaxPly(value: unknown): number {
+  return typeof value === 'number' && Number.isInteger(value) && VALID_MAX_PLY.has(value)
+    ? value
+    : DEFAULT_MAX_PLY;
+}
+
+function parsePersistedMaxPly(value: string): number {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    parsed = undefined;
+  }
+  const maxPly = normalizeMaxPly(parsed);
+  if (parsed !== maxPly) {
+    window.localStorage.setItem(MAX_PLY_STORAGE_KEY, JSON.stringify(maxPly));
+  }
+  return maxPly;
+}
+
 /** Modifier key d3-zoom listens for, named the way the user's keyboard labels it. */
 const ZOOM_MODIFIER = /Mac|iPhone|iPad/i.test(
   typeof navigator === 'undefined' ? '' : navigator.userAgent
@@ -77,8 +100,9 @@ export default function Openings() {
   // Depth was hardcoded at 12 ply with no control, while the API accepts 40 —
   // the explorer simply refused to follow games past six moves.
   const [maxPly, setMaxPly] = useLocalStorage<number>(
-    'knightmind:openings:max_ply',
-    DEFAULT_MAX_PLY
+    MAX_PLY_STORAGE_KEY,
+    DEFAULT_MAX_PLY,
+    parsePersistedMaxPly
   );
   const [treeData, setTreeData] = useState<OpeningNode | null>(null);
   const [tooltip, setTooltip] = useState<{ anchor: NodeAnchor; data: OpeningNode } | null>(null);
