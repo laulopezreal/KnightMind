@@ -34,6 +34,7 @@ from services.api.analytics_confidence import (
 )
 from services.api.auth import require_operator
 from services.api.db import SessionLocal, get_db
+from services.api.diagnosis.job import DIAGNOSIS_BATCH_DEFAULT, DIAGNOSIS_BATCH_MAX
 from services.api.engine import (
     EngineNotAvailableError,
     InvalidFenError,
@@ -45,11 +46,15 @@ from services.api.identity import (
     claim_username_if_unowned,
     require_account,
 )
-from services.api.jobs.cleanup_sessions import cleanup_abandoned_sessions
+from services.api.jobs.cleanup_sessions import (
+    cleanup_abandoned_sessions,
+    purge_expired_ai_audit,
+)
 from services.api.models import (
     Account,
     Job,
     JobStatus,
+    JobType,
     PuzzleResult,
     PuzzleReview,
     PuzzleStats,
@@ -62,19 +67,23 @@ from services.api.models import (
     Puzzle as PuzzleModel,
 )
 from services.api.motifs import MotifPerformanceResponse, get_user_motif_performance
-from services.api.openings import build_opening_tree
+from services.api.openings import OpeningTreeBuilder
+from services.api.openings import make_key as make_openings_cache_key
+from services.api.openings import tree_cache as openings_tree_cache
 from services.api.puzzles.identity import backfill_puzzle_identity
 from services.api.ratelimit import rate_limit
 from services.api.ratings_auto import auto_snapshot, auto_snapshot_throttled
 from services.api.storage import GameRepository, PuzzleRepository, normalized_position
+from services.api.storage.diagnosis_repository import DiagnosisRepository
 from services.api.storage.game_repository import MANUAL_GAME_ID
 from services.api.storage.spaced_repetition import (
     _utcnow_naive,
     get_adaptive_puzzles,
     get_all_puzzle_stats,
-    get_due_puzzle_count,
     get_next_due_date,
     get_puzzle_stats,
+    get_trainable_puzzle_count,
+    get_trainable_puzzle_ids,
     insert_puzzle_review,
     update_puzzle_stats,
 )
@@ -107,6 +116,7 @@ RATE_LIMIT_ENGINE_EVAL = 30  # Stockfish CPU; also has a per-process in-flight c
 RATE_LIMIT_IMPORT_CHESSCOM = 5  # heavy Chess.com fetch + bulk DB writes
 RATE_LIMIT_PUZZLES_GENERATE = 5  # enqueues a heavy analysis job
 RATE_LIMIT_RATINGS_SNAPSHOT = 10  # outbound Chess.com call per request
+RATE_LIMIT_DIAGNOSE = 5  # enqueues a whole-corpus analysis job
 
 # A FEN is bounded in length (piece placement + 5 short fields); anything much
 # longer than a legal position is junk. Reject oversized input with 400 before
@@ -134,7 +144,13 @@ DRAW_RESULTS = frozenset(
 
 
 async def run_session_cleanup():
-    """Background task to cleanup abandoned sessions periodically."""
+    """Background task for periodic housekeeping.
+
+    Session cleanup and AI-audit retention run in separate try blocks on
+    purpose: a failure in one must not skip the other, and a stalled retention
+    sweep would let prompt/response blobs accumulate past their window
+    silently.
+    """
     while True:
         try:
             # Run cleanup
@@ -142,6 +158,12 @@ async def run_session_cleanup():
                 await asyncio.to_thread(cleanup_abandoned_sessions, db)
         except Exception as e:
             print(f"Error in session cleanup: {e}")
+
+        try:
+            with SessionLocal() as db:
+                await asyncio.to_thread(purge_expired_ai_audit, db)
+        except Exception as e:
+            print(f"Error in AI audit purge: {e}")
 
         # Sleep for defined interval
         await asyncio.sleep(CLEANUP_INTERVAL_SECONDS)
@@ -275,15 +297,16 @@ async def get_user_status(
         if latest_puzzle_time is None or latest_game_time > latest_puzzle_time:
             has_new_games = True
 
-    # Use efficient count queries
+    # Use efficient count queries. `due_count` is the *trainable* count — due
+    # plus never-reviewed — because that is what the Train page gates on. The
+    # strict due-only count used to report 0 for a user whose puzzles had all
+    # just been generated but who also had older scheduled puzzles, disabling
+    # "Start Session" on a pile of untouched puzzles. (The previous
+    # `total_stats == 0` special case only covered the all-or-nothing case.)
     due_count = 0
     next_due_at = None
     if puzzles_count > 0:
-        # get_due_puzzle_count now counts never-reviewed ("New", NULL
-        # next_due_at) stats as due, so it is correct on its own: a fresh user
-        # whose puzzles all have eager NULL-next_due_at stats gets due_count ==
-        # trainable count without a special-case fallback.
-        due_count = get_due_puzzle_count(db, username)
+        due_count = get_trainable_puzzle_count(db, username)
         next_due_at = get_next_due_date(db, username)
 
     return UserStatusResponse(
@@ -666,8 +689,10 @@ async def get_openings(
     - ply: Half-move number (1 = white's first, 2 = black's first, etc.)
     - games_count: Number of games reaching this position
     - wins/draws/losses: Results from the player's perspective
-    - win_rate: Win percentage (wins + 0.5*draws) / games
+    - win_rate: Score percentage (wins + 0.5*draws) / games
     - children: Subsequent moves played from this position
+    - analysis: How many stored games actually reached the tree, and why the
+      rest didn't (colour filter vs. unreadable/not-the-player/unfinished)
 
     Args:
         username: The username to build the tree for (must have imported games)
@@ -688,25 +713,32 @@ async def get_openings(
             detail=f"No games found for user '{username}'. Import games first using POST /import/chesscom",
         )
 
+    # Rebuilding re-parses every stored PGN, and the client refetches on mount
+    # and on every colour-filter change. The key folds in the game count and the
+    # newest game's timestamp, so an import invalidates this by construction.
+    cache_key = make_openings_cache_key(
+        username=username,
+        color=color,
+        max_ply=max_ply,
+        game_count=game_count,
+        latest_game_time=game_repository.get_latest_game_time(username),
+    )
+    cached = openings_tree_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
     # Stream all PGNs for the user in bulk batches (one query per batch)
     # instead of one query per game, without holding every blob in memory.
     metadata_list = game_repository.get_all_metadata(username)
     game_ids = [meta.game_id for meta in metadata_list]
     pgn_count = 0
 
-    def _iter_pgn_texts():
-        nonlocal pgn_count
-        for pgn in game_repository.iter_pgns(username, game_ids):
-            pgn_count += 1
-            yield pgn
-
-    # Build the opening tree
-    tree = build_opening_tree(
-        pgn_texts=_iter_pgn_texts(),
-        player_username=username,
-        color_filter=color,
-        max_ply=max_ply,
-    )
+    # Build the opening tree. The builder (rather than the build_opening_tree
+    # convenience wrapper) is used directly so its per-game report survives.
+    builder = OpeningTreeBuilder(max_ply=max_ply)
+    for pgn in game_repository.iter_pgns(username, game_ids):
+        pgn_count += 1
+        builder.add_game(pgn, username, color)
 
     if metadata_list and pgn_count == 0:
         raise HTTPException(
@@ -714,6 +746,16 @@ async def get_openings(
             detail="Games found but PGN content is missing. Re-import games to populate PGN data.",
         )
 
+    tree = builder.build_tree()
+    # Attached to the root node rather than wrapping the response so existing
+    # clients keep reading the tree at the top level. `games_stored` comes from
+    # the repository, so a tree built from a fraction of a user's games is
+    # reportable instead of silently looking complete.
+    tree["analysis"] = {"games_stored": game_count, **builder.report.to_dict()}
+    # Stored only once the response is fully composed: the cache hands values
+    # back by reference, so anything mutated after this point would corrupt
+    # every later hit.
+    openings_tree_cache.put(cache_key, tree)
     return tree
 
 
@@ -812,6 +854,7 @@ async def generate_puzzles_endpoint(
     try:
         new_job = Job(
             username=username,
+            type=JobType.PUZZLE_GENERATION,
             status=JobStatus.QUEUED,
             message="Queued for generation",
             params={"max_games": max_games, "max_puzzles": max_puzzles},
@@ -826,8 +869,14 @@ async def generate_puzzles_endpoint(
 
     except IntegrityError as e:
         db.rollback()
+        # Scope every lookup below to this job TYPE. The active-job index is
+        # unique on (username, type), so the row we collided with is a
+        # generation job specifically -- without the filter, a concurrently
+        # running job of another type could be reported back as the caller's
+        # generation job, handing them an id that will never produce puzzles.
         stmt = select(Job).where(
             Job.username == username,
+            Job.type == JobType.PUZZLE_GENERATION,
             or_(Job.status == JobStatus.QUEUED, Job.status == JobStatus.RUNNING),
         )
         existing_job = db.scalars(stmt).first()
@@ -842,7 +891,10 @@ async def generate_puzzles_endpoint(
         else:
             stmt = (
                 select(Job)
-                .where(Job.username == username)
+                .where(
+                    Job.username == username,
+                    Job.type == JobType.PUZZLE_GENERATION,
+                )
                 .order_by(Job.created_at.desc())
             )
             latest_job = db.scalars(stmt).first()
@@ -1239,7 +1291,13 @@ async def get_due_puzzles_endpoint(
 
         puzzle_ids = list(filtered_ids)
 
-    # 3. Get prioritized IDs and their stats using adaptive selection
+    # 3. Drop puzzles that are scheduled for a future date. Topping a session up
+    #    with not-yet-due puzzles used to make "N puzzles due" a lie AND corrupt
+    #    the intervals (an early review re-anchors next_due_at on today).
+    #    See get_trainable_puzzle_ids.
+    puzzle_ids = get_trainable_puzzle_ids(db, username, puzzle_ids)
+
+    # 4. Get prioritized IDs and their stats using adaptive selection
     due_ids, all_stats = get_adaptive_puzzles(
         db, username, puzzle_ids, n, session_type, target_accuracy
     )
@@ -1287,16 +1345,12 @@ async def get_due_puzzles_endpoint(
         # SCORED training path: never ship the solution up front.
         result_puzzles.append(_strip_solution(p_dict))
 
-    # 4. Total due count for metadata
-    # We can calculate this from all_stats since it contains all stats for the user's puzzles.
-    # A NULL next_due_at marks a never-reviewed ("New") puzzle, which is
-    # trainable and therefore counts as due (mirrors get_due_puzzle_count).
+    # 5. Trainable count for metadata. `puzzle_ids` is already the trainable set
+    #    (scoped to the motif filter when one was given), so this is the honest
+    #    "how many could this request have served" number — the same predicate
+    #    the /users/{username}/status due_count uses.
     now = datetime.now(timezone.utc)
-    due_count = sum(
-        1
-        for s in all_stats.values()
-        if s.next_due_at is None or s.next_due_at.replace(tzinfo=timezone.utc) <= now
-    )
+    due_count = len(puzzle_ids)
 
     return {
         "due_count": due_count,
@@ -1842,6 +1896,259 @@ async def get_puzzle_detail(
         last_result=stats.last_result if stats else None,
         next_due_at=stats.next_due_at if stats else None,
         created_at=puzzle.created_at,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Mistake diagnosis
+# ---------------------------------------------------------------------------
+
+
+class DiagnosisEvidenceItem(BaseModel):
+    id: str
+    label: str
+    value: str
+
+
+class DiagnosisResponse(BaseModel):
+    """A diagnosis, or an honest statement that there isn't one yet.
+
+    ``state`` is what the UI renders on, and every value is a real situation
+    rather than an error:
+
+    * ``ready``       — a cause, with the evidence behind it
+    * ``unclear``     — analysed, but no rule found a supported cause
+    * ``pending``     — not analysed yet; a job will get to it
+    * ``unavailable`` — this puzzle cannot be analysed at all
+
+    No cause is ever invented to avoid ``unclear``. There is deliberately no
+    numeric confidence: the rule strength is an ordering prior, not a
+    calibrated probability, and rendering it as a percentage would overstate
+    what the rules know.
+    """
+
+    state: Literal["ready", "unclear", "pending", "unavailable"]
+    puzzle_id: str
+    primary_motif: str | None = None
+    primary_cause: str | None = None
+    primary_cause_label: str | None = None
+    secondary_causes: list[str] = []
+    secondary_cause_labels: list[str] = []
+    phase: str | None = None
+    evidence: list[DiagnosisEvidenceItem] = []
+    # True when a diagnosis has evidence but the caller did not reveal. Lets the
+    # UI say "solve it to see why" instead of rendering an empty section as if
+    # there were nothing to show.
+    evidence_withheld: bool = False
+    explanation: str | None = None
+    training_recommendation: str | None = None
+    user_confirmed_cause: str | None = None
+    source: str | None = None
+    diagnosed_at: datetime | None = None
+
+
+class DiagnosisConfirmRequest(BaseModel):
+    cause: str
+
+
+class PendingDiagnosisResponse(BaseModel):
+    username: str
+    pending: int
+
+
+def _diagnosis_response(
+    puzzle_id: str, row, reveal_solution: bool = False
+) -> DiagnosisResponse:
+    """Build the client payload.
+
+    ``reveal_solution`` defaults to False deliberately: the evidence names the
+    solution move, so a call site that forgets to pass the gate withholds
+    rather than leaks. The first version defaulted to True and POST /confirm —
+    which returns this same body — silently bypassed the gate that GET
+    enforced.
+    """
+    from services.api.diagnosis.causes import CAUSE_LABELS
+    from services.api.models import DiagnosisStatus
+
+    if row is None:
+        return DiagnosisResponse(state="pending", puzzle_id=puzzle_id)
+    if row.status == DiagnosisStatus.UNAVAILABLE:
+        # The stored ``error`` is a developer detail (an illegal move, an
+        # unparseable FEN) and is deliberately not echoed to the client.
+        return DiagnosisResponse(state="unavailable", puzzle_id=puzzle_id)
+
+    cause = row.user_confirmed_cause or row.primary_cause
+    unclear = row.insufficient_evidence or not cause
+    secondary = list(row.secondary_causes or [])
+    # The evidence names the solution — "Best move: Qxd5", the squares it
+    # attacks, the length of the winning line. That makes this endpoint a
+    # side-channel around the anti-cheat gate, so it obeys the same rule as
+    # /puzzles/{id}: withheld unless the caller reveals. The cause and its label
+    # stay, because "loose piece awareness" is a coaching label, not the move.
+    evidence = row.evidence_json or [] if reveal_solution else []
+    return DiagnosisResponse(
+        state="unclear" if unclear else "ready",
+        puzzle_id=puzzle_id,
+        primary_motif=row.primary_motif,
+        primary_cause=cause,
+        primary_cause_label=CAUSE_LABELS.get(cause) if cause else None,
+        secondary_causes=secondary,
+        secondary_cause_labels=[CAUSE_LABELS.get(c, c) for c in secondary],
+        phase=row.phase,
+        evidence=[DiagnosisEvidenceItem(**item) for item in evidence],
+        evidence_withheld=not reveal_solution and bool(row.evidence_json),
+        explanation=row.explanation,
+        training_recommendation=row.training_recommendation,
+        user_confirmed_cause=row.user_confirmed_cause,
+        source=row.source,
+        diagnosed_at=row.updated_at,
+    )
+
+
+@app.get("/puzzles/{puzzle_id}/diagnosis", response_model=DiagnosisResponse)
+async def get_puzzle_diagnosis(
+    puzzle_id: str,
+    username: Annotated[Username, Query(description="Username the puzzle belongs to")],
+    reveal: bool = Query(
+        False,
+        description="Include the evidence, which names the solution move. Off by "
+        "default so the diagnosis cannot be used to read the answer.",
+    ),
+    db: Session = Depends(get_db),
+    account: Account | None = Depends(require_account),
+):
+    """Read the stored diagnosis for a puzzle.
+
+    Never computes one. Diagnosis is background work, so a page load stays a
+    single indexed row read whatever else is going on — and stays that way when
+    the AI stage arrives and computing means a model call.
+    """
+    from services.api.models import Puzzle as PuzzleModel
+
+    assert_owns_username(account, username, db)
+
+    exists = db.scalar(
+        select(PuzzleModel.id).where(
+            PuzzleModel.id == puzzle_id, PuzzleModel.username == username
+        )
+    )
+    if not exists:
+        raise HTTPException(status_code=404, detail="Puzzle not found")
+
+    # Same gate as /puzzles/{id}: when the strip flag is OFF (default) the
+    # evidence is always included, so this deploys without breaking anything;
+    # when it is ON, ?reveal=true is required.
+    reveal_solution = reveal or not _strip_puzzle_solutions_enabled()
+    return _diagnosis_response(
+        puzzle_id, DiagnosisRepository(db).get(username, puzzle_id), reveal_solution
+    )
+
+
+@app.get("/users/{username}/diagnosis/pending", response_model=PendingDiagnosisResponse)
+async def get_pending_diagnoses(
+    username: Username,
+    db: Session = Depends(get_db),
+    account: Account | None = Depends(require_account),
+):
+    """How many puzzles still need diagnosing — drives the backfill CTA."""
+    assert_owns_username(account, username, db)
+    return PendingDiagnosisResponse(
+        username=username, pending=DiagnosisRepository(db).pending_count(username)
+    )
+
+
+@app.post(
+    "/users/{username}/diagnose",
+    response_model=JobStatusResponse,
+    dependencies=[Depends(rate_limit("diagnose", default_limit=RATE_LIMIT_DIAGNOSE))],
+)
+async def diagnose_puzzles_endpoint(
+    username: Username,
+    limit: int = Query(
+        DIAGNOSIS_BATCH_DEFAULT,
+        ge=1,
+        le=DIAGNOSIS_BATCH_MAX,
+        description="Maximum puzzles to analyse in this run",
+    ),
+    db: Session = Depends(get_db),
+    account: Account | None = Depends(require_account),
+):
+    """Queue a diagnosis run over the puzzles that still need one.
+
+    Scoped to its own job type, so it can run alongside puzzle generation --
+    that is what the (username, type) active-job index exists for. A duplicate
+    request returns the in-flight job rather than erroring, mirroring
+    /puzzles/generate.
+    """
+    assert_owns_username(account, username, db)
+    try:
+        job = Job(
+            username=username,
+            type=JobType.DIAGNOSIS,
+            status=JobStatus.QUEUED,
+            message="Queued for diagnosis",
+            params={"limit": limit},
+        )
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+        return JobStatusResponse(
+            job_id=job.id, status=job.status, message="Job queued", progress=0
+        )
+    except IntegrityError as e:
+        db.rollback()
+        existing = db.scalars(
+            select(Job).where(
+                Job.username == username,
+                Job.type == JobType.DIAGNOSIS,
+                or_(Job.status == JobStatus.QUEUED, Job.status == JobStatus.RUNNING),
+            )
+        ).first()
+        if existing:
+            return JobStatusResponse(
+                job_id=existing.id,
+                status=existing.status,
+                message="Diagnosis already in progress",
+                progress=existing.progress_current,
+            )
+        raise HTTPException(
+            status_code=500, detail="Could not create diagnosis job"
+        ) from e
+
+
+@app.post("/puzzles/{puzzle_id}/diagnosis/confirm", response_model=DiagnosisResponse)
+async def confirm_puzzle_diagnosis(
+    puzzle_id: str,
+    payload: DiagnosisConfirmRequest,
+    username: Annotated[Username, Query(description="Username the puzzle belongs to")],
+    reveal: bool = Query(
+        False,
+        description="Include the evidence, which names the solution move.",
+    ),
+    db: Session = Depends(get_db),
+    account: Account | None = Depends(require_account),
+):
+    """Let the user correct the cause label.
+
+    Stored beside the computed cause, never over it: keeping both is what makes
+    rule accuracy measurable against real feedback, and a later re-run of the
+    rules must not silently discard the correction.
+    """
+    from services.api.diagnosis.causes import CAUSE_LABELS
+
+    assert_owns_username(account, username, db)
+
+    if payload.cause not in CAUSE_LABELS:
+        raise HTTPException(status_code=422, detail="Unknown cause")
+
+    repo = DiagnosisRepository(db)
+    row = repo.confirm_cause(username, puzzle_id, payload.cause)
+    if row is None:
+        raise HTTPException(status_code=404, detail="No diagnosis for this puzzle")
+    db.commit()
+    # Same gate as the read: this returns the identical body, evidence and all.
+    return _diagnosis_response(
+        puzzle_id, row, reveal or not _strip_puzzle_solutions_enabled()
     )
 
 

@@ -7,15 +7,20 @@ import Openings from './Openings';
 let mockUsername = 'alice';
 const mockNavigate = vi.fn();
 
-vi.mock('react-router-dom', () => ({ useNavigate: () => mockNavigate }));
+vi.mock('react-router-dom', () => ({
+  useNavigate: () => mockNavigate,
+  Link: ({ children, to, ...rest }: { children: React.ReactNode; to: string; [key: string]: unknown }) => <a href={to} {...rest}>{children}</a>,
+}));
 vi.mock('../context/ChessUsernameContext', () => ({
     useChessUsername: () => ({ username: mockUsername }),
 }));
 
 const mockGetOpenings = vi.fn();
-vi.mock('../api', () => ({
-    getOpenings: (...a: unknown[]) => mockGetOpenings(...a),
-    ApiError: class extends Error { detail?: string },
+// Spread the real module and override only the call under test. A hand-listed
+// mock breaks every time the page imports something new from `../api`.
+vi.mock('../api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../api')>()),
+  getOpenings: (...a: unknown[]) => mockGetOpenings(...a),
 }));
 
 vi.mock('../components/OpeningGraph', () => ({

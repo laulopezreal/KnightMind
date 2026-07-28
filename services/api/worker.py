@@ -1,17 +1,89 @@
 import asyncio
 import logging
 import traceback
-from dataclasses import asdict
+from dataclasses import asdict, dataclass, is_dataclass
 from datetime import datetime, timedelta, timezone
+from typing import Any, Callable
 
 from sqlalchemy import func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from services.api.db import SessionLocal
-from services.api.models import Job, JobStatus
+from services.api.diagnosis.job import DIAGNOSIS_BATCH_MAX, run_diagnosis
+from services.api.models import Job, JobStatus, JobType
 from services.api.puzzles.generator import generate_puzzles
+from services.api.storage.diagnosis_repository import DiagnosisRepository
 
 logger = logging.getLogger(__name__)
+
+
+class UnknownJobTypeError(Exception):
+    """A job names a type with no registered handler.
+
+    Raised (and therefore surfaced as a FAILED job with a readable message)
+    rather than falling back to a default handler. A job that quietly runs the
+    wrong work is far worse than one that fails loudly: before the handler
+    registry existed, ``execute_job`` ignored ``job.type`` entirely and ran
+    puzzle generation for every job regardless of what it claimed to be.
+    """
+
+
+@dataclass(frozen=True)
+class JobContext:
+    """Everything a handler needs, and nothing about the worker.
+
+    ``heartbeat`` returns True when the job has been canceled and the handler
+    should stop; calling it also bumps the liveness lease, so a long-running
+    handler must call it periodically or crash recovery will reclaim the job.
+    """
+
+    job_id: str
+    username: str
+    params: dict
+    heartbeat: Callable[[], bool]
+    progress: Callable[[int, int], None]
+
+
+# A handler returns a dataclass or dict, which is persisted to
+# ``Job.result_json``. Anything else is a programming error (see
+# ``_result_payload``).
+JobHandler = Callable[[JobContext], Any]
+
+
+def _run_puzzle_generation(ctx: JobContext) -> Any:
+    """Handler for :attr:`JobType.PUZZLE_GENERATION`."""
+    # Job params bypass FastAPI validation; clamp to the same bounds as the
+    # endpoint so a stored job can't trigger an unbounded bulk PGN load.
+    max_games = min(max(int(ctx.params.get("max_games", 30)), 1), 2000)
+    max_puzzles = min(max(int(ctx.params.get("max_puzzles", 30)), 1), 2000)
+    return generate_puzzles(
+        username=ctx.username,
+        max_games=max_games,
+        max_puzzles=max_puzzles,
+        cancellation_check=ctx.heartbeat,
+        progress_callback=ctx.progress,
+    )
+
+
+JOB_HANDLERS: dict[str, JobHandler] = {
+    JobType.PUZZLE_GENERATION.value: _run_puzzle_generation,
+    JobType.DIAGNOSIS.value: run_diagnosis,
+}
+
+
+def _result_payload(result: Any) -> dict | None:
+    """Normalise a handler's return value for ``Job.result_json``."""
+    if result is None:
+        return None
+    if is_dataclass(result) and not isinstance(result, type):
+        return asdict(result)
+    if isinstance(result, dict):
+        return result
+    raise TypeError(
+        f"job handler returned {type(result).__name__}; "
+        "handlers must return a dataclass, a dict, or None"
+    )
 
 
 class JobWorker:
@@ -208,6 +280,101 @@ class JobWorker:
             )
             db.commit()
 
+    @staticmethod
+    def _enqueue_diagnosis(
+        username: str, message: str, params: dict | None = None
+    ) -> None:
+        """Queue one diagnosis job for a user, best-effort.
+
+        Deliberately wrapped so a follow-up failure cannot turn already
+        persisted work into a failed job. The active-job unique index still
+        enforces at most one queued/running diagnosis per user; collisions are
+        expected under races and are safe no-ops.
+        """
+        try:
+            with SessionLocal() as db:
+                try:
+                    db.add(
+                        Job(
+                            username=username,
+                            type=JobType.DIAGNOSIS,
+                            status=JobStatus.QUEUED,
+                            message=message,
+                            params=params or {"limit": DIAGNOSIS_BATCH_MAX},
+                        )
+                    )
+                    db.commit()
+                except IntegrityError:
+                    # A diagnosis job is already queued or running for this
+                    # user — the active-job index says so. Marked automatic
+                    # diagnosis jobs re-check pending work at completion, so
+                    # there is nothing to do here.
+                    #
+                    # Rolled back explicitly rather than relying on the context
+                    # manager: a failed flush leaves the session unusable, and
+                    # this must be safe for a caller that supplied its own
+                    # session rather than a fresh one.
+                    db.rollback()
+                    logger.info(
+                        "Diagnosis already active for %s; not re-queuing", username
+                    )
+                    return
+            logger.info("Queued follow-up diagnosis for %s", username)
+        except Exception as exc:  # noqa: BLE001 - must never fail the generation
+            logger.warning("Could not queue follow-up diagnosis: %s", exc)
+
+    @staticmethod
+    def _enqueue_followup(job_type: str, username: str) -> None:
+        """Queue a diagnosis run after puzzles are generated.
+
+        Fresh puzzles are fresh mistakes, and a mistake with no diagnosis is
+        the feature not existing for that user. Chaining here means importing
+        games is the only thing anyone has to do — nobody needs to discover
+        POST /users/{username}/diagnose.
+        """
+        if job_type != JobType.PUZZLE_GENERATION.value:
+            # Only generation unconditionally produces new puzzles. Diagnosis
+            # requeues through _enqueue_remaining_diagnosis_if_pending, guarded
+            # by the actual pending-count predicate so it cannot loop forever.
+            return
+
+        JobWorker._enqueue_diagnosis(
+            username,
+            "Queued after puzzle generation",
+            {"limit": DIAGNOSIS_BATCH_MAX, "auto_chain": True},
+        )
+
+    @staticmethod
+    def _enqueue_remaining_diagnosis_if_pending(
+        job_type: str, username: str, params: dict
+    ) -> None:
+        """Close the generation-vs-diagnosis race after a diagnosis succeeds.
+
+        A running diagnosis snapshots pending puzzle ids at start. If puzzle
+        generation creates fresh pending puzzles during that run, generation's
+        follow-up insert may collide with the active diagnosis and no queued job
+        is left behind. Once the current diagnosis is marked SUCCEEDED, re-check
+        the storage predicate and queue one more diagnosis only if work remains.
+        """
+        if job_type != JobType.DIAGNOSIS.value or not params.get("auto_chain"):
+            return
+
+        try:
+            with SessionLocal() as db:
+                pending = DiagnosisRepository(db).pending_count(username)
+        except Exception as exc:  # noqa: BLE001 - enrichment must stay best-effort
+            logger.warning("Could not check remaining diagnosis work: %s", exc)
+            return
+
+        if pending <= 0:
+            return
+
+        JobWorker._enqueue_diagnosis(
+            username,
+            "Queued for remaining diagnosis",
+            {"limit": DIAGNOSIS_BATCH_MAX, "auto_chain": True},
+        )
+
     async def execute_job(self, job_id: str):
         """Execute the actual job logic."""
         # Re-fetch job to update status
@@ -221,27 +388,32 @@ class JobWorker:
                 username = job.username
                 # Use params from job if available, otherwise defaults
                 params = job.params or {}
-                # Job params bypass FastAPI validation; clamp to the same
-                # bounds as the endpoint so a stored job can't trigger an
-                # unbounded bulk PGN load.
-                max_games = min(max(int(params.get("max_games", 30)), 1), 2000)
-                max_puzzles = min(max(int(params.get("max_puzzles", 30)), 1), 2000)
+                job_type = job.type
 
-            # Run generation (CPU bound). The generator calls the callback as it
-            # makes progress (between games AND every N plies within a game); we
-            # use it both to check for cancellation AND to bump the heartbeat_at
+            handler = JOB_HANDLERS.get(job_type)
+            if handler is None:
+                # Raised inside the try so it takes the ordinary failure path:
+                # the guarded UPDATE below records FAILED only if the job is
+                # still RUNNING, so a cancel that landed first still wins.
+                raise UnknownJobTypeError(
+                    f"no handler registered for job type {job_type!r}; "
+                    f"known types: {sorted(JOB_HANDLERS)}"
+                )
+
+            # Run the handler (CPU bound). It calls the callbacks as it makes
+            # progress; those check for cancellation AND bump the heartbeat_at
             # lease, so crash recovery can tell a live long job (fresh lease)
             # apart from a crashed one (stale lease).
             result = await asyncio.to_thread(
-                generate_puzzles,
-                username=username,
-                max_games=max_games,
-                max_puzzles=max_puzzles,
-                cancellation_check=lambda: self._heartbeat_and_check_cancellation(
-                    job_id
-                ),
-                progress_callback=lambda done, total: self._write_progress(
-                    job_id, done, total
+                handler,
+                JobContext(
+                    job_id=job_id,
+                    username=username,
+                    params=params,
+                    heartbeat=lambda: self._heartbeat_and_check_cancellation(job_id),
+                    progress=lambda done, total: self._write_progress(
+                        job_id, done, total
+                    ),
                 ),
             )
 
@@ -262,7 +434,7 @@ class JobWorker:
                         status=JobStatus.SUCCEEDED,
                         progress_current=100,
                         progress_total=100,
-                        result_json=asdict(result),
+                        result_json=_result_payload(result),
                         message="Analysis complete",
                         updated_at=now,
                     )
@@ -277,6 +449,8 @@ class JobWorker:
                 )
             else:
                 logger.info(f"Job {job_id} succeeded")
+                self._enqueue_followup(job_type, username)
+                self._enqueue_remaining_diagnosis_if_pending(job_type, username, params)
 
         except Exception as e:
             logger.error(f"Job {job_id} failed: {e}")

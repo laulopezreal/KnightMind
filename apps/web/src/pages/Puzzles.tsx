@@ -21,6 +21,20 @@ import { getModeLabels, getPuzzleActionA11yCopy, getSessionDetailsA11yCopy } fro
 import { formatMotifName } from '../utils/motif';
 import { uciLineToSan } from '../utils/chess';
 
+// Mastery ranks, styled from one lookup. The panel tint, the percentage and the
+// bar used to be three parallel ternaries — the figure already used the theme
+// tokens while the tint and bar were on raw palette colours, so the card read as
+// three different greens. The bar takes `bg-current` from the figure's own
+// colour, which makes drift impossible by construction.
+const MOTIF_RANK_STYLE = {
+    mastered: { panel: 'bg-status-mastered-soft border-status-mastered-soft', figure: 'text-positive' },
+    learning: { panel: 'bg-status-learning-soft border-status-learning-soft', figure: 'text-warning' },
+    needs_work: { panel: 'bg-negative-soft border-negative-soft', figure: 'text-negative' },
+} as const;
+
+const motifRankStyle = (rank: string) =>
+    MOTIF_RANK_STYLE[rank as keyof typeof MOTIF_RANK_STYLE] ?? MOTIF_RANK_STYLE.needs_work;
+
 export default function Puzzles() {
     const { username, setEditorOpen } = useChessUsername();
     const { sessionType, targetAccuracy, setTargetAccuracy, targetTimeMinutes, setTargetTimeMinutes } = usePuzzleMode();
@@ -50,6 +64,10 @@ export default function Puzzles() {
     // Legacy single-move puzzles simply solve at ply 0 and complete immediately.
     const [linePlyIndex, setLinePlyIndex] = useState(0);
     const [attemptedLine, setAttemptedLine] = useState<string[]>([]);
+    // Transient "we couldn't reach the server" for a board action (check a move,
+    // reveal, record a review). Deliberately separate from the puzzle `status`:
+    // a failed request is NOT a wrong answer and must never be scored as one.
+    const [actionError, setActionError] = useState<string | null>(null);
 
     // Get motif filter and warmup mode from URL query params
     const [searchParams] = useSearchParams();
@@ -86,7 +104,7 @@ export default function Puzzles() {
         }
     }
 
-    const handleReviewPuzzleRef = useRef<((result: 'pass' | 'fail', timeMs?: number) => Promise<void>)>(async () => { });
+    const handleReviewPuzzleRef = useRef<((result: 'pass' | 'fail', timeMs?: number) => Promise<boolean>)>(async () => false);
     const isAdvancingPuzzle = useRef(false);
 
     const timer = usePuzzleTimer({
@@ -388,12 +406,13 @@ export default function Puzzles() {
     // client ever holding the solver's upcoming answer (audit gate 13). The
     // whole line is recorded (attemptedLine) so a completed solve is verified
     // end-to-end on review. `boardAfterMove` already has the user's move applied.
-    const processUserMove = async (boardAfterMove: Chess, uciMove: string) => {
+    const processUserMove = async (boardAfterMove: Chess, uciMove: string, fenBefore: string) => {
         if (!currentPuzzle) return;
         const normalized = uciMove.toLowerCase();
         // Reflect the user's move immediately.
         setGame(new Chess(boardAfterMove.fen()));
         setUserMove(normalized);
+        setActionError(null);
         try {
             const res = await checkPuzzle(currentPuzzle.id, username, normalized, linePlyIndex);
             if (!res.correct) {
@@ -427,8 +446,15 @@ export default function Puzzles() {
                 setStatus('correct');
             }
         } catch (err) {
+            // A failed REQUEST is not a failed ATTEMPT. Marking it 'incorrect'
+            // told the user they blundered when the network dropped, broke
+            // their streak, and offered "Mark as Failed & Try Again" — which
+            // would have written a real fail. Roll the board back to where they
+            // were and let them try the same move again.
             console.error('Failed to check move:', err);
-            setStatus('incorrect');
+            setGame(new Chess(fenBefore));
+            setUserMove('');
+            setActionError("We couldn't check that move — your attempt wasn't recorded. Check your connection and try again.");
         }
     };
 
@@ -438,7 +464,8 @@ export default function Puzzles() {
         if (!normalizedUserMove) return;
         // Apply the typed move to a working board so a multi-move line can play
         // out its replies just like the drag path does.
-        const board = new Chess(game.fen());
+        const fenBefore = game.fen();
+        const board = new Chess(fenBefore);
         let move;
         try {
             move = board.move({
@@ -454,17 +481,27 @@ export default function Puzzles() {
         }
         clue.reset();
         const uciMove = `${move.from}${move.to}${move.promotion || ''}`;
-        await processUserMove(board, uciMove);
+        await processUserMove(board, uciMove, fenBefore);
     };
 
     const handleRevealSolution = async () => {
+        setActionError(null);
         const { move: bestMove, pv } = await ensureRevealedMove();
+        // Without a solution there is nothing to reveal. Flipping to 'revealed'
+        // anyway printed an empty "Solution …", removed every solving control,
+        // and left the puzzle queued to be recorded as a self-reported fail —
+        // charging the user for a request that never landed. Same guard the
+        // hint ladder already applies at rung 1.
+        if (!bestMove) {
+            setActionError("We couldn't load the solution — you're still on this puzzle. Check your connection and try again.");
+            return;
+        }
         setStatus('revealed');
-        setUserMove(bestMove || '');
+        setUserMove(bestMove);
         // Drop any click-selected piece so its highlight doesn't linger over
         // the solution playback.
         setClickFrom(null);
-        if (currentPuzzle && bestMove) {
+        if (currentPuzzle) {
             // Animate the whole combination (or the single move for legacy
             // puzzles) rather than teleporting one move and printing the rest.
             playSolutionLine(currentPuzzle.fen, pv.length ? pv : [bestMove]);
@@ -509,6 +546,7 @@ export default function Puzzles() {
         setLinePlyIndex(0);
         setAttemptedLine([]);
         setClickFrom(null);
+        setActionError(null);
     }
 
     // Bring the board into view when a session starts: it renders below the
@@ -573,6 +611,9 @@ export default function Puzzles() {
     const onPieceDrop = (sourceSquare: string, targetSquare: string, promotion: string = 'q') => {
         if (!currentPuzzle || status === 'correct' || status === 'revealed') return false;
         try {
+            // `game.move` mutates in place, so capture the position first —
+            // processUserMove needs it to roll back if the check request fails.
+            const fenBefore = game.fen();
             const move = game.move({ from: sourceSquare, to: targetSquare, promotion: promotion || 'q' });
             if (move === null) return false;
             clue.reset();
@@ -581,7 +622,7 @@ export default function Puzzles() {
             // but whether it SOLVES the puzzle — and, for a multi-move line, the
             // opponent's forced reply — is decided server-side so the client
             // never holds the answer ahead of time (audit gate 13).
-            void processUserMove(game, uciMove);
+            void processUserMove(game, uciMove, fenBefore);
             return true;
         } catch { return false; }
     };
@@ -604,6 +645,8 @@ export default function Puzzles() {
 
         isAdvancingPuzzle.current = true;
         try {
+            setActionError(null);
+            let recorded = true;
             if (status === 'correct') {
                 // Send the WHOLE solved line (space-separated UCI) so the SERVER
                 // re-verifies every ply — a puzzle counts as solved only when the
@@ -612,10 +655,19 @@ export default function Puzzles() {
                 const solvedLine = attemptedLine.length > 0
                     ? attemptedLine.join(' ')
                     : (userMove.trim().toLowerCase() || undefined);
-                await handleReviewPuzzle('pass', undefined, solvedLine);
+                recorded = await handleReviewPuzzle('pass', undefined, solvedLine);
             } else if (status === 'revealed') {
                 // Revealed solution: a self-reported fail, no move to verify.
-                await handleReviewPuzzle('fail');
+                recorded = await handleReviewPuzzle('fail');
+            }
+
+            // A review that failed to reach the server must NOT advance the
+            // session: doing so silently discarded the attempt (and, on the last
+            // puzzle, baked the loss into the summary). Stay put and let the
+            // user press again — the idempotency key makes the retry safe.
+            if (!recorded) {
+                setActionError("We couldn't save that result — you're still on this puzzle. Check your connection and try again.");
+                return;
             }
 
             // One step of progress per puzzle finished — so retries (mark-failed
@@ -641,7 +693,11 @@ export default function Puzzles() {
                 <div className="flex justify-between items-end">
                     <div>
                         <h1 className="text-4xl md:text-5xl font-serif text-primary mb-2">
-                            {motifFilter ? `${motifFilter} Puzzles` : 'Daily Puzzles'}
+                            {/* formatMotifName, not the raw query param: the
+                                Dashboard link that sends users here already says
+                                "Back rank mate", so printing "back_rank_mate"
+                                made the two screens disagree mid-flow. */}
+                            {motifFilter ? `${formatMotifName(motifFilter)} Puzzles` : 'Daily Puzzles'}
                         </h1>
                         <div className={`${activeSessionId && currentPuzzle ? 'hidden lg:flex' : 'flex'} items-center gap-2 mb-3`}>
                             <span className="text-xs font-sans uppercase tracking-wider px-2 py-1 rounded-sm border border-primary/20 bg-primary/5 text-primary/80">
@@ -652,8 +708,22 @@ export default function Puzzles() {
                             )}
                         </div>
                         <p className={`${activeSessionId && currentPuzzle ? 'hidden lg:block' : ''} text-lg text-primary/70 font-sans`}>
-                            {motifFilter ? `Practice ${motifFilter} tactical patterns` : 'Tactical patterns from your own games.'}
+                            {motifFilter
+                                ? `Practice ${formatMotifName(motifFilter)} tactical patterns`
+                                : 'Tactical patterns from your own games.'}
                         </p>
+                        {/* A filtered queue can be empty while the unfiltered one
+                            isn't, so the filter needs a visible exit — otherwise
+                            the only way out of a dead-end targeted session is the
+                            browser's back button. */}
+                        {motifFilter && !activeSessionId && (
+                            <Link
+                                to="/puzzles"
+                                className="mt-2 inline-block text-sm font-sans text-primary/70 km-interactive km-focus-visible km-inline-link underline decoration-primary/30 underline-offset-4"
+                            >
+                                Train everything that&apos;s due instead
+                            </Link>
+                        )}
                     </div>
                 </div>
             </section>
@@ -741,7 +811,7 @@ export default function Puzzles() {
                         ) : (
                             <div className="p-4 bg-primary/5 border border-primary/20 rounded-sm">
                                 <p className="text-sm text-primary/70 font-sans mb-3">
-                                    🚧 <strong className="font-medium">{sessionType === 'timed' ? 'Timed' : 'Accuracy Goal'} mode</strong> is currently in development.
+                                    <strong className="font-medium">{sessionType === 'timed' ? 'Timed' : 'Accuracy Goal'} mode</strong> is currently in development.
                                     Try it out by adjusting the settings, but sessions can only be started in Standard mode for now.
                                 </p>
                                 {sessionType === 'timed' && (
@@ -842,21 +912,14 @@ export default function Puzzles() {
                             )}
                         </div>
                     )}
-                    {shouldShowEmptyState && isLoadingStatus && (
-                        <div className="text-center text-primary/70 py-4">
-                            <span className="animate-pulse">Loading training status...</span>
-                        </div>
-                    )}
-                    {shouldShowEmptyState && !userStatus && !isLoadingStatus && !insightsError && !isRefreshingInsights && (
-                        <div className="bg-primary/5 border border-primary/10 rounded-sm p-6 backdrop-blur-sm text-center space-y-4">
-                            <h3 className="font-serif text-xl text-primary">Ready to train</h3>
-                            <p className="text-primary/70 font-sans">
-                                Click &quot;Start Session&quot; to begin training, or &quot;Generate New&quot; to create fresh puzzles from your games.
-                            </p>
-                        </div>
-                    )}
+                    {/* No card for the no-username case. This slot used to say
+                        "Ready to train — click Start Session", which was a dead
+                        instruction (every control above is disabled without a
+                        username). The fix is not a second card: the panel above
+                        already states the problem AND offers "Set Username", so
+                        anything here is a duplicate of the control beside it. */}
                     {statusLoadFailed && (
-                        <div className="bg-red-500/5 border border-red-500/20 rounded-sm p-6 text-center space-y-4" role="alert" aria-live="assertive">
+                        <div className="bg-negative-soft border border-negative-soft rounded-sm p-6 text-center space-y-4" role="alert" aria-live="assertive">
                             <h3 className="font-serif text-xl text-primary">Couldn&apos;t load your training data</h3>
                             <p className="text-primary/70 font-sans">
                                 We couldn&apos;t load your puzzles right now. Please try again.
@@ -949,7 +1012,7 @@ export default function Puzzles() {
                         {motifPerformance.motifs
                             .filter(m => m.rank === 'needs_work')
                             .map(motif => (
-                                <div key={motif.name} className="flex justify-between items-center p-3 bg-red-500/10 rounded-sm">
+                                <div key={motif.name} className="flex justify-between items-center p-3 bg-negative-soft rounded-sm">
                                     <div>
                                         <span className="font-serif text-primary">{formatMotifName(motif.name)}</span>
                                         <span className="text-xs text-primary/70 ml-2">
@@ -971,12 +1034,15 @@ export default function Puzzles() {
             {/* Warmup Diagnostic Banner */}
             {warmupMode && sessionState === 'active' && (
                 <div
-                    className="bg-blue-500/10 border border-blue-500/20 rounded-sm p-4 mb-6 text-center animate-teedin"
+                    className="bg-status-new-soft border border-status-new-soft rounded-sm p-4 mb-6 text-center animate-teedin"
                     role="status"
                     aria-live="polite"
                 >
-                    <p className="text-primary font-serif">
-                        🎯 Warmup Diagnostic Session
+                    <p className="text-xs font-sans uppercase tracking-widest text-primary/70 mb-1">
+                        Warmup
+                    </p>
+                    <p className="text-primary font-serif text-lg">
+                        Diagnostic session
                     </p>
                     <p className="text-primary/70 text-sm font-sans">
                         Complete 5 puzzles to see what stuck while you were away
@@ -1040,15 +1106,54 @@ export default function Puzzles() {
                             )}
                             <span className="font-mono">{currentIndex + 1}/{puzzles.length}</span>
                         </div>
+
+                        {/* Compact mobile session progress. The full panel below
+                            is `hidden lg:block`, so below 1024px the streak,
+                            hint tally and progress bar — the whole feedback loop
+                            of a session — were invisible. Same numbers, sized
+                            for a phone. */}
+                        {activeSessionId && sessionSummary && (
+                            <div data-testid="mobile-session-progress" className="lg:hidden mt-3 px-1 space-y-1.5">
+                                <div className="flex items-center justify-between text-xs font-sans text-primary/70">
+                                    <span className="uppercase tracking-wide">
+                                        Streak <span className="font-mono text-primary/80">{streak}</span>
+                                        <span className="mx-2 text-primary/30">·</span>
+                                        Hints <span className="font-mono text-primary/80">{hintsUsed}</span>
+                                    </span>
+                                    <span className="font-mono">
+                                        {reviewedCount} / {sessionSummary.requested_n}
+                                    </span>
+                                </div>
+                                <div
+                                    className="h-1.5 bg-primary/10 rounded-full overflow-hidden"
+                                    role="progressbar"
+                                    aria-valuenow={reviewedCount}
+                                    aria-valuemin={0}
+                                    aria-valuemax={sessionSummary.requested_n}
+                                    aria-label="Session progress"
+                                >
+                                    <div
+                                        className="h-full bg-primary transition-all duration-500 ease-out"
+                                        style={{ width: `${Math.min(100, (reviewedCount / sessionSummary.requested_n) * 100)}%` }}
+                                    />
+                                </div>
+                            </div>
+                        )}
                     </div>
 
                     {/* Sidebar Controls */}
                     <div className="lg:order-2 space-y-8 flex flex-col justify-center">
                         <div className="hidden lg:block space-y-2">
-                            <div className="flex justify-between items-center bg-primary/5 p-4 rounded-sm border-l-2 border-primary">
-                                <div className="flex flex-col w-full">
+                            {/* `w-full` on the inner column left no room for the
+                                side-to-move caption, which overflowed the card and
+                                collided with the session panel. The column now
+                                flexes and the caption lives with the puzzle title,
+                                which is where it belongs — it describes the
+                                position, not the session. */}
+                            <div className="bg-primary/5 p-4 rounded-sm border-l-2 border-primary">
+                                <div className="flex flex-col">
                                     {activeSessionId && sessionSummary && (
-                                        <div className="bg-primary/5 border border-primary/20 rounded-lg p-4 mb-4 w-full">
+                                        <div className="bg-primary/5 border border-primary/10 rounded-sm p-4 mb-4 w-full">
                                             <div className="flex justify-between items-center mb-2">
                                                 <span className="font-serif text-primary font-medium">
                                                     Session in Progress
@@ -1069,26 +1174,39 @@ export default function Puzzles() {
                                                 />
                                             </div>
 
-                                            {/* Core Session Stats */}
-                                            <div className="flex justify-between mt-3 text-xs">
-                                                <div className="flex items-center">
-                                                    <span className="text-primary/70 mr-1">🔥</span>
-                                                    {/* key={streak} re-triggers the pop on every increase;
-                                                        milestones (3+) also gain weight. Reduced-motion
-                                                        users get the weight change without the pulse. */}
-                                                    <span
-                                                        key={streak}
-                                                        className={`text-primary/80 inline-block ${streak >= 3 ? 'animate-streakpop font-medium' : ''}`}
-                                                    >
-                                                        Streak: {streak}
-                                                    </span>
-                                                    <span className="text-primary/70 mx-1">|</span>
-                                                    <span className="text-primary/70 mr-1">🏆</span>
-                                                    <span className="text-primary/80">Best: {bestStreak}</span>
+                                            {/* Core session stats. Typographic, not emoji: the
+                                                harmonised Dashboard cards (Consistency, Momentum)
+                                                label their figures with small-caps sans and let the
+                                                mono numeral carry the emphasis, which is the calm,
+                                                intellectual register the design guide asks for. */}
+                                            <div className="flex justify-between items-end mt-3 gap-4">
+                                                <div className="flex items-end gap-4">
+                                                    <div data-testid="session-stat-streak">
+                                                        {/* key={streak} re-triggers the pop on every increase;
+                                                            milestones (3+) also gain weight. Reduced-motion
+                                                            users get the weight change without the pulse. */}
+                                                        <p
+                                                            key={streak}
+                                                            className={`font-mono text-primary leading-none inline-block ${streak >= 3 ? 'animate-streakpop font-medium' : ''}`}
+                                                        >
+                                                            {streak}
+                                                        </p>
+                                                        <p className="text-[10px] uppercase tracking-widest text-primary/70 font-sans mt-1">
+                                                            Streak
+                                                        </p>
+                                                    </div>
+                                                    <div data-testid="session-stat-best">
+                                                        <p className="font-mono text-primary/80 leading-none">{bestStreak}</p>
+                                                        <p className="text-[10px] uppercase tracking-widest text-primary/70 font-sans mt-1">
+                                                            Best
+                                                        </p>
+                                                    </div>
                                                 </div>
-                                                <div className="flex items-center">
-                                                    <span className="text-primary/70 mr-1">💡</span>
-                                                    <span className="text-primary/80">Hints: {hintsUsed}</span>
+                                                <div className="text-right" data-testid="session-stat-hints">
+                                                    <p className="font-mono text-primary/80 leading-none">{hintsUsed}</p>
+                                                    <p className="text-[10px] uppercase tracking-widest text-primary/70 font-sans mt-1">
+                                                        Hints
+                                                    </p>
                                                 </div>
                                             </div>
 
@@ -1125,7 +1243,7 @@ export default function Puzzles() {
                                                                 {performanceHistory.slice(-10).map((item, index) => (
                                                                     <div
                                                                         key={index}
-                                                                        className={`flex-1 ${item.result === 'pass' ? 'bg-green-500' : 'bg-red-500'}`}
+                                                                        className={`flex-1 ${item.result === 'pass' ? 'bg-positive-fill' : 'bg-negative-fill'}`}
                                                                         title={`${item.result.toUpperCase()} - ${new Date(item.time).toLocaleTimeString(LOCALE)}`}
                                                                     />
                                                                 ))}
@@ -1166,11 +1284,16 @@ export default function Puzzles() {
                                         </div>
                                     )}
 
-                                    <div className="flex justify-between items-center">
-                                        <div className="flex items-center gap-2">
+                                    <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+                                        <div className="flex items-center gap-2 min-w-0">
                                             <span className="font-serif text-xl text-primary">
                                                 {currentPuzzle.title || "Puzzle"}
-                                                <span className="text-base font-normal opacity-50 ml-2 font-sans">
+                                                {/* text-primary/70, not opacity-50: axe measured the
+                                                    latter at 3.56:1 on the card tint (needs 4.5).
+                                                    Same fix the sidebar nav already made — an alpha
+                                                    colour also lets tooling compute the ratio, which
+                                                    element opacity defeats. */}
+                                                <span className="text-base font-normal text-primary/70 ml-2 font-sans">
                                                     {currentIndex + 1} / {puzzles.length}
                                                 </span>
                                             </span>
@@ -1180,11 +1303,11 @@ export default function Puzzles() {
                                                 </span>
                                             )}
                                         </div>
+                                        <span className="font-sans text-xs tracking-widest uppercase text-primary/70 shrink-0">
+                                            {currentPuzzle.side_to_move === 'white' ? 'White to Move' : 'Black to Move'}
+                                        </span>
                                     </div>
                                 </div>
-                                <span className="font-sans text-sm tracking-wide uppercase text-primary/70">
-                                    {currentPuzzle.side_to_move === 'white' ? 'White to Move' : 'Black to Move'}
-                                </span>
                             </div>
                         </div>
 
@@ -1241,6 +1364,20 @@ export default function Puzzles() {
                             )}
                         </div>
 
+                        {/* Connectivity/action failures. Sits outside the status
+                            region (which is polite and describes the puzzle) and
+                            is announced assertively — it means an action the user
+                            just took did NOT happen. */}
+                        {actionError && (
+                            <div
+                                className="bg-negative-soft border border-negative-soft rounded-sm p-3 text-sm"
+                                role="alert"
+                                aria-live="assertive"
+                            >
+                                <p className="text-negative font-sans">{actionError}</p>
+                            </div>
+                        )}
+
                         {/* Actions */}
                         <div className="space-y-6">
                             {/* Type Move Toggle */}
@@ -1262,7 +1399,11 @@ export default function Puzzles() {
                                         value={userMove}
                                         onChange={(e) => setUserMove(e.target.value)}
                                         className="w-full bg-primary/5 border border-primary/20 p-3 rounded-sm text-primary font-mono text-center focus:outline-none focus:border-primary/60 transition-colors"
-                                        onKeyPress={(e) => e.key === 'Enter' && handleCheckAnswer()}
+                                        // onKeyDown, not the deprecated onKeyPress — which React no
+                                        // longer fires reliably and which IMEs skip entirely.
+                                        onKeyDown={(e) => {
+                                            if (e.key === 'Enter') handleCheckAnswer();
+                                        }}
                                     />
                                 </div>
                             )}
@@ -1283,7 +1424,10 @@ export default function Puzzles() {
                                         disabled={!currentPuzzle || clue.isExhausted}
                                         aria-label={puzzleActionA11yCopy.hintLabel}
                                         className="px-2 py-3 md:px-6 md:py-4 border border-primary/20 text-primary rounded-sm font-serif text-sm md:text-lg transition-all km-interactive km-focus-visible disabled:opacity-50 disabled:cursor-default">
-                                        {`Hint (${clue.clueStage}/3)`}
+                                        {/* Short enough to stay on one line in the
+                                            three-up action grid; the full "Hint 1 of 3:
+                                            …" phrasing lives in the aria-label. */}
+                                        {clue.isExhausted ? 'Hints used' : `Hint ${clue.clueStage}/3`}
                                     </button>
                                     <button
                                         type="button"
@@ -1325,7 +1469,7 @@ export default function Puzzles() {
                                         ) : (
                                             <Link
                                                 to="/dashboard"
-                                                className="w-full block text-center px-6 py-4 bg-green-600 text-white rounded-sm font-serif text-lg transition-all km-interactive km-focus-visible shadow-lg shadow-green-900/20">
+                                                className="w-full block text-center px-6 py-4 bg-primary text-bg-primary rounded-sm font-serif text-lg transition-opacity km-interactive km-focus-visible">
                                                 Back to Dashboard
                                             </Link>
                                         )
@@ -1334,10 +1478,14 @@ export default function Puzzles() {
                                             type="button"
                                             onClick={handleAdvancePuzzle}
                                             disabled={finishButtonDisabled}
-                                            className={`w-full px-6 py-4 bg-green-600 text-white rounded-sm font-serif text-lg transition-all shadow-lg shadow-green-900/20 km-focus-visible ${finishButtonDisabled ? 'km-interactive-disabled' : 'km-interactive'} flex items-center justify-center`}>
+                                            // The page's one primary action, styled like every other
+                                            // primary action in the app. It used to be bg-green-600 +
+                                            // text-white — a colour that exists nowhere else, and a
+                                            // fixed pair that cannot clear contrast in both themes.
+                                            className={`w-full px-6 py-4 bg-primary text-bg-primary rounded-sm font-serif text-lg transition-opacity km-focus-visible ${finishButtonDisabled ? 'km-interactive-disabled' : 'km-interactive'} flex items-center justify-center`}>
                                             {sessionState === 'completing' ? (
                                                 <>
-                                                    <span className="animate-spin h-5 w-5 border-2 border-white/20 border-t-white rounded-full mr-2"></span>
+                                                    <span className="animate-spin h-5 w-5 border-2 border-current/20 border-t-current rounded-full mr-2"></span>
                                                     Recording Session...
                                                 </>
                                             ) : isFinalPuzzle ? 'All Done' : 'Next Puzzle →'}
@@ -1349,7 +1497,7 @@ export default function Puzzles() {
                                 <div className="space-y-4">
                                     {/* Detailed feedback for incorrect answers */}
                                     {lastFeedback && (
-                                        <div className="bg-red-500/10 border border-red-500/20 p-3 rounded-sm text-sm">
+                                        <div className="bg-negative-soft border border-negative-soft p-3 rounded-sm text-sm">
                                             <p className="text-negative font-sans">{lastFeedback}</p>
                                         </div>
                                     )}
@@ -1358,7 +1506,11 @@ export default function Puzzles() {
                                         <button
                                             type="button"
                                             onClick={async () => {
-                                                await handleReviewPuzzle('fail');
+                                                setActionError(null);
+                                                if (!await handleReviewPuzzle('fail')) {
+                                                    setActionError("We couldn't save that result — nothing was recorded. Check your connection and try again.");
+                                                    return;
+                                                }
                                                 setStatus('solving');
                                                 setUserMove('');
                                                 setGame(new Chess(currentPuzzle.fen));
@@ -1375,7 +1527,12 @@ export default function Puzzles() {
                                             type="button"
                                             onClick={handleRevealSolution}
                                             aria-label={puzzleActionA11yCopy.showSolutionLabel}
-                                            className="px-2 py-3 md:px-6 md:py-4 bg-primary text-bg-primary rounded-sm font-serif text-sm md:text-lg transition-all km-interactive km-focus-visible">
+                                            // One primary per state. On the final puzzle "Finish
+                                            // Session" below is the primary action, so this steps
+                                            // down to the outline treatment rather than competing
+                                            // with it (previously they were solid-ink and orange,
+                                            // three button identities on one screen).
+                                            className={`px-2 py-3 md:px-6 md:py-4 rounded-sm font-serif text-sm md:text-lg transition-all km-interactive km-focus-visible ${isFinalPuzzle ? 'border border-primary/20 text-primary' : 'bg-primary text-bg-primary'}`}>
                                             Show Solution
                                         </button>
                                     </div>
@@ -1391,7 +1548,13 @@ export default function Puzzles() {
                                                 if (isAdvancingPuzzle.current) return;
                                                 isAdvancingPuzzle.current = true;
                                                 try {
-                                                    await handleReviewPuzzle('fail');
+                                                    setActionError(null);
+                                                    // Don't close the session on an unrecorded
+                                                    // review — the summary would be missing it.
+                                                    if (!await handleReviewPuzzle('fail')) {
+                                                        setActionError("We couldn't save that result — the session is still open. Check your connection and try again.");
+                                                        return;
+                                                    }
                                                     // Finishing the final puzzle (as a fail) ends the session.
                                                     setReviewedCount(prev => prev + 1);
                                                     await handleCompleteSession();
@@ -1400,10 +1563,10 @@ export default function Puzzles() {
                                                 }
                                             }}
                                             disabled={sessionState === 'completing'}
-                                            className="w-full px-6 py-4 bg-orange-600 text-white rounded-sm font-serif text-lg transition-all km-focus-visible km-interactive mt-4">
+                                            className="w-full px-6 py-4 bg-primary text-bg-primary rounded-sm font-serif text-lg transition-opacity km-focus-visible km-interactive mt-4">
                                             {sessionState === 'completing' ? (
                                                 <>
-                                                    <span className="animate-spin h-5 w-5 border-2 border-white/20 border-t-white rounded-full mr-2 inline-block"></span>
+                                                    <span className="animate-spin h-5 w-5 border-2 border-current/20 border-t-current rounded-full mr-2 inline-block"></span>
                                                     Recording Session...
                                                 </>
                                             ) : (
@@ -1454,44 +1617,31 @@ export default function Puzzles() {
                 <section className="lg:order-10 bg-primary/5 border border-primary/10 rounded-sm p-6 backdrop-blur-sm">
                     <h3 className="text-lg font-serif text-primary mb-4">Chess Pattern Mastery</h3>
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                        {motifPerformance.motifs.map(motif => (
-                            <div
-                                key={motif.name}
-                                className={`p-4 rounded-sm border ${
-                                    motif.rank === 'mastered'
-                                        ? 'bg-green-500/10 border-green-500/30'
-                                        : motif.rank === 'learning'
-                                        ? 'bg-yellow-500/10 border-yellow-500/30'
-                                        : 'bg-red-500/10 border-red-500/30'
-                                }`}
-                            >
-                                <h4 className="font-serif text-primary mb-1">{formatMotifName(motif.name)}</h4>
-                                <div className="flex justify-between text-sm">
-                                    <span className="text-primary/70">
-                                        {motif.passed}/{motif.total_puzzles} solved
-                                    </span>
-                                    <span className={`font-mono ${
-                                        motif.rank === 'mastered' ? 'text-positive' :
-                                        motif.rank === 'learning' ? 'text-warning' :
-                                        'text-negative'
-                                    }`}>
-                                        {Math.round(motif.accuracy * 100)}%
-                                    </span>
-                                </div>
+                        {motifPerformance.motifs.map(motif => {
+                            const rank = motifRankStyle(motif.rank);
+                            return (
+                                <div key={motif.name} className={`p-4 rounded-sm border ${rank.panel}`}>
+                                    <h4 className="font-serif text-primary mb-1">{formatMotifName(motif.name)}</h4>
+                                    <div className="flex justify-between text-sm">
+                                        <span className="text-primary/70">
+                                            {motif.passed}/{motif.total_puzzles} solved
+                                        </span>
+                                        <span className={`font-mono ${rank.figure}`}>
+                                            {Math.round(motif.accuracy * 100)}%
+                                        </span>
+                                    </div>
 
-                                {/* Progress bar */}
-                                <div className="mt-2 h-2 bg-primary/10 rounded-full overflow-hidden">
-                                    <div
-                                        className={`h-full ${
-                                            motif.rank === 'mastered' ? 'bg-green-500' :
-                                            motif.rank === 'learning' ? 'bg-yellow-500' :
-                                            'bg-red-500'
-                                        }`}
-                                        style={{ width: `${motif.accuracy * 100}%` }}
-                                    />
+                                    {/* Progress bar — bg-current inherits the rank colour set on
+                                        the track, so the bar can never disagree with the figure. */}
+                                    <div className={`mt-2 h-2 bg-primary/10 rounded-full overflow-hidden ${rank.figure}`}>
+                                        <div
+                                            className="h-full bg-current"
+                                            style={{ width: `${motif.accuracy * 100}%` }}
+                                        />
+                                    </div>
                                 </div>
-                            </div>
-                        ))}
+                            );
+                        })}
                     </div>
                 </section>
             )}

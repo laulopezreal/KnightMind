@@ -5,10 +5,10 @@ Handles database operations for puzzle reviews and statistics.
 
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
-from services.api.models import PuzzleResult, PuzzleReview, PuzzleStats
+from services.api.models import Puzzle, PuzzleResult, PuzzleReview, PuzzleStats
 from services.api.puzzles.identity import assign_primary_motif, generate_puzzle_title
 from services.api.storage.puzzle_repository import PuzzleRepository
 
@@ -326,6 +326,92 @@ def get_due_puzzles(
     return get_adaptive_puzzles(db, username, puzzle_ids, n)
 
 
+def get_trainable_puzzle_ids(
+    db: Session, username: str, puzzle_ids: list[str]
+) -> list[str]:
+    """Narrow candidate ids to the puzzles the user may train *right now*.
+
+    Trainable = never scheduled (a brand-new puzzle, or one with no stats row
+    yet) OR scheduled and the date has arrived. A puzzle scheduled for the
+    future is deliberately excluded, for two reasons:
+
+    * Honesty. The UI counts "N puzzles due" from
+      :func:`get_trainable_puzzle_count`; a session that quietly tops itself up
+      with not-yet-due puzzles makes that number a lie.
+    * Correctness. :func:`update_puzzle_stats` re-anchors ``next_due_at`` on the
+      review date, so an early PASS inflates the interval (30d → 75d measured
+      from today, not from the original due date) while an early FAIL resets a
+      well-learned puzzle to interval 1 and drops its ease — punishing the user
+      for a puzzle the scheduler itself served too soon.
+
+    Written as an exclusion query rather than a join so that ids with no stats
+    row survive naturally, and so the caller's priority order is preserved.
+    """
+    if not puzzle_ids:
+        return []
+    now = _utcnow_naive()
+    scheduled_later = set(
+        db.scalars(
+            select(PuzzleStats.puzzle_id).where(
+                PuzzleStats.username == username,
+                PuzzleStats.puzzle_id.in_(puzzle_ids),
+                PuzzleStats.next_due_at.isnot(None),
+                PuzzleStats.next_due_at > now,
+            )
+        ).all()
+    )
+    return [pid for pid in puzzle_ids if pid not in scheduled_later]
+
+
+def get_trainable_puzzle_count(db: Session, username: str) -> int:
+    """Count the puzzles the user can train right now.
+
+    This is what "N puzzles due" means everywhere in the UI, and it counts
+    exactly the set :func:`get_trainable_puzzle_ids` serves — the two must not
+    drift, or the hero card promises work the session can't deliver (or hides
+    work it can). Unlike :func:`get_due_puzzle_count` this includes puzzles
+    that have never been reviewed, which is why freshly generated puzzles are
+    trainable the moment they exist.
+    """
+    now = _utcnow_naive()
+    stmt = (
+        select(func.count(Puzzle.id))
+        .outerjoin(
+            PuzzleStats,
+            and_(
+                PuzzleStats.puzzle_id == Puzzle.id,
+                PuzzleStats.username == Puzzle.username,
+            ),
+        )
+        .where(
+            Puzzle.username == username,
+            or_(
+                PuzzleStats.puzzle_id.is_(None),
+                PuzzleStats.next_due_at.is_(None),
+                PuzzleStats.next_due_at <= now,
+            ),
+        )
+    )
+    return db.scalar(stmt) or 0
+
+
+def get_scheduled_within_count(db: Session, username: str, hours: int) -> int:
+    """Count puzzles scheduled to become due inside the next ``hours``.
+
+    Strictly forward-looking (``now < next_due_at <= now + hours``) so it can be
+    reported alongside :func:`get_trainable_puzzle_count` without overlapping
+    it — the two sets are disjoint by construction.
+    """
+    now = _utcnow_naive()
+    stmt = select(func.count(PuzzleStats.puzzle_id)).where(
+        PuzzleStats.username == username,
+        PuzzleStats.next_due_at.isnot(None),
+        PuzzleStats.next_due_at > now,
+        PuzzleStats.next_due_at <= now + timedelta(hours=hours),
+    )
+    return db.scalar(stmt) or 0
+
+
 def get_due_puzzle_count(db: Session, username: str) -> int:
     """Get count of puzzles due for review.
 
@@ -336,6 +422,9 @@ def get_due_puzzle_count(db: Session, username: str) -> int:
     Eager-on-save stats rows start with ``next_due_at = NULL``, so excluding
     NULLs would report 0 due for a fresh user who has generated but not yet
     reviewed any puzzles.
+
+    Prefer :func:`get_trainable_puzzle_count` for user-facing totals, because it
+    also includes legacy puzzles with no stats row yet.
     """
     # naive-UTC bound: match the naive-UTC storage of next_due_at (see module note)
     now = _utcnow_naive()

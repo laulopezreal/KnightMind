@@ -1,7 +1,7 @@
 """add normalized_position to puzzles + unique manual-position index
 
-Revision ID: f3a4b5c6d7e8
-Revises: e2f3a4b5c6d7
+Revision ID: f4a5b6c7d8e9
+Revises: f3a4b5c6d7e8
 Create Date: 2026-07-27 00:00:00.000000
 
 Adds ``puzzles.normalized_position`` (the first four FEN fields: piece placement
@@ -30,8 +30,8 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "f3a4b5c6d7e8"
-down_revision: Union[str, Sequence[str], None] = "e2f3a4b5c6d7"
+revision: str = "f4a5b6c7d8e9"
+down_revision: Union[str, Sequence[str], None] = "f3a4b5c6d7e8"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

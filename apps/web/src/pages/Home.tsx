@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { importChessComGames, getImportStatus, validateChessComUser, getUserStatus, ApiError } from '../api';
 import type { UserStatus } from '../api';
@@ -47,12 +47,30 @@ export default function Home() {
   // Onboarding state
   const [onboardingPhase, setOnboardingPhase] = useState<OnboardingPhase>('idle');
   const [generatingJobId, setGeneratingJobId] = useState<string | null>(null);
-  const [newGamesCount, setNewGamesCount] = useState<number>(0);
+  // Puzzles actually created by this run, derived from the status delta.
+  // `null` = we couldn't determine it, so the modal drops the number rather
+  // than guessing.
+  const [generatedPuzzleCount, setGeneratedPuzzleCount] = useState<number | null>(null);
+  const puzzlesBeforeImportRef = useRef(0);
 
   // Job polling for puzzle generation
   const { job: generationJob } = useJobPolling(generatingJobId, {
     enabled: onboardingPhase === 'generating',
-    onSuccess: () => {
+    onSuccess: async () => {
+      // Re-read the status so the celebration can quote the real puzzle count.
+      // It used to print `newGamesCount` — the number of GAMES imported — so a
+      // 40-game import announced "40 puzzles generated" and then dropped the
+      // user on a dashboard showing 6.
+      try {
+        const freshStatus = await getUserStatus(username);
+        setUserStatus(freshStatus);
+        setGeneratedPuzzleCount(
+          Math.max(0, freshStatus.puzzles_count - puzzlesBeforeImportRef.current),
+        );
+      } catch {
+        // Non-critical: the modal falls back to count-free copy.
+        setGeneratedPuzzleCount(null);
+      }
       setOnboardingPhase('complete');
       // Show celebration for 3 seconds, then redirect
       setTimeout(() => navigate('/dashboard'), 3000);
@@ -184,7 +202,9 @@ export default function Home() {
         setActionStatus('No new games — you\u2019re all caught up!');
         setOnboardingPhase('idle');
       } else {
-        setNewGamesCount(result.new_games);
+        // Baseline for the "how many puzzles did this actually create?" delta.
+        puzzlesBeforeImportRef.current = userStatus?.puzzles_count ?? 0;
+        setGeneratedPuzzleCount(null);
         setActionStatus(`${result.new_games} new game${result.new_games === 1 ? '' : 's'} found — generating puzzles...`);
         setOnboardingPhase('generating');
 
@@ -555,17 +575,19 @@ export default function Home() {
         closeOnEscape={true}
         closeOnOverlayClick={true}
       >
-        <div className="bg-bg-primary border border-green-500/30 rounded-sm p-12 max-w-md text-center">
+        <div className="bg-bg-primary border border-positive-soft rounded-sm p-12 max-w-md text-center">
           <div className="flex justify-center mb-6">
-            <div className="h-16 w-16 rounded-full bg-green-500 flex items-center justify-center">
-              <svg className="h-10 w-10 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <div className="h-16 w-16 rounded-full bg-positive-fill flex items-center justify-center">
+              <svg className="h-10 w-10 text-positive" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
               </svg>
             </div>
           </div>
           <h2 className="text-3xl font-serif text-primary mb-4">All Set!</h2>
           <p className="text-primary/70 font-sans mb-2">
-            {newGamesCount} puzzles generated from your games.
+            {generatedPuzzleCount !== null && generatedPuzzleCount > 0
+              ? `${generatedPuzzleCount} puzzle${generatedPuzzleCount === 1 ? '' : 's'} generated from your games.`
+              : 'Your puzzles are ready.'}
           </p>
           <p className="text-primary/70 text-sm font-sans">
             Taking you to your dashboard...

@@ -7,6 +7,7 @@ const mockNavigate = vi.fn();
 
 vi.mock('react-router-dom', () => ({
   useNavigate: () => mockNavigate,
+  Link: ({ children, to, ...rest }: { children: React.ReactNode; to: string; [key: string]: unknown }) => <a href={to} {...rest}>{children}</a>,
 }));
 
 vi.mock('../context/ChessUsernameContext', () => ({
@@ -15,9 +16,11 @@ vi.mock('../context/ChessUsernameContext', () => ({
 
 const mockGetOpenings = vi.fn();
 
-vi.mock('../api', () => ({
-  getOpenings: (...args: unknown[]) => mockGetOpenings(...args),
-  ApiError: class extends Error { detail?: string },
+// Spread the real module and override only the call under test. A hand-listed
+// mock breaks every time the page imports something new from `../api`.
+vi.mock('../api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../api')>()),
+  getOpenings: (...a: unknown[]) => mockGetOpenings(...a),
 }));
 
 // Isolate the page's legend/state logic from the graph renderer.
@@ -100,14 +103,25 @@ describe('Openings', () => {
     });
   });
 
-  it('should show win rate legend once a tree is loaded', async () => {
+  it('should show score legend once a tree is loaded', async () => {
     mockGetOpenings.mockResolvedValue(MOCK_TREE);
     render(<Openings />);
 
-    expect(await screen.findByText('Win Rate:')).toBeInTheDocument();
+    expect(await screen.findByText('Score:')).toBeInTheDocument();
   });
 
-  it('should not show the win rate legend on error (no graph to explain)', async () => {
+  it('labels the metric as score, never as win rate', async () => {
+    mockGetOpenings.mockResolvedValue(MOCK_TREE);
+    render(<Openings />);
+
+    // (wins + half draws) / games is a score, not a win rate: a line drawn
+    // every time scores 50% while winning none of them.
+    await screen.findByText('Score:');
+    expect(screen.getByText(/wins \+ ½ draws/i)).toBeInTheDocument();
+    expect(screen.queryByText('Win Rate:')).not.toBeInTheDocument();
+  });
+
+  it('should not show the score legend on error (no graph to explain)', async () => {
     mockGetOpenings.mockRejectedValue(new Error('Network error'));
     render(<Openings />);
 
@@ -115,6 +129,24 @@ describe('Openings', () => {
     // graph rendered beneath it.
     expect(await screen.findByText('Network error')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /retry loading openings/i })).toBeInTheDocument();
-    expect(screen.queryByText('Win Rate:')).not.toBeInTheDocument();
+    expect(screen.queryByText('Score:')).not.toBeInTheDocument();
+  });
+
+  it('counts tree nodes as move sequences, not unique positions', async () => {
+    // Two transposing lines reach the same position through two distinct nodes,
+    // so the node count cannot be reported as "unique positions".
+    mockGetOpenings.mockResolvedValue({
+      ...MOCK_TREE,
+      children: [
+        { move_san: 'e4', ply: 1, games_count: 1, wins: 1, draws: 0, losses: 0, win_rate: 100 },
+        { move_san: 'd4', ply: 1, games_count: 1, wins: 1, draws: 0, losses: 0, win_rate: 100 },
+      ],
+    });
+    render(<Openings />);
+
+    expect(await screen.findByText('Move Sequences')).toBeInTheDocument();
+    // Root ("Start") is excluded — it is not a move.
+    expect(screen.getByText('2')).toBeInTheDocument();
+    expect(screen.queryByText('Unique Positions')).not.toBeInTheDocument();
   });
 });

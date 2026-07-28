@@ -81,6 +81,22 @@ class JobStatus(str, Enum):
     CANCELED = "canceled"
 
 
+class JobType(str, Enum):
+    """What a background job actually does.
+
+    Lives here rather than in ``worker`` so the model, the API layer and the
+    worker all name the same constant; ``worker`` imports models, so the
+    dependency can only point this way.
+
+    Every value must have a handler registered in ``worker.JOB_HANDLERS`` — a
+    job whose type has no handler is failed explicitly rather than silently
+    running someone else's work.
+    """
+
+    PUZZLE_GENERATION = "puzzle_generation"
+    DIAGNOSIS = "diagnosis"
+
+
 class PuzzleResult(str, Enum):
     PASS = "pass"
     FAIL = "fail"
@@ -89,9 +105,16 @@ class PuzzleResult(str, Enum):
 class Job(Base):
     __tablename__ = "jobs"
     __table_args__ = (
+        # One active job per (username, TYPE). Scoping by type is what lets an
+        # analysis job run alongside a puzzle generation for the same user
+        # while still guaranteeing a user can never have two concurrent jobs of
+        # the *same* kind — the invariant this index has always been for.
+        # Widening a unique index is strictly permissive, so no existing row
+        # can conflict with it.
         Index(
             "ix_jobs_active_username",
             "username",
+            "type",
             unique=True,
             postgresql_where=text("status IN ('queued', 'running')"),
             sqlite_where=text("status IN ('queued', 'running')"),
@@ -102,7 +125,11 @@ class Job(Base):
     id: Mapped[str] = mapped_column(
         String, primary_key=True, default=lambda: str(uuid.uuid4())
     )
-    type: Mapped[str] = mapped_column(String, default="puzzle_generation")
+    # NOT NULL since the table was created, so the composite index above can
+    # never be defeated by a NULL (NULLs compare distinct in a unique index).
+    type: Mapped[str] = mapped_column(
+        String, default=JobType.PUZZLE_GENERATION, nullable=False
+    )
     username: Mapped[str] = mapped_column(String, index=True)
     params: Mapped[dict] = mapped_column(JSON, nullable=True)
     status: Mapped[str] = mapped_column(
@@ -192,6 +219,183 @@ class PuzzleStats(Base):
     next_due_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
     interval_days: Mapped[int] = mapped_column(Integer, nullable=True)
     ease_factor: Mapped[float] = mapped_column(Float, default=2.0)
+
+
+class DiagnosisStatus(str, Enum):
+    """Whether a diagnosis could be produced at all.
+
+    ``UNAVAILABLE`` rows exist on purpose: a puzzle whose stored move is
+    illegal for its FEN can never be analysed, and without a row recording
+    that, every backfill run would re-attempt it forever. The row is the
+    negative result, not the absence of one.
+    """
+
+    OK = "ok"
+    UNAVAILABLE = "unavailable"
+
+
+class PuzzleDiagnosis(Base):
+    """Why the user probably made this mistake, and the facts behind that.
+
+    Keyed on (puzzle_id, username). This is deliberately *stronger* than
+    :class:`PuzzleStats`, which is keyed on puzzle_id alone: a puzzle id already
+    belongs to exactly one user by construction, so the username adds no rows,
+    but putting it in the key makes a cross-tenant row unrepresentable rather
+    than merely unlikely.
+
+    Staleness is a predicate over the version columns rather than a flag: a row
+    is stale when ``extraction_version`` or ``rule_version`` no longer match the
+    code, or when re-extraction yields a different ``evidence_hash``. That is
+    also the backfill's resume cursor — a crashed or budget-exhausted run
+    re-queries and continues, with no separate progress state to drift out of
+    sync with reality.
+    """
+
+    __tablename__ = "puzzle_diagnoses"
+    __table_args__ = (
+        # Drives the Insights "top mistake causes" aggregate and the Library
+        # cause filter.
+        Index("ix_puzzle_diagnoses_username_cause", "username", "primary_cause"),
+        # Drives the backfill's "what still needs work" scan.
+        Index(
+            "ix_puzzle_diagnoses_username_versions",
+            "username",
+            "extraction_version",
+            "rule_version",
+        ),
+        {"extend_existing": True},
+    )
+
+    puzzle_id: Mapped[str] = mapped_column(
+        String, ForeignKey("puzzles.id"), primary_key=True
+    )
+    username: Mapped[str] = mapped_column(String, primary_key=True, index=True)
+
+    status: Mapped[str] = mapped_column(
+        String, nullable=False, default=DiagnosisStatus.OK
+    )
+    # Why extraction failed, for UNAVAILABLE rows. Never shown to the user.
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Denormalised from PuzzleStats so the detail read is a single row lookup.
+    primary_motif: Mapped[str | None] = mapped_column(String, nullable=True)
+    primary_cause: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    secondary_causes: Mapped[list] = mapped_column(JSON, nullable=True, default=list)
+    # The winning rule's hand-assigned strength. Deliberately NOT named
+    # "confidence": it is an ordering prior, not a calibrated probability, and
+    # must never reach the user as a percentage (see diagnosis/causes.py).
+    # A model confidence is a separate column added with the AI stage.
+    primary_strength: Mapped[float | None] = mapped_column(Float, nullable=True)
+    insufficient_evidence: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+
+    phase: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Needs an ECO mapping that does not exist yet; NULL until then rather than
+    # guessed at.
+    opening_family: Mapped[str | None] = mapped_column(String, nullable=True)
+
+    # The citable facts (id/label/value), i.e. exactly what the UI renders and
+    # what an AI citation is validated against. The full packet is not stored:
+    # evidence_hash already pins its identity, and the packet is reproducible
+    # from the puzzle at a given extraction_version.
+    evidence_json: Mapped[list] = mapped_column(JSON, nullable=True, default=list)
+    evidence_hash: Mapped[str | None] = mapped_column(String, nullable=True)
+
+    # "rules" today; "llm" once the AI stage ranks and writes prose. Never
+    # blended — a row says which produced it.
+    source: Mapped[str] = mapped_column(String, nullable=False, default="rules")
+    extraction_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    rule_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    model_version: Mapped[str | None] = mapped_column(String, nullable=True)
+
+    # Populated by the AI stage; NULL for a rules-only diagnosis.
+    explanation: Mapped[str | None] = mapped_column(Text, nullable=True)
+    training_recommendation: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # The model's own confidence, 0-1. Deliberately separate from
+    # primary_strength: that is a hand-assigned rule prior, this is what the
+    # model reported. Conflating them would let a rule ordering masquerade as a
+    # calibrated probability. NULL on a rules-only row.
+    model_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # True when the model's primary cause matched the rules' top pick. Rolled up
+    # on /ops/status — the earliest signal that a prompt or model change
+    # regressed. NULL when no model call was accepted.
+    agreed_with_rules: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+
+    # Manual correction. Kept alongside the computed cause rather than
+    # overwriting it, so rule accuracy stays measurable against user feedback.
+    user_confirmed_cause: Mapped[str | None] = mapped_column(String, nullable=True)
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+
+class DiagnosisAuditLog(Base):
+    """One row per AI diagnosis attempt — accepted, rejected, or failed.
+
+    Kept out of ``puzzle_diagnoses`` on purpose: that table is read on every
+    puzzle-detail page load, and prompt/response blobs have no business on a hot
+    read path.
+
+    The table does double duty as the **spend ledger**. Counting today's rows is
+    how the daily caps are enforced, which means the budget survives a process
+    restart without a separate counter that could drift from what was actually
+    called.
+
+    Swept after ``AUDIT_RETENTION_DAYS`` by the existing session-cleanup loop.
+    """
+
+    __tablename__ = "diagnosis_audit_log"
+    __table_args__ = (
+        # The retention sweep and the daily spend count both scan on time.
+        Index("ix_diagnosis_audit_created_at", "created_at"),
+        # Per-user daily spend.
+        Index("ix_diagnosis_audit_username_created", "username", "created_at"),
+        {"extend_existing": True},
+    )
+
+    id: Mapped[str] = mapped_column(
+        String, primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    puzzle_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    username: Mapped[str] = mapped_column(String, nullable=False, index=True)
+
+    # accepted | rejected | skipped | error
+    status: Mapped[str] = mapped_column(String, nullable=False)
+    # Why a response was rejected, or why a call failed. The interesting rows:
+    # this is the debugging corpus for prompt and model regressions.
+    reason: Mapped[str | None] = mapped_column(String, nullable=True)
+    agreed_with_rules: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+
+    model_version: Mapped[str | None] = mapped_column(String, nullable=True)
+    rule_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    extraction_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # The prompt is reproducible from the packet plus these versions, so only
+    # its hash is kept — the full text would multiply the table for no gain.
+    prompt_hash: Mapped[str | None] = mapped_column(String, nullable=True)
+    evidence_hash: Mapped[str | None] = mapped_column(String, nullable=True)
+
+    # Truncated at AUDIT_RESPONSE_MAX_CHARS; the flag records that it happened
+    # so a debugger is never misled by a silently clipped payload.
+    response_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    response_truncated: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+
+    input_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc), nullable=False
+    )
 
 
 class PuzzleReview(Base):

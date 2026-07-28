@@ -14,7 +14,16 @@ vi.mock('../api', () => ({
 }));
 
 vi.mock('react-router-dom', () => ({
-    Link: ({ children, to }: { children: React.ReactNode; to: string }) => <a href={to}>{children}</a>,
+  Link: ({ children, to }: { children: React.ReactNode; to: string }) => <a href={to}>{children}</a>,
+  useSearchParams: () => [new URLSearchParams(), vi.fn()],
+}));
+
+vi.mock('../context/ChessUsernameContext', () => ({
+    useChessUsername: () => ({ username: 'testplayer', setEditorOpen: vi.fn() }),
+}));
+
+vi.mock('../api/puzzles', () => ({
+    createManualPuzzle: vi.fn(),
 }));
 
 vi.mock('../context/ChessUsernameContext', () => ({

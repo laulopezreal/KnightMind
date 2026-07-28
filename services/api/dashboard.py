@@ -25,8 +25,9 @@ from services.api.db import get_db
 from services.api.identity import assert_owns_username, require_account
 from services.api.models import Account, PuzzleReview, PuzzleStats, TrainingSession
 from services.api.storage.spaced_repetition import (
-    get_due_puzzle_count,
     get_next_due_date,
+    get_scheduled_within_count,
+    get_trainable_puzzle_count,
 )
 from services.api.usernames import Username
 
@@ -300,25 +301,17 @@ async def get_dashboard_summary(
     # Get recent form
     recent_form = calculate_recent_form(db, username)
 
-    # Get schedule info
-    due_now = get_due_puzzle_count(db, username)
+    # Get schedule info. The hero's "N puzzles due" must be the number a session
+    # will actually serve, so it uses the same trainable predicate /puzzles/due
+    # filters on (due + never-reviewed), not the strict due-only count.
+    due_now = get_trainable_puzzle_count(db, username)
     next_review = get_next_due_date(db, username)
 
-    # Calculate due in 4 hours
-    four_hours_from_now = datetime.now(timezone.utc) + timedelta(hours=4)
-    due_in_4h_count = (
-        db.scalar(
-            select(func.count(PuzzleStats.puzzle_id)).where(
-                PuzzleStats.username == username,
-                PuzzleStats.next_due_at.isnot(None),
-                PuzzleStats.next_due_at <= four_hours_from_now,
-            )
-        )
-        or 0
-    )
-
-    # Subtract already due puzzles
-    due_in_4h_count = max(0, due_in_4h_count - due_now)
+    # Puzzles that become due within the next 4 hours. Computed as a strictly
+    # forward-looking window rather than "everything due in 4h minus due now" —
+    # the subtraction under-reported once due_now started including
+    # never-reviewed puzzles, which carry no next_due_at at all.
+    due_in_4h_count = get_scheduled_within_count(db, username, hours=4)
 
     schedule = ScheduleData(
         due_now=due_now, due_in_4h=due_in_4h_count, next_review_at=next_review

@@ -342,3 +342,50 @@ export async function createManualPuzzle(
         body: JSON.stringify(payload),
     });
 }
+
+// --- Mistake diagnosis ---
+
+export type DiagnosisState = 'ready' | 'unclear' | 'pending' | 'unavailable';
+
+export interface DiagnosisEvidenceItem {
+    id: string;
+    label: string;
+    value: string;
+}
+
+export interface PuzzleDiagnosis {
+    state: DiagnosisState;
+    puzzle_id: string;
+    primary_motif?: string | null;
+    primary_cause?: string | null;
+    primary_cause_label?: string | null;
+    secondary_causes: string[];
+    secondary_cause_labels: string[];
+    phase?: string | null;
+    evidence: DiagnosisEvidenceItem[];
+    evidence_withheld: boolean;
+    explanation?: string | null;
+    training_recommendation?: string | null;
+    user_confirmed_cause?: string | null;
+    source?: string | null;
+    diagnosed_at?: string | null;
+}
+
+/**
+ * Read the stored diagnosis for a puzzle. Never computes one server-side, so a
+ * missing diagnosis comes back as `pending` rather than blocking the response.
+ *
+ * `reveal` is opt-in because the evidence names the solution move. Callers must
+ * only pass it once the puzzle has been attempted or revealed.
+ */
+export async function getPuzzleDiagnosis(
+    puzzleId: string,
+    username: string,
+    reveal = false
+): Promise<PuzzleDiagnosis> {
+    const params = new URLSearchParams({ username });
+    if (reveal) params.append('reveal', 'true');
+    return await request<PuzzleDiagnosis>(
+        `/puzzles/${encodeURIComponent(puzzleId)}/diagnosis?${params}`
+    );
+}

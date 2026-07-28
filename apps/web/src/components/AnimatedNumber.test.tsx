@@ -15,6 +15,32 @@ describe('AnimatedNumber', () => {
     expect(screen.getByText('0')).toBeInTheDocument();
   });
 
+  it('settles exactly even when the frame clock trails the animation start', async () => {
+    // jsdom on a loaded machine hands rAF a timestamp BEHIND the performance.now()
+    // read when the effect ran, and one that need never reach the end of the
+    // window. Unclamped that drove the eased cubic to absurd values ("-27635%"),
+    // and because t stayed < 1 the loop re-armed forever and overwrote the
+    // settle timer's correct value on the next frame — so the right number was
+    // only ever a ~16ms flicker. Freeze the clock in the past to pin both halves.
+    let live = true;
+    const frozen = performance.now() - 480;
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
+      const id = setTimeout(() => { if (live) cb(frozen); }, 16);
+      return id as unknown as number;
+    });
+    vi.stubGlobal('cancelAnimationFrame', (id: number) => clearTimeout(id));
+
+    const { container } = render(<AnimatedNumber value={80} suffix="%" duration={80} />);
+    try {
+      // Assert what the user is LEFT looking at, well past the settle at
+      // duration+80, rather than whether the right value flickered past.
+      await new Promise((r) => setTimeout(r, 400));
+      expect(container.textContent).toBe('80%');
+    } finally {
+      live = false;
+    }
+  });
+
   it('renders the final value immediately when the user prefers reduced motion', () => {
     vi.stubGlobal('matchMedia', vi.fn().mockReturnValue({
       matches: true,

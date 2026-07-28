@@ -11,6 +11,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from services.api.day_boundary import utc_today
 from services.api.main import app, get_db
 from services.api.models import (
     Base,
@@ -22,6 +23,7 @@ from services.api.models import (
 from services.api.models import (
     Puzzle as PuzzleModel,
 )
+from services.api.storage.game_repository import GameRepository
 from services.api.storage.puzzle_repository import PuzzleRepository
 
 
@@ -198,6 +200,128 @@ def test_get_openings_with_games(mock_import_games, client_with_db):
     assert "losses" in data
     assert "win_rate" in data
     assert data["games_count"] == 2
+
+    # The response must account for every stored game, so a tree built from a
+    # fraction of a user's archive is reportable instead of looking complete.
+    analysis = data["analysis"]
+    assert analysis["games_stored"] == 2
+    assert analysis["games_analyzed"] == 2
+    assert analysis["games_skipped"] == 0
+    assert analysis["excluded_by_color"] == 0
+
+
+@patch("services.api.main.import_all_games")
+def test_get_openings_analysis_reports_color_exclusions(
+    mock_import_games, client_with_db
+):
+    """Games dropped by the colour filter are reported, but not as 'skipped'."""
+
+    async def mock_generator(username, since=None):
+        from services.ingest import ChessGame
+
+        for game_data in MOCK_GAMES:
+            yield ChessGame(
+                url=game_data["url"],
+                pgn=game_data["pgn"],
+                time_control=game_data["time_control"],
+                end_time=game_data["end_time"],
+                rated=game_data["rated"],
+                white_username=game_data["white"]["username"],
+                black_username=game_data["black"]["username"],
+                white_result=game_data["white"]["result"],
+                black_result=game_data["black"]["result"],
+            )
+
+    mock_import_games.side_effect = mock_generator
+    client_with_db.post("/import/chesscom?username=testuser")
+
+    response = client_with_db.get("/openings?username=testuser&color=white")
+    assert response.status_code == 200
+    analysis = response.json()["analysis"]
+
+    assert analysis["games_stored"] == 2
+    assert analysis["games_analyzed"] + analysis["excluded_by_color"] == 2
+    assert analysis["games_skipped"] == 0
+
+
+@patch("services.api.main.import_all_games")
+def test_get_openings_serves_a_repeat_request_from_cache(
+    mock_import_games, client_with_db
+):
+    """A refetch must not re-parse every stored PGN."""
+
+    async def mock_generator(username, since=None):
+        from services.ingest import ChessGame
+
+        for game_data in MOCK_GAMES:
+            yield ChessGame(
+                url=game_data["url"],
+                pgn=game_data["pgn"],
+                time_control=game_data["time_control"],
+                end_time=game_data["end_time"],
+                rated=game_data["rated"],
+                white_username=game_data["white"]["username"],
+                black_username=game_data["black"]["username"],
+                white_result=game_data["white"]["result"],
+                black_result=game_data["black"]["result"],
+            )
+
+    mock_import_games.side_effect = mock_generator
+    client_with_db.post("/import/chesscom?username=testuser")
+
+    first = client_with_db.get("/openings?username=testuser")
+    assert first.status_code == 200
+
+    # The second request must not touch the PGN blobs at all.
+    with patch.object(
+        GameRepository, "iter_pgns", side_effect=AssertionError("rebuilt from PGNs")
+    ):
+        second = client_with_db.get("/openings?username=testuser")
+
+    assert second.status_code == 200
+    assert second.json() == first.json()
+
+    # A different colour filter is a different tree, so it must be built.
+    with patch.object(GameRepository, "iter_pgns", return_value=iter([])) as rebuilt:
+        client_with_db.get("/openings?username=testuser&color=white")
+    assert rebuilt.called
+
+
+@patch("services.api.main.import_all_games")
+def test_get_openings_cache_invalidates_when_games_change(
+    mock_import_games, client_with_db
+):
+    """Importing more games must not serve the older, smaller tree."""
+
+    def generator_for(games):
+        async def gen(username, since=None):
+            from services.ingest import ChessGame
+
+            for game_data in games:
+                yield ChessGame(
+                    url=game_data["url"],
+                    pgn=game_data["pgn"],
+                    time_control=game_data["time_control"],
+                    end_time=game_data["end_time"],
+                    rated=game_data["rated"],
+                    white_username=game_data["white"]["username"],
+                    black_username=game_data["black"]["username"],
+                    white_result=game_data["white"]["result"],
+                    black_result=game_data["black"]["result"],
+                )
+
+        return gen
+
+    mock_import_games.side_effect = generator_for(MOCK_GAMES[:1])
+    client_with_db.post("/import/chesscom?username=testuser")
+    first = client_with_db.get("/openings?username=testuser").json()
+
+    mock_import_games.side_effect = generator_for(MOCK_GAMES)
+    client_with_db.post("/import/chesscom?username=testuser")
+    second = client_with_db.get("/openings?username=testuser").json()
+
+    assert first["games_count"] == 1
+    assert second["games_count"] == len(MOCK_GAMES)
 
 
 def test_get_openings_no_games(client_with_db):
@@ -832,7 +956,10 @@ def test_get_daily_puzzles_success(client_with_db, db_session):
     assert data["count"] == 3
     assert len(data["puzzles"]) == 3
 
-    today_str = date.today().isoformat()
+    # The server stamps `used_on` on the UTC day boundary (see day_boundary.py),
+    # so asserting against a server-local `date.today()` fails for the hours
+    # where the two calendars disagree.
+    today_str = utc_today().isoformat()
     for puzzle_data in data["puzzles"]:
         assert puzzle_data["used_on"] == today_str
         assert puzzle_data["username"] == "testuser"
@@ -840,7 +967,7 @@ def test_get_daily_puzzles_success(client_with_db, db_session):
 
 def test_get_daily_puzzles_rotation(client_with_db, db_session):
     """Test that puzzles rotate correctly - unused first, then used."""
-    yesterday = date.today() - timedelta(days=1)
+    yesterday = utc_today() - timedelta(days=1)
 
     for i in range(5):
         _create_puzzle(
@@ -862,7 +989,7 @@ def test_get_daily_puzzles_rotation(client_with_db, db_session):
     data = response.json()
     assert data["count"] == 4
 
-    today_str = date.today().isoformat()
+    today_str = utc_today().isoformat()
     for puzzle_data in data["puzzles"]:
         assert puzzle_data["used_on"] == today_str
 

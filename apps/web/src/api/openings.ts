@@ -1,5 +1,28 @@
 import { request, ApiError } from './core';
 
+/**
+ * Accounting for every stored game the tree did — or didn't — include.
+ * Present on the root node only.
+ *
+ * `excluded_by_color` is what the user asked for (a colour filter), so it is
+ * deliberately kept apart from `games_skipped`, which is unintended data loss
+ * worth warning about.
+ */
+export interface OpeningAnalysis {
+    /** Games held for this user in the database. */
+    games_stored: number;
+    /** PGNs the builder was handed. */
+    games_seen: number;
+    /** Games that actually reached the tree. */
+    games_analyzed: number;
+    excluded_by_color: number;
+    /** unreadable + not_player + unfinished. */
+    games_skipped: number;
+    skipped_unreadable: number;
+    skipped_not_player: number;
+    skipped_unfinished: number;
+}
+
 export interface OpeningNode {
     move_san: string;
     ply: number;
@@ -7,11 +30,41 @@ export interface OpeningNode {
     wins: number;
     draws: number;
     losses: number;
+    /**
+     * Chess score percentage — (wins + 0.5 * draws) / games — NOT the share of
+     * games won. Kept under the original wire name for compatibility; always
+     * surface it to users as "score". See `getScoreColor`.
+     */
     win_rate: number;
+    /**
+     * ECO code and opening name for this position, e.g. "B90" / "Sicilian
+     * Defense: Najdorf Variation". Classification is longest-prefix, so a node
+     * with no entry of its own reports the most specific opening above it.
+     * Null on the starting position, and for lines outside the book.
+     */
+    eco: string | null;
+    opening_name: string | null;
     children?: OpeningNode[];
+    /** Root node only. */
+    analysis?: OpeningAnalysis;
 }
 
 export type ColorFilter = 'white' | 'black' | 'both';
+
+/**
+ * Tree depth in half-moves. The API accepts 1-40; these are the choices worth
+ * offering — your games go deeper than six moves, and the explorer used to
+ * refuse to follow them.
+ */
+export const DEPTH_OPTIONS = [
+    { plies: 8, label: '4 moves' },
+    { plies: 12, label: '6 moves' },
+    { plies: 16, label: '8 moves' },
+    { plies: 24, label: '12 moves' },
+    { plies: 40, label: '20 moves' },
+] as const;
+
+export const DEFAULT_MAX_PLY = 12;
 
 export async function getOpenings(
     username: string,

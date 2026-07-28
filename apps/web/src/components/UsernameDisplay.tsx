@@ -12,19 +12,32 @@ export default function UsernameDisplay() {
     const inputRef = useRef<HTMLInputElement>(null);
     const triggerRef = useRef<HTMLButtonElement>(null);
 
+    const focusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const disarmAutoFocus = () => {
+        if (focusTimerRef.current !== null) clearTimeout(focusTimerRef.current);
+        focusTimerRef.current = null;
+    };
+
     // Close the editor and hand keyboard focus back to the trigger, so a
     // keyboard user isn't dropped to the top of the page after Escape/Save.
     const closeAndRestoreFocus = () => {
+        // Disarm before moving focus, not in the effect cleanup. Cleanup only
+        // runs once React commits the close, and anything that delays that
+        // commit leaves the timer live — long enough to pull focus onto the
+        // input we are dismissing, which the commit then unmounts, dropping
+        // focus to <body> instead of the trigger.
+        disarmAutoFocus();
         setEditorOpen(false);
         triggerRef.current?.focus();
     };
 
     useEffect(() => {
-        if (isEditorOpen) {
-            setInputValue(username);
-            setError(null);
-            setTimeout(() => inputRef.current?.focus(), 100);
-        }
+        if (!isEditorOpen) return;
+        setInputValue(username);
+        setError(null);
+        // Deferred so the input exists and the open transition has begun.
+        focusTimerRef.current = setTimeout(() => inputRef.current?.focus(), 100);
+        return disarmAutoFocus;
     }, [isEditorOpen, username]);
 
     useEffect(() => {

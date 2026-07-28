@@ -101,6 +101,25 @@ describe('HeroTrainCard', () => {
     expect(screen.queryByText(/0 puzzles waiting/i)).not.toBeInTheDocument();
   });
 
+  it('asks a first-timer with nothing generated to import, and drops the empty counter', () => {
+    // The copy already says "import your games"; the CTA used to say "Start
+    // First Session" and route to the Train page, whose only action was "Go to
+    // Home". Label and destination now come from one predicate (utils/trainEntry).
+    render(<HeroTrainCard {...defaultProps} totalSessions={0} dueCount={0} />);
+
+    expect(screen.getByRole('button', { name: 'Import Your Games' })).toBeInTheDocument();
+    expect(screen.queryByText('Start First Session')).not.toBeInTheDocument();
+    // No "0 / puzzles due" counter when there is no queue to report.
+    expect(screen.queryByText(/puzzles due/i)).not.toBeInTheDocument();
+  });
+
+  it('still offers a first session to a user who has puzzles but has never trained', () => {
+    render(<HeroTrainCard {...defaultProps} totalSessions={0} dueCount={7} />);
+
+    expect(screen.getByRole('button', { name: 'Start First Session' })).toBeInTheDocument();
+    expect(screen.getByText('7')).toBeInTheDocument();
+  });
+
   it('should call onStartSession when button is clicked', async () => {
     const onStartSession = vi.fn();
     render(<HeroTrainCard {...defaultProps} onStartSession={onStartSession} />);
