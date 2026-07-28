@@ -281,7 +281,9 @@ class JobWorker:
             db.commit()
 
     @staticmethod
-    def _enqueue_diagnosis(username: str, message: str) -> None:
+    def _enqueue_diagnosis(
+        username: str, message: str, params: dict | None = None
+    ) -> None:
         """Queue one diagnosis job for a user, best-effort.
 
         Deliberately wrapped so a follow-up failure cannot turn already
@@ -298,14 +300,15 @@ class JobWorker:
                             type=JobType.DIAGNOSIS,
                             status=JobStatus.QUEUED,
                             message=message,
-                            params={"limit": DIAGNOSIS_BATCH_MAX},
+                            params=params or {"limit": DIAGNOSIS_BATCH_MAX},
                         )
                     )
                     db.commit()
                 except IntegrityError:
                     # A diagnosis job is already queued or running for this
-                    # user — the active-job index says so. That job will pick
-                    # up the new puzzles, so there is nothing to do.
+                    # user — the active-job index says so. Marked automatic
+                    # diagnosis jobs re-check pending work at completion, so
+                    # there is nothing to do here.
                     #
                     # Rolled back explicitly rather than relying on the context
                     # manager: a failed flush leaves the session unusable, and
@@ -335,10 +338,16 @@ class JobWorker:
             # by the actual pending-count predicate so it cannot loop forever.
             return
 
-        JobWorker._enqueue_diagnosis(username, "Queued after puzzle generation")
+        JobWorker._enqueue_diagnosis(
+            username,
+            "Queued after puzzle generation",
+            {"limit": DIAGNOSIS_BATCH_MAX, "auto_chain": True},
+        )
 
     @staticmethod
-    def _enqueue_remaining_diagnosis_if_pending(job_type: str, username: str) -> None:
+    def _enqueue_remaining_diagnosis_if_pending(
+        job_type: str, username: str, params: dict
+    ) -> None:
         """Close the generation-vs-diagnosis race after a diagnosis succeeds.
 
         A running diagnosis snapshots pending puzzle ids at start. If puzzle
@@ -347,7 +356,7 @@ class JobWorker:
         is left behind. Once the current diagnosis is marked SUCCEEDED, re-check
         the storage predicate and queue one more diagnosis only if work remains.
         """
-        if job_type != JobType.DIAGNOSIS.value:
+        if job_type != JobType.DIAGNOSIS.value or not params.get("auto_chain"):
             return
 
         try:
@@ -360,7 +369,11 @@ class JobWorker:
         if pending <= 0:
             return
 
-        JobWorker._enqueue_diagnosis(username, "Queued for remaining diagnosis")
+        JobWorker._enqueue_diagnosis(
+            username,
+            "Queued for remaining diagnosis",
+            {"limit": DIAGNOSIS_BATCH_MAX, "auto_chain": True},
+        )
 
     async def execute_job(self, job_id: str):
         """Execute the actual job logic."""
@@ -437,7 +450,7 @@ class JobWorker:
             else:
                 logger.info(f"Job {job_id} succeeded")
                 self._enqueue_followup(job_type, username)
-                self._enqueue_remaining_diagnosis_if_pending(job_type, username)
+                self._enqueue_remaining_diagnosis_if_pending(job_type, username, params)
 
         except Exception as e:
             logger.error(f"Job {job_id} failed: {e}")

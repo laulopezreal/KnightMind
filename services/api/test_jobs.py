@@ -774,6 +774,7 @@ class TestFollowUpDiagnosis:
         assert job.status == JobStatus.QUEUED
         # The whole corpus, not a default batch — this is a backfill.
         assert job.params["limit"] > 1000
+        assert job.params["auto_chain"] is True
 
     def test_a_diagnosis_run_does_not_chain_another(self, db_session):
         """Otherwise every diagnosis queues a diagnosis, forever."""
@@ -789,8 +790,9 @@ class TestFollowUpDiagnosis:
         assert db_session.query(Job).filter_by(username="chained").count() == 0
 
     def test_an_already_active_diagnosis_is_not_duplicated(self, db_session):
-        """The active-job index rejects the insert; that job will pick up the
-        new puzzles anyway, so the collision is a no-op, not an error."""
+        """The active-job index rejects the insert; marked automatic diagnosis
+        jobs re-check pending work at completion, so the collision is a no-op,
+        not an error."""
         from services.api.models import JobType
         from services.api.worker import JobWorker
 
@@ -872,7 +874,12 @@ async def test_diagnosis_success_with_late_pending_puzzle_queues_followup(
     from services.api.worker import JOB_HANDLERS, worker
 
     _reset_jobs(db_session)
-    job = Job(username="diag-late", type=JobType.DIAGNOSIS, status=JobStatus.RUNNING)
+    job = Job(
+        username="diag-late",
+        type=JobType.DIAGNOSIS,
+        status=JobStatus.RUNNING,
+        params={"limit": 1, "auto_chain": True},
+    )
     db_session.add(job)
     db_session.commit()
     db_session.refresh(job)
@@ -902,6 +909,54 @@ async def test_diagnosis_success_with_late_pending_puzzle_queues_followup(
     )
     assert followup.message == "Queued for remaining diagnosis"
     assert followup.params["limit"] > 1000
+    assert followup.params["auto_chain"] is True
+
+
+@patch("asyncio.to_thread", side_effect=run_sync_in_thread)
+@pytest.mark.asyncio
+async def test_manual_bounded_diagnosis_success_does_not_queue_followup(
+    mock_to_thread, db_session
+):
+    from services.api.models import JobType
+    from services.api.worker import JOB_HANDLERS, worker
+
+    _reset_jobs(db_session)
+    _insert_pending_puzzle(db_session, "diag-manual", "manual-before-1")
+    _insert_pending_puzzle(db_session, "diag-manual", "manual-before-2")
+    job = Job(
+        username="diag-manual",
+        type=JobType.DIAGNOSIS,
+        status=JobStatus.RUNNING,
+        params={"limit": 1},
+    )
+    db_session.add(job)
+    db_session.commit()
+    db_session.refresh(job)
+
+    def fake_diagnosis(ctx):
+        assert ctx.params == {"limit": 1}
+        return {"username": ctx.username, "diagnosed": 1, "remaining": 1}
+
+    original = JOB_HANDLERS[JobType.DIAGNOSIS.value]
+    JOB_HANDLERS[JobType.DIAGNOSIS.value] = fake_diagnosis
+    try:
+        with patch("services.api.worker.SessionLocal") as mock_sl:
+            mock_sl.return_value.__enter__.return_value = db_session
+            mock_sl.return_value.__exit__.return_value = None
+            await worker.execute_job(job.id)
+    finally:
+        JOB_HANDLERS[JobType.DIAGNOSIS.value] = original
+
+    db_session.expire_all()
+    assert db_session.get(Job, job.id).status == JobStatus.SUCCEEDED
+    queued = (
+        db_session.query(Job)
+        .filter_by(
+            username="diag-manual", type=JobType.DIAGNOSIS, status=JobStatus.QUEUED
+        )
+        .count()
+    )
+    assert queued == 0
 
 
 @patch("services.api.worker.generate_puzzles")
@@ -936,6 +991,7 @@ async def test_generation_success_chains_diagnosis_end_to_end(
         .one()
     )
     assert followup.status == JobStatus.QUEUED
+    assert followup.params["auto_chain"] is True
 
 
 @patch("services.api.worker.generate_puzzles")
