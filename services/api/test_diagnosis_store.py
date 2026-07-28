@@ -724,6 +724,61 @@ class TestResumability:
             "p0",
         ]
 
+    def test_a_re_failed_puzzle_outranks_a_newer_untouched_one(self, db_session):
+        """Recency alone would bury a puzzle failed four times behind a fresh
+        one never failed. Surviving a second exposure is the strongest signal
+        in the corpus, so it leads."""
+        base = datetime(2026, 1, 1)
+        _puzzle(db_session, puzzle_id="old-but-failed", ply=41, created_at=base)
+        _puzzle(
+            db_session,
+            puzzle_id="new-but-clean",
+            ply=43,
+            created_at=base + timedelta(days=30),
+        )
+        db_session.query(PuzzleStats).filter_by(puzzle_id="old-but-failed").update(
+            {"fail_count": 4}
+        )
+        db_session.query(PuzzleStats).filter_by(puzzle_id="new-but-clean").update(
+            {"fail_count": 0}
+        )
+        db_session.commit()
+
+        assert DiagnosisRepository(db_session).pending_puzzle_ids(USER) == [
+            "old-but-failed",
+            "new-but-clean",
+        ]
+
+    def test_recency_still_breaks_ties_between_equal_failures(self, db_session):
+        self._many(db_session, 3)
+        db_session.query(PuzzleStats).update({"fail_count": 1})
+        db_session.commit()
+        assert DiagnosisRepository(db_session).pending_puzzle_ids(USER) == [
+            "p2",
+            "p1",
+            "p0",
+        ]
+
+    def test_a_puzzle_never_attempted_sorts_as_zero_failures_not_last(self, db_session):
+        """A missing stats row must COALESCE to zero, not sort as NULL — on
+        Postgres a NULL would otherwise land at the wrong end entirely."""
+        base = datetime(2026, 1, 1)
+        _puzzle(db_session, puzzle_id="never-tried", ply=41, created_at=base)
+        db_session.query(PuzzleStats).filter_by(puzzle_id="never-tried").delete()
+        _puzzle(
+            db_session,
+            puzzle_id="failed-once",
+            ply=43,
+            created_at=base - timedelta(days=5),
+        )
+        db_session.query(PuzzleStats).filter_by(puzzle_id="failed-once").update(
+            {"fail_count": 1}
+        )
+        db_session.commit()
+
+        ids = DiagnosisRepository(db_session).pending_puzzle_ids(USER)
+        assert ids == ["failed-once", "never-tried"]
+
     def test_a_limited_run_takes_the_most_recent_first(self, db_session):
         self._many(db_session, 3)
         assert DiagnosisRepository(db_session).pending_puzzle_ids(USER, 1) == ["p2"]

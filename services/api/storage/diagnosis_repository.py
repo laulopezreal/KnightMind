@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from services.api.diagnosis.causes import RULE_VERSION
 from services.api.diagnosis.evidence import EXTRACTION_VERSION
-from services.api.models import DiagnosisStatus, Puzzle, PuzzleDiagnosis
+from services.api.models import DiagnosisStatus, Puzzle, PuzzleDiagnosis, PuzzleStats
 
 
 @dataclass(frozen=True)
@@ -80,14 +80,35 @@ class DiagnosisRepository:
         )
 
     def pending_puzzle_ids(self, username: str, limit: int | None = None) -> list[str]:
-        """Puzzles with no current diagnosis, most recent first.
+        """Puzzles with no current diagnosis, most diagnostic first.
 
-        Recency ordering is the backfill's priority rule: a mistake from last
-        week says more about how the user plays now than one from two years
-        ago, so a run that only gets partway through has still done the part
-        that matters most.
+        The ordering is the backfill's priority rule, and it decides which
+        puzzles get AI enrichment when a run is cut short — by cancellation, by
+        the batch limit, or by the daily budget. So it ranks by how much each
+        mistake reveals:
+
+        1. **Re-failed in training** — the blindspot survived a second
+           exposure, which is the strongest signal in the corpus. Recency alone
+           would bury a puzzle failed four times behind a fresh one failed
+           never.
+        2. **Recent** — a mistake from last week says more about how the user
+           plays now than one from two years ago.
+        3. **Largest swing** — among equals, the costliest blunders first.
         """
-        stmt = self._pending_query(username).order_by(Puzzle.created_at.desc())
+        stats_join = (PuzzleStats.puzzle_id == Puzzle.id) & (
+            PuzzleStats.username == username
+        )
+        stmt = (
+            self._pending_query(username)
+            .outerjoin(PuzzleStats, stats_join)
+            .order_by(
+                # COALESCE so a puzzle never attempted (no stats row) sorts as
+                # zero failures rather than last-by-NULL on Postgres.
+                func.coalesce(PuzzleStats.fail_count, 0).desc(),
+                Puzzle.created_at.desc(),
+                Puzzle.swing.desc(),
+            )
+        )
         if limit is not None:
             stmt = stmt.limit(limit)
         return list(self.db.scalars(stmt).all())

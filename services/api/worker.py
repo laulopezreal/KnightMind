@@ -6,12 +6,14 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 from sqlalchemy import func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from services.api.db import SessionLocal
-from services.api.diagnosis.job import run_diagnosis
+from services.api.diagnosis.job import DIAGNOSIS_BATCH_MAX, run_diagnosis
 from services.api.models import Job, JobStatus, JobType
 from services.api.puzzles.generator import generate_puzzles
+from services.api.storage.diagnosis_repository import DiagnosisRepository
 
 logger = logging.getLogger(__name__)
 
@@ -278,6 +280,101 @@ class JobWorker:
             )
             db.commit()
 
+    @staticmethod
+    def _enqueue_diagnosis(
+        username: str, message: str, params: dict | None = None
+    ) -> None:
+        """Queue one diagnosis job for a user, best-effort.
+
+        Deliberately wrapped so a follow-up failure cannot turn already
+        persisted work into a failed job. The active-job unique index still
+        enforces at most one queued/running diagnosis per user; collisions are
+        expected under races and are safe no-ops.
+        """
+        try:
+            with SessionLocal() as db:
+                try:
+                    db.add(
+                        Job(
+                            username=username,
+                            type=JobType.DIAGNOSIS,
+                            status=JobStatus.QUEUED,
+                            message=message,
+                            params=params or {"limit": DIAGNOSIS_BATCH_MAX},
+                        )
+                    )
+                    db.commit()
+                except IntegrityError:
+                    # A diagnosis job is already queued or running for this
+                    # user — the active-job index says so. Marked automatic
+                    # diagnosis jobs re-check pending work at completion, so
+                    # there is nothing to do here.
+                    #
+                    # Rolled back explicitly rather than relying on the context
+                    # manager: a failed flush leaves the session unusable, and
+                    # this must be safe for a caller that supplied its own
+                    # session rather than a fresh one.
+                    db.rollback()
+                    logger.info(
+                        "Diagnosis already active for %s; not re-queuing", username
+                    )
+                    return
+            logger.info("Queued follow-up diagnosis for %s", username)
+        except Exception as exc:  # noqa: BLE001 - must never fail the generation
+            logger.warning("Could not queue follow-up diagnosis: %s", exc)
+
+    @staticmethod
+    def _enqueue_followup(job_type: str, username: str) -> None:
+        """Queue a diagnosis run after puzzles are generated.
+
+        Fresh puzzles are fresh mistakes, and a mistake with no diagnosis is
+        the feature not existing for that user. Chaining here means importing
+        games is the only thing anyone has to do — nobody needs to discover
+        POST /users/{username}/diagnose.
+        """
+        if job_type != JobType.PUZZLE_GENERATION.value:
+            # Only generation unconditionally produces new puzzles. Diagnosis
+            # requeues through _enqueue_remaining_diagnosis_if_pending, guarded
+            # by the actual pending-count predicate so it cannot loop forever.
+            return
+
+        JobWorker._enqueue_diagnosis(
+            username,
+            "Queued after puzzle generation",
+            {"limit": DIAGNOSIS_BATCH_MAX, "auto_chain": True},
+        )
+
+    @staticmethod
+    def _enqueue_remaining_diagnosis_if_pending(
+        job_type: str, username: str, params: dict
+    ) -> None:
+        """Close the generation-vs-diagnosis race after a diagnosis succeeds.
+
+        A running diagnosis snapshots pending puzzle ids at start. If puzzle
+        generation creates fresh pending puzzles during that run, generation's
+        follow-up insert may collide with the active diagnosis and no queued job
+        is left behind. Once the current diagnosis is marked SUCCEEDED, re-check
+        the storage predicate and queue one more diagnosis only if work remains.
+        """
+        if job_type != JobType.DIAGNOSIS.value or not params.get("auto_chain"):
+            return
+
+        try:
+            with SessionLocal() as db:
+                pending = DiagnosisRepository(db).pending_count(username)
+        except Exception as exc:  # noqa: BLE001 - enrichment must stay best-effort
+            logger.warning("Could not check remaining diagnosis work: %s", exc)
+            return
+
+        if pending <= 0:
+            return
+
+        JobWorker._enqueue_diagnosis(
+            username,
+            "Queued for remaining diagnosis",
+            {"limit": DIAGNOSIS_BATCH_MAX, "auto_chain": True},
+        )
+
     async def execute_job(self, job_id: str):
         """Execute the actual job logic."""
         # Re-fetch job to update status
@@ -352,6 +449,8 @@ class JobWorker:
                 )
             else:
                 logger.info(f"Job {job_id} succeeded")
+                self._enqueue_followup(job_type, username)
+                self._enqueue_remaining_diagnosis_if_pending(job_type, username, params)
 
         except Exception as e:
             logger.error(f"Job {job_id} failed: {e}")
