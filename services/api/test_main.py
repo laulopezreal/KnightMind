@@ -24,6 +24,7 @@ from services.api.models import (
     Puzzle as PuzzleModel,
 )
 from services.api.storage.game_repository import GameRepository
+from services.api.storage.puzzle_repository import PuzzleRepository
 
 
 @pytest.fixture
@@ -439,6 +440,44 @@ def test_user_status_with_due_puzzles(client_with_db, db_session):
     assert data["due_count"] == 1
     assert data["has_new_games"] is False
     assert data["next_due_at"].startswith(future_due.date().isoformat())
+
+
+def test_user_status_counts_eager_new_puzzles_as_due(client_with_db, db_session):
+    """Freshly saved, never-reviewed puzzles must count as due.
+
+    Regression for the eager-on-save path: ``save_puzzle`` creates a PuzzleStats
+    row with ``next_due_at = NULL``. Those puzzles are "New" and trainable, so
+    ``/status`` must report ``due_count == N`` (not 0). Existing status tests
+    build PuzzleModel rows directly and bypass ``save_puzzle``, so this path was
+    uncovered. The test intentionally goes through the repository so the eager
+    NULL-next_due_at stats are created exactly as production does.
+    """
+    _create_game(db_session, "game-eager-status", "testuser")
+    db_session.commit()
+
+    repository = PuzzleRepository(db_session)
+    n_puzzles = 3
+    for ply in range(n_puzzles):
+        is_new, _ = repository.save_puzzle(
+            username="testuser",
+            source_game_id="game-eager-status",
+            ply=ply,
+            fen="rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+            side_to_move="white",
+            played_move_uci="e2e3",
+            best_move_uci="e2e4",
+            eval_before=0.5,
+            eval_after=-0.5,
+            swing=1.0,
+        )
+        assert is_new is True
+
+    response = client_with_db.get("/users/testuser/status")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["puzzles_count"] == n_puzzles
+    assert data["due_count"] == n_puzzles
 
 
 # --- Chess.com username validation tests ---

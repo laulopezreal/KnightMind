@@ -5,10 +5,12 @@
 # SSHs into the server, pulls latest code, rebuilds, and restarts.
 #
 # Required GitHub Secrets:
-#   DEPLOY_HOST       – Server IP or hostname (e.g., 123.45.67.89)
+#   DEPLOY_HOST       – Server tailnet IP or MagicDNS name (reached over the tailnet)
 #   DEPLOY_USER       – SSH user (e.g., root or deploy)
 #   DEPLOY_SSH_KEY    – Private SSH key for authentication
 #   DEPLOY_APP_DIR    – App directory on server (e.g., /opt/knightmind)
+#   TS_OAUTH_CLIENT_ID – Tailscale OAuth client id (tag:ci), to join the tailnet in CI
+#   TS_OAUTH_SECRET    – Tailscale OAuth secret (tag:ci)
 # ============================================================================
 
 name: Deploy
@@ -38,6 +40,16 @@ jobs:
     timeout-minutes: 10
 
     steps:
+      # GitHub-hosted runners are not on the tailnet, and the server's public
+      # :22 is closed. Join the tailnet first so the SSH deploy below can reach
+      # DEPLOY_HOST over its tailnet address.
+      - name: Connect to tailnet
+        uses: tailscale/github-action@v4.1.3
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
+
       - name: Deploy to Hetzner
         uses: appleboy/ssh-action@v1
         with:
@@ -73,15 +85,32 @@ jobs:
             echo "--- Restarting with new code ---"
             ${COMPOSE} up -d
 
-            echo "--- Health check ---"
-            sleep 5
-            HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/ops/health)
-            if [ "${HTTP_STATUS}" -ne 200 ]; then
-              echo "Health check failed with status ${HTTP_STATUS}"
+            echo "--- Health check (host published port = the real ingress path) ---"
+            # Probe 127.0.0.1:8000 on the HOST, not inside the container. This is
+            # the exact path Caddy proxies to for public traffic, so a green here
+            # proves real ingress works. An in-container probe would pass even
+            # when host->container port forwarding is broken -- which took
+            # api.guessme.world down on 2026-07-25 while the container stayed
+            # healthy internally. Use 127.0.0.1 explicitly (not 'localhost',
+            # which resolves to ::1/IPv6 first while the publish is IPv4-only)
+            # and a per-attempt timeout so a wedged socket fails fast.
+            ok=0
+            for i in $(seq 1 10); do
+              code=$(curl -s -o /dev/null -m 5 -w "%{http_code}" http://127.0.0.1:8000/ops/health || true)
+              if [ "${code}" = "200" ]; then
+                echo "Health check passed (attempt ${i}, HTTP 200)"
+                ok=1
+                break
+              fi
+              echo "Health check attempt ${i}: HTTP ${code:-000}; retrying in 3s..."
+              sleep 3
+            done
+            if [ "${ok}" -ne 1 ]; then
+              echo "Health check FAILED: api not reachable on host 127.0.0.1:8000 (the path Caddy uses for public ingress)."
+              echo "The container can be healthy internally while host->container forwarding is broken; check the docker port publish / iptables FORWARD rule for the api bridge."
               ${COMPOSE} logs --tail=50 api
               exit 1
             fi
-            echo "Health check passed (HTTP ${HTTP_STATUS})"
 
       - name: Notify success
         if: success()

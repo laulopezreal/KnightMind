@@ -12,7 +12,6 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from services.api.models import PuzzleStats
-from services.api.storage import PuzzleRepository
 
 logger = logging.getLogger(__name__)
 
@@ -183,6 +182,8 @@ def backfill_puzzle_identity(db: Session):
     Only updates records where title is NULL.
     """
     logger.info("Starting puzzle identity backfill check...")
+
+    from services.api.storage import PuzzleRepository
 
     try:
         # query all stats where title is NULL

@@ -73,7 +73,7 @@ from services.api.openings import tree_cache as openings_tree_cache
 from services.api.puzzles.identity import backfill_puzzle_identity
 from services.api.ratelimit import rate_limit
 from services.api.ratings_auto import auto_snapshot, auto_snapshot_throttled
-from services.api.storage import GameRepository, PuzzleRepository
+from services.api.storage import GameRepository, PuzzleRepository, normalized_position
 from services.api.storage.diagnosis_repository import DiagnosisRepository
 from services.api.storage.game_repository import MANUAL_GAME_ID
 from services.api.storage.spaced_repetition import (
@@ -924,6 +924,24 @@ _VALID_MOTIFS = frozenset(
 )
 
 
+def _next_manual_ply(db: Session, username_lower: str) -> int:
+    """Next sequential ply slot for a user's manual puzzles.
+
+    Manual puzzles all share MANUAL_GAME_ID, so ``ply`` here is a synthetic
+    per-user sequence number, not a board ply. Computed as ``max(ply) + 1``
+    OUTSIDE the insert's transaction, so concurrent saves can compute the same
+    value; ``create_manual_puzzle`` retries on the resulting unique-key
+    collision (see its loop for why the retry does not belong in save_puzzle).
+    """
+    max_ply = db.scalar(
+        select(func.max(PuzzleModel.ply)).where(
+            PuzzleModel.username == username_lower,
+            PuzzleModel.source_game_id == MANUAL_GAME_ID,
+        )
+    )
+    return (max_ply + 1) if max_ply is not None else 0
+
+
 @app.post("/puzzles/manual", response_model=ManualPuzzleResponse)
 async def create_manual_puzzle(
     request: ManualPuzzleRequest,
@@ -1007,59 +1025,95 @@ async def create_manual_puzzle(
         except IntegrityError:
             db.rollback()  # Another concurrent request created it first
 
-    # Idempotent: same FEN returns same puzzle
-    existing = db.scalars(
-        select(PuzzleModel).where(
-            PuzzleModel.username == username_lower,
-            PuzzleModel.source_game_id == MANUAL_GAME_ID,
-            PuzzleModel.fen == request.fen,
-        )
-    ).first()
-    if existing:
-        return ManualPuzzleResponse(puzzle_id=existing.id, is_new=False)
-
-    # Collision-free ply: each manual position gets the next sequential slot
-    max_ply = db.scalar(
-        select(func.max(PuzzleModel.ply)).where(
-            PuzzleModel.username == username_lower,
-            PuzzleModel.source_game_id == MANUAL_GAME_ID,
-        )
-    )
-    ply = (max_ply + 1) if max_ply is not None else 0
-
     puzzle_repo = PuzzleRepository(db)
-    is_new, puzzle_id = puzzle_repo.save_puzzle(
-        username=username_lower,
-        source_game_id=MANUAL_GAME_ID,
-        ply=ply,
-        fen=request.fen,
-        side_to_move=side_to_move,
-        played_move_uci=best_move_uci,
-        best_move_uci=best_move_uci,
-        accept_moves_uci=best_move_uci,
-        eval_before=0.0,
-        eval_after=0.0,
-        swing=0.0,
-        solution_pv=solution_pv_raw,
-        source_path=source_path,
-        title=title,
-        primary_motif=motif,
-    )
 
-    if not is_new:
-        # Race: find by FEN to return the correct id
-        existing = db.scalars(
+    # Idempotency key is the normalized board POSITION, not the raw FEN. The raw
+    # FEN carries halfmove/fullmove counters, so the same board reached via a
+    # different move order (a transposition — routine in an analysis tool) has a
+    # different raw FEN. Keying on the raw FEN inserted a permanent duplicate for
+    # every transposition (there is no delete path), each carrying a PuzzleStats
+    # row that inflated due_count forever. Keying on the position honours the
+    # endpoint's "same position => same puzzle" contract.
+    position_key = normalized_position(request.fen)
+
+    # Manual puzzles all share MANUAL_GAME_ID, so the unique key
+    # (username, source_game_id, ply) is really a per-user sequence. ply is
+    # allocated as max(ply)+1 OUTSIDE the insert's transaction, so two concurrent
+    # saves of DIFFERENT positions can compute the same ply; one insert wins, the
+    # other raises IntegrityError. We must NOT resolve that loser to the winner's
+    # id -- that silently drops the loser's saved position (the #268 bug). So:
+    #   * same position already present     -> return it idempotently;
+    #   * a DIFFERENT position took our ply -> reallocate ply and retry.
+    # The retry lives here, not inside save_puzzle: the puzzle-generation path
+    # passes a real board ply, where a ply collision genuinely means "this
+    # position is already saved" and retrying with ply+1 would manufacture
+    # duplicates. Only the synthetic manual sequence wants a fresh slot.
+    def _existing_by_position() -> PuzzleModel | None:
+        return db.scalars(
             select(PuzzleModel).where(
                 PuzzleModel.username == username_lower,
                 PuzzleModel.source_game_id == MANUAL_GAME_ID,
-                PuzzleModel.fen == request.fen,
+                PuzzleModel.normalized_position == position_key,
             )
         ).first()
-        return ManualPuzzleResponse(
-            puzzle_id=existing.id if existing else puzzle_id, is_new=False
-        )
 
-    return ManualPuzzleResponse(puzzle_id=puzzle_id, is_new=True)
+    max_attempts = 8
+    for _attempt in range(max_attempts):
+        # Idempotent: the same position returns the same puzzle. Re-read every
+        # iteration and immediately before the insert so it is the last read.
+        existing = _existing_by_position()
+        if existing:
+            return ManualPuzzleResponse(puzzle_id=existing.id, is_new=False)
+
+        ply = _next_manual_ply(db, username_lower)
+        try:
+            is_new, puzzle_id = puzzle_repo.save_puzzle(
+                username=username_lower,
+                source_game_id=MANUAL_GAME_ID,
+                ply=ply,
+                fen=request.fen,
+                side_to_move=side_to_move,
+                played_move_uci=best_move_uci,
+                best_move_uci=best_move_uci,
+                accept_moves_uci=best_move_uci,
+                eval_before=0.0,
+                eval_after=0.0,
+                swing=0.0,
+                solution_pv=solution_pv_raw,
+                source_path=source_path,
+                title=title,
+                primary_motif=motif,
+            )
+        except IntegrityError:
+            # A concurrent request committed THIS position (at some other ply)
+            # between our precheck and our insert, so our insert violated the
+            # partial unique index on the normalized position. save_puzzle keys
+            # its own recovery off ply, so it could not resolve a position-index
+            # violation and re-raised. Absorb it: return the winning row
+            # idempotently instead of surfacing a 500.
+            db.rollback()
+            existing = _existing_by_position()
+            if existing:
+                return ManualPuzzleResponse(puzzle_id=existing.id, is_new=False)
+            # No winner visible yet (a genuinely transient failure); retry.
+            continue
+        if is_new:
+            return ManualPuzzleResponse(puzzle_id=puzzle_id, is_new=True)
+
+        # save_puzzle found an existing row at our (username, MANUAL_GAME_ID, ply).
+        # If it is our own position (raced in ahead of us) return it idempotently;
+        # if a DIFFERENT position won the slot, loop to reallocate a fresh ply so
+        # this save is not dropped.
+        winner = db.get(PuzzleModel, puzzle_id)
+        if winner is not None and winner.normalized_position == position_key:
+            return ManualPuzzleResponse(puzzle_id=puzzle_id, is_new=False)
+
+    # Exhausted retries under sustained contention. A clear, correct error is far
+    # better than returning a phantom id; the client can safely retry the save.
+    raise HTTPException(
+        status_code=409,
+        detail="Could not save puzzle due to concurrent updates; please retry.",
+    )
 
 
 @app.get("/jobs/{job_id}", response_model=JobStatusResponse)
