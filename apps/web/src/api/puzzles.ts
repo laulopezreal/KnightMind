@@ -165,6 +165,14 @@ export type PuzzleStatus = 'new' | 'due' | 'learning' | 'mastered';
 export type PuzzleDifficulty = 'easy' | 'medium' | 'hard';
 export type PuzzleSort = 'due_soonest' | 'last_attempted' | 'most_failed' | 'difficulty_asc' | 'difficulty_desc' | 'newest';
 
+export interface PuzzleDiagnosisSummary {
+    state: 'ready' | 'unclear' | 'unavailable';
+    primary_cause: string | null;
+    primary_cause_label: string | null;
+    source: string | null;
+    diagnosed_at: string | null;
+}
+
 export interface LibraryPuzzle {
     id: string;
     title: string | null;
@@ -182,6 +190,7 @@ export interface LibraryPuzzle {
     last_result: string | null;
     next_due_at: string | null;
     created_at: string | null;
+    diagnosis_summary: PuzzleDiagnosisSummary | null;
 }
 
 export interface LibraryCorpusStats {

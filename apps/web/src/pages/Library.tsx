@@ -66,6 +66,23 @@ function DifficultyBadge({ difficulty }: { difficulty: PuzzleDifficulty }) {
     );
 }
 
+function DiagnosisBadge({ puzzle }: { puzzle: LibraryPuzzle }) {
+    const summary = puzzle.diagnosis_summary;
+    if (!summary) return null;
+
+    const label = summary.primary_cause_label
+        || (summary.state === 'unclear' ? 'Cause unclear' : 'Diagnosis unavailable');
+
+    return (
+        <span
+            aria-label="Diagnosis cause"
+            className="text-xs font-sans text-primary/75 px-2 py-0.5 bg-primary/10 border border-primary/10 rounded-sm"
+        >
+            Cause: {label}
+        </span>
+    );
+}
+
 function PuzzleRow({ puzzle }: { puzzle: LibraryPuzzle }) {
     const successRate = puzzle.attempts > 0
         ? Math.round((puzzle.pass_count / puzzle.attempts) * 100)
@@ -90,6 +107,7 @@ function PuzzleRow({ puzzle }: { puzzle: LibraryPuzzle }) {
                                 {puzzle.primary_motif}
                             </span>
                         )}
+                        <DiagnosisBadge puzzle={puzzle} />
                     </div>
                     {/* Stats row */}
                     <div className="flex items-center gap-4 mt-1 text-xs font-sans text-primary/70">
