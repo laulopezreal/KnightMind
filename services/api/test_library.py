@@ -142,12 +142,14 @@ def _create_diagnosis(
     user_confirmed_cause: str | None = None,
     insufficient_evidence: bool = False,
     status: str = DiagnosisStatus.OK,
+    error: str | None = None,
 ):
     db.add(
         PuzzleDiagnosis(
             puzzle_id=puzzle_id,
             username=username,
             status=status,
+            error=error,
             primary_motif="fork",
             primary_cause=primary_cause,
             user_confirmed_cause=user_confirmed_cause,
@@ -301,13 +303,13 @@ class TestListPuzzlesBasic:
             "source",
             "diagnosed_at",
         }
-        payload = str(puzzle)
-        assert "Qxd5" not in payload
-        assert "d1d5" not in payload
-        assert "from d1 to d5" not in payload
-        assert "training_recommendation" not in payload
-        assert "explanation" not in payload
-        assert "evidence" not in payload
+        wire = response.text
+        assert "Qxd5" not in wire
+        assert "d1d5" not in wire
+        assert "from d1 to d5" not in wire
+        assert "training_recommendation" not in wire
+        assert "explanation" not in wire
+        assert "evidence_json" not in wire
 
     def test_missing_diagnosis_returns_null_summary(self, client, db_session):
         _create_puzzle(db_session, "p-undx")
@@ -333,6 +335,54 @@ class TestListPuzzlesBasic:
 
         assert summary["primary_cause"] == "king_safety_blindness"
         assert summary["primary_cause_label"] == "King safety blindness"
+
+    def test_unclear_state_with_cause_reports_unclear(self, client, db_session):
+        """insufficient_evidence=True forces state='unclear' even when primary_cause is set."""
+        _create_puzzle(db_session, "p-unclear")
+        _create_diagnosis(
+            db_session,
+            "p-unclear",
+            primary_cause="loose_piece_awareness",
+            insufficient_evidence=True,
+        )
+        db_session.commit()
+
+        summary = client.get("/puzzles/list?username=testuser").json()["puzzles"][0][
+            "diagnosis_summary"
+        ]
+
+        assert summary["state"] == "unclear"
+        assert summary["primary_cause"] == "loose_piece_awareness"
+        assert summary["primary_cause_label"] == "Loose piece awareness"
+
+    def test_unavailable_diagnosis_omits_error_field(self, client, db_session):
+        """UNAVAILABLE rows carry an error reason that must never reach the client."""
+        _create_puzzle(db_session, "p-unavail")
+        _create_diagnosis(
+            db_session,
+            "p-unavail",
+            primary_cause=None,
+            status=DiagnosisStatus.UNAVAILABLE,
+            error="illegal_move_SENTINEL",
+        )
+        db_session.commit()
+
+        response = client.get("/puzzles/list?username=testuser")
+        summary = response.json()["puzzles"][0]["diagnosis_summary"]
+
+        assert summary["state"] == "unavailable"
+        assert summary["primary_cause"] is None
+        assert "illegal_move_SENTINEL" not in response.text
+        assert "error" not in summary
+
+    def test_diagnosis_not_leaked_across_users(self, client, db_session):
+        """A diagnosis row for user B must not appear in user A's list."""
+        _create_puzzle(db_session, "p-shared", username="alice")
+        _create_diagnosis(db_session, "p-shared", username="bob")
+        db_session.commit()
+
+        data = client.get("/puzzles/list?username=alice").json()
+        assert data["puzzles"][0]["diagnosis_summary"] is None
 
     def test_puzzles_without_stats_are_new(self, client, db_session):
         """Puzzles with no stats row have status 'new' and zeroed counts."""
@@ -858,3 +908,16 @@ class TestGetPuzzleDetail:
             "diagnosis_summary",
         }
         assert set(data.keys()) == expected_keys
+
+    def test_detail_diagnosis_summary_is_null(self, client, db_session):
+        """Detail endpoint always returns null for diagnosis_summary.
+
+        The detail page uses GET /puzzles/{id}/diagnosis for full data; the
+        summary field is list-only and intentionally absent from this response.
+        """
+        _create_puzzle(db_session, "p-dx-detail")
+        _create_diagnosis(db_session, "p-dx-detail")
+        db_session.commit()
+
+        data = client.get("/puzzles/p-dx-detail?username=testuser").json()
+        assert data["diagnosis_summary"] is None

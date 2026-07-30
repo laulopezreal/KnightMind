@@ -70,14 +70,18 @@ function DifficultyBadge({ difficulty }: { difficulty: PuzzleDifficulty }) {
 function DiagnosisBadge({ summary }: { summary: PuzzleDiagnosisSummary | null }) {
     if (!summary) return null;
 
-    const label = summary.primary_cause_label
-        || (summary.state === 'unclear' ? 'Cause unclear' : summary.state === 'unavailable' ? 'Diagnosis unavailable' : 'Cause unknown');
+    const cls = "text-xs font-sans text-primary/75 px-2 py-0.5 bg-primary/10 border border-primary/10 rounded-sm";
 
+    if (summary.state === 'unclear') {
+        return <span aria-label="Diagnosis cause" className={cls}>Cause unclear</span>;
+    }
+    if (summary.state === 'unavailable') {
+        return <span aria-label="Diagnosis cause" className={cls}>Diagnosis unavailable</span>;
+    }
+    // state === 'ready': show the human-readable label, falling back to the raw key
+    const label = summary.primary_cause_label || summary.primary_cause || 'Cause unknown';
     return (
-        <span
-            aria-label="Diagnosis cause"
-            className="text-xs font-sans text-primary/75 px-2 py-0.5 bg-primary/10 border border-primary/10 rounded-sm"
-        >
+        <span aria-label="Diagnosis cause" className={cls}>
             Cause: {label}
         </span>
     );

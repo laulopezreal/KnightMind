@@ -264,9 +264,32 @@ describe('Library', () => {
         });
         render(<Library />);
         await waitFor(() => {
-            expect(screen.getByText('Cause: Cause unclear')).toBeInTheDocument();
+            expect(screen.getByText('Cause unclear')).toBeInTheDocument();
         });
         expect(screen.getByLabelText('Diagnosis cause')).toBeInTheDocument();
+    });
+
+    it('should show "Cause unclear" even when primary_cause_label is set (state wins)', async () => {
+        mockGetLibraryPuzzles.mockResolvedValue({
+            ...EMPTY_RESPONSE,
+            puzzles: [{
+                ...MOCK_PUZZLES[0],
+                diagnosis_summary: {
+                    state: 'unclear' as const,
+                    primary_cause: 'loose_piece_awareness',
+                    primary_cause_label: 'Loose piece awareness',
+                    source: 'rules',
+                    diagnosed_at: '2026-01-16T12:00:00Z',
+                },
+            }],
+            total: 1,
+            stats: MOCK_STATS,
+        });
+        render(<Library />);
+        await waitFor(() => {
+            expect(screen.getByText('Cause unclear')).toBeInTheDocument();
+        });
+        expect(screen.queryByText('Cause: Loose piece awareness')).not.toBeInTheDocument();
     });
 
     it('should show "Diagnosis unavailable" badge for unavailable diagnosis state', async () => {
@@ -287,7 +310,7 @@ describe('Library', () => {
         });
         render(<Library />);
         await waitFor(() => {
-            expect(screen.getByText('Cause: Diagnosis unavailable')).toBeInTheDocument();
+            expect(screen.getByText('Diagnosis unavailable')).toBeInTheDocument();
         });
         expect(screen.getByLabelText('Diagnosis cause')).toBeInTheDocument();
     });
