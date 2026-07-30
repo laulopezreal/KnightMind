@@ -155,3 +155,30 @@ export async function getMotifTrends(username: string, windowDays: number = 30):
 export async function getTrickyPuzzles(username: string, limit: number = 5): Promise<TrickyPuzzlesResponse> {
     return request<TrickyPuzzlesResponse>(`/users/${encodeURIComponent(username)}/puzzles/tricky?limit=${limit}`);
 }
+
+// --- Mistake causes (Insights) ---
+
+export interface MistakeCause {
+    cause: string;
+    label: string;
+    mistakes: number;
+    dominant_phase?: string | null;
+    verified_attempts: number;
+    accuracy?: number | null;
+    insufficient_data: boolean;
+    is_unclassified: boolean;
+}
+
+export interface MistakeCausesResponse {
+    username: string;
+    causes: MistakeCause[];
+    total_diagnosed: number;
+    pending: number;
+    min_for_ranking: number;
+}
+
+export async function getMistakeCauses(username: string): Promise<MistakeCausesResponse> {
+    return await request<MistakeCausesResponse>(
+        `/users/${encodeURIComponent(username)}/mistake-causes`
+    );
+}

@@ -52,6 +52,13 @@ MIN_REVIEWS_FOR_MOTIF_TREND = _env_threshold("ANALYTICS_MIN_REVIEWS_MOTIF_TREND"
 # reflect sampling luck; 5 is the floor where a rank carries any signal.
 MIN_ATTEMPTS_FOR_MOTIF_RANK = _env_threshold("ANALYTICS_MIN_ATTEMPTS_MOTIF_RANK", 5)
 
+# A cause is only presented as a ranked weakness once it has been diagnosed at
+# least this many times. Below it, one bad afternoon looks identical to a
+# habit — and "you have a loose-piece problem" said on the strength of a single
+# game is the kind of confident-but-unfounded claim this codebase exists to
+# avoid. Four is the point where a repeat stops being coincidence.
+MIN_DIAGNOSES_FOR_CAUSE_RANK = _env_threshold("ANALYTICS_MIN_DIAGNOSES_CAUSE_RANK", 4)
+
 # Rating-driver attribution needs enough rated games that the Elo delta vs the
 # expected score is not dominated by per-game variance (a single game swings
 # rating by ~10-30 pts). Below 5 rated games we stay descriptive and neutral.

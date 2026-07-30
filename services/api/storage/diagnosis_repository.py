@@ -10,12 +10,48 @@ no cursor that can drift out of step with what is actually stored.
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from sqlalchemy import Select, func, or_, select
+from sqlalchemy import Select, case, func, or_, select
 from sqlalchemy.orm import Session
 
+from services.api.analytics_confidence import (
+    MIN_ATTEMPTS_FOR_MOTIF_RANK,
+    MIN_DIAGNOSES_FOR_CAUSE_RANK,
+)
 from services.api.diagnosis.causes import RULE_VERSION
 from services.api.diagnosis.evidence import EXTRACTION_VERSION
-from services.api.models import DiagnosisStatus, Puzzle, PuzzleDiagnosis, PuzzleStats
+from services.api.models import (
+    DiagnosisStatus,
+    Puzzle,
+    PuzzleDiagnosis,
+    PuzzleResult,
+    PuzzleReview,
+    PuzzleStats,
+)
+
+
+@dataclass(frozen=True)
+class CauseStat:
+    """How often one cause explains this user's mistakes, and how they fare on it.
+
+    Two independent numbers, deliberately not merged:
+
+    ``mistakes`` is always trustworthy — every puzzle in the corpus is a real
+    blunder from a real game, so this is a direct count, not a sample.
+
+    ``accuracy`` is a proportion over *server-verified* training attempts only,
+    and is None until there are enough of them. Self-reported results are
+    excluded on purpose: the codebase already refuses to present them as
+    verified skill (see ``PuzzleReview.verified``), and a pass rate is exactly
+    the kind of claim that would launder them.
+    """
+
+    cause: str
+    mistakes: int
+    dominant_phase: str | None
+    verified_attempts: int
+    verified_passes: int
+    accuracy: float | None
+    insufficient_data: bool
 
 
 @dataclass(frozen=True)
@@ -226,3 +262,91 @@ class DiagnosisRepository:
             .order_by(func.count().desc(), cause)
         )
         return [(row.cause, row.n) for row in self.db.execute(stmt).all()]
+
+    def cause_breakdown(self, username: str) -> list[CauseStat]:
+        """Per-cause counts, dominant phase, and verified accuracy.
+
+        Assembled from two small queries rather than one clever join. The
+        corpus is a few hundred rows per user, so the readable version costs
+        nothing measurable — and a mode-of-phase plus a verified-only pass rate
+        expressed in SQL would be considerably harder to check than to write.
+        """
+        cause_col = func.coalesce(
+            PuzzleDiagnosis.user_confirmed_cause, PuzzleDiagnosis.primary_cause
+        )
+        rows = self.db.execute(
+            select(
+                PuzzleDiagnosis.puzzle_id,
+                cause_col.label("cause"),
+                PuzzleDiagnosis.phase,
+            ).where(
+                PuzzleDiagnosis.username == username,
+                PuzzleDiagnosis.status == DiagnosisStatus.OK,
+                cause_col.isnot(None),
+            )
+        ).all()
+        if not rows:
+            return []
+
+        # Server-verified attempts only — see CauseStat's docstring.
+        verified = self.db.execute(
+            select(
+                PuzzleReview.puzzle_id,
+                func.count().label("attempts"),
+                func.sum(
+                    case((PuzzleReview.result == PuzzleResult.PASS, 1), else_=0)
+                ).label("passes"),
+            )
+            .where(
+                PuzzleReview.username == username,
+                PuzzleReview.verified.is_(True),
+            )
+            .group_by(PuzzleReview.puzzle_id)
+        ).all()
+        by_puzzle = {r.puzzle_id: (r.attempts or 0, r.passes or 0) for r in verified}
+
+        buckets: dict[str, dict] = {}
+        for row in rows:
+            bucket = buckets.setdefault(
+                row.cause,
+                {"mistakes": 0, "phases": {}, "attempts": 0, "passes": 0},
+            )
+            bucket["mistakes"] += 1
+            if row.phase:
+                bucket["phases"][row.phase] = bucket["phases"].get(row.phase, 0) + 1
+            attempts, passes = by_puzzle.get(row.puzzle_id, (0, 0))
+            bucket["attempts"] += attempts
+            bucket["passes"] += passes
+
+        stats = [
+            CauseStat(
+                cause=cause,
+                mistakes=b["mistakes"],
+                # Only when one phase actually dominates; a 3/3 split names no
+                # phase rather than picking one by dictionary order.
+                dominant_phase=_dominant(b["phases"]),
+                verified_attempts=b["attempts"],
+                verified_passes=b["passes"],
+                accuracy=(
+                    b["passes"] / b["attempts"]
+                    if b["attempts"] >= MIN_ATTEMPTS_FOR_MOTIF_RANK
+                    else None
+                ),
+                insufficient_data=b["mistakes"] < MIN_DIAGNOSES_FOR_CAUSE_RANK,
+            )
+            for cause, b in buckets.items()
+        ]
+        # Most frequent first; name breaks ties so the order is stable across
+        # requests rather than following dict insertion.
+        stats.sort(key=lambda s: (-s.mistakes, s.cause))
+        return stats
+
+
+def _dominant(phases: dict[str, int]) -> str | None:
+    """The single most common phase, or None when nothing leads."""
+    if not phases:
+        return None
+    ranked = sorted(phases.items(), key=lambda kv: (-kv[1], kv[0]))
+    if len(ranked) > 1 and ranked[0][1] == ranked[1][1]:
+        return None
+    return ranked[0][0]
