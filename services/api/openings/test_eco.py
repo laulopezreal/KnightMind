@@ -2,7 +2,14 @@
 
 import chess
 
-from .eco import _position_key, classify, eco_table
+from .eco import (
+    _position_key,
+    classify,
+    eco_table,
+    max_book_ply,
+    min_games_floor,
+    warm,
+)
 from .tree_builder import build_opening_tree
 
 
@@ -159,3 +166,30 @@ class TestMinGames:
         tree = build_opening_tree(games, "testplayer", "both", 4, min_games=2)
 
         assert tree["games_count"] == 4
+
+
+class TestMinGamesFloor:
+    """The floor is a server cost control, so the server has to own it."""
+
+    def test_shallow_trees_are_unfiltered(self):
+        assert min_games_floor(8) == 1
+        assert min_games_floor(12) == 1
+
+    def test_deeper_trees_raise_the_floor(self):
+        assert min_games_floor(16) == 2
+        assert min_games_floor(24) == 2
+        assert min_games_floor(40) == 3
+
+    def test_the_floor_is_monotonic_in_depth(self):
+        floors = [min_games_floor(d) for d in range(1, 41)]
+        assert floors == sorted(floors)
+
+
+class TestBookDepth:
+    def test_reports_the_deepest_vendored_line(self):
+        # Positions past this cannot match, so the walk skips computing them.
+        assert max_book_ply() == 36
+
+    def test_warm_builds_the_table_up_front(self):
+        warm()
+        assert len(eco_table()) > 3000

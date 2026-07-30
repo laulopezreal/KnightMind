@@ -41,6 +41,7 @@ const TREE = {
   analysis: {
     games_stored: 40, games_seen: 40, games_analyzed: 40, excluded_by_color: 0,
     games_skipped: 0, skipped_unreadable: 0, skipped_not_player: 0, skipped_unfinished: 0,
+  min_games: 1,
   },
 };
 

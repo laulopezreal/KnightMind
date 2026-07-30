@@ -12,7 +12,7 @@ from typing import Literal
 
 import chess.pgn
 
-from .eco import classify
+from .eco import classify, max_book_ply
 
 
 @dataclass
@@ -255,6 +255,7 @@ class OpeningTreeBuilder:
         # board keeps it linear. SAN is computed on the position *before* the
         # move (identical to the previous ``node.board().san(move)``).
         board = game.board()
+        book_depth = max_book_ply()
 
         while node.variations and ply < self.max_ply:
             next_node = node.variation(0)  # Main line
@@ -271,8 +272,11 @@ class OpeningTreeBuilder:
                     ply=ply,
                     # ECO is keyed by position, and the board is already here.
                     # A node's move path is fixed, so its EPD never changes —
-                    # recording it once on creation is enough.
-                    epd=board.epd(),
+                    # recording it once on creation is enough. Past the deepest
+                    # book line it can never match, and epd() is by far the most
+                    # expensive call in this walk (~45% of it), so skip it there
+                    # and let those nodes inherit as they would anyway.
+                    epd=board.epd() if ply <= book_depth else None,
                 )
 
             child_node = current_tree_node.children[move_san]
@@ -293,24 +297,17 @@ class OpeningTreeBuilder:
         Returns:
             Dictionary representation of the opening tree suitable for JSON serialization
         """
-        # Return the tree starting from root's children (skip the dummy root node)
-        return {
-            "move_san": "Start",
-            "ply": 0,
-            "games_count": self.root.stats.games,
-            "wins": self.root.stats.wins,
-            "draws": self.root.stats.draws,
-            "losses": self.root.stats.losses,
-            "win_rate": round(self.root.stats.win_rate, 1),
-            # The starting position belongs to no opening.
-            "eco": None,
-            "opening_name": None,
-            "children": [
-                child.to_dict(None, min_games)
-                for child in self.root.children.values()
-                if child.stats.games >= min_games
-            ],
-        }
+        # Routed through to_dict rather than hand-built: a second writer means
+        # every new node field has to be added twice (as `eco`/`opening_name`
+        # just were) and the pruning predicate written twice. The root's `epd`
+        # is None, so `classify` already returns the "belongs to no opening"
+        # answer without a special case.
+        tree = self.root.to_dict(min_games=min_games)
+        tree["move_san"] = "Start"
+        # The root always reports a children array, even when empty — clients
+        # branch on its contents rather than its presence.
+        tree.setdefault("children", [])
+        return tree
 
 
 def build_opening_tree(

@@ -323,6 +323,43 @@ def test_get_openings_cache_invalidates_when_games_change(
     assert second["games_count"] == len(MOCK_GAMES)
 
 
+@patch("services.api.main.import_all_games")
+def test_get_openings_enforces_the_depth_floor(mock_import_games, client_with_db):
+    """A deep request cannot opt out of pruning — the server pays for the tree."""
+
+    async def mock_generator(username, since=None):
+        from services.ingest import ChessGame
+
+        for game_data in MOCK_GAMES:
+            yield ChessGame(
+                url=game_data["url"],
+                pgn=game_data["pgn"],
+                time_control=game_data["time_control"],
+                end_time=game_data["end_time"],
+                rated=game_data["rated"],
+                white_username=game_data["white"]["username"],
+                black_username=game_data["black"]["username"],
+                white_result=game_data["white"]["result"],
+                black_result=game_data["black"]["result"],
+            )
+
+    mock_import_games.side_effect = mock_generator
+    client_with_db.post("/import/chesscom?username=testuser")
+
+    # Asking for everything at maximum depth is exactly the request that built a
+    # multi-megabyte tree; the floor applies regardless of what was asked for.
+    deep = client_with_db.get("/openings?username=testuser&max_ply=40&min_games=1")
+    assert deep.status_code == 200
+    assert deep.json()["analysis"]["min_games"] == 3
+
+    # A shallow tree is served unfiltered, and a higher request is honoured.
+    shallow = client_with_db.get("/openings?username=testuser&max_ply=12&min_games=1")
+    assert shallow.json()["analysis"]["min_games"] == 1
+
+    stricter = client_with_db.get("/openings?username=testuser&max_ply=12&min_games=5")
+    assert stricter.json()["analysis"]["min_games"] == 5
+
+
 def test_get_openings_no_games(client_with_db):
     """Test /openings returns 404 when user has no games."""
     response = client_with_db.get("/openings?username=unknownuser")

@@ -52,6 +52,34 @@ def _position_key(pgn: str) -> str | None:
 
 
 @lru_cache(maxsize=1)
+def max_book_ply() -> int:
+    """
+    Depth of the deepest vendored line (36 at the time of writing).
+
+    A position past it cannot match any entry, so computing its key is pure
+    waste — and deeper nodes inherit their ancestor's name regardless, which is
+    the designed behaviour. Derived from the data rather than hardcoded so a
+    refreshed table cannot silently outgrow the cutoff.
+    """
+    return max(
+        (len(entry) for entry in _entry_plies()),
+        default=0,
+    )
+
+
+@lru_cache(maxsize=1)
+def _entry_plies() -> tuple[tuple[str, ...], ...]:
+    """Move lists of every vendored entry, for depth statistics."""
+    if not ECO_DATA.exists():
+        return ()
+    with ECO_DATA.open(encoding="utf-8", newline="") as handle:
+        return tuple(
+            tuple(t for t in row.get("pgn", "").split() if not _MOVE_NUMBER.match(t))
+            for row in csv.DictReader(handle, delimiter="\t")
+        )
+
+
+@lru_cache(maxsize=1)
 def eco_table() -> dict[str, tuple[str, str]]:
     """
     Position EPD -> (ECO code, opening name).
@@ -86,3 +114,33 @@ def classify(epd: str | None) -> tuple[str, str] | None:
     if not epd:
         return None
     return eco_table().get(epd)
+
+
+# Depth -> the fewest games a line must have to be worth returning.
+#
+# Measured on 800 games: a 40-ply tree is 96% lines played exactly once —
+# 20,546 nodes and 3.8 MB of JSON against 392 nodes and 71 KB once those are
+# dropped. The floor lives here, server-side, because the server is what pays
+# for the blowup: a client-only rule protects nobody holding a URL.
+_MIN_GAMES_FLOOR = ((32, 3), (16, 2))
+
+
+def min_games_floor(max_ply: int) -> int:
+    """Smallest `min_games` worth serving at this depth."""
+    for depth, floor in _MIN_GAMES_FLOOR:
+        if max_ply >= depth:
+            return floor
+    return 1
+
+
+def warm() -> None:
+    """
+    Build the table up front.
+
+    ~370 ms of python-chess replay. The endpoint is an ``async def`` handler, so
+    FastAPI runs it on the event loop rather than the threadpool, and the image
+    runs a single worker — leaving this to the first request would stall every
+    other in-flight request behind it once per deploy.
+    """
+    eco_table()
+    max_book_ply()

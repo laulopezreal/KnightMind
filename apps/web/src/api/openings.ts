@@ -18,6 +18,12 @@ export interface OpeningAnalysis {
     excluded_by_color: number;
     /** unreadable + not_player + unfinished. */
     games_skipped: number;
+    /**
+     * The min-games floor the server actually applied — it raises a request
+     * that asks for less at depth, so this is the filter that shaped the tree
+     * on screen, including on a cache hit. Report this, never the request.
+     */
+    min_games: number;
     skipped_unreadable: number;
     skipped_not_player: number;
     skipped_unfinished: number;
@@ -56,33 +62,18 @@ export type ColorFilter = 'white' | 'black' | 'both';
  * offering — your games go deeper than six moves, and the explorer used to
  * refuse to follow them.
  */
-export const DEPTH_OPTIONS = [
-    { plies: 8, label: '4 moves', minGames: 1 },
-    { plies: 12, label: '6 moves', minGames: 1 },
-    { plies: 16, label: '8 moves', minGames: 2 },
-    { plies: 24, label: '12 moves', minGames: 2 },
-    { plies: 40, label: '20 moves', minGames: 3 },
-] as const;
+export const DEPTH_OPTIONS = [8, 12, 16, 24, 40] as const;
+
+/** "12 moves" for 24 plies — derived, so it cannot drift from the value. */
+export function depthLabel(plies: number): string {
+    return `${plies / 2} moves`;
+}
 
 export const DEFAULT_MAX_PLY = 12;
 
-/**
- * How many games a line must have been played to appear, for a given depth.
- *
- * Deep trees are dominated by lines played exactly once: measured on 800 games,
- * a 40-ply tree is 96% one-off tails — 20,546 nodes and 3.8 MB of JSON, against
- * 392 nodes and 71 KB once they are dropped. Those tails are not a repertoire,
- * and rendering them is neither useful nor affordable, so depth carries a
- * matching threshold. The page states the threshold rather than filtering
- * silently.
- */
-export function minGamesForDepth(plies: number): number {
-    return DEPTH_OPTIONS.find(o => o.plies === plies)?.minGames ?? 1;
-}
-
 /** Clamp a persisted or hand-edited value onto an option we actually offer. */
 export function normaliseDepth(plies: unknown): number {
-    return DEPTH_OPTIONS.some(o => o.plies === plies)
+    return DEPTH_OPTIONS.some(offered => offered === plies)
         ? (plies as number)
         : DEFAULT_MAX_PLY;
 }
@@ -90,14 +81,12 @@ export function normaliseDepth(plies: unknown): number {
 export async function getOpenings(
     username: string,
     color: ColorFilter = 'both',
-    maxPly: number = DEFAULT_MAX_PLY,
-    minGames: number = 1
+    maxPly: number = DEFAULT_MAX_PLY
 ): Promise<OpeningNode> {
     const params = new URLSearchParams({
         username,
         color,
         max_ply: maxPly.toString(),
-        min_games: minGames.toString(),
     });
 
     try {

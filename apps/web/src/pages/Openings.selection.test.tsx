@@ -45,6 +45,7 @@ function node(move_san: string, over: Partial<OpeningNode> = {}): OpeningNode {
 const ANALYSIS = {
   games_stored: 40, games_seen: 40, games_analyzed: 40, excluded_by_color: 0,
   games_skipped: 0, skipped_unreadable: 0, skipped_not_player: 0, skipped_unfinished: 0,
+  min_games: 1,
 };
 
 // The tree must actually contain the line the tests select. The graph only ever
@@ -154,7 +155,7 @@ describe('Openings depth control', () => {
     render(<Openings />);
     await screen.findByTestId('opening-graph');
 
-    expect(mockGetOpenings).toHaveBeenCalledWith('alice', 'both', 12, 1);
+    expect(mockGetOpenings).toHaveBeenCalledWith('alice', 'both', 12);
   });
 
   it('refetches deeper when asked', async () => {
@@ -166,29 +167,24 @@ describe('Openings depth control', () => {
     await userEvent.selectOptions(screen.getByLabelText('Tree depth in moves'), '24');
 
     await waitFor(() =>
-      expect(mockGetOpenings).toHaveBeenLastCalledWith('alice', 'both', 24, 2)
+      expect(mockGetOpenings).toHaveBeenLastCalledWith('alice', 'both', 24)
     );
   });
 
-  it('falls back to the default when the persisted depth is not offered', async () => {
-    // localStorage is user-writable and can outlive the option list; anything
-    // outside the API's 1-40 bound would 422 on load.
-    localStorage.setItem('knightmind:openings:max_ply', JSON.stringify(999));
-    render(<Openings />);
-    await screen.findByTestId('opening-graph');
-
-    expect(mockGetOpenings).toHaveBeenCalledWith('alice', 'both', 12, 1);
-  });
-
-  it('raises the min-games floor with depth, and says so', async () => {
+  it('reports the floor the server applied, not the one it asked for', async () => {
+    // 96% of a 40-ply tree is lines played once; pruning them is the difference
+    // between 3.8 MB and 71 KB. The server owns that floor and can raise it, so
+    // the banner has to read the response or it may contradict the tree shown.
+    mockGetOpenings.mockResolvedValue({
+      ...TREE,
+      analysis: { ...ANALYSIS, min_games: 3 },
+    });
     localStorage.setItem('knightmind:openings:max_ply', JSON.stringify(40));
     render(<Openings />);
     await screen.findByTestId('opening-graph');
 
-    // 96% of a 40-ply tree is lines played once; pruning them is the
-    // difference between 3.8 MB and 71 KB. It must be stated, not silent.
-    expect(mockGetOpenings).toHaveBeenCalledWith('alice', 'both', 40, 3);
-    expect(screen.getByText(/played at least 3 times/i)).toBeInTheDocument();
+    expect(mockGetOpenings).toHaveBeenCalledWith('alice', 'both', 40);
+    expect(await screen.findByText(/played at least 3 times/i)).toBeInTheDocument();
   });
 
   it('remembers the chosen depth', async () => {
@@ -196,7 +192,7 @@ describe('Openings depth control', () => {
     render(<Openings />);
     await screen.findByTestId('opening-graph');
 
-    expect(mockGetOpenings).toHaveBeenCalledWith('alice', 'both', 16, 2);
+    expect(mockGetOpenings).toHaveBeenCalledWith('alice', 'both', 16);
   });
 
   it('repairs invalid persisted depth before the first fetch', async () => {
@@ -220,13 +216,13 @@ describe('Openings score baseline', () => {
     const panel = screen.getByLabelText('Selected line');
     expect(panel).toHaveTextContent('35.7%');
     expect(panel).toHaveTextContent('vs your 55%');
-    expect(panel).toHaveTextContent('−19.3');
+    expect(panel).toHaveTextContent('-19.3');
   });
 
   it('marks a line that beats the average with a plus', async () => {
     await selectLine([node('Start'), node('e4', { win_rate: 70 })]);
 
-    expect(screen.getByLabelText('Selected line')).toHaveTextContent('+15');
+    expect(screen.getByLabelText('Selected line')).toHaveTextContent('+15.0');
   });
 
   it('says "level with" rather than a signed zero', async () => {

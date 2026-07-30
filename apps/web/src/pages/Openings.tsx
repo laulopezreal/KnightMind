@@ -1,13 +1,14 @@
-import { useEffect, useRef, useState, useCallback, useLayoutEffect } from 'react';
+import { useEffect, useRef, useState, useCallback, useLayoutEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { Link, useNavigate } from 'react-router-dom';
 import {
-  getOpenings, ApiError, DEPTH_OPTIONS, DEFAULT_MAX_PLY, minGamesForDepth,
+  getOpenings, ApiError, DEPTH_OPTIONS, DEFAULT_MAX_PLY, depthLabel, normaliseDepth,
   type OpeningNode, type ColorFilter,
 } from '../api';
 import { useChessUsername } from '../context/ChessUsernameContext';
 import { OpeningGraph, type OpeningGraphHandle, type NodeAnchor } from '../components/OpeningGraph';
 import { getScoreColor } from '../utils/openings';
+import { formatSigned } from '../utils/ratings';
 import { formatLine, engineHrefForPath, resolvePath } from '../utils/openingLine';
 import { useLocalStorage } from '../hooks/useLocalStorage';
 import { PageHeader } from '../components/PageHeader';
@@ -37,13 +38,6 @@ const SCOPE_NOUN: Record<ColorFilter, string> = {
 };
 
 const MAX_PLY_STORAGE_KEY = 'knightmind:openings:max_ply';
-const VALID_MAX_PLY = new Set<number>(DEPTH_OPTIONS.map(option => option.plies));
-
-function normalizeMaxPly(value: unknown): number {
-  return typeof value === 'number' && Number.isInteger(value) && VALID_MAX_PLY.has(value)
-    ? value
-    : DEFAULT_MAX_PLY;
-}
 
 function parsePersistedMaxPly(value: string): number {
   let parsed: unknown;
@@ -52,7 +46,9 @@ function parsePersistedMaxPly(value: string): number {
   } catch {
     parsed = undefined;
   }
-  const maxPly = normalizeMaxPly(parsed);
+  // `normaliseDepth` lives beside DEPTH_OPTIONS, so the option list and the
+  // rule that validates it cannot drift apart.
+  const maxPly = normaliseDepth(parsed);
   if (parsed !== maxPly) {
     window.localStorage.setItem(MAX_PLY_STORAGE_KEY, JSON.stringify(maxPly));
   }
@@ -65,14 +61,15 @@ const ZOOM_MODIFIER = /Mac|iPhone|iPad/i.test(
 ) ? '⌘' : 'Ctrl';
 
 /**
- * Signed difference against the baseline, e.g. "−35.6" or "+4.2".
- * A true minus sign, not a hyphen — this sits beside percentages in a serif
- * layout where the hyphen reads as a dash.
+ * Signed difference against the baseline, e.g. "-35.6" or "+4.2".
+ * Delegates to the shared delta formatter so this reads like every other delta
+ * in the app; only the exactly-equal case is Openings-specific, since "+0" is
+ * a worse answer than saying so.
  */
 function formatDelta(delta: number): string {
   const rounded = Math.round(delta * 10) / 10;
   if (rounded === 0) return 'level with';
-  return `${rounded > 0 ? '+' : '−'}${Math.abs(rounded)}`;
+  return formatSigned(rounded, 1);
 }
 
 function countAllNodes(node: OpeningNode): number {
@@ -107,8 +104,6 @@ export default function Openings() {
     DEFAULT_MAX_PLY,
     parsePersistedMaxPly
   );
-  // Deeper trees prune one-off lines; see minGamesForDepth for the measurements.
-  const minGames = minGamesForDepth(maxPly);
   const [treeData, setTreeData] = useState<OpeningNode | null>(null);
   const [tooltip, setTooltip] = useState<{ anchor: NodeAnchor; data: OpeningNode } | null>(null);
   // Root-to-node path for the activated node. Backs the selection panel, which
@@ -166,6 +161,15 @@ export default function Openings() {
   const analysis = treeData?.analysis;
   const hasOpenings = treeData !== null && treeData.games_count > 0;
   const skippedGames = analysis?.games_skipped ?? 0;
+  // The floor the server actually applied — it raises a shallow request at
+  // depth, so reporting what we asked for could contradict the tree on screen.
+  const minGames = analysis?.min_games ?? 1;
+  // Walking the whole tree on every render was cheap at a fixed 12 plies; the
+  // depth control raised the ceiling, and every hover re-renders this page.
+  const moveSequences = useMemo(
+    () => (treeData ? countAllNodes(treeData) - 1 : 0),
+    [treeData]
+  );
   // The root aggregates every analysed game, so its score is the user's overall
   // average — the baseline any individual line is judged against.
   const baseline = hasOpenings ? treeData.win_rate : null;
@@ -193,7 +197,7 @@ export default function Openings() {
     return 'Load your games to build your opening knowledge graph.';
   })();
 
-  const fetchOpenings = useCallback(async (user: string, color: ColorFilter, plies: number, floor: number) => {
+  const fetchOpenings = useCallback(async (user: string, color: ColorFilter, plies: number) => {
     // The route guard above redirects when there is no username, so there is
     // nothing actionable to say here.
     if (!user.trim()) return;
@@ -206,7 +210,7 @@ export default function Openings() {
     setNoGamesImported(false);
 
     try {
-      const data = await getOpenings(user, color, plies, floor);
+      const data = await getOpenings(user, color, plies);
       if (token.isStale()) return;
       setTreeData(data);
     } catch (err) {
@@ -235,15 +239,15 @@ export default function Openings() {
   }, [request]);
 
   const handleFetchClick = () => {
-    fetchOpenings(username, colorFilter, maxPly, minGames);
+    fetchOpenings(username, colorFilter, maxPly);
   };
 
   // Auto-fetch when page loads with username or when username/color filter changes
   useEffect(() => {
     if (username.trim()) {
-      fetchOpenings(username, colorFilter, maxPly, minGames);
+      fetchOpenings(username, colorFilter, maxPly);
     }
-  }, [username, colorFilter, maxPly, minGames, fetchOpenings]);
+  }, [username, colorFilter, maxPly, fetchOpenings]);
 
   /**
    * A 200 with an empty tree has several distinct causes; each needs a
@@ -475,8 +479,8 @@ export default function Openings() {
               aria-label="Tree depth in moves"
               className="bg-transparent border-b border-primary/20 py-1 text-primary focus:outline-none focus:border-primary/60 transition-colors font-serif text-lg cursor-pointer"
             >
-              {DEPTH_OPTIONS.map(option => (
-                <option key={option.plies} value={option.plies}>{option.label} deep</option>
+              {DEPTH_OPTIONS.map(plies => (
+                <option key={plies} value={plies}>{depthLabel(plies)} deep</option>
               ))}
             </select>
           </div>
@@ -615,7 +619,7 @@ export default function Openings() {
                 { value: treeData.games_count, label: 'Games Analyzed' },
                 // Tree nodes are distinct move sequences, not distinct positions:
                 // two transposing lines reach one position via two nodes.
-                { value: countAllNodes(treeData) - 1, label: 'Move Sequences' },
+                { value: moveSequences, label: 'Move Sequences' },
               ].map(stat => (
                 <div className="text-center" key={stat.label}>
                   <div className="text-2xl font-mono text-primary">{stat.value}</div>
