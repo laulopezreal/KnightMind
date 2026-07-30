@@ -17,11 +17,13 @@ vi.mock('../context/ChessUsernameContext', () => ({
 const mockGetMotifPerformance = vi.fn();
 const mockGetMotifTrends = vi.fn();
 const mockGetTrickyPuzzles = vi.fn();
+const mockGetMistakeCauses = vi.fn();
 
 vi.mock('../api/users', () => ({
   getMotifPerformance: (...args: unknown[]) => mockGetMotifPerformance(...args),
   getMotifTrends: (...args: unknown[]) => mockGetMotifTrends(...args),
   getTrickyPuzzles: (...args: unknown[]) => mockGetTrickyPuzzles(...args),
+  getMistakeCauses: (...args: unknown[]) => mockGetMistakeCauses(...args),
 }));
 
 vi.mock('../components/TacticalRadar', () => ({
@@ -47,6 +49,13 @@ describe('Insights', () => {
     mockGetMotifPerformance.mockRejectedValue(new Error('Not loaded'));
     mockGetMotifTrends.mockRejectedValue(new Error('Not loaded'));
     mockGetTrickyPuzzles.mockResolvedValue({ puzzles: [], total_count: 0 });
+    mockGetMistakeCauses.mockResolvedValue({
+      username: 'testuser',
+      causes: [],
+      total_diagnosed: 0,
+      pending: 0,
+      min_for_ranking: 4,
+    });
   });
 
   it('should redirect to home when no username', () => {

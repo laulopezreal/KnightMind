@@ -1075,3 +1075,238 @@ class TestUserColourComesFromThePosition:
         assert facts.user_result is None
         assert facts.time_control.is_known is False
         assert facts.rated is False
+
+
+class TestMistakeCausesAggregate:
+    """The Insights read. Its whole job is to be honest about how much it
+    knows — a cause seen twice must not read like a diagnosed habit."""
+
+    def _diagnosed(self, db, puzzle_id, cause, phase="middlegame", ply=41):
+        _puzzle(db, puzzle_id=puzzle_id, ply=ply)
+        DiagnosisRepository(db).upsert(
+            DiagnosisWrite(
+                puzzle_id=puzzle_id, username=USER, primary_cause=cause, phase=phase
+            )
+        )
+        db.commit()
+
+    def _verified_review(self, db, puzzle_id, result, n=1):
+        from services.api.models import PuzzleReview
+
+        for _ in range(n):
+            db.add(
+                PuzzleReview(
+                    puzzle_id=puzzle_id,
+                    username=USER,
+                    result=result,
+                    verified=True,
+                    source="server_verified",
+                )
+            )
+        db.commit()
+
+    def test_counts_and_ranks_causes_by_frequency(self, client, db_session):
+        for i in range(3):
+            self._diagnosed(
+                db_session, f"a{i}", "loose_piece_awareness", ply=41 + i * 2
+            )
+        self._diagnosed(db_session, "b0", "king_safety_blindness", ply=61)
+
+        body = client.get(f"/users/{USER}/mistake-causes").json()
+        assert [c["cause"] for c in body["causes"]] == [
+            "loose_piece_awareness",
+            "king_safety_blindness",
+        ]
+        assert body["causes"][0]["mistakes"] == 3
+        assert body["total_diagnosed"] == 4
+
+    def test_a_thin_cause_is_returned_but_flagged_not_hidden(self, client, db_session):
+        """The count is real and worth showing; what it does not support is
+        being called a tendency."""
+        self._diagnosed(db_session, "a0", "loose_piece_awareness")
+
+        body = client.get(f"/users/{USER}/mistake-causes").json()
+        cause = body["causes"][0]
+        assert cause["mistakes"] == 1
+        assert cause["insufficient_data"] is True
+        assert body["min_for_ranking"] >= 2
+
+    def test_a_cause_at_the_threshold_is_no_longer_insufficient(
+        self, client, db_session, monkeypatch
+    ):
+        from services.api.analytics_confidence import MIN_DIAGNOSES_FOR_CAUSE_RANK
+
+        for i in range(MIN_DIAGNOSES_FOR_CAUSE_RANK):
+            self._diagnosed(
+                db_session, f"a{i}", "loose_piece_awareness", ply=41 + i * 2
+            )
+
+        body = client.get(f"/users/{USER}/mistake-causes").json()
+        assert body["causes"][0]["insufficient_data"] is False
+
+    def test_accuracy_counts_only_server_verified_attempts(self, client, db_session):
+        """A pass rate built on self-reported results would launder exactly
+        what PuzzleReview.verified exists to separate."""
+        from services.api.models import PuzzleResult, PuzzleReview
+
+        self._diagnosed(db_session, "a0", "loose_piece_awareness")
+        self._diagnosed(db_session, "a1", "loose_piece_awareness", ply=43)
+        self._verified_review(db_session, "a0", PuzzleResult.PASS, n=3)
+        self._verified_review(db_session, "a1", PuzzleResult.FAIL, n=2)
+        # Self-reported results must not move the number.
+        for _ in range(20):
+            db_session.add(
+                PuzzleReview(
+                    puzzle_id="a0",
+                    username=USER,
+                    result=PuzzleResult.PASS,
+                    verified=False,
+                    source="client_reported",
+                )
+            )
+        db_session.commit()
+
+        cause = client.get(f"/users/{USER}/mistake-causes").json()["causes"][0]
+        assert cause["verified_attempts"] == 5
+        assert cause["accuracy"] == 0.6
+
+    def test_accuracy_needs_more_than_one_puzzle_however_many_attempts(
+        self, client, db_session
+    ):
+        """Regression: six attempts at one puzzle cleared the attempt floor and
+        reported as the cause's pass rate. Repeated attempts on a single
+        position measure recall of that position, not competence at the cause —
+        they are not independent observations."""
+        from services.api.models import PuzzleResult
+
+        self._diagnosed(db_session, "a0", "loose_piece_awareness")
+        self._diagnosed(db_session, "a1", "loose_piece_awareness", ply=43)
+        self._verified_review(db_session, "a0", PuzzleResult.PASS, n=6)
+
+        cause = client.get(f"/users/{USER}/mistake-causes").json()["causes"][0]
+        assert cause["verified_attempts"] == 6
+        assert cause["verified_puzzles"] == 1
+        assert cause["accuracy"] is None
+
+    def test_accuracy_appears_once_a_second_puzzle_is_attempted(
+        self, client, db_session
+    ):
+        from services.api.models import PuzzleResult
+
+        self._diagnosed(db_session, "a0", "loose_piece_awareness")
+        self._diagnosed(db_session, "a1", "loose_piece_awareness", ply=43)
+        self._verified_review(db_session, "a0", PuzzleResult.PASS, n=4)
+        self._verified_review(db_session, "a1", PuzzleResult.FAIL, n=2)
+
+        cause = client.get(f"/users/{USER}/mistake-causes").json()["causes"][0]
+        assert cause["verified_puzzles"] == 2
+        assert cause["accuracy"] == pytest.approx(4 / 6)
+
+    def test_accuracy_is_none_below_the_sample_floor(self, client, db_session):
+        from services.api.models import PuzzleResult
+
+        self._diagnosed(db_session, "a0", "loose_piece_awareness")
+        self._verified_review(db_session, "a0", PuzzleResult.PASS, n=2)
+
+        cause = client.get(f"/users/{USER}/mistake-causes").json()["causes"][0]
+        assert cause["verified_attempts"] == 2
+        assert cause["accuracy"] is None
+
+    def test_a_split_phase_names_no_dominant_phase(self, client, db_session):
+        """A 1-1 split must not pick a phase by dictionary order."""
+        self._diagnosed(db_session, "a0", "loose_piece_awareness", phase="opening")
+        self._diagnosed(
+            db_session, "a1", "loose_piece_awareness", phase="endgame", ply=43
+        )
+
+        cause = client.get(f"/users/{USER}/mistake-causes").json()["causes"][0]
+        assert cause["dominant_phase"] is None
+
+    def test_a_clear_majority_names_the_phase(self, client, db_session):
+        for i in range(3):
+            self._diagnosed(
+                db_session,
+                f"a{i}",
+                "loose_piece_awareness",
+                phase="middlegame",
+                ply=41 + i * 2,
+            )
+        self._diagnosed(
+            db_session, "a9", "loose_piece_awareness", phase="opening", ply=61
+        )
+
+        cause = client.get(f"/users/{USER}/mistake-causes").json()["causes"][0]
+        assert cause["dominant_phase"] == "middlegame"
+
+    def test_unclassified_is_reported_but_flagged(self, client, db_session):
+        """Hiding it would overstate how much of the corpus is understood."""
+        from services.api.diagnosis.causes import UNCLASSIFIED
+
+        self._diagnosed(db_session, "a0", UNCLASSIFIED)
+
+        cause = client.get(f"/users/{USER}/mistake-causes").json()["causes"][0]
+        assert cause["cause"] == UNCLASSIFIED
+        assert cause["is_unclassified"] is True
+
+    def test_a_users_own_correction_is_what_gets_counted(self, client, db_session):
+        self._diagnosed(db_session, "a0", "loose_piece_awareness")
+        DiagnosisRepository(db_session).confirm_cause(
+            USER, "a0", "king_safety_blindness"
+        )
+        db_session.commit()
+
+        body = client.get(f"/users/{USER}/mistake-causes").json()
+        assert [c["cause"] for c in body["causes"]] == ["king_safety_blindness"]
+
+    def test_unanalysable_puzzles_contribute_no_cause(self, client, db_session):
+        from services.api.models import DiagnosisStatus
+
+        _puzzle(db_session, puzzle_id="broken")
+        DiagnosisRepository(db_session).upsert(
+            DiagnosisWrite(
+                puzzle_id="broken",
+                username=USER,
+                status=DiagnosisStatus.UNAVAILABLE,
+                error="illegal move",
+            )
+        )
+        db_session.commit()
+
+        body = client.get(f"/users/{USER}/mistake-causes").json()
+        assert body["causes"] == []
+        assert body["total_diagnosed"] == 0
+
+    def test_pending_work_is_reported_alongside(self, client, db_session):
+        """Without it, a nearly-empty list is indistinguishable from "you make
+        no mistakes"."""
+        self._diagnosed(db_session, "a0", "loose_piece_awareness")
+        _puzzle(db_session, puzzle_id="undiagnosed", ply=61)
+
+        body = client.get(f"/users/{USER}/mistake-causes").json()
+        assert body["total_diagnosed"] == 1
+        assert body["pending"] == 1
+
+    def test_an_empty_corpus_is_an_empty_list_not_an_error(self, client, db_session):
+        body = client.get(f"/users/{USER}/mistake-causes").json()
+        assert body == {
+            "username": USER,
+            "causes": [],
+            "total_diagnosed": 0,
+            "pending": 0,
+            "min_for_ranking": body["min_for_ranking"],
+        }
+
+    def test_another_users_diagnoses_are_not_counted(self, client, db_session):
+        self._diagnosed(db_session, "mine", "loose_piece_awareness")
+        _puzzle(db_session, puzzle_id="theirs", username="other", game_id="g9")
+        DiagnosisRepository(db_session).upsert(
+            DiagnosisWrite(
+                puzzle_id="theirs",
+                username="other",
+                primary_cause="king_safety_blindness",
+            )
+        )
+        db_session.commit()
+
+        body = client.get(f"/users/{USER}/mistake-causes").json()
+        assert [c["cause"] for c in body["causes"]] == ["loose_piece_awareness"]

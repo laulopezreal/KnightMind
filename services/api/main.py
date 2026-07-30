@@ -1990,6 +1990,90 @@ async def get_puzzle_diagnosis(
     )
 
 
+class MistakeCause(BaseModel):
+    """One cause, with how often it explains this user's mistakes.
+
+    ``mistakes`` is a direct count and always trustworthy — every puzzle in the
+    corpus is a real blunder from a real game.
+
+    ``accuracy`` is a proportion over *server-verified* training attempts only,
+    and is None until the sample supports it. Self-reported results are
+    excluded: the codebase refuses to present them as verified skill, and a
+    pass rate is exactly the claim that would launder them.
+
+    ``insufficient_data`` says the cause has not been seen often enough to call
+    a tendency. The UI must not rank or recommend against it — below the
+    threshold, one bad afternoon looks identical to a habit.
+    """
+
+    cause: str
+    label: str
+    mistakes: int
+    dominant_phase: str | None = None
+    verified_attempts: int = 0
+    # How many distinct puzzles those attempts covered. Exposed so the UI can
+    # say how broad the sample is, not just how large.
+    verified_puzzles: int = 0
+    accuracy: float | None = None
+    insufficient_data: bool = True
+    # "Cause unclear" is an honest bucket, not a weakness to train. Flagged so
+    # the UI can show it as coverage information without recommending practice.
+    is_unclassified: bool = False
+
+
+class MistakeCausesResponse(BaseModel):
+    username: str
+    causes: list[MistakeCause]
+    total_diagnosed: int
+    # Diagnoses still owed. Without it a nearly-empty list is indistinguishable
+    # from "you make no mistakes".
+    pending: int
+    min_for_ranking: int
+
+
+@app.get("/users/{username}/mistake-causes", response_model=MistakeCausesResponse)
+async def get_mistake_causes(
+    username: Username,
+    db: Session = Depends(get_db),
+    account: Account | None = Depends(require_account),
+):
+    """Aggregate this user's diagnosed mistakes by cause.
+
+    Descriptive only. A cause below ``MIN_DIAGNOSES_FOR_CAUSE_RANK`` is
+    returned with ``insufficient_data`` set rather than withheld — the count is
+    real and worth showing; what it does not yet support is being called a
+    tendency.
+    """
+    from services.api.analytics_confidence import MIN_DIAGNOSES_FOR_CAUSE_RANK
+    from services.api.diagnosis.causes import CAUSE_LABELS, UNCLASSIFIED
+
+    assert_owns_username(account, username, db)
+
+    repo = DiagnosisRepository(db)
+    stats = repo.cause_breakdown(username)
+
+    return MistakeCausesResponse(
+        username=username,
+        causes=[
+            MistakeCause(
+                cause=s.cause,
+                label=CAUSE_LABELS.get(s.cause, s.cause),
+                mistakes=s.mistakes,
+                dominant_phase=s.dominant_phase,
+                verified_attempts=s.verified_attempts,
+                verified_puzzles=s.verified_puzzles,
+                accuracy=s.accuracy,
+                insufficient_data=s.insufficient_data,
+                is_unclassified=s.cause == UNCLASSIFIED,
+            )
+            for s in stats
+        ],
+        total_diagnosed=sum(s.mistakes for s in stats),
+        pending=repo.pending_count(username),
+        min_for_ranking=MIN_DIAGNOSES_FOR_CAUSE_RANK,
+    )
+
+
 @app.get("/users/{username}/diagnosis/pending", response_model=PendingDiagnosisResponse)
 async def get_pending_diagnoses(
     username: Username,
