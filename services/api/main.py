@@ -2031,6 +2031,92 @@ class MistakeCausesResponse(BaseModel):
     min_for_ranking: int
 
 
+class MistakePattern(BaseModel):
+    """A named, described habit — the coaching layer over a raw cause.
+
+    Only causes that have come up often enough to be a tendency become
+    patterns. A cause below the threshold stays a count on the causes endpoint
+    and is deliberately absent here: naming something "Loose Piece Syndrome"
+    off two occurrences would be the overreach this whole feature avoids.
+
+    ``priority`` orders one person's patterns against each other. It is not a
+    probability and means nothing across users.
+    """
+
+    cause: str
+    name: str
+    description: str
+    mistakes: int
+    recent_mistakes: int
+    dominant_phase: str | None = None
+    accuracy: float | None = None
+    priority: float = 0.0
+
+
+class MistakePatternsResponse(BaseModel):
+    username: str
+    patterns: list[MistakePattern]
+    # Causes that exist but are not yet tendencies. Reported as a number so the
+    # UI can say "and 3 more not seen often enough yet" instead of implying the
+    # named list is everything.
+    below_threshold: int
+    pending: int
+
+
+@app.get("/users/{username}/mistake-patterns", response_model=MistakePatternsResponse)
+async def get_mistake_patterns(
+    username: Username,
+    db: Session = Depends(get_db),
+    account: Account | None = Depends(require_account),
+):
+    """This user's mistake habits, named and ordered by how much they matter.
+
+    Computed on demand from the diagnoses rather than from a stored clustering.
+    At this corpus size the grouping is a millisecond query, so persisting it
+    would buy a job, two tables and a staleness window for nothing measurable.
+    """
+    from services.api.diagnosis.patterns import identify, priority_score
+
+    assert_owns_username(account, username, db)
+
+    repo = DiagnosisRepository(db)
+    stats = repo.cause_breakdown(username)
+
+    patterns = []
+    below = 0
+    for stat in stats:
+        identity = identify(stat.cause, stat.dominant_phase)
+        # No identity means either "unclassified" or a cause with no written
+        # pattern yet. Neither should be invented on the fly.
+        if identity is None:
+            continue
+        if stat.insufficient_data:
+            below += 1
+            continue
+        patterns.append(
+            MistakePattern(
+                cause=stat.cause,
+                name=identity.name,
+                description=identity.description,
+                mistakes=stat.mistakes,
+                recent_mistakes=stat.recent_mistakes,
+                dominant_phase=stat.dominant_phase,
+                accuracy=stat.accuracy,
+                priority=priority_score(
+                    stat.mistakes, stat.accuracy, stat.recent_mistakes
+                ),
+            )
+        )
+
+    patterns.sort(key=lambda p: (-p.priority, p.cause))
+    return MistakePatternsResponse(
+        username=username,
+        patterns=patterns,
+        below_threshold=below,
+        pending=repo.pending_count(username),
+    )
+
+
 @app.get("/users/{username}/mistake-causes", response_model=MistakeCausesResponse)
 async def get_mistake_causes(
     username: Username,

@@ -8,7 +8,7 @@ no cursor that can drift out of step with what is actually stored.
 """
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import Select, case, func, or_, select
 from sqlalchemy.orm import Session
@@ -22,12 +22,18 @@ from services.api.diagnosis.causes import RULE_VERSION
 from services.api.diagnosis.evidence import EXTRACTION_VERSION
 from services.api.models import (
     DiagnosisStatus,
+    Game,
     Puzzle,
     PuzzleDiagnosis,
     PuzzleResult,
     PuzzleReview,
     PuzzleStats,
 )
+
+# How far back a game counts as "recent" for pattern prioritisation. Long
+# enough that a casual player still has a populated window, short enough that a
+# habit fixed six months ago stops being weighted as current.
+RECENT_WINDOW_DAYS = 90
 
 
 @dataclass(frozen=True)
@@ -57,6 +63,11 @@ class CauseStat:
     verified_passes: int
     accuracy: float | None
     insufficient_data: bool
+    # Mistakes from games played in the recent window. Keyed on the GAME's
+    # end_time, not the puzzle's created_at: puzzles are all generated at import
+    # time, so created_at clusters into a few moments and says nothing about
+    # when the habit was actually happening.
+    recent_mistakes: int = 0
 
 
 @dataclass(frozen=True)
@@ -310,6 +321,25 @@ class DiagnosisRepository:
         ).all()
         by_puzzle = {r.puzzle_id: (r.attempts or 0, r.passes or 0) for r in verified}
 
+        # Which puzzles came from recently-played games.
+        cutoff = int(
+            (
+                datetime.now(timezone.utc) - timedelta(days=RECENT_WINDOW_DAYS)
+            ).timestamp()
+        )
+        recent_ids = {
+            row[0]
+            for row in self.db.execute(
+                select(Puzzle.id)
+                .join(
+                    Game,
+                    (Game.game_id == Puzzle.source_game_id)
+                    & (Game.username == Puzzle.username),
+                )
+                .where(Puzzle.username == username, Game.end_time >= cutoff)
+            ).all()
+        }
+
         buckets: dict[str, dict] = {}
         for row in rows:
             bucket = buckets.setdefault(
@@ -320,9 +350,12 @@ class DiagnosisRepository:
                     "attempts": 0,
                     "passes": 0,
                     "puzzles": 0,
+                    "recent": 0,
                 },
             )
             bucket["mistakes"] += 1
+            if row.puzzle_id in recent_ids:
+                bucket["recent"] += 1
             if row.phase:
                 bucket["phases"][row.phase] = bucket["phases"].get(row.phase, 0) + 1
             attempts, passes = by_puzzle.get(row.puzzle_id, (0, 0))
@@ -353,6 +386,7 @@ class DiagnosisRepository:
                     else None
                 ),
                 insufficient_data=b["mistakes"] < MIN_DIAGNOSES_FOR_CAUSE_RANK,
+                recent_mistakes=b["recent"],
             )
             for cause, b in buckets.items()
         ]

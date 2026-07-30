@@ -1310,3 +1310,95 @@ class TestMistakeCausesAggregate:
 
         body = client.get(f"/users/{USER}/mistake-causes").json()
         assert [c["cause"] for c in body["causes"]] == ["loose_piece_awareness"]
+
+
+class TestMistakePatternsEndpoint:
+    """Named habits. Only causes that have actually recurred become patterns —
+    naming something "Loose Piece Syndrome" off two occurrences is the overreach
+    the whole feature avoids."""
+
+    def _diagnosed(self, db, puzzle_id, cause, phase="middlegame", ply=41):
+        _puzzle(db, puzzle_id=puzzle_id, ply=ply)
+        DiagnosisRepository(db).upsert(
+            DiagnosisWrite(
+                puzzle_id=puzzle_id, username=USER, primary_cause=cause, phase=phase
+            )
+        )
+        db.commit()
+
+    def _many(self, db, cause, n, phase="middlegame"):
+        for i in range(n):
+            self._diagnosed(db, f"{cause[:4]}{i}", cause, phase=phase, ply=41 + i * 2)
+
+    def test_a_recurring_cause_becomes_a_named_pattern(self, client, db_session):
+        self._many(db_session, "loose_piece_awareness", 5)
+
+        body = client.get(f"/users/{USER}/mistake-patterns").json()
+        pattern = body["patterns"][0]
+        assert pattern["name"] == "Loose Piece Syndrome"
+        assert "undefended" in pattern["description"]
+        assert pattern["mistakes"] == 5
+
+    def test_a_thin_cause_is_counted_but_never_named(self, client, db_session):
+        self._many(db_session, "loose_piece_awareness", 2)
+
+        body = client.get(f"/users/{USER}/mistake-patterns").json()
+        assert body["patterns"] == []
+        assert body["below_threshold"] == 1
+
+    def test_unclassified_never_becomes_a_pattern(self, client, db_session):
+        from services.api.diagnosis.causes import UNCLASSIFIED
+
+        self._many(db_session, UNCLASSIFIED, 10)
+
+        body = client.get(f"/users/{USER}/mistake-patterns").json()
+        assert body["patterns"] == []
+        # Not counted as below-threshold either: it is not a habit awaiting
+        # more evidence, it is the absence of a diagnosis.
+        assert body["below_threshold"] == 0
+
+    def test_the_phase_specific_name_is_used_when_a_phase_dominates(
+        self, client, db_session
+    ):
+        self._many(db_session, "king_safety_blindness", 5, phase="endgame")
+
+        body = client.get(f"/users/{USER}/mistake-patterns").json()
+        assert body["patterns"][0]["name"] == "Back Rank Neglect"
+
+    def test_patterns_are_ordered_by_priority(self, client, db_session):
+        self._many(db_session, "loose_piece_awareness", 4)
+        for i in range(9):
+            self._diagnosed(
+                db_session, f"fmb{i}", "forcing_move_blindness", ply=81 + i * 2
+            )
+
+        body = client.get(f"/users/{USER}/mistake-patterns").json()
+        names = [p["cause"] for p in body["patterns"]]
+        assert names[0] == "forcing_move_blindness"
+        assert body["patterns"][0]["priority"] > body["patterns"][1]["priority"]
+
+    def test_pending_work_is_reported(self, client, db_session):
+        self._many(db_session, "loose_piece_awareness", 4)
+        _puzzle(db_session, puzzle_id="undiagnosed", ply=99)
+
+        body = client.get(f"/users/{USER}/mistake-patterns").json()
+        assert body["pending"] == 1
+
+    def test_an_empty_corpus_is_an_empty_list(self, client, db_session):
+        body = client.get(f"/users/{USER}/mistake-patterns").json()
+        assert body["patterns"] == []
+        assert body["below_threshold"] == 0
+
+    def test_another_users_patterns_are_not_returned(self, client, db_session):
+        _puzzle(db_session, puzzle_id="theirs", username="other", game_id="g9")
+        DiagnosisRepository(db_session).upsert(
+            DiagnosisWrite(
+                puzzle_id="theirs",
+                username="other",
+                primary_cause="loose_piece_awareness",
+            )
+        )
+        db_session.commit()
+
+        body = client.get(f"/users/{USER}/mistake-patterns").json()
+        assert body["patterns"] == []
