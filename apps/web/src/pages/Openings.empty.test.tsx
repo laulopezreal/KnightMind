@@ -125,7 +125,7 @@ describe('Openings — a 200 with an empty tree', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Show all games' }));
 
     await waitFor(() =>
-      expect(mockGetOpenings).toHaveBeenLastCalledWith('alice', 'both', 12)
+      expect(mockGetOpenings).toHaveBeenLastCalledWith('alice', 'both', 12, 1)
     );
   });
 

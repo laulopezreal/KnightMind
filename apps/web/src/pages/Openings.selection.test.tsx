@@ -154,7 +154,7 @@ describe('Openings depth control', () => {
     render(<Openings />);
     await screen.findByTestId('opening-graph');
 
-    expect(mockGetOpenings).toHaveBeenCalledWith('alice', 'both', 12);
+    expect(mockGetOpenings).toHaveBeenCalledWith('alice', 'both', 12, 1);
   });
 
   it('refetches deeper when asked', async () => {
@@ -166,8 +166,29 @@ describe('Openings depth control', () => {
     await userEvent.selectOptions(screen.getByLabelText('Tree depth in moves'), '24');
 
     await waitFor(() =>
-      expect(mockGetOpenings).toHaveBeenLastCalledWith('alice', 'both', 24)
+      expect(mockGetOpenings).toHaveBeenLastCalledWith('alice', 'both', 24, 2)
     );
+  });
+
+  it('falls back to the default when the persisted depth is not offered', async () => {
+    // localStorage is user-writable and can outlive the option list; anything
+    // outside the API's 1-40 bound would 422 on load.
+    localStorage.setItem('knightmind:openings:max_ply', JSON.stringify(999));
+    render(<Openings />);
+    await screen.findByTestId('opening-graph');
+
+    expect(mockGetOpenings).toHaveBeenCalledWith('alice', 'both', 12, 1);
+  });
+
+  it('raises the min-games floor with depth, and says so', async () => {
+    localStorage.setItem('knightmind:openings:max_ply', JSON.stringify(40));
+    render(<Openings />);
+    await screen.findByTestId('opening-graph');
+
+    // 96% of a 40-ply tree is lines played once; pruning them is the
+    // difference between 3.8 MB and 71 KB. It must be stated, not silent.
+    expect(mockGetOpenings).toHaveBeenCalledWith('alice', 'both', 40, 3);
+    expect(screen.getByText(/played at least 3 times/i)).toBeInTheDocument();
   });
 
   it('remembers the chosen depth', async () => {
@@ -175,7 +196,7 @@ describe('Openings depth control', () => {
     render(<Openings />);
     await screen.findByTestId('opening-graph');
 
-    expect(mockGetOpenings).toHaveBeenCalledWith('alice', 'both', 16);
+    expect(mockGetOpenings).toHaveBeenCalledWith('alice', 'both', 16, 2);
   });
 
   it('repairs invalid persisted depth before the first fetch', async () => {

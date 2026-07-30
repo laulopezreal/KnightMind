@@ -6,23 +6,31 @@ correct and unreadable. A repertoire you cannot name is one you cannot search
 for, study, or talk about, so every node is annotated with the opening it
 belongs to.
 
-Data: the lichess `chess-openings` table (CC0), vendored as ``eco.tsv``. Its
-`pgn` column is a SAN move list with move numbers, e.g. "1. e4 c5 2. Nf3"; the
-numbers are stripped at load so a lookup key is exactly the tuple of moves the
-tree builder already walks.
+Data: the lichess `chess-openings` table (CC0), vendored as ``eco.tsv``.
 
-Naming is longest-prefix: a position deep in a line takes the most specific
-entry at or above it. That is why nodes inherit their parent's name when their
-own exact path is not in the table — 20 plies into the Najdorf you are still in
-the Najdorf, and reporting "unnamed" there would be worse than useless.
+**Keyed by position, not by move order.** Keying on the SAN sequence looked
+right and was wrong: `1.d4 Nf6 2.c4 e6 3.Nc3 Bb4` found the Nimzo-Indian while
+the identical position via `1.c4 e6 2.Nc3 Bb4 3.d4 Nf6` found nothing.
+Transposition is ordinary chess, not an edge case, so each entry is replayed
+once at load and stored under its EPD — the same key the tree builder can
+produce from the board it already maintains.
+
+Naming is longest-prefix: a position with no entry of its own inherits the
+nearest named ancestor, because twenty plies into the Najdorf you are still in
+the Najdorf.
 """
 
 from __future__ import annotations
 
 import csv
+import logging
 import re
 from functools import lru_cache
 from pathlib import Path
+
+import chess
+
+logger = logging.getLogger(__name__)
 
 ECO_DATA = Path(__file__).with_name("eco.tsv")
 
@@ -30,33 +38,51 @@ ECO_DATA = Path(__file__).with_name("eco.tsv")
 _MOVE_NUMBER = re.compile(r"^\d+\.+$")
 
 
-def _moves(pgn: str) -> tuple[str, ...]:
-    return tuple(t for t in pgn.split() if not _MOVE_NUMBER.match(t))
+def _position_key(pgn: str) -> str | None:
+    """Replay a vendored line and return the EPD it reaches, or None if it will not play."""
+    board = chess.Board()
+    for token in pgn.split():
+        if _MOVE_NUMBER.match(token):
+            continue
+        try:
+            board.push_san(token)
+        except ValueError:
+            return None
+    return board.epd() if board.move_stack else None
 
 
 @lru_cache(maxsize=1)
-def eco_table() -> dict[tuple[str, ...], tuple[str, str]]:
+def eco_table() -> dict[str, tuple[str, str]]:
     """
-    Move path -> (ECO code, opening name).
+    Position EPD -> (ECO code, opening name).
 
-    Cached for the life of the process: ~3,800 rows parse in a few
-    milliseconds, but the tree builder consults this once per node.
+    Replaying ~3,800 lines costs roughly a third of a second, paid once per
+    process and cached, against a lookup consulted for every node of every tree.
     """
-    table: dict[tuple[str, ...], tuple[str, str]] = {}
-    if not ECO_DATA.exists():  # pragma: no cover - vendored alongside this file
+    table: dict[str, tuple[str, str]] = {}
+    if not ECO_DATA.exists():
+        # Loud rather than silent: an empty table leaves every opening unnamed,
+        # which looks like "we could not classify these lines" instead of "the
+        # data file did not ship".
+        logger.error("ECO data missing at %s — openings will be unnamed", ECO_DATA)
         return table
 
+    unplayable = 0
     with ECO_DATA.open(encoding="utf-8", newline="") as handle:
         for row in csv.DictReader(handle, delimiter="\t"):
-            path = _moves(row.get("pgn", ""))
-            if not path:
+            key = _position_key(row.get("pgn", ""))
+            if key is None:
+                unplayable += 1
                 continue
-            # First entry wins: the file is sorted, so a shorter, more general
-            # line is never overwritten by a longer one sharing its prefix.
-            table.setdefault(path, (row["eco"], row["name"]))
+            table.setdefault(key, (row["eco"], row["name"]))
+
+    if unplayable:
+        logger.warning("ECO data: %d entries could not be replayed", unplayable)
     return table
 
 
-def classify(path: tuple[str, ...]) -> tuple[str, str] | None:
-    """Exact-path lookup. Callers inherit from the parent for longest-prefix."""
-    return eco_table().get(path)
+def classify(epd: str | None) -> tuple[str, str] | None:
+    """Exact-position lookup. Callers inherit from the parent for longest-prefix."""
+    if not epd:
+        return None
+    return eco_table().get(epd)

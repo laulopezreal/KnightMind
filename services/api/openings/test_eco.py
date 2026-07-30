@@ -1,7 +1,17 @@
 """Tests for ECO classification of opening lines."""
 
-from .eco import _moves, classify, eco_table
+import chess
+
+from .eco import _position_key, classify, eco_table
 from .tree_builder import build_opening_tree
+
+
+def epd(*moves: str) -> str:
+    """EPD of the position reached by these SAN moves — the ECO lookup key."""
+    board = chess.Board()
+    for move in moves:
+        board.push_san(move)
+    return board.epd()
 
 
 def pgn(moves: str, white: str = "testplayer", result: str = "1-0") -> str:
@@ -12,31 +22,42 @@ class TestTable:
     def test_loads_the_vendored_dataset(self):
         assert len(eco_table()) > 3000
 
-    def test_strips_move_numbers_from_the_pgn_column(self):
-        # The vendored column is "1. e4 c5 2. Nf3"; only the moves are the key.
-        assert _moves("1. e4 c5 2. Nf3") == ("e4", "c5", "Nf3")
-        assert _moves("1... e5") == ("e5",)
+    def test_strips_move_numbers_when_replaying(self):
+        # The vendored column is "1. e4 c5 2. Nf3"; the numbers are not moves.
+        assert _position_key("1. e4 c5 2. Nf3") == epd("e4", "c5", "Nf3")
+
+    def test_ignores_an_unplayable_entry(self):
+        assert _position_key("1. e4 Qxf7") is None
 
     def test_names_a_first_move(self):
-        assert classify(("e4",)) == ("B00", "King's Pawn Game")
+        assert classify(epd("e4")) == ("B00", "King's Pawn Game")
 
     def test_names_a_main_line(self):
-        code, name = classify(("e4", "c5"))
+        code, name = classify(epd("e4", "c5"))
         assert code == "B20"
         assert name == "Sicilian Defense"
 
     def test_names_a_deep_variation(self):
         code, name = classify(
-            ("e4", "c5", "Nf3", "d6", "d4", "cxd4", "Nxd4", "Nf6", "Nc3", "a6")
+            epd("e4", "c5", "Nf3", "d6", "d4", "cxd4", "Nxd4", "Nf6", "Nc3", "a6")
         )
         assert code == "B90"
         assert "Najdorf" in name
 
-    def test_returns_none_for_an_unknown_path(self):
-        assert classify(("e4", "e5", "Qh5", "Ke7", "Qxe5")) is None
+    def test_names_a_transposition_the_same_way(self):
+        """Keying on move order missed this: same position, different route."""
+        via_d4 = epd("d4", "Nf6", "c4", "e6", "Nc3", "Bb4")
+        via_c4 = epd("c4", "e6", "Nc3", "Bb4", "d4", "Nf6")
 
-    def test_returns_none_for_an_empty_path(self):
-        assert classify(()) is None
+        assert via_d4 == via_c4
+        assert classify(via_d4) == classify(via_c4) == ("E20", "Nimzo-Indian Defense")
+
+    def test_returns_none_for_an_unknown_position(self):
+        assert classify(epd("e4", "e5", "Qh5", "Ke7", "Qxe5")) is None
+
+    def test_returns_none_without_a_position(self):
+        assert classify(None) is None
+        assert classify("") is None
 
 
 class TestTreeAnnotation:
@@ -97,3 +118,44 @@ class TestTreeAnnotation:
         by_move = {c["move_san"]: c for c in tree["children"][0]["children"]}
         assert by_move["c5"]["opening_name"] == "Sicilian Defense"
         assert "French" in by_move["e6"]["opening_name"]
+
+
+class TestMinGames:
+    """One-off tails dominate a deep tree and are noise, not repertoire."""
+
+    def test_keeps_everything_by_default(self):
+        tree = build_opening_tree(
+            [pgn("1. e4 c5"), pgn("1. d4 d5")], "testplayer", "both", max_ply=4
+        )
+
+        assert {c["move_san"] for c in tree["children"]} == {"e4", "d4"}
+
+    def test_drops_lines_played_fewer_times_than_asked(self):
+        games = [pgn("1. e4 c5")] * 3 + [pgn("1. d4 d5")]
+        tree = build_opening_tree(games, "testplayer", "both", max_ply=4, min_games=2)
+
+        assert [c["move_san"] for c in tree["children"]] == ["e4"]
+
+    def test_prunes_deep_tails_while_keeping_the_trunk(self):
+        # Two games share the first four plies then diverge; at min_games=2 the
+        # shared trunk survives and the one-off continuations do not.
+        games = [
+            pgn("1. e4 c5 2. Nf3 d6 3. d4"),
+            pgn("1. e4 c5 2. Nf3 d6 3. Bb5+"),
+        ]
+        tree = build_opening_tree(games, "testplayer", "both", 10, min_games=2)
+
+        node = tree
+        for _ in range(4):
+            node = node["children"][0]
+        assert node["move_san"] == "d6"
+        assert node["games_count"] == 2
+        # Both third moves were played once each, so neither is repertoire.
+        assert "children" not in node
+
+    def test_root_totals_still_count_every_analysed_game(self):
+        # Pruning shapes the tree; it must not rewrite how much was analysed.
+        games = [pgn("1. e4 c5")] * 3 + [pgn("1. d4 d5")]
+        tree = build_opening_tree(games, "testplayer", "both", 4, min_games=2)
+
+        assert tree["games_count"] == 4

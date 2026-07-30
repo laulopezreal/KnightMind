@@ -663,6 +663,16 @@ async def get_openings(
     max_ply: int = Query(
         12, ge=1, le=40, description="Maximum number of half-moves to include"
     ),
+    min_games: int = Query(
+        1,
+        ge=1,
+        le=100,
+        description=(
+            "Omit lines played fewer than this many times. At depth, one-off "
+            "tails dominate the tree (96% of a measured 40-ply tree) and are "
+            "noise rather than repertoire."
+        ),
+    ),
     db: Session = Depends(get_db),
     account: Account | None = Depends(require_account),
 ):
@@ -707,6 +717,7 @@ async def get_openings(
         max_ply=max_ply,
         game_count=game_count,
         latest_game_time=game_repository.get_latest_game_time(username),
+        min_games=min_games,
     )
     cached = openings_tree_cache.get(cache_key)
     if cached is not None:
@@ -731,12 +742,18 @@ async def get_openings(
             detail="Games found but PGN content is missing. Re-import games to populate PGN data.",
         )
 
-    tree = builder.build_tree()
+    tree = builder.build_tree(min_games=min_games)
     # Attached to the root node rather than wrapping the response so existing
     # clients keep reading the tree at the top level. `games_stored` comes from
     # the repository, so a tree built from a fraction of a user's games is
     # reportable instead of silently looking complete.
-    tree["analysis"] = {"games_stored": game_count, **builder.report.to_dict()}
+    tree["analysis"] = {
+        "games_stored": game_count,
+        # Surfaced rather than applied silently: the client states the filter so
+        # a thinner tree reads as a deliberate choice, not missing data.
+        "min_games": min_games,
+        **builder.report.to_dict(),
+    }
     # Stored only once the response is fully composed: the cache hands values
     # back by reference, so anything mutated after this point would corrupt
     # every later hit.

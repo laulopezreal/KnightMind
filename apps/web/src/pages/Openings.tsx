@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useCallback, useLayoutEffect } from 'react
 import { createPortal } from 'react-dom';
 import { Link, useNavigate } from 'react-router-dom';
 import {
-  getOpenings, ApiError, DEPTH_OPTIONS, DEFAULT_MAX_PLY,
+  getOpenings, ApiError, DEPTH_OPTIONS, DEFAULT_MAX_PLY, minGamesForDepth,
   type OpeningNode, type ColorFilter,
 } from '../api';
 import { useChessUsername } from '../context/ChessUsernameContext';
@@ -99,11 +99,16 @@ export default function Openings() {
   );
   // Depth was hardcoded at 12 ply with no control, while the API accepts 40 —
   // the explorer simply refused to follow games past six moves.
+  // Validation lives in the storage parser rather than at read time, so a bad
+  // persisted value is also repaired in place instead of being re-clamped on
+  // every render.
   const [maxPly, setMaxPly] = useLocalStorage<number>(
     MAX_PLY_STORAGE_KEY,
     DEFAULT_MAX_PLY,
     parsePersistedMaxPly
   );
+  // Deeper trees prune one-off lines; see minGamesForDepth for the measurements.
+  const minGames = minGamesForDepth(maxPly);
   const [treeData, setTreeData] = useState<OpeningNode | null>(null);
   const [tooltip, setTooltip] = useState<{ anchor: NodeAnchor; data: OpeningNode } | null>(null);
   // Root-to-node path for the activated node. Backs the selection panel, which
@@ -188,7 +193,7 @@ export default function Openings() {
     return 'Load your games to build your opening knowledge graph.';
   })();
 
-  const fetchOpenings = useCallback(async (user: string, color: ColorFilter, plies: number) => {
+  const fetchOpenings = useCallback(async (user: string, color: ColorFilter, plies: number, floor: number) => {
     // The route guard above redirects when there is no username, so there is
     // nothing actionable to say here.
     if (!user.trim()) return;
@@ -201,7 +206,7 @@ export default function Openings() {
     setNoGamesImported(false);
 
     try {
-      const data = await getOpenings(user, color, plies);
+      const data = await getOpenings(user, color, plies, floor);
       if (token.isStale()) return;
       setTreeData(data);
     } catch (err) {
@@ -230,15 +235,15 @@ export default function Openings() {
   }, [request]);
 
   const handleFetchClick = () => {
-    fetchOpenings(username, colorFilter, maxPly);
+    fetchOpenings(username, colorFilter, maxPly, minGames);
   };
 
   // Auto-fetch when page loads with username or when username/color filter changes
   useEffect(() => {
     if (username.trim()) {
-      fetchOpenings(username, colorFilter, maxPly);
+      fetchOpenings(username, colorFilter, maxPly, minGames);
     }
-  }, [username, colorFilter, maxPly, fetchOpenings]);
+  }, [username, colorFilter, maxPly, minGames, fetchOpenings]);
 
   /**
    * A 200 with an empty tree has several distinct causes; each needs a
@@ -595,6 +600,15 @@ export default function Openings() {
             <span className="w-full text-center text-primary/70">
               Score = (wins + &frac12; draws) &divide; games played
             </span>
+
+            {/* Deeper trees prune one-off lines, which would otherwise be ~96%
+                of the nodes. Stated, never silent — a thinner tree must read as
+                a deliberate filter, not as missing data. */}
+            {minGames > 1 && (
+              <span className="w-full text-center text-primary/70">
+                Showing lines played at least {minGames} times
+              </span>
+            )}
 
             <div className="w-full flex justify-center gap-12 pt-4 mt-4 border-t border-primary/10">
               {[
