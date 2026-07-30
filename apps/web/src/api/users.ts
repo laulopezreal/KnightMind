@@ -164,6 +164,7 @@ export interface MistakeCause {
     mistakes: number;
     dominant_phase?: string | null;
     verified_attempts: number;
+    verified_puzzles: number;
     accuracy?: number | null;
     insufficient_data: boolean;
     is_unclassified: boolean;

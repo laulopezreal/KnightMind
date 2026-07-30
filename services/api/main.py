@@ -2011,6 +2011,9 @@ class MistakeCause(BaseModel):
     mistakes: int
     dominant_phase: str | None = None
     verified_attempts: int = 0
+    # How many distinct puzzles those attempts covered. Exposed so the UI can
+    # say how broad the sample is, not just how large.
+    verified_puzzles: int = 0
     accuracy: float | None = None
     insufficient_data: bool = True
     # "Cause unclear" is an honest bucket, not a weakness to train. Flagged so
@@ -2058,6 +2061,7 @@ async def get_mistake_causes(
                 mistakes=s.mistakes,
                 dominant_phase=s.dominant_phase,
                 verified_attempts=s.verified_attempts,
+                verified_puzzles=s.verified_puzzles,
                 accuracy=s.accuracy,
                 insufficient_data=s.insufficient_data,
                 is_unclassified=s.cause == UNCLASSIFIED,

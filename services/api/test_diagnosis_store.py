@@ -1150,8 +1150,9 @@ class TestMistakeCausesAggregate:
         from services.api.models import PuzzleResult, PuzzleReview
 
         self._diagnosed(db_session, "a0", "loose_piece_awareness")
+        self._diagnosed(db_session, "a1", "loose_piece_awareness", ply=43)
         self._verified_review(db_session, "a0", PuzzleResult.PASS, n=3)
-        self._verified_review(db_session, "a0", PuzzleResult.FAIL, n=2)
+        self._verified_review(db_session, "a1", PuzzleResult.FAIL, n=2)
         # Self-reported results must not move the number.
         for _ in range(20):
             db_session.add(
@@ -1168,6 +1169,38 @@ class TestMistakeCausesAggregate:
         cause = client.get(f"/users/{USER}/mistake-causes").json()["causes"][0]
         assert cause["verified_attempts"] == 5
         assert cause["accuracy"] == 0.6
+
+    def test_accuracy_needs_more_than_one_puzzle_however_many_attempts(
+        self, client, db_session
+    ):
+        """Regression: six attempts at one puzzle cleared the attempt floor and
+        reported as the cause's pass rate. Repeated attempts on a single
+        position measure recall of that position, not competence at the cause —
+        they are not independent observations."""
+        from services.api.models import PuzzleResult
+
+        self._diagnosed(db_session, "a0", "loose_piece_awareness")
+        self._diagnosed(db_session, "a1", "loose_piece_awareness", ply=43)
+        self._verified_review(db_session, "a0", PuzzleResult.PASS, n=6)
+
+        cause = client.get(f"/users/{USER}/mistake-causes").json()["causes"][0]
+        assert cause["verified_attempts"] == 6
+        assert cause["verified_puzzles"] == 1
+        assert cause["accuracy"] is None
+
+    def test_accuracy_appears_once_a_second_puzzle_is_attempted(
+        self, client, db_session
+    ):
+        from services.api.models import PuzzleResult
+
+        self._diagnosed(db_session, "a0", "loose_piece_awareness")
+        self._diagnosed(db_session, "a1", "loose_piece_awareness", ply=43)
+        self._verified_review(db_session, "a0", PuzzleResult.PASS, n=4)
+        self._verified_review(db_session, "a1", PuzzleResult.FAIL, n=2)
+
+        cause = client.get(f"/users/{USER}/mistake-causes").json()["causes"][0]
+        assert cause["verified_puzzles"] == 2
+        assert cause["accuracy"] == pytest.approx(4 / 6)
 
     def test_accuracy_is_none_below_the_sample_floor(self, client, db_session):
         from services.api.models import PuzzleResult

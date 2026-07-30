@@ -105,9 +105,7 @@ function CauseRow({ cause, total }: { cause: MistakeCause; total: number }) {
                     </span>
                 )}
                 <span className="font-sans text-xs text-primary/60">
-                    {cause.accuracy === null || cause.accuracy === undefined
-                        ? 'not enough attempts yet'
-                        : `${Math.round(cause.accuracy * 100)}% solved when retried`}
+                    {accuracyLabel(cause)}
                 </span>
             </div>
 
@@ -119,6 +117,25 @@ function CauseRow({ cause, total }: { cause: MistakeCause; total: number }) {
             </Link>
         </li>
     );
+}
+
+/**
+ * Why there is no rate yet, specifically.
+ *
+ * The API withholds accuracy for two different reasons and they need different
+ * words: too few attempts, or enough attempts but all on one puzzle. Solving
+ * the same position repeatedly shows recall of that position, not that the
+ * habit has changed — telling the user "not enough attempts" when they have
+ * plenty would read as a bug.
+ */
+function accuracyLabel(cause: MistakeCause): string {
+    if (cause.accuracy !== null && cause.accuracy !== undefined) {
+        return `${Math.round(cause.accuracy * 100)}% solved when retried`;
+    }
+    if (cause.verified_attempts > 0 && cause.verified_puzzles <= 1) {
+        return 'only one puzzle tried so far';
+    }
+    return 'not enough attempts yet';
 }
 
 function Shell({ children, pending }: { children: React.ReactNode; pending: number }) {

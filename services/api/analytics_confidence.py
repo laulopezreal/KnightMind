@@ -59,6 +59,15 @@ MIN_ATTEMPTS_FOR_MOTIF_RANK = _env_threshold("ANALYTICS_MIN_ATTEMPTS_MOTIF_RANK"
 # avoid. Four is the point where a repeat stops being coincidence.
 MIN_DIAGNOSES_FOR_CAUSE_RANK = _env_threshold("ANALYTICS_MIN_DIAGNOSES_CAUSE_RANK", 4)
 
+# Distinct puzzles that must have been attempted before a per-cause pass rate
+# is reported. Guards a failure mode the attempt count alone cannot see:
+# repeated attempts on a single puzzle are not independent observations.
+# Solving the same position six times shows you remember that position, not
+# that you have stopped making the mistake — so a rate drawn from one puzzle
+# would read as competence at the cause. Two is the smallest sample that is
+# not that.
+MIN_PUZZLES_FOR_CAUSE_ACCURACY = _env_threshold("ANALYTICS_MIN_PUZZLES_CAUSE_ACC", 2)
+
 # Rating-driver attribution needs enough rated games that the Elo delta vs the
 # expected score is not dominated by per-game variance (a single game swings
 # rating by ~10-30 pts). Below 5 rated games we stay descriptive and neutral.

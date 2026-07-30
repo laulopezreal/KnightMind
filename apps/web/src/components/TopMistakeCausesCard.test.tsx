@@ -11,6 +11,7 @@ function cause(overrides: Partial<MistakeCause> = {}): MistakeCause {
         mistakes: 8,
         dominant_phase: 'middlegame',
         verified_attempts: 10,
+        verified_puzzles: 4,
         accuracy: 0.4,
         insufficient_data: false,
         is_unclassified: false,
@@ -106,11 +107,27 @@ describe('TopMistakeCausesCard', () => {
         it('renders a missing rate as "not enough attempts", never as 0%', () => {
             show(
                 data({
-                    causes: [cause({ accuracy: null, verified_attempts: 2 })],
+                    causes: [
+                        cause({ accuracy: null, verified_attempts: 2, verified_puzzles: 2 }),
+                    ],
                 })
             );
             expect(screen.getByText(/not enough attempts yet/i)).toBeInTheDocument();
             expect(screen.queryByText(/0% solved/)).not.toBeInTheDocument();
+        });
+
+        it('says so specifically when the attempts are all on one puzzle', () => {
+            // "not enough attempts" would read as a bug to someone who has
+            // tried the same position ten times.
+            show(
+                data({
+                    causes: [
+                        cause({ accuracy: null, verified_attempts: 10, verified_puzzles: 1 }),
+                    ],
+                })
+            );
+            expect(screen.getByText(/only one puzzle tried so far/i)).toBeInTheDocument();
+            expect(screen.queryByText(/not enough attempts/i)).not.toBeInTheDocument();
         });
 
         it('renders a genuine zero rate as 0%', () => {

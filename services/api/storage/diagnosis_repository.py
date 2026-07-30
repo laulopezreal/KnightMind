@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from services.api.analytics_confidence import (
     MIN_ATTEMPTS_FOR_MOTIF_RANK,
     MIN_DIAGNOSES_FOR_CAUSE_RANK,
+    MIN_PUZZLES_FOR_CAUSE_ACCURACY,
 )
 from services.api.diagnosis.causes import RULE_VERSION
 from services.api.diagnosis.evidence import EXTRACTION_VERSION
@@ -49,6 +50,10 @@ class CauseStat:
     mistakes: int
     dominant_phase: str | None
     verified_attempts: int
+    # Distinct puzzles behind those attempts. Attempts alone are not
+    # independent observations: six tries at one puzzle measure recall of that
+    # puzzle, not competence at the cause.
+    verified_puzzles: int
     verified_passes: int
     accuracy: float | None
     insufficient_data: bool
@@ -309,7 +314,13 @@ class DiagnosisRepository:
         for row in rows:
             bucket = buckets.setdefault(
                 row.cause,
-                {"mistakes": 0, "phases": {}, "attempts": 0, "passes": 0},
+                {
+                    "mistakes": 0,
+                    "phases": {},
+                    "attempts": 0,
+                    "passes": 0,
+                    "puzzles": 0,
+                },
             )
             bucket["mistakes"] += 1
             if row.phase:
@@ -317,6 +328,8 @@ class DiagnosisRepository:
             attempts, passes = by_puzzle.get(row.puzzle_id, (0, 0))
             bucket["attempts"] += attempts
             bucket["passes"] += passes
+            if attempts:
+                bucket["puzzles"] += 1
 
         stats = [
             CauseStat(
@@ -326,10 +339,17 @@ class DiagnosisRepository:
                 # phase rather than picking one by dictionary order.
                 dominant_phase=_dominant(b["phases"]),
                 verified_attempts=b["attempts"],
+                verified_puzzles=b["puzzles"],
                 verified_passes=b["passes"],
+                # Two gates, because they fail differently. The attempt floor
+                # is the usual small-sample guard. The distinct-puzzle floor
+                # exists because attempts concentrated on one puzzle are not
+                # independent: solving the same position six times says you
+                # remember it, not that you have stopped making the mistake.
                 accuracy=(
                     b["passes"] / b["attempts"]
                     if b["attempts"] >= MIN_ATTEMPTS_FOR_MOTIF_RANK
+                    and b["puzzles"] >= MIN_PUZZLES_FOR_CAUSE_ACCURACY
                     else None
                 ),
                 insufficient_data=b["mistakes"] < MIN_DIAGNOSES_FOR_CAUSE_RANK,
