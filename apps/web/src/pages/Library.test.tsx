@@ -246,6 +246,52 @@ describe('Library', () => {
         expect(screen.queryByText('Cause unclear')).not.toBeInTheDocument();
     });
 
+    it('should show "Cause unclear" badge for unclear diagnosis state', async () => {
+        mockGetLibraryPuzzles.mockResolvedValue({
+            ...EMPTY_RESPONSE,
+            puzzles: [{
+                ...MOCK_PUZZLES[0],
+                diagnosis_summary: {
+                    state: 'unclear' as const,
+                    primary_cause: null,
+                    primary_cause_label: null,
+                    source: 'rules',
+                    diagnosed_at: '2026-01-16T12:00:00Z',
+                },
+            }],
+            total: 1,
+            stats: MOCK_STATS,
+        });
+        render(<Library />);
+        await waitFor(() => {
+            expect(screen.getByText('Cause: Cause unclear')).toBeInTheDocument();
+        });
+        expect(screen.getByLabelText('Diagnosis cause')).toBeInTheDocument();
+    });
+
+    it('should show "Diagnosis unavailable" badge for unavailable diagnosis state', async () => {
+        mockGetLibraryPuzzles.mockResolvedValue({
+            ...EMPTY_RESPONSE,
+            puzzles: [{
+                ...MOCK_PUZZLES[0],
+                diagnosis_summary: {
+                    state: 'unavailable' as const,
+                    primary_cause: null,
+                    primary_cause_label: null,
+                    source: null,
+                    diagnosed_at: null,
+                },
+            }],
+            total: 1,
+            stats: MOCK_STATS,
+        });
+        render(<Library />);
+        await waitFor(() => {
+            expect(screen.getByText('Cause: Diagnosis unavailable')).toBeInTheDocument();
+        });
+        expect(screen.getByLabelText('Diagnosis cause')).toBeInTheDocument();
+    });
+
     it('should display solve stats', async () => {
         render(<Library />);
         await waitFor(() => {

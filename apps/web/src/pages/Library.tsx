@@ -6,6 +6,7 @@ import {
     getLibraryPuzzles,
     type LibraryPuzzle,
     type LibraryCorpusStats,
+    type PuzzleDiagnosisSummary,
     type PuzzleStatus,
     type PuzzleDifficulty,
     type PuzzleSort,
@@ -66,12 +67,11 @@ function DifficultyBadge({ difficulty }: { difficulty: PuzzleDifficulty }) {
     );
 }
 
-function DiagnosisBadge({ puzzle }: { puzzle: LibraryPuzzle }) {
-    const summary = puzzle.diagnosis_summary;
+function DiagnosisBadge({ summary }: { summary: PuzzleDiagnosisSummary | null }) {
     if (!summary) return null;
 
     const label = summary.primary_cause_label
-        || (summary.state === 'unclear' ? 'Cause unclear' : 'Diagnosis unavailable');
+        || (summary.state === 'unclear' ? 'Cause unclear' : summary.state === 'unavailable' ? 'Diagnosis unavailable' : 'Cause unknown');
 
     return (
         <span
@@ -107,7 +107,7 @@ function PuzzleRow({ puzzle }: { puzzle: LibraryPuzzle }) {
                                 {puzzle.primary_motif}
                             </span>
                         )}
-                        <DiagnosisBadge puzzle={puzzle} />
+                        <DiagnosisBadge summary={puzzle.diagnosis_summary} />
                     </div>
                     {/* Stats row */}
                     <div className="flex items-center gap-4 mt-1 text-xs font-sans text-primary/70">

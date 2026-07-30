@@ -1891,6 +1891,8 @@ async def get_puzzle_detail(
         last_result=stats.last_result if stats else None,
         next_due_at=stats.next_due_at if stats else None,
         created_at=puzzle.created_at,
+        # diagnosis_summary is intentionally omitted here: the detail page uses
+        # GET /puzzles/{id}/diagnosis for full diagnosis data, not this field.
     )
 
 
