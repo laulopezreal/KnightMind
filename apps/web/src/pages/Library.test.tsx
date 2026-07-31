@@ -28,6 +28,7 @@ const EMPTY_RESPONSE = {
     limit: 50,
     offset: 0,
     available_motifs: [],
+    available_causes: [],
     stats: { total: 0, due: 0, new: 0, learning: 0, mastered: 0 },
 };
 
@@ -441,5 +442,87 @@ describe('Library', () => {
             const prevButton = screen.getByText('Previous');
             expect(prevButton).toBeDisabled();
         });
+    });
+});
+
+describe('Library cause filter', () => {
+    const CAUSES = [
+        { value: 'loose_piece_awareness', label: 'Loose piece awareness' },
+        { value: 'king_safety_blindness', label: 'King safety blindness' },
+    ];
+
+    beforeEach(() => {
+        vi.clearAllMocks();
+        mockGetLibraryPuzzles.mockResolvedValue({
+            ...EMPTY_RESPONSE,
+            available_causes: CAUSES,
+        });
+    });
+
+    afterEach(() => {
+        window.history.replaceState({}, '', '/library');
+    });
+
+    it('applies ?cause= from the URL on first load', async () => {
+        // This is the whole point of the Insights "practise this" links: they
+        // arrive with the parameter already set and expect a narrowed list.
+        window.history.replaceState({}, '', '/library?cause=loose_piece_awareness');
+        render(<Library />);
+
+        await waitFor(() => {
+            expect(mockGetLibraryPuzzles).toHaveBeenCalledWith(
+                expect.objectContaining({ cause: 'loose_piece_awareness' })
+            );
+        });
+    });
+
+    it('sends no cause when the URL carries none', async () => {
+        render(<Library />);
+        await waitFor(() => expect(mockGetLibraryPuzzles).toHaveBeenCalled());
+        expect(mockGetLibraryPuzzles).toHaveBeenCalledWith(
+            expect.objectContaining({ cause: undefined })
+        );
+    });
+
+    it('shows the arriving cause as the selected filter', async () => {
+        // Otherwise the list is narrowed with no visible reason and the user
+        // cannot tell why most of their puzzles are missing.
+        window.history.replaceState({}, '', '/library?cause=king_safety_blindness');
+        render(<Library />);
+
+        const select = await screen.findByLabelText('Filter by mistake cause');
+        expect(select).toHaveValue('king_safety_blindness');
+    });
+
+    it('labels the options rather than showing raw slugs', async () => {
+        render(<Library />);
+        expect(await screen.findByRole('option', { name: 'Loose piece awareness' }))
+            .toBeInTheDocument();
+        expect(
+            screen.queryByRole('option', { name: 'loose_piece_awareness' })
+        ).not.toBeInTheDocument();
+    });
+
+    it('lets the user clear the filter they arrived with', async () => {
+        window.history.replaceState({}, '', '/library?cause=loose_piece_awareness');
+        render(<Library />);
+
+        const select = await screen.findByLabelText('Filter by mistake cause');
+        fireEvent.change(select, { target: { value: '' } });
+
+        await waitFor(() => {
+            expect(mockGetLibraryPuzzles).toHaveBeenLastCalledWith(
+                expect.objectContaining({ cause: undefined })
+            );
+        });
+    });
+
+    it('hides the control when nothing has been diagnosed', async () => {
+        mockGetLibraryPuzzles.mockResolvedValue(EMPTY_RESPONSE);
+        render(<Library />);
+        await waitFor(() => expect(mockGetLibraryPuzzles).toHaveBeenCalled());
+        expect(
+            screen.queryByLabelText('Filter by mistake cause')
+        ).not.toBeInTheDocument();
     });
 });

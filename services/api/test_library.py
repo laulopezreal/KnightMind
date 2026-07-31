@@ -921,3 +921,190 @@ class TestGetPuzzleDetail:
 
         data = client.get("/puzzles/p-dx-detail?username=testuser").json()
         assert data["diagnosis_summary"] is None
+
+
+class TestCauseFilter:
+    """The destination of the Insights "practise this" links.
+
+    Those cards link to ``/library?cause=…``. Asserting the link's href in the
+    frontend proves nothing on its own — these tests cover the other half, that
+    the destination actually narrows the list.
+    """
+
+    def test_narrows_the_list_to_one_cause(self, client, db_session):
+        _seed_puzzles(db_session, count=3)
+        _create_diagnosis(db_session, "p-0", primary_cause="loose_piece_awareness")
+        _create_diagnosis(db_session, "p-1", primary_cause="king_safety_blindness")
+        _create_diagnosis(db_session, "p-2", primary_cause="loose_piece_awareness")
+        db_session.commit()
+
+        res = client.get(
+            "/puzzles/list?username=testuser&cause=loose_piece_awareness"
+        )
+        assert res.status_code == 200
+        body = res.json()
+        assert {p["id"] for p in body["puzzles"]} == {"p-0", "p-2"}
+        assert body["total"] == 2
+
+    def test_excludes_undiagnosed_puzzles(self, client, db_session):
+        # An undiagnosed puzzle has no cause, so it cannot match one. Without
+        # this the outer join would let every un-analysed puzzle through.
+        _seed_puzzles(db_session, count=2)
+        _create_diagnosis(db_session, "p-0", primary_cause="loose_piece_awareness")
+        db_session.commit()
+
+        body = client.get(
+            "/puzzles/list?username=testuser&cause=loose_piece_awareness"
+        ).json()
+        assert [p["id"] for p in body["puzzles"]] == ["p-0"]
+
+    def test_a_user_correction_beats_the_computed_cause(self, client, db_session):
+        # Same precedence the aggregates use: if the user says the diagnosis was
+        # wrong, filtering must follow their word, both ways.
+        _seed_puzzles(db_session, count=1)
+        _create_diagnosis(
+            db_session,
+            "p-0",
+            primary_cause="loose_piece_awareness",
+            user_confirmed_cause="king_safety_blindness",
+        )
+        db_session.commit()
+
+        confirmed = client.get(
+            "/puzzles/list?username=testuser&cause=king_safety_blindness"
+        ).json()
+        assert [p["id"] for p in confirmed["puzzles"]] == ["p-0"]
+
+        computed = client.get(
+            "/puzzles/list?username=testuser&cause=loose_piece_awareness"
+        ).json()
+        assert computed["puzzles"] == []
+
+    def test_accepts_several_causes(self, client, db_session):
+        _seed_puzzles(db_session, count=3)
+        _create_diagnosis(db_session, "p-0", primary_cause="loose_piece_awareness")
+        _create_diagnosis(db_session, "p-1", primary_cause="king_safety_blindness")
+        _create_diagnosis(db_session, "p-2", primary_cause="endgame_technique_gap")
+        db_session.commit()
+
+        body = client.get(
+            "/puzzles/list?username=testuser"
+            "&cause=loose_piece_awareness,king_safety_blindness"
+        ).json()
+        assert {p["id"] for p in body["puzzles"]} == {"p-0", "p-1"}
+
+    def test_combines_with_the_other_filters(self, client, db_session):
+        # A cause filter that ignored the status filter would quietly widen the
+        # result the moment a user arrived from Insights with both set.
+        _seed_puzzles(db_session, count=3)
+        for pid in ("p-0", "p-1", "p-2"):
+            _create_diagnosis(db_session, pid, primary_cause="loose_piece_awareness")
+        db_session.commit()
+
+        unfiltered = client.get(
+            "/puzzles/list?username=testuser&cause=loose_piece_awareness"
+        ).json()
+        combined = client.get(
+            "/puzzles/list?username=testuser"
+            "&cause=loose_piece_awareness&difficulty=hard"
+        ).json()
+        assert combined["total"] < unfiltered["total"]
+        assert all(p["difficulty"] == "hard" for p in combined["puzzles"])
+
+    def test_is_scoped_to_the_requesting_user(self, client, db_session):
+        # The diagnosis table is keyed (puzzle_id, username); a join that
+        # forgot the username would surface another player's classification.
+        _seed_puzzles(db_session, count=1, username="testuser")
+        _create_diagnosis(
+            db_session, "p-0", username="other", primary_cause="king_safety_blindness"
+        )
+        db_session.commit()
+
+        body = client.get(
+            "/puzzles/list?username=testuser&cause=king_safety_blindness"
+        ).json()
+        assert body["puzzles"] == []
+
+
+class TestAvailableCauses:
+    def test_offers_only_causes_that_would_return_something(self, client, db_session):
+        _seed_puzzles(db_session, count=2)
+        _create_diagnosis(db_session, "p-0", primary_cause="loose_piece_awareness")
+        db_session.commit()
+
+        body = client.get("/puzzles/list?username=testuser").json()
+        assert body["available_causes"] == [
+            {"value": "loose_piece_awareness", "label": "Loose piece awareness"}
+        ]
+
+    def test_carries_the_label_so_the_ui_never_shows_a_slug(
+        self, client, db_session
+    ):
+        _seed_puzzles(db_session, count=1)
+        _create_diagnosis(db_session, "p-0", primary_cause="king_safety_blindness")
+        db_session.commit()
+
+        body = client.get("/puzzles/list?username=testuser").json()
+        assert body["available_causes"][0]["label"] != "king_safety_blindness"
+
+    def test_reports_the_confirmed_cause_not_the_computed_one(
+        self, client, db_session
+    ):
+        _seed_puzzles(db_session, count=1)
+        _create_diagnosis(
+            db_session,
+            "p-0",
+            primary_cause="loose_piece_awareness",
+            user_confirmed_cause="king_safety_blindness",
+        )
+        db_session.commit()
+
+        body = client.get("/puzzles/list?username=testuser").json()
+        values = [c["value"] for c in body["available_causes"]]
+        assert values == ["king_safety_blindness"]
+
+    def test_offers_exactly_what_the_insights_counts_are_built_from(
+        self, client, db_session
+    ):
+        # The two surfaces must agree: what Insights counts under a cause is
+        # what the library filter returns for it. Comparing against the
+        # repository the Insights endpoint uses pins them to one predicate
+        # rather than to two queries that happen to match today.
+        from services.api.storage.diagnosis_repository import DiagnosisRepository
+
+        _seed_puzzles(db_session, count=3)
+        _create_diagnosis(db_session, "p-0", primary_cause="loose_piece_awareness")
+        _create_diagnosis(
+            db_session,
+            "p-1",
+            primary_cause="king_safety_blindness",
+            user_confirmed_cause="loose_piece_awareness",
+        )
+        _create_diagnosis(
+            db_session,
+            "p-2",
+            primary_cause=None,
+            status=DiagnosisStatus.UNAVAILABLE,
+            error="illegal move for fen",
+        )
+        db_session.commit()
+
+        counts = dict(DiagnosisRepository(db_session).cause_counts("testuser"))
+        body = client.get("/puzzles/list?username=testuser").json()
+
+        assert {c["value"] for c in body["available_causes"]} == set(counts)
+        for value, expected in counts.items():
+            listed = client.get(
+                f"/puzzles/list?username=testuser&cause={value}"
+            ).json()
+            assert listed["total"] == expected
+
+    def test_is_scoped_to_the_requesting_user(self, client, db_session):
+        _seed_puzzles(db_session, count=1, username="testuser")
+        _create_diagnosis(
+            db_session, "p-0", username="other", primary_cause="king_safety_blindness"
+        )
+        db_session.commit()
+
+        body = client.get("/puzzles/list?username=testuser").json()
+        assert body["available_causes"] == []
