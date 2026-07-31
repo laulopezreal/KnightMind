@@ -9,7 +9,7 @@ from sqlalchemy.orm import sessionmaker
 
 from services.api.db import Base, get_db
 from services.api.main import app
-from services.api.models import Job, JobStatus
+from services.api.models import Game, Job, JobStatus, Puzzle
 from services.api.worker import JobWorker
 
 # Use a file-based DB for tests to ensure threading works if needed,
@@ -279,6 +279,45 @@ def test_write_progress_never_touches_a_non_running_job(db_session):
 def _reset_jobs(db_session):
     """Clear the shared module-scoped jobs table for claim isolation."""
     db_session.query(Job).delete()
+    db_session.commit()
+
+
+def _insert_pending_puzzle(db_session, username: str, puzzle_id: str) -> None:
+    """Insert a puzzle with no diagnosis so DiagnosisRepository sees work."""
+    game_id = f"{puzzle_id}-game"
+    db_session.add(
+        Game(
+            game_id=game_id,
+            url=f"https://chess.com/game/{game_id}",
+            username=username,
+            white_username=username,
+            black_username="opponent",
+            white_result="resigned",
+            black_result="win",
+            time_control="600+5",
+            end_time=int(datetime.now(timezone.utc).timestamp()),
+            rated=True,
+            pgn_blob='[Event "Test"]\n\n1. e4 e5 *',
+        )
+    )
+    db_session.add(
+        Puzzle(
+            id=puzzle_id,
+            username=username,
+            source_game_id=game_id,
+            ply=3,
+            fen="6k1/pp3ppp/8/3q4/8/8/PP3PPP/3Q2K1 w - - 0 1",
+            side_to_move="white",
+            played_move_uci="d1d2",
+            best_move_uci="d1d5",
+            accept_moves_uci="d1d5",
+            solution_pv="d1d5",
+            eval_before=1.5,
+            eval_after=-7.5,
+            swing=9.0,
+            confirmed_depth=18,
+        )
+    )
     db_session.commit()
 
 
@@ -709,3 +748,324 @@ def test_migration_scoped_active_job_index_postgres():
     index = indexes["ix_jobs_active_username"]
     assert index["unique"]
     assert index["column_names"] == ["username", "type"]
+
+
+# ---------------------------------------------------------------------------
+# Follow-up diagnosis after puzzle generation
+# ---------------------------------------------------------------------------
+
+
+class TestFollowUpDiagnosis:
+    """Fresh puzzles are fresh mistakes. Chaining diagnosis off generation
+    means importing games is the only thing a user has to do."""
+
+    def test_a_successful_generation_queues_a_diagnosis_run(self, db_session):
+        from services.api.models import JobType
+        from services.api.worker import JobWorker
+
+        _reset_jobs(db_session)
+        with patch("services.api.worker.SessionLocal") as mock_sl:
+            mock_sl.return_value.__enter__.return_value = db_session
+            mock_sl.return_value.__exit__.return_value = None
+            JobWorker._enqueue_followup(JobType.PUZZLE_GENERATION.value, "chained")
+
+        job = db_session.query(Job).filter_by(username="chained").one()
+        assert job.type == JobType.DIAGNOSIS
+        assert job.status == JobStatus.QUEUED
+        # The whole corpus, not a default batch — this is a backfill.
+        assert job.params["limit"] > 1000
+        assert job.params["auto_chain"] is True
+
+    def test_a_diagnosis_run_does_not_chain_another(self, db_session):
+        """Otherwise every diagnosis queues a diagnosis, forever."""
+        from services.api.models import JobType
+        from services.api.worker import JobWorker
+
+        _reset_jobs(db_session)
+        with patch("services.api.worker.SessionLocal") as mock_sl:
+            mock_sl.return_value.__enter__.return_value = db_session
+            mock_sl.return_value.__exit__.return_value = None
+            JobWorker._enqueue_followup(JobType.DIAGNOSIS.value, "chained")
+
+        assert db_session.query(Job).filter_by(username="chained").count() == 0
+
+    def test_an_already_active_diagnosis_is_not_duplicated(self, db_session):
+        """The active-job index rejects the insert; marked automatic diagnosis
+        jobs re-check pending work at completion, so the collision is a no-op,
+        not an error."""
+        from services.api.models import JobType
+        from services.api.worker import JobWorker
+
+        _reset_jobs(db_session)
+        db_session.add(
+            Job(username="busy", type=JobType.DIAGNOSIS, status=JobStatus.RUNNING)
+        )
+        db_session.commit()
+
+        with patch("services.api.worker.SessionLocal") as mock_sl:
+            mock_sl.return_value.__enter__.return_value = db_session
+            mock_sl.return_value.__exit__.return_value = None
+            JobWorker._enqueue_followup(JobType.PUZZLE_GENERATION.value, "busy")
+
+        assert db_session.query(Job).filter_by(username="busy").count() == 1
+        # The session must still be usable — a failed flush that is not rolled
+        # back leaves it poisoned for every later query.
+        assert db_session.query(Job).count() >= 1
+
+    def test_a_failure_to_queue_never_propagates(self, db_session):
+        """This runs after the generation is already marked SUCCEEDED. A
+        follow-up that cannot be queued is a missing enrichment, not lost
+        work — it must never turn a successful generation into a failure."""
+        from services.api.models import JobType
+        from services.api.worker import JobWorker
+
+        with patch(
+            "services.api.worker.SessionLocal", side_effect=RuntimeError("db down")
+        ):
+            JobWorker._enqueue_followup(JobType.PUZZLE_GENERATION.value, "unlucky")
+        # No exception escaped.
+
+
+@patch("asyncio.to_thread", side_effect=run_sync_in_thread)
+@pytest.mark.asyncio
+async def test_diagnosis_success_with_no_remaining_pending_chains_nothing(
+    mock_to_thread, db_session
+):
+    from services.api.models import JobType
+    from services.api.worker import JOB_HANDLERS, worker
+
+    _reset_jobs(db_session)
+    job = Job(username="diag-empty", type=JobType.DIAGNOSIS, status=JobStatus.RUNNING)
+    db_session.add(job)
+    db_session.commit()
+    db_session.refresh(job)
+
+    def fake_diagnosis(ctx):
+        return {"username": ctx.username, "remaining": 0, "canceled": False}
+
+    original = JOB_HANDLERS[JobType.DIAGNOSIS.value]
+    JOB_HANDLERS[JobType.DIAGNOSIS.value] = fake_diagnosis
+    try:
+        with patch("services.api.worker.SessionLocal") as mock_sl:
+            mock_sl.return_value.__enter__.return_value = db_session
+            mock_sl.return_value.__exit__.return_value = None
+            await worker.execute_job(job.id)
+    finally:
+        JOB_HANDLERS[JobType.DIAGNOSIS.value] = original
+
+    db_session.expire_all()
+    assert db_session.get(Job, job.id).status == JobStatus.SUCCEEDED
+    queued = (
+        db_session.query(Job)
+        .filter_by(
+            username="diag-empty", type=JobType.DIAGNOSIS, status=JobStatus.QUEUED
+        )
+        .count()
+    )
+    assert queued == 0
+
+
+@patch("asyncio.to_thread", side_effect=run_sync_in_thread)
+@pytest.mark.asyncio
+async def test_diagnosis_success_with_late_pending_puzzle_queues_followup(
+    mock_to_thread, db_session
+):
+    from services.api.models import JobType
+    from services.api.worker import JOB_HANDLERS, worker
+
+    _reset_jobs(db_session)
+    job = Job(
+        username="diag-late",
+        type=JobType.DIAGNOSIS,
+        status=JobStatus.RUNNING,
+        params={"limit": 1, "auto_chain": True},
+    )
+    db_session.add(job)
+    db_session.commit()
+    db_session.refresh(job)
+
+    def fake_diagnosis(ctx):
+        _insert_pending_puzzle(db_session, ctx.username, "late-pending")
+        return {"username": ctx.username, "remaining": 1, "canceled": False}
+
+    original = JOB_HANDLERS[JobType.DIAGNOSIS.value]
+    JOB_HANDLERS[JobType.DIAGNOSIS.value] = fake_diagnosis
+    try:
+        with patch("services.api.worker.SessionLocal") as mock_sl:
+            mock_sl.return_value.__enter__.return_value = db_session
+            mock_sl.return_value.__exit__.return_value = None
+            await worker.execute_job(job.id)
+    finally:
+        JOB_HANDLERS[JobType.DIAGNOSIS.value] = original
+
+    db_session.expire_all()
+    assert db_session.get(Job, job.id).status == JobStatus.SUCCEEDED
+    followup = (
+        db_session.query(Job)
+        .filter_by(
+            username="diag-late", type=JobType.DIAGNOSIS, status=JobStatus.QUEUED
+        )
+        .one()
+    )
+    assert followup.message == "Queued for remaining diagnosis"
+    assert followup.params["limit"] > 1000
+    assert followup.params["auto_chain"] is True
+
+
+@patch("asyncio.to_thread", side_effect=run_sync_in_thread)
+@pytest.mark.asyncio
+async def test_manual_bounded_diagnosis_success_does_not_queue_followup(
+    mock_to_thread, db_session
+):
+    from services.api.models import JobType
+    from services.api.worker import JOB_HANDLERS, worker
+
+    _reset_jobs(db_session)
+    _insert_pending_puzzle(db_session, "diag-manual", "manual-before-1")
+    _insert_pending_puzzle(db_session, "diag-manual", "manual-before-2")
+    job = Job(
+        username="diag-manual",
+        type=JobType.DIAGNOSIS,
+        status=JobStatus.RUNNING,
+        params={"limit": 1},
+    )
+    db_session.add(job)
+    db_session.commit()
+    db_session.refresh(job)
+
+    def fake_diagnosis(ctx):
+        assert ctx.params == {"limit": 1}
+        return {"username": ctx.username, "diagnosed": 1, "remaining": 1}
+
+    original = JOB_HANDLERS[JobType.DIAGNOSIS.value]
+    JOB_HANDLERS[JobType.DIAGNOSIS.value] = fake_diagnosis
+    try:
+        with patch("services.api.worker.SessionLocal") as mock_sl:
+            mock_sl.return_value.__enter__.return_value = db_session
+            mock_sl.return_value.__exit__.return_value = None
+            await worker.execute_job(job.id)
+    finally:
+        JOB_HANDLERS[JobType.DIAGNOSIS.value] = original
+
+    db_session.expire_all()
+    assert db_session.get(Job, job.id).status == JobStatus.SUCCEEDED
+    queued = (
+        db_session.query(Job)
+        .filter_by(
+            username="diag-manual", type=JobType.DIAGNOSIS, status=JobStatus.QUEUED
+        )
+        .count()
+    )
+    assert queued == 0
+
+
+@patch("services.api.worker.generate_puzzles")
+@patch("asyncio.to_thread", side_effect=run_sync_in_thread)
+@pytest.mark.asyncio
+async def test_generation_success_chains_diagnosis_end_to_end(
+    mock_to_thread, mock_generate, db_session
+):
+    from services.api.models import JobType
+    from services.api.puzzles.generator import GenerationResult
+    from services.api.worker import worker
+
+    _reset_jobs(db_session)
+    job = Job(
+        username="e2e-chain", type=JobType.PUZZLE_GENERATION, status=JobStatus.RUNNING
+    )
+    db_session.add(job)
+    db_session.commit()
+    db_session.refresh(job)
+    mock_generate.return_value = GenerationResult(5, 0, 100)
+
+    with patch("services.api.worker.SessionLocal") as mock_sl:
+        mock_sl.return_value.__enter__.return_value = db_session
+        mock_sl.return_value.__exit__.return_value = None
+        await worker.execute_job(job.id)
+
+    db_session.expire_all()
+    assert db_session.get(Job, job.id).status == JobStatus.SUCCEEDED
+    followup = (
+        db_session.query(Job)
+        .filter_by(username="e2e-chain", type=JobType.DIAGNOSIS)
+        .one()
+    )
+    assert followup.status == JobStatus.QUEUED
+    assert followup.params["auto_chain"] is True
+
+
+@patch("services.api.worker.generate_puzzles")
+@patch("asyncio.to_thread", side_effect=run_sync_in_thread)
+@pytest.mark.asyncio
+async def test_a_canceled_generation_chains_nothing(
+    mock_to_thread, mock_generate, db_session
+):
+    """The completion was discarded, so there is nothing to follow up on."""
+    from services.api.models import JobType
+    from services.api.puzzles.generator import GenerationResult
+    from services.api.worker import worker
+
+    _reset_jobs(db_session)
+    job = Job(
+        username="e2e-cancel", type=JobType.PUZZLE_GENERATION, status=JobStatus.CANCELED
+    )
+    db_session.add(job)
+    db_session.commit()
+    db_session.refresh(job)
+    mock_generate.return_value = GenerationResult(5, 0, 100)
+
+    with patch("services.api.worker.SessionLocal") as mock_sl:
+        mock_sl.return_value.__enter__.return_value = db_session
+        mock_sl.return_value.__exit__.return_value = None
+        await worker.execute_job(job.id)
+
+    db_session.expire_all()
+    assert (
+        db_session.query(Job)
+        .filter_by(username="e2e-cancel", type=JobType.DIAGNOSIS)
+        .count()
+        == 0
+    )
+
+
+@patch("services.api.worker.generate_puzzles")
+@patch("asyncio.to_thread", side_effect=run_sync_in_thread)
+@pytest.mark.asyncio
+async def test_a_raising_followup_cannot_undo_a_succeeded_generation(
+    mock_to_thread, mock_generate, db_session
+):
+    """The strong form of "must never fail the generation".
+
+    _enqueue_followup swallows its own errors, but that swallow is one edit
+    away from being removed. The guarantee that actually holds is structural:
+    the follow-up runs *after* the success write, and the failure write is
+    guarded on status = RUNNING — so even an exception escaping the follow-up
+    finds a job that has already left RUNNING and is discarded.
+    """
+    from services.api.models import JobType
+    from services.api.puzzles.generator import GenerationResult
+    from services.api.worker import JobWorker, worker
+
+    _reset_jobs(db_session)
+    job = Job(
+        username="e2e-raise", type=JobType.PUZZLE_GENERATION, status=JobStatus.RUNNING
+    )
+    db_session.add(job)
+    db_session.commit()
+    db_session.refresh(job)
+    mock_generate.return_value = GenerationResult(5, 0, 100)
+
+    def boom(*a, **k):
+        raise RuntimeError("follow-up exploded")
+
+    with (
+        patch("services.api.worker.SessionLocal") as mock_sl,
+        patch.object(JobWorker, "_enqueue_followup", staticmethod(boom)),
+    ):
+        mock_sl.return_value.__enter__.return_value = db_session
+        mock_sl.return_value.__exit__.return_value = None
+        await worker.execute_job(job.id)
+
+    db_session.expire_all()
+    assert db_session.get(Job, job.id).status == JobStatus.SUCCEEDED
+    assert db_session.get(Job, job.id).error_message is None

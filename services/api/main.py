@@ -46,12 +46,17 @@ from services.api.identity import (
     claim_username_if_unowned,
     require_account,
 )
-from services.api.jobs.cleanup_sessions import cleanup_abandoned_sessions
+from services.api.jobs.cleanup_sessions import (
+    cleanup_abandoned_sessions,
+    purge_expired_ai_audit,
+)
 from services.api.models import (
     Account,
+    DiagnosisStatus,
     Job,
     JobStatus,
     JobType,
+    PuzzleDiagnosis,
     PuzzleResult,
     PuzzleReview,
     PuzzleStats,
@@ -142,7 +147,13 @@ DRAW_RESULTS = frozenset(
 
 
 async def run_session_cleanup():
-    """Background task to cleanup abandoned sessions periodically."""
+    """Background task for periodic housekeeping.
+
+    Session cleanup and AI-audit retention run in separate try blocks on
+    purpose: a failure in one must not skip the other, and a stalled retention
+    sweep would let prompt/response blobs accumulate past their window
+    silently.
+    """
     while True:
         try:
             # Run cleanup
@@ -150,6 +161,12 @@ async def run_session_cleanup():
                 await asyncio.to_thread(cleanup_abandoned_sessions, db)
         except Exception as e:
             print(f"Error in session cleanup: {e}")
+
+        try:
+            with SessionLocal() as db:
+                await asyncio.to_thread(purge_expired_ai_audit, db)
+        except Exception as e:
+            print(f"Error in AI audit purge: {e}")
 
         # Sleep for defined interval
         await asyncio.sleep(CLEANUP_INTERVAL_SECONDS)
@@ -536,6 +553,21 @@ class DuePuzzlesResponse(BaseModel):
     puzzles: list[dict]
 
 
+class PuzzleDiagnosisSummary(BaseModel):
+    """Safe Library-list summary of a stored diagnosis.
+
+    This deliberately excludes evidence/prose/recommendations and all move/line
+    details. Full diagnosis evidence remains gated behind
+    ``/puzzles/{id}/diagnosis`` after reveal.
+    """
+
+    state: Literal["ready", "unclear", "unavailable"]
+    primary_cause: str | None = None
+    primary_cause_label: str | None = None
+    source: str | None = None
+    diagnosed_at: datetime | None = None
+
+
 class PuzzleListItem(BaseModel):
     id: str
     title: str | None
@@ -560,6 +592,33 @@ class PuzzleListItem(BaseModel):
     last_result: str | None
     next_due_at: datetime | None
     created_at: datetime | None
+    diagnosis_summary: PuzzleDiagnosisSummary | None = None
+
+
+def _puzzle_diagnosis_summary(
+    row: PuzzleDiagnosis | None,
+) -> PuzzleDiagnosisSummary | None:
+    """Return the non-spoiler diagnosis subset safe for Library list rows."""
+    from services.api.diagnosis.causes import CAUSE_LABELS
+
+    if row is None:
+        return None
+    if row.status == DiagnosisStatus.UNAVAILABLE:
+        return PuzzleDiagnosisSummary(
+            state="unavailable",
+            source=row.source,
+            diagnosed_at=row.updated_at,
+        )
+
+    cause = row.user_confirmed_cause or row.primary_cause
+    unclear = row.insufficient_evidence or not cause
+    return PuzzleDiagnosisSummary(
+        state="unclear" if unclear else "ready",
+        primary_cause=cause,
+        primary_cause_label=CAUSE_LABELS.get(cause) if cause else None,
+        source=row.source,
+        diagnosed_at=row.updated_at,
+    )
 
 
 class PuzzleCorpusStats(BaseModel):
@@ -1591,6 +1650,9 @@ async def list_puzzles(
     join_cond = (PuzzleModel.id == PuzzleStats.puzzle_id) & (
         PuzzleStats.username == username_lower
     )
+    diagnosis_join_cond = (PuzzleModel.id == PuzzleDiagnosis.puzzle_id) & (
+        PuzzleDiagnosis.username == username_lower
+    )
 
     # --- 1. Corpus stats (unfiltered) ---
     status_case = case(
@@ -1650,8 +1712,9 @@ async def list_puzzles(
     computed_status = status_case.label("computed_status")
 
     base_stmt = (
-        select(PuzzleModel, PuzzleStats, computed_status)
+        select(PuzzleModel, PuzzleStats, PuzzleDiagnosis, computed_status)
         .outerjoin(PuzzleStats, join_cond)
+        .outerjoin(PuzzleDiagnosis, diagnosis_join_cond)
         .where(PuzzleModel.username == username_lower)
     )
 
@@ -1734,7 +1797,7 @@ async def list_puzzles(
     # --- 7. Build response ---
     rows = db.execute(base_stmt).all()
     result_puzzles = []
-    for puzzle, stats, row_status in rows:
+    for puzzle, stats, diagnosis, row_status in rows:
         result_puzzles.append(
             PuzzleListItem(
                 id=puzzle.id,
@@ -1757,6 +1820,7 @@ async def list_puzzles(
                 last_result=stats.last_result if stats else None,
                 next_due_at=stats.next_due_at if stats else None,
                 created_at=puzzle.created_at,
+                diagnosis_summary=_puzzle_diagnosis_summary(diagnosis),
             )
         )
 
@@ -1857,6 +1921,8 @@ async def get_puzzle_detail(
         last_result=stats.last_result if stats else None,
         next_due_at=stats.next_due_at if stats else None,
         created_at=puzzle.created_at,
+        # diagnosis_summary is intentionally omitted here: the detail page uses
+        # GET /puzzles/{id}/diagnosis for full diagnosis data, not this field.
     )
 
 
@@ -2002,6 +2068,176 @@ async def get_puzzle_diagnosis(
     reveal_solution = reveal or not _strip_puzzle_solutions_enabled()
     return _diagnosis_response(
         puzzle_id, DiagnosisRepository(db).get(username, puzzle_id), reveal_solution
+    )
+
+
+class MistakeCause(BaseModel):
+    """One cause, with how often it explains this user's mistakes.
+
+    ``mistakes`` is a direct count and always trustworthy — every puzzle in the
+    corpus is a real blunder from a real game.
+
+    ``accuracy`` is a proportion over *server-verified* training attempts only,
+    and is None until the sample supports it. Self-reported results are
+    excluded: the codebase refuses to present them as verified skill, and a
+    pass rate is exactly the claim that would launder them.
+
+    ``insufficient_data`` says the cause has not been seen often enough to call
+    a tendency. The UI must not rank or recommend against it — below the
+    threshold, one bad afternoon looks identical to a habit.
+    """
+
+    cause: str
+    label: str
+    mistakes: int
+    dominant_phase: str | None = None
+    verified_attempts: int = 0
+    # How many distinct puzzles those attempts covered. Exposed so the UI can
+    # say how broad the sample is, not just how large.
+    verified_puzzles: int = 0
+    accuracy: float | None = None
+    insufficient_data: bool = True
+    # "Cause unclear" is an honest bucket, not a weakness to train. Flagged so
+    # the UI can show it as coverage information without recommending practice.
+    is_unclassified: bool = False
+
+
+class MistakeCausesResponse(BaseModel):
+    username: str
+    causes: list[MistakeCause]
+    total_diagnosed: int
+    # Diagnoses still owed. Without it a nearly-empty list is indistinguishable
+    # from "you make no mistakes".
+    pending: int
+    min_for_ranking: int
+
+
+class MistakePattern(BaseModel):
+    """A named, described habit — the coaching layer over a raw cause.
+
+    Only causes that have come up often enough to be a tendency become
+    patterns. A cause below the threshold stays a count on the causes endpoint
+    and is deliberately absent here: naming something "Loose Piece Syndrome"
+    off two occurrences would be the overreach this whole feature avoids.
+
+    ``priority`` orders one person's patterns against each other. It is not a
+    probability and means nothing across users.
+    """
+
+    cause: str
+    name: str
+    description: str
+    mistakes: int
+    recent_mistakes: int
+    dominant_phase: str | None = None
+    accuracy: float | None = None
+    priority: float = 0.0
+
+
+class MistakePatternsResponse(BaseModel):
+    username: str
+    patterns: list[MistakePattern]
+    # Causes that exist but are not yet tendencies. Reported as a number so the
+    # UI can say "and 3 more not seen often enough yet" instead of implying the
+    # named list is everything.
+    below_threshold: int
+    pending: int
+
+
+@app.get("/users/{username}/mistake-patterns", response_model=MistakePatternsResponse)
+async def get_mistake_patterns(
+    username: Username,
+    db: Session = Depends(get_db),
+    account: Account | None = Depends(require_account),
+):
+    """This user's mistake habits, named and ordered by how much they matter.
+
+    Computed on demand from the diagnoses rather than from a stored clustering.
+    At this corpus size the grouping is a millisecond query, so persisting it
+    would buy a job, two tables and a staleness window for nothing measurable.
+    """
+    from services.api.diagnosis.patterns import identify, priority_score
+
+    assert_owns_username(account, username, db)
+
+    repo = DiagnosisRepository(db)
+    stats = repo.cause_breakdown(username)
+
+    patterns = []
+    below = 0
+    for stat in stats:
+        identity = identify(stat.cause, stat.dominant_phase)
+        # No identity means either "unclassified" or a cause with no written
+        # pattern yet. Neither should be invented on the fly.
+        if identity is None:
+            continue
+        if stat.insufficient_data:
+            below += 1
+            continue
+        patterns.append(
+            MistakePattern(
+                cause=stat.cause,
+                name=identity.name,
+                description=identity.description,
+                mistakes=stat.mistakes,
+                recent_mistakes=stat.recent_mistakes,
+                dominant_phase=stat.dominant_phase,
+                accuracy=stat.accuracy,
+                priority=priority_score(
+                    stat.mistakes, stat.accuracy, stat.recent_mistakes
+                ),
+            )
+        )
+
+    patterns.sort(key=lambda p: (-p.priority, p.cause))
+    return MistakePatternsResponse(
+        username=username,
+        patterns=patterns,
+        below_threshold=below,
+        pending=repo.pending_count(username),
+    )
+
+
+@app.get("/users/{username}/mistake-causes", response_model=MistakeCausesResponse)
+async def get_mistake_causes(
+    username: Username,
+    db: Session = Depends(get_db),
+    account: Account | None = Depends(require_account),
+):
+    """Aggregate this user's diagnosed mistakes by cause.
+
+    Descriptive only. A cause below ``MIN_DIAGNOSES_FOR_CAUSE_RANK`` is
+    returned with ``insufficient_data`` set rather than withheld — the count is
+    real and worth showing; what it does not yet support is being called a
+    tendency.
+    """
+    from services.api.analytics_confidence import MIN_DIAGNOSES_FOR_CAUSE_RANK
+    from services.api.diagnosis.causes import CAUSE_LABELS, UNCLASSIFIED
+
+    assert_owns_username(account, username, db)
+
+    repo = DiagnosisRepository(db)
+    stats = repo.cause_breakdown(username)
+
+    return MistakeCausesResponse(
+        username=username,
+        causes=[
+            MistakeCause(
+                cause=s.cause,
+                label=CAUSE_LABELS.get(s.cause, s.cause),
+                mistakes=s.mistakes,
+                dominant_phase=s.dominant_phase,
+                verified_attempts=s.verified_attempts,
+                verified_puzzles=s.verified_puzzles,
+                accuracy=s.accuracy,
+                insufficient_data=s.insufficient_data,
+                is_unclassified=s.cause == UNCLASSIFIED,
+            )
+            for s in stats
+        ],
+        total_diagnosed=sum(s.mistakes for s in stats),
+        pending=repo.pending_count(username),
+        min_for_ranking=MIN_DIAGNOSES_FOR_CAUSE_RANK,
     )
 
 

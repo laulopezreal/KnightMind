@@ -6,6 +6,7 @@ import {
     getLibraryPuzzles,
     type LibraryPuzzle,
     type LibraryCorpusStats,
+    type PuzzleDiagnosisSummary,
     type PuzzleStatus,
     type PuzzleDifficulty,
     type PuzzleSort,
@@ -66,6 +67,26 @@ function DifficultyBadge({ difficulty }: { difficulty: PuzzleDifficulty }) {
     );
 }
 
+function DiagnosisBadge({ summary }: { summary: PuzzleDiagnosisSummary | null }) {
+    if (!summary) return null;
+
+    const cls = "text-xs font-sans text-primary/75 px-2 py-0.5 bg-primary/10 border border-primary/10 rounded-sm";
+
+    if (summary.state === 'unclear') {
+        return <span aria-label="Diagnosis cause" className={cls}>Cause unclear</span>;
+    }
+    if (summary.state === 'unavailable') {
+        return <span aria-label="Diagnosis cause" className={cls}>Diagnosis unavailable</span>;
+    }
+    // state === 'ready': show the human-readable label, falling back to the raw key
+    const label = summary.primary_cause_label || summary.primary_cause || 'Cause unknown';
+    return (
+        <span aria-label="Diagnosis cause" className={cls}>
+            Cause: {label}
+        </span>
+    );
+}
+
 function PuzzleRow({ puzzle }: { puzzle: LibraryPuzzle }) {
     const successRate = puzzle.attempts > 0
         ? Math.round((puzzle.pass_count / puzzle.attempts) * 100)
@@ -90,6 +111,7 @@ function PuzzleRow({ puzzle }: { puzzle: LibraryPuzzle }) {
                                 {puzzle.primary_motif}
                             </span>
                         )}
+                        <DiagnosisBadge summary={puzzle.diagnosis_summary} />
                     </div>
                     {/* Stats row */}
                     <div className="flex items-center gap-4 mt-1 text-xs font-sans text-primary/70">

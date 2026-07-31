@@ -18,11 +18,15 @@ vi.mock('../context/ChessUsernameContext', () => ({
 const mockGetMotifPerformance = vi.fn();
 const mockGetMotifTrends = vi.fn();
 const mockGetTrickyPuzzles = vi.fn();
+const mockGetMistakeCauses = vi.fn();
+const mockGetMistakePatterns = vi.fn();
 
 vi.mock('../api/users', () => ({
     getMotifPerformance: (...a: unknown[]) => mockGetMotifPerformance(...a),
     getMotifTrends: (...a: unknown[]) => mockGetMotifTrends(...a),
     getTrickyPuzzles: (...a: unknown[]) => mockGetTrickyPuzzles(...a),
+    getMistakeCauses: (...a: unknown[]) => mockGetMistakeCauses(...a),
+    getMistakePatterns: (...a: unknown[]) => mockGetMistakePatterns(...a),
 }));
 
 vi.mock('../components/TacticalRadar', () => ({
@@ -40,6 +44,14 @@ describe('Insights data states', () => {
         vi.clearAllMocks();
         mockUsername = 'alice';
         mockGetTrickyPuzzles.mockResolvedValue({ puzzles: [], total_count: 0 });
+        mockGetMistakeCauses.mockResolvedValue({
+      username: 'testuser',
+      causes: [],
+      total_diagnosed: 0,
+      pending: 0,
+      min_for_ranking: 4,
+    });
+    mockGetMistakePatterns.mockResolvedValue({ username: 'testuser', patterns: [], below_threshold: 0, pending: 0 });
     });
     afterEach(() => setOnline(true));
 

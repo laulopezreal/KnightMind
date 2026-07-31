@@ -312,6 +312,15 @@ class PuzzleDiagnosis(Base):
     # Populated by the AI stage; NULL for a rules-only diagnosis.
     explanation: Mapped[str | None] = mapped_column(Text, nullable=True)
     training_recommendation: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # The model's own confidence, 0-1. Deliberately separate from
+    # primary_strength: that is a hand-assigned rule prior, this is what the
+    # model reported. Conflating them would let a rule ordering masquerade as a
+    # calibrated probability. NULL on a rules-only row.
+    model_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # True when the model's primary cause matched the rules' top pick. Rolled up
+    # on /ops/status — the earliest signal that a prompt or model change
+    # regressed. NULL when no model call was accepted.
+    agreed_with_rules: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
 
     # Manual correction. Kept alongside the computed cause rather than
     # overwriting it, so rule accuracy stays measurable against user feedback.
@@ -326,6 +335,66 @@ class PuzzleDiagnosis(Base):
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
         nullable=False,
+    )
+
+
+class DiagnosisAuditLog(Base):
+    """One row per AI diagnosis attempt — accepted, rejected, or failed.
+
+    Kept out of ``puzzle_diagnoses`` on purpose: that table is read on every
+    puzzle-detail page load, and prompt/response blobs have no business on a hot
+    read path.
+
+    The table does double duty as the **spend ledger**. Counting today's rows is
+    how the daily caps are enforced, which means the budget survives a process
+    restart without a separate counter that could drift from what was actually
+    called.
+
+    Swept after ``AUDIT_RETENTION_DAYS`` by the existing session-cleanup loop.
+    """
+
+    __tablename__ = "diagnosis_audit_log"
+    __table_args__ = (
+        # The retention sweep and the daily spend count both scan on time.
+        Index("ix_diagnosis_audit_created_at", "created_at"),
+        # Per-user daily spend.
+        Index("ix_diagnosis_audit_username_created", "username", "created_at"),
+        {"extend_existing": True},
+    )
+
+    id: Mapped[str] = mapped_column(
+        String, primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    puzzle_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    username: Mapped[str] = mapped_column(String, nullable=False, index=True)
+
+    # accepted | rejected | skipped | error
+    status: Mapped[str] = mapped_column(String, nullable=False)
+    # Why a response was rejected, or why a call failed. The interesting rows:
+    # this is the debugging corpus for prompt and model regressions.
+    reason: Mapped[str | None] = mapped_column(String, nullable=True)
+    agreed_with_rules: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+
+    model_version: Mapped[str | None] = mapped_column(String, nullable=True)
+    rule_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    extraction_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # The prompt is reproducible from the packet plus these versions, so only
+    # its hash is kept — the full text would multiply the table for no gain.
+    prompt_hash: Mapped[str | None] = mapped_column(String, nullable=True)
+    evidence_hash: Mapped[str | None] = mapped_column(String, nullable=True)
+
+    # Truncated at AUDIT_RESPONSE_MAX_CHARS; the flag records that it happened
+    # so a debugger is never misled by a silently clipped payload.
+    response_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    response_truncated: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+
+    input_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc), nullable=False
     )
 
 

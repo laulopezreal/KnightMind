@@ -155,3 +155,57 @@ export async function getMotifTrends(username: string, windowDays: number = 30):
 export async function getTrickyPuzzles(username: string, limit: number = 5): Promise<TrickyPuzzlesResponse> {
     return request<TrickyPuzzlesResponse>(`/users/${encodeURIComponent(username)}/puzzles/tricky?limit=${limit}`);
 }
+
+// --- Mistake causes (Insights) ---
+
+export interface MistakeCause {
+    cause: string;
+    label: string;
+    mistakes: number;
+    dominant_phase?: string | null;
+    verified_attempts: number;
+    verified_puzzles: number;
+    accuracy?: number | null;
+    insufficient_data: boolean;
+    is_unclassified: boolean;
+}
+
+export interface MistakeCausesResponse {
+    username: string;
+    causes: MistakeCause[];
+    total_diagnosed: number;
+    pending: number;
+    min_for_ranking: number;
+}
+
+export async function getMistakeCauses(username: string): Promise<MistakeCausesResponse> {
+    return await request<MistakeCausesResponse>(
+        `/users/${encodeURIComponent(username)}/mistake-causes`
+    );
+}
+
+export interface MistakePattern {
+    cause: string;
+    name: string;
+    description: string;
+    mistakes: number;
+    recent_mistakes: number;
+    dominant_phase?: string | null;
+    accuracy?: number | null;
+    priority: number;
+}
+
+export interface MistakePatternsResponse {
+    username: string;
+    patterns: MistakePattern[];
+    below_threshold: number;
+    pending: number;
+}
+
+export async function getMistakePatterns(
+    username: string
+): Promise<MistakePatternsResponse> {
+    return await request<MistakePatternsResponse>(
+        `/users/${encodeURIComponent(username)}/mistake-patterns`
+    );
+}
