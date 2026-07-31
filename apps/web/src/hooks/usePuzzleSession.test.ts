@@ -243,6 +243,29 @@ describe('usePuzzleSession', () => {
         expect(result.current.sessionState).toBe('active');
     });
 
+    it('persists the motif on the session so resume can re-serve it', async () => {
+        // The write side of the resume fix: nothing else records the motif —
+        // it lives only in the URL, which the nav bar drops.
+        mockedStartSession.mockResolvedValue({ session_id: 's1', requested_n: 1 });
+        mockedGetDuePuzzles.mockResolvedValue({
+            due_count: 1,
+            returned_count: 1,
+            now: new Date().toISOString(),
+            puzzles: [mockPuzzle],
+        });
+
+        const opts = makeOpts({ motifFilter: 'fork' });
+        const { result } = renderHook(() => usePuzzleSession(opts));
+
+        await act(async () => {
+            await result.current.handleStartSession();
+        });
+
+        expect(mockedStartSession).toHaveBeenCalledWith(
+            'testuser', 1, 'standard', undefined, undefined, { motif: 'fork' },
+        );
+    });
+
     it('should set up timer for timed sessions', async () => {
         mockedStartSession.mockResolvedValue({ session_id: 's1', requested_n: 5 });
         mockedGetDuePuzzles.mockResolvedValue({
@@ -605,6 +628,55 @@ describe('usePuzzleSession', () => {
 
         await waitFor(() => expect(mockedGetDuePuzzles).toHaveBeenCalled());
         expect(mockedGetDuePuzzles.mock.calls[0][5]).toBeUndefined();
+    });
+
+    it('resumes using the session\'s own motif, not the URL\'s', async () => {
+        // The user starts a motif-filtered session from /puzzles?motif=fork,
+        // solves one, then comes back via the nav bar — no query parameter.
+        // Re-fetching without the motif widens the queue to everything due, so
+        // the restored index lands on a different puzzle and they re-solve one
+        // they already did, advancing its interval a second time.
+        localStorage.setItem('knightmind:session:testuser', 'saved-session');
+        mockedGetSession.mockResolvedValue({
+            ...mockSessionSummary,
+            session_id: 'saved-session',
+            completed_at: null,
+            motif: 'fork',
+        } as never);
+        mockedGetDuePuzzles.mockResolvedValue({
+            due_count: 1,
+            returned_count: 1,
+            puzzles: [mockPuzzle],
+        } as never);
+
+        const opts = makeOpts({ activeSessionId: null, motifFilter: null });
+        renderHook(() => usePuzzleSession(opts));
+
+        await waitFor(() => expect(mockedGetDuePuzzles).toHaveBeenCalled());
+        // The 5th argument is motifFilter.
+        expect(mockedGetDuePuzzles.mock.calls[0][4]).toBe('fork');
+    });
+
+    it('resumes an unfiltered session without a motif', async () => {
+        // The mirror case: a stale URL motif must not narrow a session that
+        // was served the full due queue.
+        localStorage.setItem('knightmind:session:testuser', 'saved-session');
+        mockedGetSession.mockResolvedValue({
+            ...mockSessionSummary,
+            session_id: 'saved-session',
+            completed_at: null,
+        } as never);
+        mockedGetDuePuzzles.mockResolvedValue({
+            due_count: 1,
+            returned_count: 1,
+            puzzles: [mockPuzzle],
+        } as never);
+
+        const opts = makeOpts({ activeSessionId: null, motifFilter: 'pin' });
+        renderHook(() => usePuzzleSession(opts));
+
+        await waitFor(() => expect(mockedGetDuePuzzles).toHaveBeenCalled());
+        expect(mockedGetDuePuzzles.mock.calls[0][4]).toBeUndefined();
     });
 
     // ── Issue #154: double-completion guard ──
