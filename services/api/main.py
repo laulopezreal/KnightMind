@@ -622,12 +622,18 @@ class PuzzleCorpusStats(BaseModel):
     mastered: int
 
 
+class CauseOption(BaseModel):
+    value: str
+    label: str
+
+
 class PuzzleListResponse(BaseModel):
     puzzles: list[PuzzleListItem]
     total: int
     limit: int
     offset: int
     available_motifs: list[str]
+    available_causes: list[CauseOption] = []
     stats: PuzzleCorpusStats
 
 
@@ -1582,6 +1588,11 @@ async def list_puzzles(
     motif: str = Query(
         None, description="Filter by primary_motif (comma-separated for OR)"
     ),
+    cause: str = Query(
+        None,
+        description="Filter by diagnosed mistake cause (comma-separated for OR). "
+        "This is what the Insights 'practise this' links target.",
+    ),
     difficulty: str = Query(None, description="Filter: easy, medium, hard"),
     sort: str = Query(
         "due_soonest",
@@ -1677,6 +1688,30 @@ async def list_puzzles(
     )
     available_motifs = [row[0] for row in db.execute(motifs_stmt).all()]
 
+    # Same contract as available_motifs: the filter surface should offer only
+    # values that would actually return something.
+    causes_stmt = (
+        select(
+            func.coalesce(
+                PuzzleDiagnosis.user_confirmed_cause, PuzzleDiagnosis.primary_cause
+            )
+        )
+        .where(
+            PuzzleDiagnosis.username == username_lower,
+            PuzzleDiagnosis.status == DiagnosisStatus.OK,
+        )
+        .distinct()
+    )
+    from services.api.diagnosis.causes import CAUSE_LABELS
+
+    # Carries its own label rather than a bare slug: the label table lives in
+    # causes.py, and shipping a second copy to the frontend would let the two
+    # drift the moment a cause is renamed.
+    available_causes = [
+        CauseOption(value=value, label=CAUSE_LABELS.get(value, value))
+        for value in sorted(row[0] for row in db.execute(causes_stmt).all() if row[0])
+    ]
+
     # --- 3. Build filtered query ---
     # Reuse status_case from corpus stats so status logic is defined once.
     computed_status = status_case.label("computed_status")
@@ -1707,6 +1742,25 @@ async def list_puzzles(
         motif_values = [m.strip().lower() for m in motif.split(",")]
         base_stmt = base_stmt.where(
             func.lower(PuzzleStats.primary_motif).in_(motif_values)
+        )
+
+    # Mistake-cause filter. Joins the diagnosis rather than the motif: a motif
+    # says what was on the board, a cause says why it was missed, and the
+    # Insights cards send users here by cause.
+    #
+    # The predicate is deliberately identical to the one behind the Insights
+    # counts (``DiagnosisRepository.cause_counts``): correction over computed
+    # cause, analysable rows only. A user who clicks "8 mistakes · practise
+    # this" must land on 8 puzzles, and that holds by construction rather than
+    # by the two queries happening to agree.
+    if cause:
+        cause_values = [c.strip().lower() for c in cause.split(",") if c.strip()]
+        diagnosis_cause = func.coalesce(
+            PuzzleDiagnosis.user_confirmed_cause, PuzzleDiagnosis.primary_cause
+        )
+        base_stmt = base_stmt.where(
+            PuzzleDiagnosis.status == DiagnosisStatus.OK,
+            func.lower(diagnosis_cause).in_(cause_values),
         )
 
     # Difficulty filter
@@ -1800,6 +1854,7 @@ async def list_puzzles(
         limit=limit,
         offset=offset,
         available_motifs=available_motifs,
+        available_causes=available_causes,
         stats=PuzzleCorpusStats(
             total=corpus_total,
             due=cr.cnt_due or 0,

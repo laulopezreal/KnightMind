@@ -10,6 +10,7 @@ import {
     type PuzzleStatus,
     type PuzzleDifficulty,
     type PuzzleSort,
+    type CauseOption,
 } from '../api/puzzles';
 import { PageHeader } from '../components/PageHeader';
 import { DataStateError, DataStateLoading } from '../components/DataState';
@@ -164,6 +165,13 @@ export default function Library() {
     const [statusFilter, setStatusFilter] = useState<PuzzleStatus | ''>('');
     const [difficultyFilter, setDifficultyFilter] = useState<PuzzleDifficulty | ''>('');
     const [motifFilter, setMotifFilter] = useState('');
+    // Seeded from the URL so the Insights "practise this" links land filtered.
+    // Without this the CTA silently dropped its parameter and dumped the user
+    // in the unfiltered library.
+    const [causeFilter, setCauseFilter] = useState(
+        () => new URLSearchParams(window.location.search).get('cause') ?? ''
+    );
+    const [availableCauses, setAvailableCauses] = useState<CauseOption[]>([]);
     const [sort, setSort] = useState<PuzzleSort>('due_soonest');
     const [offset, setOffset] = useState(0);
 
@@ -177,7 +185,7 @@ export default function Library() {
     // Reset offset when filters change
     useEffect(() => {
         setOffset(0);
-    }, [debouncedSearch, statusFilter, difficultyFilter, motifFilter, sort]);
+    }, [debouncedSearch, statusFilter, difficultyFilter, motifFilter, causeFilter, sort]);
 
     const fetchPuzzles = useCallback(async () => {
         if (!username) return;
@@ -189,6 +197,7 @@ export default function Library() {
                 q: debouncedSearch || undefined,
                 status: statusFilter || undefined,
                 motif: motifFilter || undefined,
+                cause: causeFilter || undefined,
                 difficulty: difficultyFilter || undefined,
                 sort,
                 limit: PAGE_SIZE,
@@ -197,13 +206,14 @@ export default function Library() {
             setPuzzles(res.puzzles);
             setTotal(res.total);
             setAvailableMotifs(res.available_motifs);
+            setAvailableCauses(res.available_causes ?? []);
             setCorpusStats(res.stats);
         } catch (err) {
             setError(err instanceof Error ? err.message : 'Failed to load puzzles');
         } finally {
             setIsLoading(false);
         }
-    }, [username, debouncedSearch, statusFilter, difficultyFilter, motifFilter, sort, offset]);
+    }, [username, debouncedSearch, statusFilter, difficultyFilter, motifFilter, causeFilter, sort, offset]);
 
     useEffect(() => {
         fetchPuzzles();
@@ -313,6 +323,21 @@ export default function Library() {
                             <option value="">All motifs</option>
                             {availableMotifs.map(m => (
                                 <option key={m} value={m}>{m}</option>
+                            ))}
+                        </select>
+                    )}
+
+                    {/* Mistake cause — the target of the Insights "practise this" links */}
+                    {availableCauses.length > 0 && (
+                        <select
+                            value={causeFilter}
+                            onChange={(e) => setCauseFilter(e.target.value)}
+                            aria-label="Filter by mistake cause"
+                            className="bg-bg-primary border border-primary/20 rounded-sm px-3 py-1.5 text-primary focus:outline-none focus:border-primary/60"
+                        >
+                            <option value="">All causes</option>
+                            {availableCauses.map(c => (
+                                <option key={c.value} value={c.value}>{c.label}</option>
                             ))}
                         </select>
                     )}
