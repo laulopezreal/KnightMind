@@ -361,9 +361,9 @@ def test_get_openings_enforces_the_depth_floor(mock_import_games, client_with_db
             yield from _walk(child)
 
     moves = [n for n in _walk(deep.json()) if n["move_san"] != "Start"]
-    assert all(n["games_count"] >= 3 for n in moves), (
-        "a line below the applied floor survived into the response"
-    )
+    assert all(
+        n["games_count"] >= 3 for n in moves
+    ), "a line below the applied floor survived into the response"
 
     # A shallow tree is served unfiltered, and a higher request is honoured.
     shallow = client_with_db.get("/openings?username=testuser&max_ply=12&min_games=1")

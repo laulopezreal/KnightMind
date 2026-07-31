@@ -3135,9 +3135,7 @@ async def explain_rating_changes(
                         result=(
                             "Win"
                             if item["actual"] == 1.0
-                            else "Draw"
-                            if item["actual"] == 0.5
-                            else "Loss"
+                            else "Draw" if item["actual"] == 0.5 else "Loss"
                         ),
                         expected_score=round(expected, 2),
                         rating_diff=r_opp - r_self,
