@@ -328,3 +328,54 @@ async def test_use_hint_completed_session(db_session):
         await use_hint(session_id, request, db_session)
 
     assert exc_info.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_session_reports_the_focus_it_was_started_with(db_session):
+    """A resumed session must be orderable the way it was served.
+
+    The client re-fetches its puzzles on resume and restores the user's place
+    by *index*. If the focus were re-read from the URL instead of from the
+    session, navigating back without the query parameter would produce a
+    different order, the restored index would land on a different puzzle, and
+    the user would re-solve one they had already done — advancing that puzzle's
+    interval a second time.
+    """
+    request = StartSessionRequest(
+        username="testuser",
+        n=5,
+        session_data={"focus_cause": "loose_piece_awareness"},
+    )
+    started = await start_session(request, db_session)
+
+    summary = await get_session(started.session_id, db_session)
+    assert summary.focus_cause == "loose_piece_awareness"
+
+
+@pytest.mark.asyncio
+async def test_an_unfocused_session_reports_no_focus(db_session):
+    started = await start_session(
+        StartSessionRequest(username="testuser", n=5), db_session
+    )
+    summary = await get_session(started.session_id, db_session)
+    assert summary.focus_cause is None
+
+
+@pytest.mark.asyncio
+async def test_focus_does_not_disturb_other_session_data(db_session):
+    # session_data is shared with the warm-up flag; one key must not clobber
+    # the other.
+    started = await start_session(
+        StartSessionRequest(
+            username="testuser",
+            n=5,
+            session_data={"is_warmup": True, "focus_cause": "king_safety_blindness"},
+        ),
+        db_session,
+    )
+    summary = await get_session(started.session_id, db_session)
+    assert summary.focus_cause == "king_safety_blindness"
+
+    stmt = select(TrainingSession).where(TrainingSession.id == started.session_id)
+    stored = db_session.scalars(stmt).first()
+    assert stored.session_data["is_warmup"] is True

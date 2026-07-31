@@ -131,6 +131,27 @@ class DiagnosisRepository:
             )
         )
 
+    def puzzle_ids_for_cause(self, username: str, cause: str) -> set[str]:
+        """Every puzzle this user's diagnoses attribute to one cause.
+
+        A set, not a list: the caller uses it as a membership test when
+        ordering an existing candidate list, and returning an ordered result
+        would invite treating it as the queue itself. It is not — a focus
+        re-orders the trainable puzzles, it does not select them.
+
+        Same predicate as the Insights counts and the library filter:
+        correction over computed cause, analysable rows only.
+        """
+        cause_col = func.coalesce(
+            PuzzleDiagnosis.user_confirmed_cause, PuzzleDiagnosis.primary_cause
+        )
+        stmt = select(PuzzleDiagnosis.puzzle_id).where(
+            PuzzleDiagnosis.username == username,
+            PuzzleDiagnosis.status == DiagnosisStatus.OK,
+            cause_col == cause,
+        )
+        return set(self.db.scalars(stmt).all())
+
     def pending_puzzle_ids(self, username: str, limit: int | None = None) -> list[str]:
         """Puzzles with no current diagnosis, most diagnostic first.
 

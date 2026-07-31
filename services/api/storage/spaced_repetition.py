@@ -246,6 +246,7 @@ def get_adaptive_puzzles(
     n: int = 5,
     session_type: str = "standard",
     target_accuracy: float = None,
+    focus_puzzle_ids: set[str] | None = None,
 ) -> tuple[list[str], dict[str, PuzzleStats]]:
     """
     Get puzzles for the user from the candidate list, ordered by adaptive priority.
@@ -259,8 +260,25 @@ def get_adaptive_puzzles(
     For accuracy_goal sessions:
     - Prioritize puzzles with lower pass rates if user is below target
     - Prioritize puzzles with higher pass rates if user is above target
+
+    ``focus_puzzle_ids`` biases a training-pattern session. It re-orders the
+    candidates it is given and nothing else:
+
+    * It sits *after* the due/new/future tier in the sort key, so a focus can
+      never promote a not-yet-due puzzle above a due one. The caller has
+      already narrowed to the trainable set (``get_trainable_puzzle_ids``);
+      this only changes the order within it.
+    * A focus puzzle absent from ``puzzle_ids`` stays absent. Focusing on a
+      pattern with nothing due yields an ordinary session rather than an empty
+      one or an error — the pattern is a preference, not a filter.
+
+    Within one tier, focus puzzles come first in the tier's own order. That can
+    serve a focus puzzle ahead of a more-overdue one, which is the point of
+    asking for a focused session and costs nothing: every puzzle in the due
+    tier is already due, so no interval is re-anchored early.
     """
     now = datetime.now(timezone.utc)
+    focus = focus_puzzle_ids or set()
 
     # Query stats for the given puzzle IDs
     stmt = select(PuzzleStats).where(
@@ -306,7 +324,10 @@ def get_adaptive_puzzles(
                 # Normalize to -1 to 1 range
                 adaptive_score = accuracy_diff / 100.0
 
-        return (base_priority, time_factor, -adaptive_score)
+        # Tier first, focus second: the focus re-orders within a tier and can
+        # never cross one. With no focus requested every key is (…, 0, …) and
+        # the order is byte-identical to an unfocused session.
+        return (base_priority, 0 if pid in focus else 1, time_factor, -adaptive_score)
 
     sorted_pids = sorted(puzzle_ids, key=sort_key)
     return sorted_pids[:n], all_stats

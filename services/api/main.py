@@ -1278,6 +1278,14 @@ async def get_due_puzzles_endpoint(
     motif: str = Query(
         None, description="Filter puzzles by specific motif (e.g., 'Fork', 'Pin')"
     ),
+    focus_cause: str = Query(
+        None,
+        description=(
+            "Bias the order toward puzzles diagnosed with this mistake cause. "
+            "Unlike `motif` this never narrows the session — it re-orders the "
+            "puzzles that are already trainable."
+        ),
+    ),
     db: Session = Depends(get_db),
     account: Account | None = Depends(require_account),
 ):
@@ -1285,6 +1293,12 @@ async def get_due_puzzles_endpoint(
     Get puzzles due for review, followed by new puzzles.
     Supports adaptive selection based on session type and target accuracy.
     Optionally filter by specific chess motif.
+
+    ``focus_cause`` is opt-in and changes nothing unless passed: a user who
+    never asks for a focused session gets the same queue as before. It is a
+    bias rather than a filter so that clicking "train this pattern" on a day
+    with nothing of that pattern due gives an ordinary session instead of an
+    error.
     """
     assert_owns_username(account, username, db)
     puzzle_repository = PuzzleRepository(db)
@@ -1323,9 +1337,18 @@ async def get_due_puzzles_endpoint(
     #    See get_trainable_puzzle_ids.
     puzzle_ids = get_trainable_puzzle_ids(db, username, puzzle_ids)
 
-    # 4. Get prioritized IDs and their stats using adaptive selection
+    # 4. Resolve the focus to puzzle ids, if one was asked for. Done *after*
+    #    the trainable narrowing above so the focus can only reorder what
+    #    survived it — a focus must never make a not-yet-due puzzle due.
+    focus_ids: set[str] = set()
+    if focus_cause:
+        # `username` is already canonical — the Username type folds case at the
+        # request boundary — so no re-folding here.
+        focus_ids = DiagnosisRepository(db).puzzle_ids_for_cause(username, focus_cause)
+
+    # 5. Get prioritized IDs and their stats using adaptive selection
     due_ids, all_stats = get_adaptive_puzzles(
-        db, username, puzzle_ids, n, session_type, target_accuracy
+        db, username, puzzle_ids, n, session_type, target_accuracy, focus_ids
     )
 
     # 3. Load content and merge with stats
@@ -2248,6 +2271,72 @@ async def get_mistake_patterns(
     return MistakePatternsResponse(
         username=username,
         patterns=patterns,
+        below_threshold=below,
+        pending=repo.pending_count(username),
+    )
+
+
+class TodaysFocus(BaseModel):
+    cause: str
+    name: str
+    description: str
+    mistakes: int
+    recent_mistakes: int
+    accuracy: float | None = None
+    priority: float = 0.0
+    # The numbers the choice rests on, so the user can disagree on evidence.
+    rationale: str
+    runner_up: str | None = None
+
+
+class TodaysFocusResponse(BaseModel):
+    """The one habit worth working on today, or an honest absence of one.
+
+    ``focus`` is None whenever no pattern has come up often enough to be called
+    a tendency. The card renders that as "not yet" rather than falling back to
+    whatever happens to be most frequent — a plan built on two occurrences is a
+    guess, and this product does not dress guesses as findings.
+    """
+
+    username: str
+    focus: TodaysFocus | None = None
+    below_threshold: int = 0
+    pending: int = 0
+
+
+@app.get("/users/{username}/todays-focus", response_model=TodaysFocusResponse)
+async def get_todays_focus(
+    username: Username,
+    db: Session = Depends(get_db),
+    account: Account | None = Depends(require_account),
+):
+    """What to train today, and why.
+
+    Reads the same cause breakdown the Insights cards use; it computes nothing
+    the other surfaces would disagree with.
+    """
+    from services.api.diagnosis.patterns import identify
+    from services.api.diagnosis.planner import plan_focus
+
+    assert_owns_username(account, username, db)
+
+    repo = DiagnosisRepository(db)
+    stats = repo.cause_breakdown(username)
+    chosen = plan_focus(stats)
+
+    # Counted exactly as the patterns endpoint counts it: a cause with no
+    # written pattern — "unclassified" above all — is not a habit awaiting more
+    # evidence, so it must not read as "nearly a pattern" here while the card
+    # beside it correctly ignores it.
+    below = sum(
+        1
+        for s in stats
+        if s.insufficient_data and identify(s.cause, s.dominant_phase) is not None
+    )
+
+    return TodaysFocusResponse(
+        username=username,
+        focus=TodaysFocus(**asdict(chosen)) if chosen else None,
         below_threshold=below,
         pending=repo.pending_count(username),
     )

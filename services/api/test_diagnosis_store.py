@@ -1438,3 +1438,99 @@ class TestMistakePatternsEndpoint:
 
         body = client.get(f"/users/{USER}/mistake-patterns").json()
         assert body["patterns"] == []
+
+
+class TestTodaysFocusEndpoint:
+    """The recommendation surface. Its main job is knowing when to say nothing."""
+
+    def _diagnosed(self, db, puzzle_id, cause, phase="middlegame", ply=41):
+        _puzzle(db, puzzle_id=puzzle_id, ply=ply)
+        DiagnosisRepository(db).upsert(
+            DiagnosisWrite(
+                puzzle_id=puzzle_id, username=USER, primary_cause=cause, phase=phase
+            )
+        )
+        db.commit()
+
+    def _many(self, db, cause, n, phase="middlegame", ply_base=41):
+        # ply_base separates causes: puzzles are unique on
+        # (username, source_game_id, ply), so two causes seeded from the same
+        # base would collide rather than coexist.
+        for i in range(n):
+            self._diagnosed(
+                db, f"{cause[:4]}{i}", cause, phase=phase, ply=ply_base + i * 2
+            )
+
+    def test_recommends_the_dominant_pattern(self, client, db_session):
+        self._many(db_session, "loose_piece_awareness", 6)
+
+        body = client.get(f"/users/{USER}/todays-focus").json()
+        assert body["focus"]["cause"] == "loose_piece_awareness"
+        assert body["focus"]["name"] == "Loose Piece Syndrome"
+        assert "6 diagnosed mistakes" in body["focus"]["rationale"]
+
+    def test_recommends_nothing_before_a_pattern_is_established(
+        self, client, db_session
+    ):
+        self._many(db_session, "loose_piece_awareness", 2)
+
+        body = client.get(f"/users/{USER}/todays-focus").json()
+        assert body["focus"] is None
+        # The count is still reported: "not yet" is a different message from
+        # "nothing found", and the card needs to tell them apart.
+        assert body["below_threshold"] == 1
+
+    def test_recommends_nothing_for_an_untouched_account(self, client, db_session):
+        body = client.get(f"/users/{USER}/todays-focus").json()
+        assert body["focus"] is None
+        assert body["below_threshold"] == 0
+
+    def test_agrees_with_the_patterns_endpoint(self, client, db_session):
+        # Two surfaces, one answer. A focus that disagreed with the ranked list
+        # shown right next to it would read as a bug in whichever the user
+        # trusted less.
+        self._many(db_session, "loose_piece_awareness", 4)
+        self._many(db_session, "king_safety_blindness", 9, ply_base=101)
+
+        patterns = client.get(f"/users/{USER}/mistake-patterns").json()["patterns"]
+        focus = client.get(f"/users/{USER}/todays-focus").json()["focus"]
+        assert focus["cause"] == patterns[0]["cause"]
+        assert focus["priority"] == patterns[0]["priority"]
+        assert focus["runner_up"] == patterns[1]["name"]
+
+    def test_is_scoped_to_the_requesting_user(self, client, db_session):
+        _puzzle(db_session, puzzle_id="theirs", ply=41)
+        DiagnosisRepository(db_session).upsert(
+            DiagnosisWrite(
+                puzzle_id="theirs",
+                username="other",
+                primary_cause="king_safety_blindness",
+            )
+        )
+        db_session.commit()
+
+        body = client.get(f"/users/{USER}/todays-focus").json()
+        assert body["focus"] is None
+
+    def test_counts_below_threshold_the_way_the_patterns_card_does(
+        self, client, db_session
+    ):
+        # An unclassified cause is not a habit awaiting more evidence, so it
+        # must not make this card say "nothing has recurred often enough yet"
+        # — that reads as progress toward a pattern that will never form.
+        from services.api.diagnosis.causes import UNCLASSIFIED
+
+        self._many(db_session, UNCLASSIFIED, 2)
+
+        focus = client.get(f"/users/{USER}/todays-focus").json()
+        patterns = client.get(f"/users/{USER}/mistake-patterns").json()
+        assert focus["below_threshold"] == patterns["below_threshold"] == 0
+
+    def test_still_counts_a_thin_but_nameable_cause(self, client, db_session):
+        # The other side of the same rule: a real cause below the threshold is
+        # genuinely on its way to becoming a pattern.
+        self._many(db_session, "loose_piece_awareness", 2)
+
+        focus = client.get(f"/users/{USER}/todays-focus").json()
+        patterns = client.get(f"/users/{USER}/mistake-patterns").json()
+        assert focus["below_threshold"] == patterns["below_threshold"] == 1

@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { getMistakeCauses, getMistakePatterns, getMotifPerformance, getMotifTrends, getTrickyPuzzles, type MistakeCausesResponse, type MistakePatternsResponse, type MotifPerformanceResponse, type TrendsResponse, type TrickyPuzzlesResponse } from '../api/users';
+import { getMistakeCauses, getMistakePatterns, getTodaysFocus, getMotifPerformance, getMotifTrends, getTrickyPuzzles, type MistakeCausesResponse, type MistakePatternsResponse, type TodaysFocusResponse, type MotifPerformanceResponse, type TrendsResponse, type TrickyPuzzlesResponse } from '../api/users';
 import { useChessUsername } from '../context/ChessUsernameContext';
 import { TacticalRadar } from '../components/TacticalRadar';
 import { MistakePatternsCard } from '../components/MistakePatternsCard';
+import { TodaysFocusCard } from '../components/TodaysFocusCard';
 import { TopMistakeCausesCard } from '../components/TopMistakeCausesCard';
 import { MotifTrends } from '../components/MotifTrends';
 import { RecentlyTrickyCard } from '../components/RecentlyTrickyCard';
@@ -21,6 +22,7 @@ export default function Insights() {
     const [trickyPuzzles, setTrickyPuzzles] = useState<TrickyPuzzlesResponse | null>(null);
     const [causes, setCauses] = useState<MistakeCausesResponse | null>(null);
     const [patterns, setPatterns] = useState<MistakePatternsResponse | null>(null);
+    const [focus, setFocus] = useState<TodaysFocusResponse | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const hasLoadedRef = useRef(false);
@@ -56,10 +58,11 @@ export default function Insights() {
             ]);
 
             // Supplementary: fail silently — page works without them
-            const [tricky, causeData, patternData] = await Promise.all([
+            const [tricky, causeData, patternData, focusData] = await Promise.all([
                 getTrickyPuzzles(username, 5).catch(() => null),
                 getMistakeCauses(username).catch(() => null),
                 getMistakePatterns(username).catch(() => null),
+                getTodaysFocus(username).catch(() => null),
             ]);
 
             if (token.isStale()) return;
@@ -68,6 +71,7 @@ export default function Insights() {
             setTrickyPuzzles(tricky);
             setCauses(causeData);
             setPatterns(patternData);
+            setFocus(focusData);
             hasLoadedRef.current = true;
         } catch (err) {
             if (token.isStale()) return;
@@ -145,6 +149,11 @@ export default function Insights() {
                     {/* Named habits lead: "Loose Piece Syndrome, and here is what
                         to change" is more actionable than the cause breakdown
                         beneath it, which is the same information unnamed. */}
+                    {/* The recommendation comes before the description of the
+                        habits: a user who reads one card should read the one
+                        that says what to do. */}
+                    {focus && <TodaysFocusCard data={focus} />}
+
                     {patterns && <MistakePatternsCard data={patterns} />}
 
                     {hasCauses && <TopMistakeCausesCard data={causes} />}

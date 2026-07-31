@@ -288,3 +288,115 @@ def test_due_puzzles_no_puzzles_returns_404(client):
     response = client.get("/puzzles/due?username=missinguser&n=2")
     assert response.status_code == 404
     assert "no puzzles found" in response.json()["detail"].lower()
+
+
+class TestFocusCauseParameter:
+    """`focus_cause` on /puzzles/due biases a session; it must not filter it.
+
+    The distinction matters at the endpoint boundary because `motif` — the
+    parameter sitting next to it — *does* filter, and 404s when nothing
+    matches. A user clicking "train this pattern" on a day with nothing of that
+    pattern due should get their normal session, not an error.
+    """
+
+    def _diagnose(self, db, puzzle_id, cause):
+        from services.api.models import DiagnosisStatus, PuzzleDiagnosis
+
+        db.add(
+            PuzzleDiagnosis(
+                puzzle_id=puzzle_id,
+                username="testuser",
+                status=DiagnosisStatus.OK,
+                primary_cause=cause,
+                source="rules",
+                evidence_json=[],
+            )
+        )
+        db.commit()
+
+    def _due(self, db, pid, days_ago):
+        db.add(
+            PuzzleStats(
+                puzzle_id=pid,
+                username="testuser",
+                attempts=1,
+                pass_count=1,
+                last_result="pass",
+                interval_days=1,
+                ease_factor=2.0,
+                next_due_at=datetime.now(timezone.utc) - timedelta(days=days_ago),
+            )
+        )
+        db.commit()
+
+    def test_serves_the_focused_puzzle_first(self, client, db_session, seed_puzzles):
+        self._due(db_session, "p1", 10)
+        self._due(db_session, "p2", 1)
+        self._diagnose(db_session, "p2", "king_safety_blindness")
+
+        plain = client.get("/puzzles/due?username=testuser&n=5").json()
+        assert plain["puzzles"][0]["id"] == "p1"
+
+        focused = client.get(
+            "/puzzles/due?username=testuser&n=5&focus_cause=king_safety_blindness"
+        ).json()
+        assert focused["puzzles"][0]["id"] == "p2"
+
+    def test_returns_a_normal_session_when_the_focus_has_nothing_due(
+        self, client, db_session, seed_puzzles
+    ):
+        self._due(db_session, "p1", 3)
+        self._diagnose(db_session, "p1", "loose_piece_awareness")
+
+        focused = client.get(
+            "/puzzles/due?username=testuser&n=5&focus_cause=endgame_technique_gap"
+        )
+        assert focused.status_code == 200
+        plain = client.get("/puzzles/due?username=testuser&n=5").json()
+        assert [p["id"] for p in focused.json()["puzzles"]] == [
+            p["id"] for p in plain["puzzles"]
+        ]
+
+    def test_an_unknown_cause_is_not_an_error(self, client, db_session, seed_puzzles):
+        # No allow-list check on purpose: an unknown cause simply matches no
+        # puzzles, which the bias already handles. Rejecting it would turn a
+        # stale bookmark into a broken session.
+        res = client.get("/puzzles/due?username=testuser&n=5&focus_cause=not_a_cause")
+        assert res.status_code == 200
+        assert len(res.json()["puzzles"]) > 0
+
+    def test_never_serves_more_than_the_session_size(
+        self, client, db_session, seed_puzzles
+    ):
+        for pid in ("p1", "p2", "p3"):
+            self._due(db_session, pid, 2)
+            self._diagnose(db_session, pid, "loose_piece_awareness")
+
+        body = client.get(
+            "/puzzles/due?username=testuser&n=2&focus_cause=loose_piece_awareness"
+        ).json()
+        assert len(body["puzzles"]) == 2
+
+    def test_does_not_reach_into_another_users_diagnoses(
+        self, client, db_session, seed_puzzles
+    ):
+        from services.api.models import DiagnosisStatus, PuzzleDiagnosis
+
+        self._due(db_session, "p1", 10)
+        self._due(db_session, "p2", 1)
+        db_session.add(
+            PuzzleDiagnosis(
+                puzzle_id="p2",
+                username="someone_else",
+                status=DiagnosisStatus.OK,
+                primary_cause="king_safety_blindness",
+                source="rules",
+                evidence_json=[],
+            )
+        )
+        db_session.commit()
+
+        focused = client.get(
+            "/puzzles/due?username=testuser&n=5&focus_cause=king_safety_blindness"
+        ).json()
+        assert focused["puzzles"][0]["id"] == "p1"
