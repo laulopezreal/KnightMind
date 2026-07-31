@@ -19,12 +19,14 @@ const mockGetMotifPerformance = vi.fn();
 const mockGetMotifTrends = vi.fn();
 const mockGetTrickyPuzzles = vi.fn();
 const mockGetMistakeCauses = vi.fn();
+const mockGetMistakePatterns = vi.fn();
 
 vi.mock('../api/users', () => ({
     getMotifPerformance: (...a: unknown[]) => mockGetMotifPerformance(...a),
     getMotifTrends: (...a: unknown[]) => mockGetMotifTrends(...a),
     getTrickyPuzzles: (...a: unknown[]) => mockGetTrickyPuzzles(...a),
     getMistakeCauses: (...a: unknown[]) => mockGetMistakeCauses(...a),
+    getMistakePatterns: (...a: unknown[]) => mockGetMistakePatterns(...a),
 }));
 
 vi.mock('../components/TacticalRadar', () => ({
@@ -49,6 +51,7 @@ describe('Insights data states', () => {
       pending: 0,
       min_for_ranking: 4,
     });
+    mockGetMistakePatterns.mockResolvedValue({ username: 'testuser', patterns: [], below_threshold: 0, pending: 0 });
     });
     afterEach(() => setOnline(true));
 

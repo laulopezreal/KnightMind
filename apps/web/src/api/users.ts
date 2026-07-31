@@ -183,3 +183,29 @@ export async function getMistakeCauses(username: string): Promise<MistakeCausesR
         `/users/${encodeURIComponent(username)}/mistake-causes`
     );
 }
+
+export interface MistakePattern {
+    cause: string;
+    name: string;
+    description: string;
+    mistakes: number;
+    recent_mistakes: number;
+    dominant_phase?: string | null;
+    accuracy?: number | null;
+    priority: number;
+}
+
+export interface MistakePatternsResponse {
+    username: string;
+    patterns: MistakePattern[];
+    below_threshold: number;
+    pending: number;
+}
+
+export async function getMistakePatterns(
+    username: string
+): Promise<MistakePatternsResponse> {
+    return await request<MistakePatternsResponse>(
+        `/users/${encodeURIComponent(username)}/mistake-patterns`
+    );
+}

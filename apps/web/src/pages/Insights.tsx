@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { getMistakeCauses, getMotifPerformance, getMotifTrends, getTrickyPuzzles, type MistakeCausesResponse, type MotifPerformanceResponse, type TrendsResponse, type TrickyPuzzlesResponse } from '../api/users';
+import { getMistakeCauses, getMistakePatterns, getMotifPerformance, getMotifTrends, getTrickyPuzzles, type MistakeCausesResponse, type MistakePatternsResponse, type MotifPerformanceResponse, type TrendsResponse, type TrickyPuzzlesResponse } from '../api/users';
 import { useChessUsername } from '../context/ChessUsernameContext';
 import { TacticalRadar } from '../components/TacticalRadar';
+import { MistakePatternsCard } from '../components/MistakePatternsCard';
 import { TopMistakeCausesCard } from '../components/TopMistakeCausesCard';
 import { MotifTrends } from '../components/MotifTrends';
 import { RecentlyTrickyCard } from '../components/RecentlyTrickyCard';
@@ -19,6 +20,7 @@ export default function Insights() {
     const [trends, setTrends] = useState<TrendsResponse | null>(null);
     const [trickyPuzzles, setTrickyPuzzles] = useState<TrickyPuzzlesResponse | null>(null);
     const [causes, setCauses] = useState<MistakeCausesResponse | null>(null);
+    const [patterns, setPatterns] = useState<MistakePatternsResponse | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const hasLoadedRef = useRef(false);
@@ -54,9 +56,10 @@ export default function Insights() {
             ]);
 
             // Supplementary: fail silently — page works without them
-            const [tricky, causeData] = await Promise.all([
+            const [tricky, causeData, patternData] = await Promise.all([
                 getTrickyPuzzles(username, 5).catch(() => null),
                 getMistakeCauses(username).catch(() => null),
+                getMistakePatterns(username).catch(() => null),
             ]);
 
             if (token.isStale()) return;
@@ -64,6 +67,7 @@ export default function Insights() {
             setTrends(trendsData);
             setTrickyPuzzles(tricky);
             setCauses(causeData);
+            setPatterns(patternData);
             hasLoadedRef.current = true;
         } catch (err) {
             if (token.isStale()) return;
@@ -138,6 +142,11 @@ export default function Insights() {
                         cause is actionable in a way a motif label is not — "you
                         don't scan for loose pieces" tells you what to change,
                         "fork: 40%" does not. */}
+                    {/* Named habits lead: "Loose Piece Syndrome, and here is what
+                        to change" is more actionable than the cause breakdown
+                        beneath it, which is the same information unnamed. */}
+                    {patterns && <MistakePatternsCard data={patterns} />}
+
                     {hasCauses && <TopMistakeCausesCard data={causes} />}
 
                     {/* Tier 1: Tactical Radar — full width, visually dominant */}
