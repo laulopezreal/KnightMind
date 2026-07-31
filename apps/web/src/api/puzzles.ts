@@ -133,7 +133,8 @@ export async function getDuePuzzles(
     n: number = 5,
     sessionType: string = "standard",
     targetAccuracy?: number,
-    motif?: string
+    motif?: string,
+    focusCause?: string
 ): Promise<DuePuzzlesResponse> {
     const params = new URLSearchParams({
         username,
@@ -147,6 +148,13 @@ export async function getDuePuzzles(
 
     if (motif) {
         params.append('motif', motif);
+    }
+
+    // A bias, not a filter: unlike `motif` this never narrows the session, so
+    // a focus with nothing due today returns the ordinary queue rather than a
+    // 404. See get_adaptive_puzzles.
+    if (focusCause) {
+        params.append('focus_cause', focusCause);
     }
 
     try {

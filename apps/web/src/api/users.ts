@@ -209,3 +209,32 @@ export async function getMistakePatterns(
         `/users/${encodeURIComponent(username)}/mistake-patterns`
     );
 }
+
+// --- Today's focus (training planner) ---
+
+export interface TodaysFocus {
+    cause: string;
+    name: string;
+    description: string;
+    mistakes: number;
+    recent_mistakes: number;
+    accuracy?: number | null;
+    priority: number;
+    /** The numbers the recommendation rests on, so it can be argued with. */
+    rationale: string;
+    runner_up?: string | null;
+}
+
+export interface TodaysFocusResponse {
+    username: string;
+    /** Null whenever no pattern has recurred enough to recommend. */
+    focus: TodaysFocus | null;
+    below_threshold: number;
+    pending: number;
+}
+
+export async function getTodaysFocus(username: string): Promise<TodaysFocusResponse> {
+    return await request<TodaysFocusResponse>(
+        `/users/${encodeURIComponent(username)}/todays-focus`
+    );
+}

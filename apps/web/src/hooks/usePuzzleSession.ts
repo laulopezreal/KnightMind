@@ -27,6 +27,8 @@ export interface UsePuzzleSessionOptions {
     targetTimeMinutes: number;
     warmupMode: boolean;
     motifFilter: string | null;
+    /** Mistake cause to bias the queue toward. Never narrows it. */
+    focusCause: string | null;
     userStatus: UserStatus | null;
     timer: Pick<UsePuzzleTimerReturn, 'startSessionTimer' | 'cleanup' | 'currentPuzzleTime' | 'puzzleStartTime'>;
     checkAchievements: (params: { streak: number; currentPuzzleTime: number }) => void;
@@ -125,6 +127,7 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
         targetTimeMinutes,
         warmupMode,
         motifFilter,
+        focusCause,
         userStatus,
         timer,
         checkAchievements,
@@ -243,6 +246,7 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
                         session.session_type || 'standard',
                         session.target_accuracy,
                         motifFilter || undefined,
+                        focusCause || undefined,
                     );
                     setPuzzles(response.puzzles);
 
@@ -463,6 +467,7 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
                 sessionType,
                 sessionType === 'accuracy_goal' ? targetAccuracy : undefined,
                 motifFilter || undefined,
+                focusCause || undefined,
             );
             puzzles = response.puzzles;
         } catch (puzErr) {
@@ -522,6 +527,7 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
         targetTimeMinutes,
         warmupMode,
         motifFilter,
+        focusCause,
         setActiveSessionId,
         setStatus,
         timer.startSessionTimer,

@@ -18,6 +18,7 @@ const mockGetMotifPerformance = vi.fn();
 const mockGetMotifTrends = vi.fn();
 const mockGetTrickyPuzzles = vi.fn();
 const mockGetMistakeCauses = vi.fn();
+const mockGetTodaysFocus = vi.fn();
 const mockGetMistakePatterns = vi.fn();
 
 vi.mock('../api/users', () => ({
@@ -26,6 +27,7 @@ vi.mock('../api/users', () => ({
   getTrickyPuzzles: (...args: unknown[]) => mockGetTrickyPuzzles(...args),
   getMistakeCauses: (...args: unknown[]) => mockGetMistakeCauses(...args),
     getMistakePatterns: (...a: unknown[]) => mockGetMistakePatterns(...a),
+  getTodaysFocus: (...args: unknown[]) => mockGetTodaysFocus(...args),
 }));
 
 vi.mock('../components/TacticalRadar', () => ({
@@ -59,6 +61,7 @@ describe('Insights', () => {
       min_for_ranking: 4,
     });
     mockGetMistakePatterns.mockResolvedValue({ username: 'testuser', patterns: [], below_threshold: 0, pending: 0 });
+    mockGetTodaysFocus.mockResolvedValue({ username: 'testuser', focus: null, below_threshold: 0, pending: 0 });
   });
 
   it('should redirect to home when no username', () => {

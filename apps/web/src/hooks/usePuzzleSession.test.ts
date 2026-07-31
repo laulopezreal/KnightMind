@@ -99,6 +99,7 @@ function makeOpts(overrides: Partial<UsePuzzleSessionOptions> = {}): UsePuzzleSe
         targetTimeMinutes: 10,
         warmupMode: false,
         motifFilter: null,
+        focusCause: null,
         userStatus: mockUserStatus,
         timer: {
             startSessionTimer: vi.fn(),

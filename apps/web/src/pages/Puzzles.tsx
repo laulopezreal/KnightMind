@@ -72,6 +72,9 @@ export default function Puzzles() {
     // Get motif filter and warmup mode from URL query params
     const [searchParams] = useSearchParams();
     const motifFilter = searchParams.get('motif');
+    // A bias rather than a filter, so — unlike motif — it never leaves the user
+    // in a dead-end empty session and needs no escape hatch.
+    const focusCause = searchParams.get('focus_cause');
     const isWarmupMode = searchParams.get('warmup') === 'true';
 
     // Warmup state
@@ -128,6 +131,7 @@ export default function Puzzles() {
         targetTimeMinutes,
         warmupMode,
         motifFilter,
+        focusCause,
         userStatus,
         timer,
         checkAchievements,

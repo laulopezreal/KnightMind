@@ -19,6 +19,7 @@ const mockGetMotifPerformance = vi.fn();
 const mockGetMotifTrends = vi.fn();
 const mockGetTrickyPuzzles = vi.fn();
 const mockGetMistakeCauses = vi.fn();
+const mockGetTodaysFocus = vi.fn();
 const mockGetMistakePatterns = vi.fn();
 
 vi.mock('../api/users', () => ({
@@ -26,6 +27,7 @@ vi.mock('../api/users', () => ({
     getMotifTrends: (...a: unknown[]) => mockGetMotifTrends(...a),
     getTrickyPuzzles: (...a: unknown[]) => mockGetTrickyPuzzles(...a),
     getMistakeCauses: (...a: unknown[]) => mockGetMistakeCauses(...a),
+    getTodaysFocus: (...a: unknown[]) => mockGetTodaysFocus(...a),
     getMistakePatterns: (...a: unknown[]) => mockGetMistakePatterns(...a),
 }));
 
@@ -51,6 +53,12 @@ describe('Insights data states', () => {
       pending: 0,
       min_for_ranking: 4,
     });
+        mockGetTodaysFocus.mockResolvedValue({
+            username: 'testuser',
+            focus: null,
+            below_threshold: 0,
+            pending: 0,
+        });
     mockGetMistakePatterns.mockResolvedValue({ username: 'testuser', patterns: [], below_threshold: 0, pending: 0 });
     });
     afterEach(() => setOnline(true));
