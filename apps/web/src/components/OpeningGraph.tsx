@@ -203,6 +203,15 @@ export function OpeningGraph({ data, onNodeHover, onNodeHoverEnd, onNodeSelect, 
   const focusedKeyRef = useRef<string | null>(null);
   /** True once the user has zoomed or panned by hand, rather than us fitting. */
   const userAdjustedRef = useRef(false);
+  /** True while one of our own fits is being applied.
+   *
+   *  d3-zoom keeps a gesture alive on the element for 150ms after the last
+   *  wheel notch, and reuses it for any transform applied in that window —
+   *  including ours, which then arrives carrying the wheel's `sourceEvent`.
+   *  Read literally that says "the user chose this view", so clicking Fit
+   *  straight after wheel-zooming re-set the flag it had just cleared and
+   *  resize-refitting stayed dead for the rest of the mount. */
+  const applyingFitRef = useRef(false);
   /** True once a tree has been built here, so a rebuild is told apart from a
    *  first build. Inferring it from the expanded-key set was wrong: collapsing
    *  the last open node empties the set, and the next refresh then re-expanded
@@ -622,8 +631,17 @@ export function OpeningGraph({ data, onNodeHover, onNodeHoverEnd, onNodeSelect, 
         const transform = d3.zoomIdentity.translate(tx, ty).scale(k);
 
         const target = d3.select(svgEl!);
-        (animate && !reducedMotion ? target.transition().duration(500) : target)
-          .call(zoom.transform as never, transform);
+        applyingFitRef.current = true;
+        if (animate && !reducedMotion) {
+          // Cleared on interrupt as well as end, so a real gesture during the
+          // animation resumes marking the view as the user's from that point.
+          target.transition().duration(500)
+            .call(zoom.transform as never, transform)
+            .on('end interrupt', () => { applyingFitRef.current = false; });
+        } else {
+          target.call(zoom.transform as never, transform);
+          applyingFitRef.current = false;
+        }
       }
       fitRef.current = fit;
 
@@ -658,7 +676,7 @@ export function OpeningGraph({ data, onNodeHover, onNodeHoverEnd, onNodeSelect, 
           // `sourceEvent` is null for programmatic transforms (our own fit) and
           // set for real gestures, which is what distinguishes "the user chose
           // this view" from "we placed it".
-          if (event.sourceEvent) userAdjustedRef.current = true;
+          if (event.sourceEvent && !applyingFitRef.current) userAdjustedRef.current = true;
         })
         .on('end', () => d3.select(svgEl).style('cursor', 'grab'));
 
