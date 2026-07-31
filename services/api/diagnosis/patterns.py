@@ -10,6 +10,13 @@ between runs makes Insights feel unreliable — the same weakness would be calle
 something different each week. The AI stage may personalise the *explanation* on
 an individual diagnosis; the pattern's identity stays fixed.
 
+Stability has a second half the table alone does not give you. A phase-specific
+name is only selected when that phase holds a strict majority of the cause's
+diagnoses (see ``_dominant`` in the diagnosis repository) — otherwise the
+general name is used. Keying on a plurality would have reintroduced the drift
+from the data side: at 4-3 a single new puzzle would rename a user's weakness
+with no explanation.
+
 No new tables. At this corpus size the grouping is a few hundred rows and is
 computed on demand from ``puzzle_diagnoses``, the same way the cause breakdown
 is. See the note at the bottom for what would justify persisting it.

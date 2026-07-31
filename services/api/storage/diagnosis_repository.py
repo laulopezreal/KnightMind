@@ -397,10 +397,20 @@ class DiagnosisRepository:
 
 
 def _dominant(phases: dict[str, int]) -> str | None:
-    """The single most common phase, or None when nothing leads."""
+    """The phase a cause genuinely concentrates in, or None.
+
+    Requires a strict majority, not a plurality. A plurality is too fragile for
+    what this drives: it is rendered as "mostly middlegame" and it selects the
+    pattern's *name*, so at 4-3 a single new puzzle would flip a user's named
+    weakness from "King Safety Blind Spot" to "Back Rank Neglect" with no
+    explanation — the same week-to-week drift that keeping names out of the
+    model was meant to prevent.
+
+    Above half, the claim is true and stable. Below it, saying nothing is both
+    more honest and less jumpy.
+    """
     if not phases:
         return None
-    ranked = sorted(phases.items(), key=lambda kv: (-kv[1], kv[0]))
-    if len(ranked) > 1 and ranked[0][1] == ranked[1][1]:
-        return None
-    return ranked[0][0]
+    total = sum(phases.values())
+    phase, count = max(phases.items(), key=lambda kv: (kv[1], kv[0]))
+    return phase if count * 2 > total else None

@@ -1222,6 +1222,42 @@ class TestMistakeCausesAggregate:
         cause = client.get(f"/users/{USER}/mistake-causes").json()["causes"][0]
         assert cause["dominant_phase"] is None
 
+    def test_a_plurality_is_not_enough_to_name_a_phase(self, client, db_session):
+        """Regression: a plurality flipped the pattern's *name* on one puzzle.
+        At 2-1-1 nothing is "mostly" anything, and claiming otherwise makes a
+        user's named weakness change week to week for no visible reason."""
+        self._diagnosed(db_session, "a0", "loose_piece_awareness", phase="middlegame")
+        self._diagnosed(
+            db_session, "a1", "loose_piece_awareness", phase="middlegame", ply=43
+        )
+        self._diagnosed(
+            db_session, "a2", "loose_piece_awareness", phase="opening", ply=45
+        )
+        self._diagnosed(
+            db_session, "a3", "loose_piece_awareness", phase="endgame", ply=47
+        )
+
+        cause = client.get(f"/users/{USER}/mistake-causes").json()["causes"][0]
+        assert cause["dominant_phase"] is None
+
+    def test_exactly_half_is_not_a_majority(self, client, db_session):
+        self._diagnosed(db_session, "a0", "loose_piece_awareness", phase="middlegame")
+        self._diagnosed(
+            db_session, "a1", "loose_piece_awareness", phase="middlegame", ply=43
+        )
+        self._diagnosed(
+            db_session, "a2", "loose_piece_awareness", phase="opening", ply=45
+        )
+        self._diagnosed(
+            db_session, "a3", "loose_piece_awareness", phase="endgame", ply=47
+        )
+        self._diagnosed(
+            db_session, "a4", "loose_piece_awareness", phase="opening", ply=49
+        )
+
+        cause = client.get(f"/users/{USER}/mistake-causes").json()["causes"][0]
+        assert cause["dominant_phase"] is None
+
     def test_a_clear_majority_names_the_phase(self, client, db_session):
         for i in range(3):
             self._diagnosed(
