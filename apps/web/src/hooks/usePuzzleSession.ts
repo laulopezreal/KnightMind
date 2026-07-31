@@ -17,6 +17,24 @@ import type { UsePuzzleTimerReturn } from './usePuzzleTimer';
 export type PuzzleStatus = 'solving' | 'correct' | 'incorrect' | 'revealed';
 export type SessionState = 'idle' | 'loading' | 'active' | 'completing' | 'completed' | 'error';
 
+/**
+ * What to persist alongside a session so it can be resumed faithfully.
+ *
+ * The focus goes here rather than being re-read from the URL on resume: the
+ * order a focused session was served in has to survive the user navigating
+ * back without the query parameter, or the restored index lands on a
+ * different puzzle.
+ */
+function buildSessionData(
+    warmupMode: boolean,
+    focusCause: string | null
+): Record<string, unknown> | undefined {
+    const data: Record<string, unknown> = {};
+    if (warmupMode) data.is_warmup = true;
+    if (focusCause) data.focus_cause = focusCause;
+    return Object.keys(data).length > 0 ? data : undefined;
+}
+
 export interface UsePuzzleSessionOptions {
     activeSessionId: string | null;
     setActiveSessionId: (id: string | null) => void;
@@ -246,7 +264,12 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
                         session.session_type || 'standard',
                         session.target_accuracy,
                         motifFilter || undefined,
-                        focusCause || undefined,
+                        // The session's own focus, not the URL's. A resumed
+                        // session must be ordered the way it was served, or
+                        // the restored index points at a different puzzle and
+                        // the user re-solves one — advancing its interval
+                        // twice.
+                        session.focus_cause || undefined,
                     );
                     setPuzzles(response.puzzles);
 
@@ -495,7 +518,7 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
                 sessionType,
                 targetAccuracyParam,
                 targetTimeMinutesParam,
-                warmupMode ? { is_warmup: true } : undefined,
+                buildSessionData(warmupMode, focusCause),
             );
             setActiveSessionId(session_id);
 

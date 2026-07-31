@@ -1511,3 +1511,26 @@ class TestTodaysFocusEndpoint:
 
         body = client.get(f"/users/{USER}/todays-focus").json()
         assert body["focus"] is None
+
+    def test_counts_below_threshold_the_way_the_patterns_card_does(
+        self, client, db_session
+    ):
+        # An unclassified cause is not a habit awaiting more evidence, so it
+        # must not make this card say "nothing has recurred often enough yet"
+        # — that reads as progress toward a pattern that will never form.
+        from services.api.diagnosis.causes import UNCLASSIFIED
+
+        self._many(db_session, UNCLASSIFIED, 2)
+
+        focus = client.get(f"/users/{USER}/todays-focus").json()
+        patterns = client.get(f"/users/{USER}/mistake-patterns").json()
+        assert focus["below_threshold"] == patterns["below_threshold"] == 0
+
+    def test_still_counts_a_thin_but_nameable_cause(self, client, db_session):
+        # The other side of the same rule: a real cause below the threshold is
+        # genuinely on its way to becoming a pattern.
+        self._many(db_session, "loose_piece_awareness", 2)
+
+        focus = client.get(f"/users/{USER}/todays-focus").json()
+        patterns = client.get(f"/users/{USER}/mistake-patterns").json()
+        assert focus["below_threshold"] == patterns["below_threshold"] == 1

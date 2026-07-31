@@ -1312,9 +1312,9 @@ async def get_due_puzzles_endpoint(
     #    survived it — a focus must never make a not-yet-due puzzle due.
     focus_ids: set[str] = set()
     if focus_cause:
-        focus_ids = DiagnosisRepository(db).puzzle_ids_for_cause(
-            username.lower(), focus_cause
-        )
+        # `username` is already canonical — the Username type folds case at the
+        # request boundary — so no re-folding here.
+        focus_ids = DiagnosisRepository(db).puzzle_ids_for_cause(username, focus_cause)
 
     # 5. Get prioritized IDs and their stats using adaptive selection
     due_ids, all_stats = get_adaptive_puzzles(
@@ -2285,6 +2285,7 @@ async def get_todays_focus(
     Reads the same cause breakdown the Insights cards use; it computes nothing
     the other surfaces would disagree with.
     """
+    from services.api.diagnosis.patterns import identify
     from services.api.diagnosis.planner import plan_focus
 
     assert_owns_username(account, username, db)
@@ -2293,10 +2294,20 @@ async def get_todays_focus(
     stats = repo.cause_breakdown(username)
     chosen = plan_focus(stats)
 
+    # Counted exactly as the patterns endpoint counts it: a cause with no
+    # written pattern — "unclassified" above all — is not a habit awaiting more
+    # evidence, so it must not read as "nearly a pattern" here while the card
+    # beside it correctly ignores it.
+    below = sum(
+        1
+        for s in stats
+        if s.insufficient_data and identify(s.cause, s.dominant_phase) is not None
+    )
+
     return TodaysFocusResponse(
         username=username,
         focus=TodaysFocus(**asdict(chosen)) if chosen else None,
-        below_threshold=sum(1 for s in stats if s.insufficient_data),
+        below_threshold=below,
         pending=repo.pending_count(username),
     )
 
