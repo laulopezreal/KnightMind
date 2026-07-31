@@ -1026,3 +1026,46 @@ async def test_a_canceled_generation_chains_nothing(
         .count()
         == 0
     )
+
+
+@patch("services.api.worker.generate_puzzles")
+@patch("asyncio.to_thread", side_effect=run_sync_in_thread)
+@pytest.mark.asyncio
+async def test_a_raising_followup_cannot_undo_a_succeeded_generation(
+    mock_to_thread, mock_generate, db_session
+):
+    """The strong form of "must never fail the generation".
+
+    _enqueue_followup swallows its own errors, but that swallow is one edit
+    away from being removed. The guarantee that actually holds is structural:
+    the follow-up runs *after* the success write, and the failure write is
+    guarded on status = RUNNING — so even an exception escaping the follow-up
+    finds a job that has already left RUNNING and is discarded.
+    """
+    from services.api.models import JobType
+    from services.api.puzzles.generator import GenerationResult
+    from services.api.worker import JobWorker, worker
+
+    _reset_jobs(db_session)
+    job = Job(
+        username="e2e-raise", type=JobType.PUZZLE_GENERATION, status=JobStatus.RUNNING
+    )
+    db_session.add(job)
+    db_session.commit()
+    db_session.refresh(job)
+    mock_generate.return_value = GenerationResult(5, 0, 100)
+
+    def boom(*a, **k):
+        raise RuntimeError("follow-up exploded")
+
+    with (
+        patch("services.api.worker.SessionLocal") as mock_sl,
+        patch.object(JobWorker, "_enqueue_followup", staticmethod(boom)),
+    ):
+        mock_sl.return_value.__enter__.return_value = db_session
+        mock_sl.return_value.__exit__.return_value = None
+        await worker.execute_job(job.id)
+
+    db_session.expire_all()
+    assert db_session.get(Job, job.id).status == JobStatus.SUCCEEDED
+    assert db_session.get(Job, job.id).error_message is None

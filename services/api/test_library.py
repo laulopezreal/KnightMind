@@ -13,7 +13,13 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from services.api.main import app, get_db
-from services.api.models import Base, Game, PuzzleStats
+from services.api.models import (
+    Base,
+    DiagnosisStatus,
+    Game,
+    PuzzleDiagnosis,
+    PuzzleStats,
+)
 from services.api.models import Puzzle as PuzzleModel
 
 
@@ -70,6 +76,7 @@ def _create_puzzle(
     username: str = "testuser",
     swing: float = 3.0,
     fen: str = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1",
+    best_move_uci: str = "d2d4",
     created_at: datetime | None = None,
 ):
     """Helper: create a Puzzle row (and parent Game if needed)."""
@@ -84,7 +91,7 @@ def _create_puzzle(
             fen=fen,
             side_to_move="white",
             played_move_uci="e2e4",
-            best_move_uci="d2d4",
+            best_move_uci=best_move_uci,
             eval_before=0.2,
             eval_after=-0.5,
             swing=swing,
@@ -122,6 +129,42 @@ def _create_stats(
             next_due_at=next_due_at,
             interval_days=1 if next_due_at else None,
             ease_factor=2.0,
+        )
+    )
+    db.flush()
+
+
+def _create_diagnosis(
+    db,
+    puzzle_id: str,
+    username: str = "testuser",
+    primary_cause: str | None = "loose_piece_awareness",
+    user_confirmed_cause: str | None = None,
+    insufficient_evidence: bool = False,
+    status: str = DiagnosisStatus.OK,
+    error: str | None = None,
+):
+    db.add(
+        PuzzleDiagnosis(
+            puzzle_id=puzzle_id,
+            username=username,
+            status=status,
+            error=error,
+            primary_motif="fork",
+            primary_cause=primary_cause,
+            user_confirmed_cause=user_confirmed_cause,
+            insufficient_evidence=insufficient_evidence,
+            source="rules",
+            evidence_json=[
+                {
+                    "id": "best.move",
+                    "label": "Best move",
+                    "value": "Best move Qxd5 from d1 to d5, PV d1d5",
+                }
+            ],
+            explanation="The solution is Qxd5.",
+            training_recommendation="Look for the queen move Qxd5.",
+            updated_at=datetime(2026, 1, 2, 12, 0),
         )
     )
     db.flush()
@@ -226,9 +269,120 @@ class TestListPuzzlesBasic:
             "last_result",
             "next_due_at",
             "created_at",
+            "diagnosis_summary",
         ]
         for field in required_fields:
             assert field in puzzle, f"Missing field: {field}"
+
+    def test_includes_safe_diagnosis_summary_without_solution_evidence(
+        self, client, db_session, monkeypatch
+    ):
+        _create_puzzle(db_session, "p-diagnosed", best_move_uci="d1d5")
+        _create_stats(db_session, "p-diagnosed")
+        _create_diagnosis(db_session, "p-diagnosed")
+        db_session.commit()
+        monkeypatch.setenv("KNIGHTMIND_STRIP_PUZZLE_SOLUTIONS", "true")
+
+        response = client.get("/puzzles/list?username=testuser")
+        assert response.status_code == 200
+        puzzle = response.json()["puzzles"][0]
+
+        assert puzzle["best_move_uci"] is None
+        assert puzzle["accept_moves_uci"] == []
+        assert puzzle["diagnosis_summary"] == {
+            "state": "ready",
+            "primary_cause": "loose_piece_awareness",
+            "primary_cause_label": "Loose piece awareness",
+            "source": "rules",
+            "diagnosed_at": "2026-01-02T12:00:00",
+        }
+        assert set(puzzle["diagnosis_summary"]) == {
+            "state",
+            "primary_cause",
+            "primary_cause_label",
+            "source",
+            "diagnosed_at",
+        }
+        wire = response.text
+        assert "Qxd5" not in wire
+        assert "d1d5" not in wire
+        assert "from d1 to d5" not in wire
+        assert "training_recommendation" not in wire
+        assert "explanation" not in wire
+        assert "evidence_json" not in wire
+
+    def test_missing_diagnosis_returns_null_summary(self, client, db_session):
+        _create_puzzle(db_session, "p-undx")
+        db_session.commit()
+
+        puzzle = client.get("/puzzles/list?username=testuser").json()["puzzles"][0]
+
+        assert puzzle["diagnosis_summary"] is None
+
+    def test_user_confirmed_cause_wins_in_list_summary(self, client, db_session):
+        _create_puzzle(db_session, "p-confirmed")
+        _create_diagnosis(
+            db_session,
+            "p-confirmed",
+            primary_cause="loose_piece_awareness",
+            user_confirmed_cause="king_safety_blindness",
+        )
+        db_session.commit()
+
+        summary = client.get("/puzzles/list?username=testuser").json()["puzzles"][0][
+            "diagnosis_summary"
+        ]
+
+        assert summary["primary_cause"] == "king_safety_blindness"
+        assert summary["primary_cause_label"] == "King safety blindness"
+
+    def test_unclear_state_with_cause_reports_unclear(self, client, db_session):
+        """insufficient_evidence=True forces state='unclear' even when primary_cause is set."""
+        _create_puzzle(db_session, "p-unclear")
+        _create_diagnosis(
+            db_session,
+            "p-unclear",
+            primary_cause="loose_piece_awareness",
+            insufficient_evidence=True,
+        )
+        db_session.commit()
+
+        summary = client.get("/puzzles/list?username=testuser").json()["puzzles"][0][
+            "diagnosis_summary"
+        ]
+
+        assert summary["state"] == "unclear"
+        assert summary["primary_cause"] == "loose_piece_awareness"
+        assert summary["primary_cause_label"] == "Loose piece awareness"
+
+    def test_unavailable_diagnosis_omits_error_field(self, client, db_session):
+        """UNAVAILABLE rows carry an error reason that must never reach the client."""
+        _create_puzzle(db_session, "p-unavail")
+        _create_diagnosis(
+            db_session,
+            "p-unavail",
+            primary_cause=None,
+            status=DiagnosisStatus.UNAVAILABLE,
+            error="illegal_move_SENTINEL",
+        )
+        db_session.commit()
+
+        response = client.get("/puzzles/list?username=testuser")
+        summary = response.json()["puzzles"][0]["diagnosis_summary"]
+
+        assert summary["state"] == "unavailable"
+        assert summary["primary_cause"] is None
+        assert "illegal_move_SENTINEL" not in response.text
+        assert "error" not in summary
+
+    def test_diagnosis_not_leaked_across_users(self, client, db_session):
+        """A diagnosis row for user B must not appear in user A's list."""
+        _create_puzzle(db_session, "p-shared", username="alice")
+        _create_diagnosis(db_session, "p-shared", username="bob")
+        db_session.commit()
+
+        data = client.get("/puzzles/list?username=alice").json()
+        assert data["puzzles"][0]["diagnosis_summary"] is None
 
     def test_puzzles_without_stats_are_new(self, client, db_session):
         """Puzzles with no stats row have status 'new' and zeroed counts."""
@@ -751,5 +905,19 @@ class TestGetPuzzleDetail:
             "last_result",
             "next_due_at",
             "created_at",
+            "diagnosis_summary",
         }
         assert set(data.keys()) == expected_keys
+
+    def test_detail_diagnosis_summary_is_null(self, client, db_session):
+        """Detail endpoint always returns null for diagnosis_summary.
+
+        The detail page uses GET /puzzles/{id}/diagnosis for full data; the
+        summary field is list-only and intentionally absent from this response.
+        """
+        _create_puzzle(db_session, "p-dx-detail")
+        _create_diagnosis(db_session, "p-dx-detail")
+        db_session.commit()
+
+        data = client.get("/puzzles/p-dx-detail?username=testuser").json()
+        assert data["diagnosis_summary"] is None

@@ -49,6 +49,13 @@ const MOCK_PUZZLES = [
         last_result: 'pass',
         next_due_at: '2026-01-20T12:00:00Z',
         created_at: '2026-01-01T00:00:00Z',
+        diagnosis_summary: {
+            state: 'ready' as const,
+            primary_cause: 'loose_piece_awareness',
+            primary_cause_label: 'Loose piece awareness',
+            source: 'rules',
+            diagnosed_at: '2026-01-16T12:00:00Z',
+        },
     },
     {
         id: 'p-2',
@@ -67,6 +74,7 @@ const MOCK_PUZZLES = [
         last_result: null,
         next_due_at: null,
         created_at: '2026-01-05T00:00:00Z',
+        diagnosis_summary: null,
     },
 ];
 
@@ -219,6 +227,92 @@ describe('Library', () => {
             const matches = screen.getAllByText('Fork');
             expect(matches.length).toBeGreaterThanOrEqual(1);
         });
+    });
+
+    it('should display a compact diagnosis cause badge when present', async () => {
+        render(<Library />);
+        await waitFor(() => {
+            expect(screen.getByText('Cause: Loose piece awareness')).toBeInTheDocument();
+        });
+        expect(screen.getByLabelText('Diagnosis cause')).toBeInTheDocument();
+    });
+
+    it('should not render a noisy diagnosis placeholder when missing', async () => {
+        render(<Library />);
+        await waitFor(() => {
+            expect(screen.getByText('Knight Outpost')).toBeInTheDocument();
+        });
+        expect(screen.queryByText('Diagnosis unavailable')).not.toBeInTheDocument();
+        expect(screen.queryByText('Cause unclear')).not.toBeInTheDocument();
+    });
+
+    it('should show "Cause unclear" badge for unclear diagnosis state', async () => {
+        mockGetLibraryPuzzles.mockResolvedValue({
+            ...EMPTY_RESPONSE,
+            puzzles: [{
+                ...MOCK_PUZZLES[0],
+                diagnosis_summary: {
+                    state: 'unclear' as const,
+                    primary_cause: null,
+                    primary_cause_label: null,
+                    source: 'rules',
+                    diagnosed_at: '2026-01-16T12:00:00Z',
+                },
+            }],
+            total: 1,
+            stats: MOCK_STATS,
+        });
+        render(<Library />);
+        await waitFor(() => {
+            expect(screen.getByText('Cause unclear')).toBeInTheDocument();
+        });
+        expect(screen.getByLabelText('Diagnosis cause')).toBeInTheDocument();
+    });
+
+    it('should show "Cause unclear" even when primary_cause_label is set (state wins)', async () => {
+        mockGetLibraryPuzzles.mockResolvedValue({
+            ...EMPTY_RESPONSE,
+            puzzles: [{
+                ...MOCK_PUZZLES[0],
+                diagnosis_summary: {
+                    state: 'unclear' as const,
+                    primary_cause: 'loose_piece_awareness',
+                    primary_cause_label: 'Loose piece awareness',
+                    source: 'rules',
+                    diagnosed_at: '2026-01-16T12:00:00Z',
+                },
+            }],
+            total: 1,
+            stats: MOCK_STATS,
+        });
+        render(<Library />);
+        await waitFor(() => {
+            expect(screen.getByText('Cause unclear')).toBeInTheDocument();
+        });
+        expect(screen.queryByText('Cause: Loose piece awareness')).not.toBeInTheDocument();
+    });
+
+    it('should show "Diagnosis unavailable" badge for unavailable diagnosis state', async () => {
+        mockGetLibraryPuzzles.mockResolvedValue({
+            ...EMPTY_RESPONSE,
+            puzzles: [{
+                ...MOCK_PUZZLES[0],
+                diagnosis_summary: {
+                    state: 'unavailable' as const,
+                    primary_cause: null,
+                    primary_cause_label: null,
+                    source: null,
+                    diagnosed_at: null,
+                },
+            }],
+            total: 1,
+            stats: MOCK_STATS,
+        });
+        render(<Library />);
+        await waitFor(() => {
+            expect(screen.getByText('Diagnosis unavailable')).toBeInTheDocument();
+        });
+        expect(screen.getByLabelText('Diagnosis cause')).toBeInTheDocument();
     });
 
     it('should display solve stats', async () => {

@@ -52,9 +52,11 @@ from services.api.jobs.cleanup_sessions import (
 )
 from services.api.models import (
     Account,
+    DiagnosisStatus,
     Job,
     JobStatus,
     JobType,
+    PuzzleDiagnosis,
     PuzzleResult,
     PuzzleReview,
     PuzzleStats,
@@ -544,6 +546,21 @@ class DuePuzzlesResponse(BaseModel):
     puzzles: list[dict]
 
 
+class PuzzleDiagnosisSummary(BaseModel):
+    """Safe Library-list summary of a stored diagnosis.
+
+    This deliberately excludes evidence/prose/recommendations and all move/line
+    details. Full diagnosis evidence remains gated behind
+    ``/puzzles/{id}/diagnosis`` after reveal.
+    """
+
+    state: Literal["ready", "unclear", "unavailable"]
+    primary_cause: str | None = None
+    primary_cause_label: str | None = None
+    source: str | None = None
+    diagnosed_at: datetime | None = None
+
+
 class PuzzleListItem(BaseModel):
     id: str
     title: str | None
@@ -568,6 +585,33 @@ class PuzzleListItem(BaseModel):
     last_result: str | None
     next_due_at: datetime | None
     created_at: datetime | None
+    diagnosis_summary: PuzzleDiagnosisSummary | None = None
+
+
+def _puzzle_diagnosis_summary(
+    row: PuzzleDiagnosis | None,
+) -> PuzzleDiagnosisSummary | None:
+    """Return the non-spoiler diagnosis subset safe for Library list rows."""
+    from services.api.diagnosis.causes import CAUSE_LABELS
+
+    if row is None:
+        return None
+    if row.status == DiagnosisStatus.UNAVAILABLE:
+        return PuzzleDiagnosisSummary(
+            state="unavailable",
+            source=row.source,
+            diagnosed_at=row.updated_at,
+        )
+
+    cause = row.user_confirmed_cause or row.primary_cause
+    unclear = row.insufficient_evidence or not cause
+    return PuzzleDiagnosisSummary(
+        state="unclear" if unclear else "ready",
+        primary_cause=cause,
+        primary_cause_label=CAUSE_LABELS.get(cause) if cause else None,
+        source=row.source,
+        diagnosed_at=row.updated_at,
+    )
 
 
 class PuzzleCorpusStats(BaseModel):
@@ -1576,6 +1620,9 @@ async def list_puzzles(
     join_cond = (PuzzleModel.id == PuzzleStats.puzzle_id) & (
         PuzzleStats.username == username_lower
     )
+    diagnosis_join_cond = (PuzzleModel.id == PuzzleDiagnosis.puzzle_id) & (
+        PuzzleDiagnosis.username == username_lower
+    )
 
     # --- 1. Corpus stats (unfiltered) ---
     status_case = case(
@@ -1635,8 +1682,9 @@ async def list_puzzles(
     computed_status = status_case.label("computed_status")
 
     base_stmt = (
-        select(PuzzleModel, PuzzleStats, computed_status)
+        select(PuzzleModel, PuzzleStats, PuzzleDiagnosis, computed_status)
         .outerjoin(PuzzleStats, join_cond)
+        .outerjoin(PuzzleDiagnosis, diagnosis_join_cond)
         .where(PuzzleModel.username == username_lower)
     )
 
@@ -1719,7 +1767,7 @@ async def list_puzzles(
     # --- 7. Build response ---
     rows = db.execute(base_stmt).all()
     result_puzzles = []
-    for puzzle, stats, row_status in rows:
+    for puzzle, stats, diagnosis, row_status in rows:
         result_puzzles.append(
             PuzzleListItem(
                 id=puzzle.id,
@@ -1742,6 +1790,7 @@ async def list_puzzles(
                 last_result=stats.last_result if stats else None,
                 next_due_at=stats.next_due_at if stats else None,
                 created_at=puzzle.created_at,
+                diagnosis_summary=_puzzle_diagnosis_summary(diagnosis),
             )
         )
 
@@ -1842,6 +1891,8 @@ async def get_puzzle_detail(
         last_result=stats.last_result if stats else None,
         next_due_at=stats.next_due_at if stats else None,
         created_at=puzzle.created_at,
+        # diagnosis_summary is intentionally omitted here: the detail page uses
+        # GET /puzzles/{id}/diagnosis for full diagnosis data, not this field.
     )
 
 
