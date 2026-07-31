@@ -41,7 +41,7 @@ function emptyTree(analysis: Record<string, number>) {
     analysis: {
       games_stored: 0, games_seen: 0, games_analyzed: 0, excluded_by_color: 0,
       games_skipped: 0, skipped_unreadable: 0, skipped_not_player: 0,
-      skipped_unfinished: 0, ...analysis,
+      skipped_unfinished: 0, min_games: 1, ...analysis,
     },
   };
 }
@@ -54,6 +54,7 @@ const POPULATED_TREE = {
   analysis: {
     games_stored: 40, games_seen: 40, games_analyzed: 40, excluded_by_color: 0,
     games_skipped: 0, skipped_unreadable: 0, skipped_not_player: 0, skipped_unfinished: 0,
+  min_games: 1,
   },
 };
 

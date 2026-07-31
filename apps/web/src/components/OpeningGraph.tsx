@@ -203,6 +203,11 @@ export function OpeningGraph({ data, onNodeHover, onNodeHoverEnd, onNodeSelect, 
   const focusedKeyRef = useRef<string | null>(null);
   /** True once the user has zoomed or panned by hand, rather than us fitting. */
   const userAdjustedRef = useRef(false);
+  /** True once a tree has been built here, so a rebuild is told apart from a
+   *  first build. Inferring it from the expanded-key set was wrong: collapsing
+   *  the last open node empties the set, and the next refresh then re-expanded
+   *  and refitted as though the component had just mounted. */
+  const hasBuiltRef = useRef(false);
 
   useImperativeHandle(graphRef, () => ({
     // Actually fits the visible tree to the panel. This used to reset the zoom
@@ -218,12 +223,16 @@ export function OpeningGraph({ data, onNodeHover, onNodeHoverEnd, onNodeSelect, 
       const svgEl = svgRef.current;
       const zoom = zoomBehaviorRef.current;
       if (!svgEl || !zoom) return;
+      // d3 reports sourceEvent: null for a programmatic transform, so the zoom
+      // handler cannot tell this from our own fit — mark it here instead.
+      userAdjustedRef.current = true;
       d3.select(svgEl).transition().duration(300).call(zoom.scaleBy as never, 1.3);
     },
     zoomOut: () => {
       const svgEl = svgRef.current;
       const zoom = zoomBehaviorRef.current;
       if (!svgEl || !zoom) return;
+      userAdjustedRef.current = true;
       d3.select(svgEl).transition().duration(300).call(zoom.scaleBy as never, 0.7);
     },
   }), []);
@@ -250,7 +259,7 @@ export function OpeningGraph({ data, onNodeHover, onNodeHoverEnd, onNodeSelect, 
       // first build, auto-collapse decides what is open and we record it; on a
       // rebuild the recorded set is authoritative, so the user's expanded lines
       // survive instead of snapping back to the default three plies.
-      const isRebuild = expandedKeysRef.current.size > 0;
+      const isRebuild = hasBuiltRef.current;
       if (isRebuild) {
         applyExpansion(root, expandedKeysRef.current);
       } else {
@@ -259,6 +268,7 @@ export function OpeningGraph({ data, onNodeHover, onNodeHoverEnd, onNodeSelect, 
         }
         collectExpanded(root, expandedKeysRef.current);
       }
+      hasBuiltRef.current = true;
 
       // `role="presentation"` on the plumbing groups. A tree's owned elements
       // are supposed to be treeitems (or groups of them), and three plain <g>

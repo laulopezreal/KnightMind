@@ -69,9 +69,10 @@ from services.api.models import (
     Puzzle as PuzzleModel,
 )
 from services.api.motifs import MotifPerformanceResponse, get_user_motif_performance
-from services.api.openings import OpeningTreeBuilder
+from services.api.openings import OpeningTreeBuilder, min_games_floor
 from services.api.openings import make_key as make_openings_cache_key
 from services.api.openings import tree_cache as openings_tree_cache
+from services.api.openings import warm as warm_eco
 from services.api.puzzles.identity import backfill_puzzle_identity
 from services.api.ratelimit import rate_limit
 from services.api.ratings_auto import auto_snapshot, auto_snapshot_throttled
@@ -184,6 +185,12 @@ async def lifespan(app: FastAPI):
             backfill_puzzle_identity(db)
 
     await anyio.to_thread.run_sync(_run_backfill)
+
+    # Build the ECO table off the request path. /openings is an `async def`
+    # handler, so FastAPI runs it on the event loop rather than the threadpool,
+    # and the image runs a single worker — left lazy, the first request after a
+    # deploy stalls every other in-flight request behind ~370ms of replay.
+    await anyio.to_thread.run_sync(warm_eco)
 
     # Start session cleanup background task if not disabled
     cleanup_task = None
@@ -728,6 +735,16 @@ async def get_openings(
     max_ply: int = Query(
         12, ge=1, le=40, description="Maximum number of half-moves to include"
     ),
+    min_games: int = Query(
+        1,
+        ge=1,
+        le=100,
+        description=(
+            "Omit lines played fewer than this many times. At depth, one-off "
+            "tails dominate the tree (96% of a measured 40-ply tree) and are "
+            "noise rather than repertoire."
+        ),
+    ),
     db: Session = Depends(get_db),
     account: Account | None = Depends(require_account),
 ):
@@ -766,12 +783,19 @@ async def get_openings(
     # Rebuilding re-parses every stored PGN, and the client refetches on mount
     # and on every colour-filter change. The key folds in the game count and the
     # newest game's timestamp, so an import invalidates this by construction.
+    # The requested floor is a hint; the depth-based floor is a cost control and
+    # wins. Without it `?max_ply=40&min_games=1` still builds and caches the
+    # multi-megabyte tree for anyone who asks, which is exactly what the client
+    # table was meant to prevent.
+    applied_min_games = max(min_games, min_games_floor(max_ply))
+
     cache_key = make_openings_cache_key(
         username=username,
         color=color,
         max_ply=max_ply,
         game_count=game_count,
         latest_game_time=game_repository.get_latest_game_time(username),
+        min_games=applied_min_games,
     )
     cached = openings_tree_cache.get(cache_key)
     if cached is not None:
@@ -796,12 +820,18 @@ async def get_openings(
             detail="Games found but PGN content is missing. Re-import games to populate PGN data.",
         )
 
-    tree = builder.build_tree()
+    tree = builder.build_tree(min_games=applied_min_games)
     # Attached to the root node rather than wrapping the response so existing
     # clients keep reading the tree at the top level. `games_stored` comes from
     # the repository, so a tree built from a fraction of a user's games is
     # reportable instead of silently looking complete.
-    tree["analysis"] = {"games_stored": game_count, **builder.report.to_dict()}
+    tree["analysis"] = {
+        "games_stored": game_count,
+        # Surfaced rather than applied silently: the client states the filter so
+        # a thinner tree reads as a deliberate choice, not missing data.
+        "min_games": applied_min_games,
+        **builder.report.to_dict(),
+    }
     # Stored only once the response is fully composed: the cache hands values
     # back by reference, so anything mutated after this point would corrupt
     # every later hit.

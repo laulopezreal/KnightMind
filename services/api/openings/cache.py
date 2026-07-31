@@ -27,13 +27,13 @@ from typing import Any
 
 # Bump when the serialized tree's shape changes, so old entries cannot be
 # served against new client expectations.
-SCHEME_VERSION = "v2"
+SCHEME_VERSION = "v2"  # v2: nodes gained eco/opening_name; key gained min_games
 
 # Trees are the largest thing held here; a few dozen covers a single user
 # flipping filters plus a handful of concurrent users without unbounded growth.
 DEFAULT_MAX_ENTRIES = 32
 
-CacheKey = tuple[str, str, int, int, str, str]
+CacheKey = tuple[str, str, int, int, int, str, str]
 
 
 def make_key(
@@ -43,6 +43,7 @@ def make_key(
     max_ply: int,
     game_count: int,
     latest_game_time: datetime | None,
+    min_games: int = 1,
 ) -> CacheKey:
     """
     Build a self-invalidating key.
@@ -55,6 +56,7 @@ def make_key(
         SCHEME_VERSION,
         username.strip().lower(),
         max_ply,
+        min_games,
         game_count,
         latest_game_time.isoformat() if latest_game_time else "none",
         color,

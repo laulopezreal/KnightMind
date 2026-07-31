@@ -45,6 +45,7 @@ function node(move_san: string, over: Partial<OpeningNode> = {}): OpeningNode {
 const ANALYSIS = {
   games_stored: 40, games_seen: 40, games_analyzed: 40, excluded_by_color: 0,
   games_skipped: 0, skipped_unreadable: 0, skipped_not_player: 0, skipped_unfinished: 0,
+  min_games: 1,
 };
 
 // The tree must actually contain the line the tests select. The graph only ever
@@ -170,6 +171,22 @@ describe('Openings depth control', () => {
     );
   });
 
+  it('reports the floor the server applied, not the one it asked for', async () => {
+    // 96% of a 40-ply tree is lines played once; pruning them is the difference
+    // between 3.8 MB and 71 KB. The server owns that floor and can raise it, so
+    // the banner has to read the response or it may contradict the tree shown.
+    mockGetOpenings.mockResolvedValue({
+      ...TREE,
+      analysis: { ...ANALYSIS, min_games: 3 },
+    });
+    localStorage.setItem('knightmind:openings:max_ply', JSON.stringify(40));
+    render(<Openings />);
+    await screen.findByTestId('opening-graph');
+
+    expect(mockGetOpenings).toHaveBeenCalledWith('alice', 'both', 40);
+    expect(await screen.findByText(/played at least 3 times/i)).toBeInTheDocument();
+  });
+
   it('remembers the chosen depth', async () => {
     localStorage.setItem('knightmind:openings:max_ply', JSON.stringify(16));
     render(<Openings />);
@@ -199,13 +216,13 @@ describe('Openings score baseline', () => {
     const panel = screen.getByLabelText('Selected line');
     expect(panel).toHaveTextContent('35.7%');
     expect(panel).toHaveTextContent('vs your 55%');
-    expect(panel).toHaveTextContent('−19.3');
+    expect(panel).toHaveTextContent('-19.3');
   });
 
   it('marks a line that beats the average with a plus', async () => {
     await selectLine([node('Start'), node('e4', { win_rate: 70 })]);
 
-    expect(screen.getByLabelText('Selected line')).toHaveTextContent('+15');
+    expect(screen.getByLabelText('Selected line')).toHaveTextContent('+15.0');
   });
 
   it('says "level with" rather than a signed zero', async () => {

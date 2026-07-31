@@ -41,6 +41,7 @@ const TREE = {
   analysis: {
     games_stored: 40, games_seen: 40, games_analyzed: 40, excluded_by_color: 0,
     games_skipped: 0, skipped_unreadable: 0, skipped_not_player: 0, skipped_unfinished: 0,
+  min_games: 1,
   },
 };
 
@@ -101,7 +102,10 @@ describe('Openings tooltip placement', () => {
   it('flips to the left of the node rather than overflowing right', async () => {
     const el = await hoverAt({ x: 1200, y: 400 });
 
-    expect(position(el).left).toBeLessThan(1200);
+    // The exact flipped coordinate, not merely "on screen": the downstream
+    // clamp alone satisfies a loose bound, so a clamp-only implementation
+    // passed this test while covering the node the user is pointing at.
+    expect(position(el).left).toBe(1200 - TOOLTIP_W - 24);
   });
 
   it('stays on screen for a node above the top edge', async () => {

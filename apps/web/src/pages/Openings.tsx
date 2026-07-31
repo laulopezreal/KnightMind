@@ -1,13 +1,14 @@
-import { useEffect, useRef, useState, useCallback, useLayoutEffect } from 'react';
+import { useEffect, useRef, useState, useCallback, useLayoutEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { Link, useNavigate } from 'react-router-dom';
 import {
-  getOpenings, ApiError, DEPTH_OPTIONS, DEFAULT_MAX_PLY,
+  getOpenings, ApiError, DEPTH_OPTIONS, DEFAULT_MAX_PLY, depthLabel, normaliseDepth,
   type OpeningNode, type ColorFilter,
 } from '../api';
 import { useChessUsername } from '../context/ChessUsernameContext';
 import { OpeningGraph, type OpeningGraphHandle, type NodeAnchor } from '../components/OpeningGraph';
 import { getScoreColor } from '../utils/openings';
+import { formatSigned } from '../utils/ratings';
 import { formatLine, engineHrefForPath, resolvePath } from '../utils/openingLine';
 import { useLocalStorage } from '../hooks/useLocalStorage';
 import { PageHeader } from '../components/PageHeader';
@@ -37,13 +38,6 @@ const SCOPE_NOUN: Record<ColorFilter, string> = {
 };
 
 const MAX_PLY_STORAGE_KEY = 'knightmind:openings:max_ply';
-const VALID_MAX_PLY = new Set<number>(DEPTH_OPTIONS.map(option => option.plies));
-
-function normalizeMaxPly(value: unknown): number {
-  return typeof value === 'number' && Number.isInteger(value) && VALID_MAX_PLY.has(value)
-    ? value
-    : DEFAULT_MAX_PLY;
-}
 
 function parsePersistedMaxPly(value: string): number {
   let parsed: unknown;
@@ -52,7 +46,9 @@ function parsePersistedMaxPly(value: string): number {
   } catch {
     parsed = undefined;
   }
-  const maxPly = normalizeMaxPly(parsed);
+  // `normaliseDepth` lives beside DEPTH_OPTIONS, so the option list and the
+  // rule that validates it cannot drift apart.
+  const maxPly = normaliseDepth(parsed);
   if (parsed !== maxPly) {
     window.localStorage.setItem(MAX_PLY_STORAGE_KEY, JSON.stringify(maxPly));
   }
@@ -65,14 +61,15 @@ const ZOOM_MODIFIER = /Mac|iPhone|iPad/i.test(
 ) ? '⌘' : 'Ctrl';
 
 /**
- * Signed difference against the baseline, e.g. "−35.6" or "+4.2".
- * A true minus sign, not a hyphen — this sits beside percentages in a serif
- * layout where the hyphen reads as a dash.
+ * Signed difference against the baseline, e.g. "-35.6" or "+4.2".
+ * Delegates to the shared delta formatter so this reads like every other delta
+ * in the app; only the exactly-equal case is Openings-specific, since "+0" is
+ * a worse answer than saying so.
  */
 function formatDelta(delta: number): string {
   const rounded = Math.round(delta * 10) / 10;
   if (rounded === 0) return 'level with';
-  return `${rounded > 0 ? '+' : '−'}${Math.abs(rounded)}`;
+  return formatSigned(rounded, 1);
 }
 
 function countAllNodes(node: OpeningNode): number {
@@ -99,12 +96,21 @@ export default function Openings() {
   );
   // Depth was hardcoded at 12 ply with no control, while the API accepts 40 —
   // the explorer simply refused to follow games past six moves.
+  // Validation lives in the storage parser rather than at read time, so a bad
+  // persisted value is also repaired in place instead of being re-clamped on
+  // every render.
   const [maxPly, setMaxPly] = useLocalStorage<number>(
     MAX_PLY_STORAGE_KEY,
     DEFAULT_MAX_PLY,
     parsePersistedMaxPly
   );
   const [treeData, setTreeData] = useState<OpeningNode | null>(null);
+  // Which colour the tree on screen actually answers for. The graph is keyed on
+  // this rather than on `colorFilter`, because a refresh deliberately keeps the
+  // old tree while the new one loads — keying on the control would remount the
+  // graph immediately and let it auto-collapse and fit against the *previous*
+  // colour's data, then skip both when the real tree arrived.
+  const [loadedFilter, setLoadedFilter] = useState<ColorFilter | null>(null);
   const [tooltip, setTooltip] = useState<{ anchor: NodeAnchor; data: OpeningNode } | null>(null);
   // Root-to-node path for the activated node. Backs the selection panel, which
   // is the page's only stable (non-hover) surface for a line's figures and the
@@ -161,6 +167,15 @@ export default function Openings() {
   const analysis = treeData?.analysis;
   const hasOpenings = treeData !== null && treeData.games_count > 0;
   const skippedGames = analysis?.games_skipped ?? 0;
+  // The floor the server actually applied — it raises a shallow request at
+  // depth, so reporting what we asked for could contradict the tree on screen.
+  const minGames = analysis?.min_games ?? 1;
+  // Walking the whole tree on every render was cheap at a fixed 12 plies; the
+  // depth control raised the ceiling, and every hover re-renders this page.
+  const moveSequences = useMemo(
+    () => (treeData ? countAllNodes(treeData) - 1 : 0),
+    [treeData]
+  );
   // The root aggregates every analysed game, so its score is the user's overall
   // average — the baseline any individual line is judged against.
   const baseline = hasOpenings ? treeData.win_rate : null;
@@ -204,6 +219,7 @@ export default function Openings() {
       const data = await getOpenings(user, color, plies);
       if (token.isStale()) return;
       setTreeData(data);
+      setLoadedFilter(color);
     } catch (err) {
       if (token.isStale()) return;
       let isMissingGames = false;
@@ -246,7 +262,14 @@ export default function Openings() {
    * "no data" card.
    */
   const emptyState = (() => {
-    if (colorFilter !== 'both' && (analysis?.excluded_by_color ?? 0) > 0) {
+    // Ordered by what is actually true, not by convenience: with games both
+    // excluded by the filter AND skipped as unreadable, blaming the filter
+    // alone is simply wrong, and the accurate branch was unreachable.
+    if (
+      colorFilter !== 'both' &&
+      (analysis?.excluded_by_color ?? 0) > 0 &&
+      skippedGames === 0
+    ) {
       const side = colorFilter === 'white' ? 'White' : 'Black';
       return {
         title: `No ${SCOPE_NOUN[colorFilter]} yet`,
@@ -256,9 +279,13 @@ export default function Openings() {
       };
     }
     if (skippedGames > 0) {
+      const excluded = analysis?.excluded_by_color ?? 0;
+      const alsoFiltered = excluded > 0
+        ? ` A further ${excluded} were played as the other colour.`
+        : '';
       return {
         title: 'None of your games could be analysed',
-        description: `${skippedGames} of ${analysis?.games_stored ?? skippedGames} stored games were unreadable, unfinished, or played under a different username. Re-importing usually fixes this.`,
+        description: `${skippedGames} of ${analysis?.games_stored ?? skippedGames} stored games were unreadable, unfinished, or played under a different username.${alsoFiltered} Re-importing usually fixes this.`,
         actionLabel: 'Re-import games',
         onAction: () => navigate('/'),
       };
@@ -361,10 +388,10 @@ export default function Openings() {
     // wasted while the tree was squeezed into the rest.
     <section className="relative h-[60vh] min-h-[360px] max-h-[720px] bg-primary/5 border border-primary/10 rounded-sm overflow-hidden">
       <OpeningGraph
-        // Remounting on a filter change resets the view, which is right for a
-        // different question; a plain Refresh keeps the same instance and so
-        // keeps the user's zoom and expanded lines.
-        key={colorFilter}
+        // Remount when the loaded colour changes — a different question
+        // deserves a fresh view. A plain Refresh keeps the same instance, and
+        // so keeps the user's zoom and expanded lines.
+        key={loadedFilter ?? 'initial'}
         data={treeData as OpeningNode}
         onNodeHover={(anchor, node) => setTooltip({ anchor, data: node })}
         onNodeHoverEnd={() => setTooltip(null)}
@@ -470,8 +497,8 @@ export default function Openings() {
               aria-label="Tree depth in moves"
               className="bg-transparent border-b border-primary/20 py-1 text-primary focus:outline-none focus:border-primary/60 transition-colors font-serif text-lg cursor-pointer"
             >
-              {DEPTH_OPTIONS.map(option => (
-                <option key={option.plies} value={option.plies}>{option.label} deep</option>
+              {DEPTH_OPTIONS.map(plies => (
+                <option key={plies} value={plies}>{depthLabel(plies)} deep</option>
               ))}
             </select>
           </div>
@@ -596,12 +623,21 @@ export default function Openings() {
               Score = (wins + &frac12; draws) &divide; games played
             </span>
 
+            {/* Deeper trees prune one-off lines, which would otherwise be ~96%
+                of the nodes. Stated, never silent — a thinner tree must read as
+                a deliberate filter, not as missing data. */}
+            {minGames > 1 && (
+              <span className="w-full text-center text-primary/70">
+                Showing lines played at least {minGames} times
+              </span>
+            )}
+
             <div className="w-full flex justify-center gap-12 pt-4 mt-4 border-t border-primary/10">
               {[
                 { value: treeData.games_count, label: 'Games Analyzed' },
                 // Tree nodes are distinct move sequences, not distinct positions:
                 // two transposing lines reach one position via two nodes.
-                { value: countAllNodes(treeData) - 1, label: 'Move Sequences' },
+                { value: moveSequences, label: 'Move Sequences' },
               ].map(stat => (
                 <div className="text-center" key={stat.label}>
                   <div className="text-2xl font-mono text-primary">{stat.value}</div>

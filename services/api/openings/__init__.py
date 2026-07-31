@@ -1,4 +1,5 @@
 from .cache import OpeningTreeCache, make_key, tree_cache
+from .eco import classify, min_games_floor, warm
 from .tree_builder import (
     BuildReport,
     OpeningNode,
@@ -9,6 +10,9 @@ from .tree_builder import (
 
 __all__ = [
     "BuildReport",
+    "classify",
+    "min_games_floor",
+    "warm",
     "OpeningTreeBuilder",
     "OpeningTreeCache",
     "OpeningNode",

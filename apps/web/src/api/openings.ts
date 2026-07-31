@@ -18,6 +18,12 @@ export interface OpeningAnalysis {
     excluded_by_color: number;
     /** unreadable + not_player + unfinished. */
     games_skipped: number;
+    /**
+     * The min-games floor the server actually applied — it raises a request
+     * that asks for less at depth, so this is the filter that shaped the tree
+     * on screen, including on a cache hit. Report this, never the request.
+     */
+    min_games: number;
     skipped_unreadable: number;
     skipped_not_player: number;
     skipped_unfinished: number;
@@ -56,20 +62,26 @@ export type ColorFilter = 'white' | 'black' | 'both';
  * offering — your games go deeper than six moves, and the explorer used to
  * refuse to follow them.
  */
-export const DEPTH_OPTIONS = [
-    { plies: 8, label: '4 moves' },
-    { plies: 12, label: '6 moves' },
-    { plies: 16, label: '8 moves' },
-    { plies: 24, label: '12 moves' },
-    { plies: 40, label: '20 moves' },
-] as const;
+export const DEPTH_OPTIONS = [8, 12, 16, 24, 40] as const;
+
+/** "12 moves" for 24 plies — derived, so it cannot drift from the value. */
+export function depthLabel(plies: number): string {
+    return `${plies / 2} moves`;
+}
 
 export const DEFAULT_MAX_PLY = 12;
+
+/** Clamp a persisted or hand-edited value onto an option we actually offer. */
+export function normaliseDepth(plies: unknown): number {
+    return DEPTH_OPTIONS.some(offered => offered === plies)
+        ? (plies as number)
+        : DEFAULT_MAX_PLY;
+}
 
 export async function getOpenings(
     username: string,
     color: ColorFilter = 'both',
-    maxPly: number = 12
+    maxPly: number = DEFAULT_MAX_PLY
 ): Promise<OpeningNode> {
     const params = new URLSearchParams({
         username,
