@@ -75,6 +75,7 @@ const MOCK_PUZZLE = {
     last_result: 'pass',
     next_due_at: '2026-01-20T12:00:00Z',
     created_at: '2026-01-01T00:00:00Z',
+    diagnosis_summary: null,
 };
 
 // The evidence names the solution — that is exactly why the card is gated.
