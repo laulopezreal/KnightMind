@@ -1,15 +1,16 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, act } from '@testing-library/react';
+import { screen, waitFor, act } from '@testing-library/react';
 import Openings from './Openings';
+import { renderAt } from '../test/router';
 
 // Dim 25: offline affordance + stale-response guard on username change.
 
 let mockUsername = 'alice';
 const mockNavigate = vi.fn();
 
-vi.mock('react-router-dom', () => ({
+vi.mock('react-router-dom', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('react-router-dom')>()),
   useNavigate: () => mockNavigate,
-  Link: ({ children, to, ...rest }: { children: React.ReactNode; to: string; [key: string]: unknown }) => <a href={to} {...rest}>{children}</a>,
 }));
 vi.mock('../context/ChessUsernameContext', () => ({
     useChessUsername: () => ({ username: mockUsername }),
@@ -53,7 +54,7 @@ describe('Openings data states', () => {
         setOnline(false);
         mockGetOpenings.mockRejectedValue(new Error('Network request failed'));
 
-        render(<Openings />);
+        renderAt(<Openings />);
 
         await waitFor(() => {
             expect(screen.getByRole('alert')).toHaveTextContent(/offline/i);
@@ -72,7 +73,7 @@ describe('Openings data states', () => {
             .mockImplementationOnce(() => new Promise((res) => { resolveAlice = res; }))
             .mockResolvedValue({ ...MOCK_TREE, games_count: 77 });
 
-        const { rerender } = render(<Openings />);
+        const { rerender } = renderAt(<Openings />);
 
         mockUsername = 'bob';
         rerender(<Openings />);

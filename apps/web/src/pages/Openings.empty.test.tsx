@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import Openings from './Openings';
+import { renderAt } from '../test/router';
 // Resolves to the mocked module below. The page branches on `instanceof
 // ApiError`, so the error thrown here must be the very class the page imports.
 import { ApiError } from '../api';
@@ -13,9 +14,9 @@ import { ApiError } from '../api';
 let mockUsername = 'alice';
 const mockNavigate = vi.fn();
 
-vi.mock('react-router-dom', () => ({
+vi.mock('react-router-dom', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('react-router-dom')>()),
   useNavigate: () => mockNavigate,
-  Link: ({ children, to, ...rest }: { children: React.ReactNode; to: string; [key: string]: unknown }) => <a href={to} {...rest}>{children}</a>,
 }));
 vi.mock('../context/ChessUsernameContext', () => ({
   useChessUsername: () => ({ username: mockUsername }),
@@ -67,7 +68,7 @@ beforeEach(() => {
 describe('Openings — nothing imported yet (first run)', () => {
   it('offers an import route instead of an error with a dead Retry', async () => {
     mockGetOpenings.mockRejectedValue(new ApiError('No games found', 404));
-    render(<Openings />);
+    renderAt(<Openings />);
 
     expect(await screen.findByText('No games imported yet')).toBeInTheDocument();
     // A 404 here means "nothing imported", which is not a failure.
@@ -79,7 +80,7 @@ describe('Openings — nothing imported yet (first run)', () => {
 
   it('routes to the import screen from the empty state', async () => {
     mockGetOpenings.mockRejectedValue(new ApiError('No games found', 404));
-    render(<Openings />);
+    renderAt(<Openings />);
 
     await userEvent.click(await screen.findByRole('button', { name: 'Import games' }));
     expect(mockNavigate).toHaveBeenCalledWith('/');
@@ -87,7 +88,7 @@ describe('Openings — nothing imported yet (first run)', () => {
 
   it('hides the colour filter when there is nothing to filter', async () => {
     mockGetOpenings.mockRejectedValue(new ApiError('No games found', 404));
-    render(<Openings />);
+    renderAt(<Openings />);
 
     await screen.findByText('No games imported yet');
     expect(
@@ -97,7 +98,7 @@ describe('Openings — nothing imported yet (first run)', () => {
 
   it('still reports a real server error as an error', async () => {
     mockGetOpenings.mockRejectedValue(new ApiError('Internal Server Error', 500));
-    render(<Openings />);
+    renderAt(<Openings />);
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Internal Server Error');
     expect(screen.queryByText('No games imported yet')).not.toBeInTheDocument();
@@ -108,7 +109,7 @@ describe('Openings — a 200 with an empty tree', () => {
   it('does not render graph chrome around an empty tree', async () => {
     mockGetOpenings.mockResolvedValue(emptyTree({ games_stored: 12, excluded_by_color: 12 }));
     localStorage.setItem('knightmind:openings:color_filter', JSON.stringify('black'));
-    render(<Openings />);
+    renderAt(<Openings />);
 
     await waitFor(() => expect(screen.queryByTestId('opening-graph')).not.toBeInTheDocument());
     // No legend, no stats, no zoom controls explaining a graph that isn't there.
@@ -120,7 +121,7 @@ describe('Openings — a 200 with an empty tree', () => {
   it('names the colour filter as the reason and offers a way out', async () => {
     mockGetOpenings.mockResolvedValue(emptyTree({ games_stored: 12, excluded_by_color: 12 }));
     localStorage.setItem('knightmind:openings:color_filter', JSON.stringify('black'));
-    render(<Openings />);
+    renderAt(<Openings />);
 
     expect(await screen.findByText('No games as Black yet')).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: 'Show all games' }));
@@ -133,7 +134,7 @@ describe('Openings — a 200 with an empty tree', () => {
   it('does not claim the subtitle covers all imported games when it is empty', async () => {
     mockGetOpenings.mockResolvedValue(emptyTree({ games_stored: 12, excluded_by_color: 12 }));
     localStorage.setItem('knightmind:openings:color_filter', JSON.stringify('black'));
-    render(<Openings />);
+    renderAt(<Openings />);
 
     await screen.findByText('No games as Black yet');
     expect(screen.getByText('No games as Black to chart yet.')).toBeInTheDocument();
@@ -143,7 +144,7 @@ describe('Openings — a 200 with an empty tree', () => {
     mockGetOpenings.mockResolvedValue(
       emptyTree({ games_stored: 9, games_seen: 9, games_skipped: 9, skipped_unreadable: 9 })
     );
-    render(<Openings />);
+    renderAt(<Openings />);
 
     expect(await screen.findByText('None of your games could be analysed')).toBeInTheDocument();
     expect(screen.getByText(/9 of 9 stored games/)).toBeInTheDocument();
@@ -160,7 +161,7 @@ describe('Openings — partially analysed archive', () => {
         games_skipped: 10, skipped_unfinished: 10,
       },
     });
-    render(<Openings />);
+    renderAt(<Openings />);
 
     expect(await screen.findByTestId('opening-graph')).toBeInTheDocument();
     expect(screen.getByText(/10 of 50 stored games could not be analysed/)).toBeInTheDocument();
@@ -168,7 +169,7 @@ describe('Openings — partially analysed archive', () => {
 
   it('stays quiet when every stored game was analysed', async () => {
     mockGetOpenings.mockResolvedValue(POPULATED_TREE);
-    render(<Openings />);
+    renderAt(<Openings />);
 
     expect(await screen.findByTestId('opening-graph')).toBeInTheDocument();
     expect(screen.queryByText(/could not be analysed/)).not.toBeInTheDocument();
@@ -183,7 +184,7 @@ describe('Openings — partially analysed archive', () => {
         excluded_by_color: 50, games_skipped: 0,
       },
     });
-    render(<Openings />);
+    renderAt(<Openings />);
 
     expect(await screen.findByTestId('opening-graph')).toBeInTheDocument();
     expect(screen.queryByText(/could not be analysed/)).not.toBeInTheDocument();

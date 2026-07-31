@@ -78,6 +78,24 @@ export function normaliseDepth(plies: unknown): number {
         : DEFAULT_MAX_PLY;
 }
 
+/**
+ * A depth named in the URL, or null when the URL does not name a usable one.
+ *
+ * Deliberately *not* `normaliseDepth`: absent and invalid must both fall
+ * through to the user's stored preference, and clamping them to the default
+ * would silently overrule it.
+ */
+export function offeredDepth(raw: string | null): number | null {
+    if (raw === null) return null;
+    const plies = Number(raw);
+    return DEPTH_OPTIONS.some(offered => offered === plies) ? plies : null;
+}
+
+/** A colour named in the URL, or null when the URL does not name a valid one. */
+export function offeredColor(raw: string | null): ColorFilter | null {
+    return raw === 'white' || raw === 'black' || raw === 'both' ? raw : null;
+}
+
 export async function getOpenings(
     username: string,
     color: ColorFilter = 'both',

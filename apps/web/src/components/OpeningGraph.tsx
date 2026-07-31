@@ -46,6 +46,11 @@ export interface OpeningGraphHandle {
   fitToView: () => void;
   zoomIn: () => void;
   zoomOut: () => void;
+  /**
+   * Open every ancestor of a move sequence, mark it as the graph's selection
+   * and bring it into view. Returns false when the line is not in this tree.
+   */
+  revealPath: (moves: string[]) => boolean;
 }
 
 /** Extended hierarchy node with collapsible _children storage and a stable key */
@@ -192,6 +197,7 @@ export function OpeningGraph({ data, onNodeHover, onNodeHoverEnd, onNodeSelect, 
   const gRef = useRef<SVGGElement>(null);
   const zoomBehaviorRef = useRef<d3.ZoomBehavior<SVGSVGElement, unknown> | null>(null);
   const fitRef = useRef<(animate?: boolean) => void>(() => {});
+  const revealRef = useRef<(moves: string[]) => boolean>(() => false);
   const callbacksRef = useRef({ onNodeHover, onNodeHoverEnd, onNodeSelect, onError });
   callbacksRef.current = { onNodeHover, onNodeHoverEnd, onNodeSelect, onError };
 
@@ -244,6 +250,7 @@ export function OpeningGraph({ data, onNodeHover, onNodeHoverEnd, onNodeSelect, 
       userAdjustedRef.current = true;
       d3.select(svgEl).transition().duration(300).call(zoom.scaleBy as never, 0.7);
     },
+    revealPath: (moves: string[]) => revealRef.current(moves),
   }), []);
 
   useEffect(() => {
@@ -645,6 +652,38 @@ export function OpeningGraph({ data, onNodeHover, onNodeHoverEnd, onNodeSelect, 
       }
       fitRef.current = fit;
 
+      /**
+       * Open a line and make it the graph's current node.
+       *
+       * Does not report a selection: this runs *because* the page's selection
+       * changed (a link opened, or Back pressed), so calling back would only
+       * echo. Nor does it move DOM focus — that would scroll the page out from
+       * under someone who opened a link to read it. The node still becomes the
+       * tab stop, so Tab lands on the line the link was about.
+       */
+      function reveal(moves: string[]): boolean {
+        let node = root;
+        for (const san of moves) {
+          const children = (node.children ?? node._children ?? []) as CollapsibleNode[];
+          const next = children.find(child => child.data.move_san === san);
+          if (!next) return false;
+          if (node._children) {
+            node.children = node._children;
+            node._children = undefined;
+          }
+          if (node.key) expandedKeysRef.current.add(node.key);
+          node = next;
+        }
+        focusedKey = node.key ?? null;
+        focusedKeyRef.current = focusedKey;
+        update(node);
+        // A line the viewer cannot see is a link that failed to do its job:
+        // the branch is open now, so refit to bring it on screen.
+        fit(true);
+        return true;
+      }
+      revealRef.current = reveal;
+
       const zoomBehavior = d3.zoom<SVGSVGElement, unknown>()
         .scaleExtent(LAYOUT.zoomExtent)
         // Stated explicitly rather than left to d3's default, which reads
@@ -722,6 +761,7 @@ export function OpeningGraph({ data, onNodeHover, onNodeHoverEnd, onNodeSelect, 
       d3.select(gEl).selectAll('*').remove();
       zoomBehaviorRef.current = null;
       fitRef.current = () => {};
+      revealRef.current = () => false;
     };
   }, [data]);
 

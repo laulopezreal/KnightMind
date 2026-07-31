@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import { OpeningGraph } from './OpeningGraph';
+import { createRef } from 'react';
+import { OpeningGraph, type OpeningGraphHandle } from './OpeningGraph';
 import type { OpeningNode } from '../api';
 
 // This component previously had no tests at all, which is how a graph with zero
@@ -454,5 +455,59 @@ describe('OpeningGraph — page scrolling', () => {
     svg.dispatchEvent(wheel);
 
     expect(wheel.defaultPrevented).toBe(true);
+  });
+});
+
+describe('OpeningGraph revealPath', () => {
+  /** Render with a handle, the way the page holds one. */
+  function renderWithHandle(data: OpeningNode) {
+    const ref = createRef<OpeningGraphHandle>();
+    const rest = renderGraph(data, { graphRef: ref });
+    return { ...rest, ref };
+  }
+
+  it('opens a line the auto-collapse had hidden', () => {
+    const { ref } = renderWithHandle(BIG_TREE);
+    // Only three plies start open, so a link to a deeper line describes
+    // something the viewer cannot see until every ancestor is opened.
+    expect(byMove('3. c5')).toBeUndefined();
+
+    expect(ref.current!.revealPath(['c1', 'c2', 'c3', 'c4', 'c5'])).toBe(true);
+
+    expect(byMove('3. c5')).toBeDefined();
+  });
+
+  it('makes the revealed line the tab stop', () => {
+    const { ref } = renderWithHandle(BIG_TREE);
+
+    ref.current!.revealPath(['c1', 'c2', 'c3']);
+
+    expect(byMove('2. c3')).toHaveAttribute('tabindex', '0');
+  });
+
+  it('does not steal focus', () => {
+    // This runs on load for a shared link. Pulling focus into the graph would
+    // scroll the page away from someone who opened it to read.
+    const { ref } = renderWithHandle(BIG_TREE);
+    const before = document.activeElement;
+
+    ref.current!.revealPath(['c1', 'c2', 'c3']);
+
+    expect(document.activeElement).toBe(before);
+  });
+
+  it('reports a line this tree does not contain', () => {
+    const { ref } = renderWithHandle(BIG_TREE);
+
+    // The colour filter or a shallower depth can both remove a line the link
+    // was written against.
+    expect(ref.current!.revealPath(['c1', 'zz'])).toBe(false);
+  });
+
+  it('reveals nothing for the bare root', () => {
+    const { ref } = renderWithHandle(BIG_TREE);
+
+    expect(ref.current!.revealPath([])).toBe(true);
+    expect(byMove('Starting position')).toHaveAttribute('tabindex', '0');
   });
 });
