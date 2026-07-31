@@ -938,9 +938,7 @@ class TestCauseFilter:
         _create_diagnosis(db_session, "p-2", primary_cause="loose_piece_awareness")
         db_session.commit()
 
-        res = client.get(
-            "/puzzles/list?username=testuser&cause=loose_piece_awareness"
-        )
+        res = client.get("/puzzles/list?username=testuser&cause=loose_piece_awareness")
         assert res.status_code == 200
         body = res.json()
         assert {p["id"] for p in body["puzzles"]} == {"p-0", "p-2"}
@@ -1037,9 +1035,7 @@ class TestAvailableCauses:
             {"value": "loose_piece_awareness", "label": "Loose piece awareness"}
         ]
 
-    def test_carries_the_label_so_the_ui_never_shows_a_slug(
-        self, client, db_session
-    ):
+    def test_carries_the_label_so_the_ui_never_shows_a_slug(self, client, db_session):
         _seed_puzzles(db_session, count=1)
         _create_diagnosis(db_session, "p-0", primary_cause="king_safety_blindness")
         db_session.commit()
@@ -1047,9 +1043,7 @@ class TestAvailableCauses:
         body = client.get("/puzzles/list?username=testuser").json()
         assert body["available_causes"][0]["label"] != "king_safety_blindness"
 
-    def test_reports_the_confirmed_cause_not_the_computed_one(
-        self, client, db_session
-    ):
+    def test_reports_the_confirmed_cause_not_the_computed_one(self, client, db_session):
         _seed_puzzles(db_session, count=1)
         _create_diagnosis(
             db_session,
@@ -1094,9 +1088,7 @@ class TestAvailableCauses:
 
         assert {c["value"] for c in body["available_causes"]} == set(counts)
         for value, expected in counts.items():
-            listed = client.get(
-                f"/puzzles/list?username=testuser&cause={value}"
-            ).json()
+            listed = client.get(f"/puzzles/list?username=testuser&cause={value}").json()
             assert listed["total"] == expected
 
     def test_is_scoped_to_the_requesting_user(self, client, db_session):
