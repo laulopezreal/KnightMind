@@ -105,6 +105,12 @@ export default function Openings() {
     parsePersistedMaxPly
   );
   const [treeData, setTreeData] = useState<OpeningNode | null>(null);
+  // Which colour the tree on screen actually answers for. The graph is keyed on
+  // this rather than on `colorFilter`, because a refresh deliberately keeps the
+  // old tree while the new one loads — keying on the control would remount the
+  // graph immediately and let it auto-collapse and fit against the *previous*
+  // colour's data, then skip both when the real tree arrived.
+  const [loadedFilter, setLoadedFilter] = useState<ColorFilter | null>(null);
   const [tooltip, setTooltip] = useState<{ anchor: NodeAnchor; data: OpeningNode } | null>(null);
   // Root-to-node path for the activated node. Backs the selection panel, which
   // is the page's only stable (non-hover) surface for a line's figures and the
@@ -213,6 +219,7 @@ export default function Openings() {
       const data = await getOpenings(user, color, plies);
       if (token.isStale()) return;
       setTreeData(data);
+      setLoadedFilter(color);
     } catch (err) {
       if (token.isStale()) return;
       let isMissingGames = false;
@@ -255,7 +262,14 @@ export default function Openings() {
    * "no data" card.
    */
   const emptyState = (() => {
-    if (colorFilter !== 'both' && (analysis?.excluded_by_color ?? 0) > 0) {
+    // Ordered by what is actually true, not by convenience: with games both
+    // excluded by the filter AND skipped as unreadable, blaming the filter
+    // alone is simply wrong, and the accurate branch was unreachable.
+    if (
+      colorFilter !== 'both' &&
+      (analysis?.excluded_by_color ?? 0) > 0 &&
+      skippedGames === 0
+    ) {
       const side = colorFilter === 'white' ? 'White' : 'Black';
       return {
         title: `No ${SCOPE_NOUN[colorFilter]} yet`,
@@ -265,9 +279,13 @@ export default function Openings() {
       };
     }
     if (skippedGames > 0) {
+      const excluded = analysis?.excluded_by_color ?? 0;
+      const alsoFiltered = excluded > 0
+        ? ` A further ${excluded} were played as the other colour.`
+        : '';
       return {
         title: 'None of your games could be analysed',
-        description: `${skippedGames} of ${analysis?.games_stored ?? skippedGames} stored games were unreadable, unfinished, or played under a different username. Re-importing usually fixes this.`,
+        description: `${skippedGames} of ${analysis?.games_stored ?? skippedGames} stored games were unreadable, unfinished, or played under a different username.${alsoFiltered} Re-importing usually fixes this.`,
         actionLabel: 'Re-import games',
         onAction: () => navigate('/'),
       };
@@ -370,10 +388,10 @@ export default function Openings() {
     // wasted while the tree was squeezed into the rest.
     <section className="relative h-[60vh] min-h-[360px] max-h-[720px] bg-primary/5 border border-primary/10 rounded-sm overflow-hidden">
       <OpeningGraph
-        // Remounting on a filter change resets the view, which is right for a
-        // different question; a plain Refresh keeps the same instance and so
-        // keeps the user's zoom and expanded lines.
-        key={colorFilter}
+        // Remount when the loaded colour changes — a different question
+        // deserves a fresh view. A plain Refresh keeps the same instance, and
+        // so keeps the user's zoom and expanded lines.
+        key={loadedFilter ?? 'initial'}
         data={treeData as OpeningNode}
         onNodeHover={(anchor, node) => setTooltip({ anchor, data: node })}
         onNodeHoverEnd={() => setTooltip(null)}

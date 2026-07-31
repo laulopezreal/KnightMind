@@ -352,6 +352,19 @@ def test_get_openings_enforces_the_depth_floor(mock_import_games, client_with_db
     assert deep.status_code == 200
     assert deep.json()["analysis"]["min_games"] == 3
 
+    # ...and the tree was actually built that way. Asserting the reported number
+    # alone passes even when the builder is handed the unpruned request value —
+    # confirmed by mutation, on the most expensive path in the feature.
+    def _walk(node):
+        yield node
+        for child in node.get("children", []):
+            yield from _walk(child)
+
+    moves = [n for n in _walk(deep.json()) if n["move_san"] != "Start"]
+    assert all(n["games_count"] >= 3 for n in moves), (
+        "a line below the applied floor survived into the response"
+    )
+
     # A shallow tree is served unfiltered, and a higher request is honoured.
     shallow = client_with_db.get("/openings?username=testuser&max_ply=12&min_games=1")
     assert shallow.json()["analysis"]["min_games"] == 1

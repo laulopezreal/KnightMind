@@ -255,9 +255,10 @@ describe('OpeningGraph — progressive disclosure', () => {
   it('collapses every level of a large tree, not just the first', () => {
     renderGraph(BIG_TREE);
 
-    // Depth 0-3 visible; deeper plies stay hidden until asked for.
-    const visible = items().length;
-    expect(visible).toBeLessThan(BIG_TREE.children!.length * 8);
+    // Depth 0-3 visible; deeper plies stay hidden until asked for. The bound
+    // has to be tighter than the tree's own size or it holds with collapsing
+    // removed entirely: 6 branches x 4 visible plies + root.
+    expect(items().length).toBeLessThanOrEqual(6 * 4 + 1);
     expect(labels().some((l) => l.startsWith('3. a5'))).toBe(false);
   });
 

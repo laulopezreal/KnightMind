@@ -3,6 +3,7 @@
 import chess
 
 from .eco import (
+    _entry_plies,
     _position_key,
     classify,
     eco_table,
@@ -104,18 +105,31 @@ class TestTreeAnnotation:
         assert "Najdorf" in node["opening_name"]
         assert node["eco"] == "B90"
 
-    def test_an_unnamed_opening_stays_unnamed_rather_than_guessing(self):
+    def test_an_off_book_line_keeps_its_ancestor_name_and_no_other(self):
+        """`eco` and `opening_name` come from one tuple, so asserting "one is
+        set or the other is None" is true in every reachable state — it passed
+        even when the node inherited a completely wrong opening."""
         tree = build_opening_tree(
             [pgn("1. e4 e5 2. Qh5 Ke7 3. Qxe5")], "testplayer", "both", max_ply=6
         )
 
-        node = tree["children"][0]  # e4 — named
-        assert node["opening_name"] is not None
-        for _ in range(2):
+        # 2. Qh5 is itself in the book (Wayward Queen Attack); the line leaves
+        # it at 2...Ke7, which is where inheritance has to take over.
+        node = tree
+        for _ in range(3):
             node = node["children"][0]
-        # ...but once the line leaves the book, the last known name is kept
-        # rather than inventing one; what must never happen is a wrong code.
-        assert node["eco"] is not None or node["opening_name"] is None
+        named_ancestor = node  # 2. Qh5
+        off_book = node["children"][0]  # 2...Ke7
+
+        assert (
+            named_ancestor["opening_name"] == "King's Pawn Game: Wayward Queen Attack"
+        )
+        # It inherits that ancestor exactly — not some other opening, and not
+        # nothing.
+        assert (off_book["eco"], off_book["opening_name"]) == (
+            named_ancestor["eco"],
+            named_ancestor["opening_name"],
+        )
 
     def test_sibling_lines_get_different_names(self):
         tree = build_opening_tree(
@@ -160,6 +174,27 @@ class TestMinGames:
         # Both third moves were played once each, so neither is repertoire.
         assert "children" not in node
 
+    def test_the_floor_shapes_the_tree_and_not_only_the_label(self):
+        """The endpoint reports the applied floor; this checks it was applied.
+
+        Asserting the reported number alone passes even if the builder is handed
+        a different value — verified by mutation, and that is the single most
+        expensive thing in this feature.
+        """
+        games = [pgn("1. e4 c5")] * 3 + [pgn("1. e4 e5")]
+        tree = build_opening_tree(games, "testplayer", "both", 6, min_games=3)
+
+        def walk(node):
+            yield node
+            for child in node.get("children", []):
+                yield from walk(child)
+
+        counts = [n["games_count"] for n in walk(tree) if n["move_san"] != "Start"]
+        assert counts, "the surviving trunk should not be empty"
+        assert min(counts) >= 3
+        # The once-played line is gone, by name, not just by count.
+        assert "e5" not in [n["move_san"] for n in walk(tree)]
+
     def test_root_totals_still_count_every_analysed_game(self):
         # Pruning shapes the tree; it must not rewrite how much was analysed.
         games = [pgn("1. e4 c5")] * 3 + [pgn("1. d4 d5")]
@@ -187,8 +222,36 @@ class TestMinGamesFloor:
 
 class TestBookDepth:
     def test_reports_the_deepest_vendored_line(self):
-        # Positions past this cannot match, so the walk skips computing them.
-        assert max_book_ply() == 36
+        """Derived from the data, so refreshing eco.tsv with a deeper line must
+        move the cutoff rather than turn the suite red."""
+        from .eco import _entry_plies
+
+        assert max_book_ply() == max(len(entry) for entry in _entry_plies())
+        assert max_book_ply() >= 12  # sanity floor
+
+    def test_a_line_at_the_cutoff_is_named_by_its_own_entry(self):
+        """The boundary is inclusive: an off-by-one would silently relabel the
+        deepest book line with its parent's name."""
+        deepest = max(_entry_plies(), key=len)
+        moves = " ".join(
+            f"{i // 2 + 1}. {m}" if i % 2 == 0 else m for i, m in enumerate(deepest)
+        )
+        tree = build_opening_tree(
+            [pgn(moves)], "testplayer", "both", max_ply=len(deepest) + 4
+        )
+
+        node = tree
+        for _ in range(len(deepest)):
+            node = node["children"][0]
+        parent = tree
+        for _ in range(len(deepest) - 1):
+            parent = parent["children"][0]
+
+        assert node["eco"] is not None
+        assert (node["eco"], node["opening_name"]) != (
+            parent["eco"],
+            parent["opening_name"],
+        )
 
     def test_warm_builds_the_table_up_front(self):
         warm()

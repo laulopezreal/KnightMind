@@ -102,7 +102,10 @@ describe('Openings tooltip placement', () => {
   it('flips to the left of the node rather than overflowing right', async () => {
     const el = await hoverAt({ x: 1200, y: 400 });
 
-    expect(position(el).left).toBeLessThan(1200);
+    // The exact flipped coordinate, not merely "on screen": the downstream
+    // clamp alone satisfies a loose bound, so a clamp-only implementation
+    // passed this test while covering the node the user is pointing at.
+    expect(position(el).left).toBe(1200 - TOOLTIP_W - 24);
   });
 
   it('stays on screen for a node above the top edge', async () => {
