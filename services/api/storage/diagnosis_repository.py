@@ -168,23 +168,69 @@ class DiagnosisRepository:
            plays now than one from two years ago.
         3. **Largest swing** — among equals, the costliest blunders first.
         """
-        stats_join = (PuzzleStats.puzzle_id == Puzzle.id) & (
-            PuzzleStats.username == username
-        )
-        stmt = (
-            self._pending_query(username)
-            .outerjoin(PuzzleStats, stats_join)
-            .order_by(
-                # COALESCE so a puzzle never attempted (no stats row) sorts as
-                # zero failures rather than last-by-NULL on Postgres.
-                func.coalesce(PuzzleStats.fail_count, 0).desc(),
-                Puzzle.created_at.desc(),
-                Puzzle.swing.desc(),
-            )
-        )
+        stmt = self._diagnostic_order(self._pending_query(username), username)
         if limit is not None:
             stmt = stmt.limit(limit)
         return list(self.db.scalars(stmt).all())
+
+    def _diagnostic_order(self, stmt: Select, username: str) -> Select:
+        """The backfill's priority rule: most diagnostic puzzle first.
+
+        Shared by the pending and re-enrichment queries so a run cut short — by
+        cancellation, the batch limit, or the daily budget — spends what it has
+        on the same puzzles in either mode.
+        """
+        stats_join = (PuzzleStats.puzzle_id == Puzzle.id) & (
+            PuzzleStats.username == username
+        )
+        return stmt.outerjoin(PuzzleStats, stats_join).order_by(
+            # COALESCE so a puzzle never attempted (no stats row) sorts as
+            # zero failures rather than last-by-NULL on Postgres.
+            func.coalesce(PuzzleStats.fail_count, 0).desc(),
+            Puzzle.created_at.desc(),
+            Puzzle.swing.desc(),
+        )
+
+    def unenriched_puzzle_ids(
+        self, username: str, limit: int | None = None
+    ) -> list[str]:
+        """Diagnoses that were produced without the model, most diagnostic first.
+
+        This is the "a key just arrived" query. Version-based staleness cannot
+        see this case by design: adding ``ANTHROPIC_API_KEY`` changes no data
+        version, so a corpus diagnosed while the key was absent stays
+        rules-only forever without an explicit sweep.
+
+        Deliberately NOT folded into ``_stale_clause``. A row whose model
+        response is rejected keeps ``model_version = NULL``, so a standing rule
+        would re-attempt that puzzle every run for the life of the deployment,
+        spending budget daily on an answer that keeps failing validation. This
+        is an operator action instead: it re-attempts on demand, and re-running
+        it is how a transient failure gets retried.
+
+        UNAVAILABLE rows are excluded — a puzzle that could not be analysed at
+        all has nothing for the model to explain.
+        """
+        stmt = (
+            select(Puzzle.id)
+            .join(
+                PuzzleDiagnosis,
+                (PuzzleDiagnosis.puzzle_id == Puzzle.id)
+                & (PuzzleDiagnosis.username == username),
+            )
+            .where(
+                Puzzle.username == username,
+                PuzzleDiagnosis.status == DiagnosisStatus.OK,
+                PuzzleDiagnosis.model_version.is_(None),
+            )
+        )
+        stmt = self._diagnostic_order(stmt, username)
+        if limit is not None:
+            stmt = stmt.limit(limit)
+        return list(self.db.scalars(stmt).all())
+
+    def unenriched_count(self, username: str) -> int:
+        return len(self.unenriched_puzzle_ids(username))
 
     def pending_count(self, username: str) -> int:
         return (

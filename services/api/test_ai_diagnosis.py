@@ -27,7 +27,10 @@ from services.api.storage.ai_audit_repository import (  # noqa: E402
     AuditWrite,
     Budget,
 )
-from services.api.storage.diagnosis_repository import DiagnosisRepository  # noqa: E402
+from services.api.storage.diagnosis_repository import (  # noqa: E402
+    DiagnosisRepository,
+    DiagnosisWrite,
+)
 from services.api.test_diagnosis_store import (  # noqa: E402
     USER,
     FakeContext,
@@ -484,3 +487,68 @@ class TestBudgetWindowIsRolling:
         )
         db_session.commit()
         assert repo.budget_last_24h(USER).user_used == 0
+
+
+class TestReenrichRun:
+    """The end-to-end shape of the "a key just arrived" sweep."""
+
+    def test_an_ordinary_run_leaves_a_rules_only_row_alone(
+        self, db_session, monkeypatch
+    ):
+        # The gap this feature closes, demonstrated: a key is now present and
+        # the model would answer, but the default scope never revisits the row.
+        _puzzle(db_session)
+        patch_session(monkeypatch, db_session)
+        patch_ai(monkeypatch, accepted())
+        DiagnosisRepository(db_session).upsert(
+            DiagnosisWrite(
+                puzzle_id="p1",
+                username=USER,
+                primary_cause="loose_piece_awareness",
+            )
+        )
+        db_session.commit()
+
+        result = run_diagnosis(FakeContext())
+        assert result["enriched"] == 0
+        assert DiagnosisRepository(db_session).get(USER, "p1").explanation is None
+
+    def test_the_reenrich_scope_fills_in_the_prose(self, db_session, monkeypatch):
+        _puzzle(db_session)
+        patch_session(monkeypatch, db_session)
+        patch_ai(monkeypatch, accepted())
+        DiagnosisRepository(db_session).upsert(
+            DiagnosisWrite(
+                puzzle_id="p1",
+                username=USER,
+                primary_cause="loose_piece_awareness",
+            )
+        )
+        db_session.commit()
+
+        result = run_diagnosis(FakeContext(params={"scope": "reenrich"}))
+        assert result["enriched"] == 1
+
+        row = DiagnosisRepository(db_session).get(USER, "p1")
+        assert row.explanation
+        assert row.model_version
+
+    def test_a_swept_row_is_not_swept_again(self, db_session, monkeypatch):
+        # Convergence: once enriched, model_version is set and the row drops
+        # out of the query. Without this the sweep would re-spend budget on the
+        # same corpus every time it ran.
+        _puzzle(db_session)
+        patch_session(monkeypatch, db_session)
+        patch_ai(monkeypatch, accepted())
+        DiagnosisRepository(db_session).upsert(
+            DiagnosisWrite(
+                puzzle_id="p1",
+                username=USER,
+                primary_cause="loose_piece_awareness",
+            )
+        )
+        db_session.commit()
+
+        run_diagnosis(FakeContext(params={"scope": "reenrich"}))
+        second = run_diagnosis(FakeContext(params={"scope": "reenrich"}))
+        assert second["enriched"] == 0

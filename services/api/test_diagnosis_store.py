@@ -549,7 +549,9 @@ class TestDiagnosisEndpoint:
     def test_pending_count_endpoint(self, client, db_session):
         _puzzle(db_session)
         body = client.get(f"/users/{USER}/diagnosis/pending").json()
-        assert body == {"username": USER, "pending": 1}
+        # Exact equality on purpose: this payload is small and a silently added
+        # field is worth failing on.
+        assert body == {"username": USER, "pending": 1, "unenriched": 0}
 
 
 class TestDiagnoseEnqueue:
@@ -1534,3 +1536,89 @@ class TestTodaysFocusEndpoint:
         focus = client.get(f"/users/{USER}/todays-focus").json()
         patterns = client.get(f"/users/{USER}/mistake-patterns").json()
         assert focus["below_threshold"] == patterns["below_threshold"] == 1
+
+
+class TestReenrichScope:
+    """The "a key just arrived" sweep.
+
+    Version-based staleness deliberately cannot see a configuration change:
+    setting ANTHROPIC_API_KEY moves no data version, so a corpus diagnosed
+    while the key was absent stays rules-only and no ordinary run revisits it.
+    These tests pin the escape hatch — and pin that it stays an escape hatch
+    rather than becoming a standing rule that re-attempts failures forever.
+    """
+
+    def _diagnosed(self, db, puzzle_id, *, model_version=None, ply=41, status=None):
+        _puzzle(db, puzzle_id=puzzle_id, ply=ply)
+        DiagnosisRepository(db).upsert(
+            DiagnosisWrite(
+                puzzle_id=puzzle_id,
+                username=USER,
+                primary_cause="loose_piece_awareness",
+                status=status or DiagnosisStatus.OK,
+                model_version=model_version,
+            )
+        )
+        db.commit()
+
+    def test_a_rules_only_diagnosis_is_not_pending(self, client, db_session):
+        # The whole reason this feature is needed. If this ever starts
+        # returning the puzzle, the sweep is redundant and should be deleted.
+        self._diagnosed(db_session, "p1")
+        repo = DiagnosisRepository(db_session)
+        assert repo.pending_puzzle_ids(USER) == []
+        assert repo.unenriched_puzzle_ids(USER) == ["p1"]
+
+    def test_an_ai_enriched_diagnosis_is_left_alone(self, client, db_session):
+        self._diagnosed(db_session, "p1", model_version="claude-opus-5")
+        assert DiagnosisRepository(db_session).unenriched_puzzle_ids(USER) == []
+
+    def test_an_unanalysable_puzzle_is_not_swept(self, client, db_session):
+        # Nothing for the model to explain, so re-running only spends budget.
+        self._diagnosed(db_session, "p1", status=DiagnosisStatus.UNAVAILABLE)
+        assert DiagnosisRepository(db_session).unenriched_puzzle_ids(USER) == []
+
+    def test_is_scoped_to_the_requesting_user(self, client, db_session):
+        _puzzle(db_session, puzzle_id="theirs", ply=41)
+        DiagnosisRepository(db_session).upsert(
+            DiagnosisWrite(
+                puzzle_id="theirs",
+                username="other",
+                primary_cause="loose_piece_awareness",
+            )
+        )
+        db_session.commit()
+        assert DiagnosisRepository(db_session).unenriched_puzzle_ids(USER) == []
+
+    def test_the_count_is_reported_beside_pending(self, client, db_session):
+        # An operator needs to see the backlog before triggering the sweep, and
+        # "pending: 0" alone would say everything is done.
+        self._diagnosed(db_session, "p1")
+        body = client.get(f"/users/{USER}/diagnosis/pending").json()
+        assert body["pending"] == 0
+        assert body["unenriched"] == 1
+
+    def test_the_scope_reaches_the_job(self, client, db_session):
+        response = client.post(f"/users/{USER}/diagnose?scope=reenrich")
+        assert response.status_code == 200
+        job = db_session.get(Job, response.json()["job_id"])
+        assert job.params["scope"] == "reenrich"
+
+    def test_the_default_scope_is_the_ordinary_backfill(self, client, db_session):
+        response = client.post(f"/users/{USER}/diagnose")
+        job = db_session.get(Job, response.json()["job_id"])
+        assert job.params["scope"] == "pending"
+
+    def test_an_unknown_scope_is_rejected(self, client, db_session):
+        # Silently falling back would let a typo look like a completed sweep.
+        assert client.post(f"/users/{USER}/diagnose?scope=nonsense").status_code == 422
+
+    def test_orders_the_same_way_the_backfill_does(self, client, db_session):
+        # A run cut short by the daily cap must spend it on the same puzzles
+        # either way: most-failed first.
+        self._diagnosed(db_session, "seldom", ply=41)
+        self._diagnosed(db_session, "often", ply=43)
+        stats = db_session.get(PuzzleStats, "often")
+        stats.attempts, stats.fail_count = 4, 4
+        db_session.commit()
+        assert DiagnosisRepository(db_session).unenriched_puzzle_ids(USER)[0] == "often"
