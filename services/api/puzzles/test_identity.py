@@ -47,9 +47,7 @@ def test_backfill_puzzle_identity(monkeypatch):
     mock_puzzle = MagicMock()
     mock_repo.get_puzzle.return_value = mock_puzzle
 
-    monkeypatch.setattr(
-        "services.api.puzzles.identity.PuzzleRepository", lambda db: mock_repo
-    )
+    monkeypatch.setattr("services.api.storage.PuzzleRepository", lambda db: mock_repo)
 
     # Run backfill
     backfill_puzzle_identity(mock_db)

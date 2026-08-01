@@ -4,7 +4,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from services.api.models import Base
+from services.api.models import Base, PuzzleStats
 from services.api.storage.spaced_repetition import (
     _utcnow_naive,
     get_adaptive_puzzles,
@@ -71,6 +71,33 @@ def test_record_fail_review(db_session):
     assert stats.pass_count == 0
     assert stats.fail_count == 1
     assert stats.last_result == "fail"
+
+
+def test_update_puzzle_stats_preserves_existing_identity(db_session):
+    """Review updates preserve existing puzzle title and motif identity fields."""
+
+    db_session.add(
+        PuzzleStats(
+            puzzle_id="test-puzzle-identity",
+            username="testuser",
+            title="Manual title",
+            primary_motif="manual_motif",
+            attempts=0,
+            pass_count=0,
+            fail_count=0,
+            ease_factor=2.0,
+        )
+    )
+    db_session.commit()
+
+    stats = update_puzzle_stats(db_session, "test-puzzle-identity", "testuser", "pass")
+    db_session.commit()
+
+    assert stats.attempts == 1
+    assert stats.pass_count == 1
+    assert stats.fail_count == 0
+    assert stats.title == "Manual title"
+    assert stats.primary_motif == "manual_motif"
 
 
 def test_sequential_reviews(db_session):
@@ -345,3 +372,33 @@ class TestFocusBias:
             focus_puzzle_ids={f"p{i}" for i in range(6)},
         )
         assert len(ordered) == 3
+
+
+def test_a_never_reviewed_puzzle_counts_as_due(db_session):
+    """A NULL next_due_at is "New", and New is trainable.
+
+    Stats rows are created eagerly on save, so a user who has generated puzzles
+    but reviewed none has a table full of NULL due dates. Excluding them makes
+    the badge say "0 due" while a session happily serves them — the count and
+    the queue must not disagree about what is trainable.
+
+    This was lost once already: it lives on main and was dropped when dev's
+    version of this file won a merge, so it is pinned here rather than left to
+    the next reconciliation.
+    """
+    from services.api.models import PuzzleStats
+    from services.api.storage.spaced_repetition import get_due_puzzle_count
+
+    db_session.add(
+        PuzzleStats(
+            puzzle_id="never-reviewed",
+            username="u",
+            attempts=0,
+            pass_count=0,
+            ease_factor=2.0,
+            next_due_at=None,
+        )
+    )
+    db_session.commit()
+
+    assert get_due_puzzle_count(db_session, "u") == 1
