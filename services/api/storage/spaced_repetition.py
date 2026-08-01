@@ -436,14 +436,22 @@ def get_scheduled_within_count(db: Session, username: str, hours: int) -> int:
 def get_due_puzzle_count(db: Session, username: str) -> int:
     """Get count of puzzles due for review.
 
-    Strict "has a schedule and it has arrived" count. Prefer
-    :func:`get_trainable_puzzle_count` for anything user-facing — this one
-    excludes never-reviewed puzzles.
+    A puzzle is "due" when its ``next_due_at`` has passed OR is NULL. A NULL
+    ``next_due_at`` marks a never-reviewed ("New") puzzle, which the scheduler
+    (``get_adaptive_puzzles``) already surfaces as trainable; counting it here
+    keeps the badge/gate consistent with what a session will actually serve.
+    Eager-on-save stats rows start with ``next_due_at = NULL``, so excluding
+    NULLs would report 0 due for a fresh user who has generated but not yet
+    reviewed any puzzles.
+
+    Prefer :func:`get_trainable_puzzle_count` for user-facing totals, because it
+    also includes legacy puzzles with no stats row yet.
     """
     # naive-UTC bound: match the naive-UTC storage of next_due_at (see module note)
     now = _utcnow_naive()
     stmt = select(func.count(PuzzleStats.puzzle_id)).where(
-        PuzzleStats.username == username, PuzzleStats.next_due_at <= now
+        PuzzleStats.username == username,
+        or_(PuzzleStats.next_due_at.is_(None), PuzzleStats.next_due_at <= now),
     )
     return db.scalar(stmt) or 0
 
