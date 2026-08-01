@@ -26,6 +26,14 @@ vi.mock('../api/puzzles', () => ({
     createManualPuzzle: vi.fn(),
 }));
 
+vi.mock('../context/ChessUsernameContext', () => ({
+    useChessUsername: () => ({ username: 'testplayer', setEditorOpen: vi.fn() }),
+}));
+
+vi.mock('../api/puzzles', () => ({
+    createManualPuzzle: vi.fn(),
+}));
+
 // Stub the visual board; the accessible grid overlay derives from options.position.
 vi.mock('react-chessboard', () => ({
     Chessboard: () => <div data-testid="visual-board" />,

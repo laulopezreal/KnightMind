@@ -16,7 +16,7 @@ Two column choices worth knowing when reading the schema:
   it, every backfill run would re-attempt the same broken puzzle forever.
 
 Revision ID: a4b5c6d7e8f9
-Revises: f3a4b5c6d7e8
+Revises: f4a5b6c7d8e9
 Create Date: 2026-07-27 00:00:00.000000
 
 """
@@ -28,7 +28,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "a4b5c6d7e8f9"
-down_revision: Union[str, Sequence[str], None] = "f3a4b5c6d7e8"
+down_revision: Union[str, Sequence[str], None] = "f4a5b6c7d8e9"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

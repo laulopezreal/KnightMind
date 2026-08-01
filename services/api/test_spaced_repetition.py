@@ -4,7 +4,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from services.api.models import Base
+from services.api.models import Base, PuzzleStats
 from services.api.storage.spaced_repetition import (
     _utcnow_naive,
     get_adaptive_puzzles,
@@ -71,6 +71,33 @@ def test_record_fail_review(db_session):
     assert stats.pass_count == 0
     assert stats.fail_count == 1
     assert stats.last_result == "fail"
+
+
+def test_update_puzzle_stats_preserves_existing_identity(db_session):
+    """Review updates preserve existing puzzle title and motif identity fields."""
+
+    db_session.add(
+        PuzzleStats(
+            puzzle_id="test-puzzle-identity",
+            username="testuser",
+            title="Manual title",
+            primary_motif="manual_motif",
+            attempts=0,
+            pass_count=0,
+            fail_count=0,
+            ease_factor=2.0,
+        )
+    )
+    db_session.commit()
+
+    stats = update_puzzle_stats(db_session, "test-puzzle-identity", "testuser", "pass")
+    db_session.commit()
+
+    assert stats.attempts == 1
+    assert stats.pass_count == 1
+    assert stats.fail_count == 0
+    assert stats.title == "Manual title"
+    assert stats.primary_motif == "manual_motif"
 
 
 def test_sequential_reviews(db_session):

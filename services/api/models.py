@@ -531,33 +531,6 @@ class ImportSummary(Base):
     last_new_games: Mapped[int] = mapped_column(Integer, default=0)
 
 
-class OpeningExplorerCache(Base):
-    """Opening-explorer aggregates for one position and rating band.
-
-    Shared across users and not derived from anyone's games: the row is a fact
-    about a position in a public database, so one user's lookup answers
-    everyone else's. That is the point — it keeps a page that shows a baseline
-    on every selection from making an outbound call per selection.
-
-    ``key`` folds in the scheme version, speeds and rating band (see
-    ``explorer.cache_key``), so a change to what we ask for cannot read back
-    rows that answered a different question.
-    """
-
-    __tablename__ = "opening_explorer_cache"
-    __table_args__ = {"extend_existing": True}
-
-    key: Mapped[str] = mapped_column(String, primary_key=True)
-    # Stored beside the key so a row is self-describing when read by hand.
-    epd: Mapped[str] = mapped_column(Text, nullable=False)
-    white: Mapped[int] = mapped_column(Integer, nullable=False)
-    draws: Mapped[int] = mapped_column(Integer, nullable=False)
-    black: Mapped[int] = mapped_column(Integer, nullable=False)
-    fetched_at: Mapped[datetime] = mapped_column(
-        DateTime, default=lambda: datetime.now(timezone.utc), nullable=False
-    )
-
-
 class Game(Base):
     __tablename__ = "games"
     __table_args__ = (
@@ -596,6 +569,28 @@ class Puzzle(Base):
             "ply",
             unique=True,
         ),
+        # Idempotency backstop for manual (analysis-save) puzzles: two saves of
+        # the SAME board position (see normalized_position — first four FEN
+        # fields, so transpositions collapse to one key) must not both persist.
+        # Scoped to MANUAL_GAME_ID because only the manual sequence keys off
+        # position; generation-path rows key off (game, ply) and legitimately
+        # repeat a position across games. normalized_position IS NOT NULL keeps
+        # pre-migration manual rows (NULL key) exempt; the app-level precheck in
+        # create_manual_puzzle handles transpositions, this closes the concurrent
+        # TOCTOU window at the DB.
+        Index(
+            "uq_puzzles_manual_position",
+            "username",
+            "source_game_id",
+            "normalized_position",
+            unique=True,
+            postgresql_where=text(
+                "source_game_id = '__manual__' AND normalized_position IS NOT NULL"
+            ),
+            sqlite_where=text(
+                "source_game_id = '__manual__' AND normalized_position IS NOT NULL"
+            ),
+        ),
         # A puzzle references the owning user's copy of the source game, so the
         # FK is composite now that games is keyed by (game_id, username).
         ForeignKeyConstraint(
@@ -611,6 +606,14 @@ class Puzzle(Base):
     source_game_id: Mapped[str] = mapped_column(String, nullable=False)
     ply: Mapped[int] = mapped_column(Integer, nullable=False)
     fen: Mapped[str] = mapped_column(Text, nullable=False)
+    # Position-identity key: the first four fields of ``fen`` (piece placement +
+    # side to move + castling + en passant), dropping the halfmove/fullmove
+    # counters. Two FENs for the same board reached via different move orders
+    # (a transposition) share this key. Used to dedup manual puzzles by position
+    # rather than by raw FEN (see storage.puzzle_repository.normalized_position
+    # and the uq_puzzles_manual_position partial unique index). NULL for rows
+    # written before this column existed.
+    normalized_position: Mapped[str | None] = mapped_column(Text, nullable=True)
     side_to_move: Mapped[str] = mapped_column(String, nullable=False)
     played_move_uci: Mapped[str] = mapped_column(String, nullable=False)
     best_move_uci: Mapped[str] = mapped_column(String, nullable=False)
@@ -643,3 +646,30 @@ class Puzzle(Base):
         DateTime, default=lambda: datetime.now(timezone.utc)
     )
     source_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class OpeningExplorerCache(Base):
+    """Opening-explorer aggregates for one position and rating band.
+
+    Shared across users and not derived from anyone's games: the row is a fact
+    about a position in a public database, so one user's lookup answers
+    everyone else's. That is the point — it keeps a page that shows a baseline
+    on every selection from making an outbound call per selection.
+
+    ``key`` folds in the scheme version, speeds and rating band (see
+    ``explorer.cache_key``), so a change to what we ask for cannot read back
+    rows that answered a different question.
+    """
+
+    __tablename__ = "opening_explorer_cache"
+    __table_args__ = {"extend_existing": True}
+
+    key: Mapped[str] = mapped_column(String, primary_key=True)
+    # Stored beside the key so a row is self-describing when read by hand.
+    epd: Mapped[str] = mapped_column(Text, nullable=False)
+    white: Mapped[int] = mapped_column(Integer, nullable=False)
+    draws: Mapped[int] = mapped_column(Integer, nullable=False)
+    black: Mapped[int] = mapped_column(Integer, nullable=False)
+    fetched_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc), nullable=False
+    )
