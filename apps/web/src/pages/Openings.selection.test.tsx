@@ -42,7 +42,7 @@ function node(move_san: string, over: Partial<OpeningNode> = {}): OpeningNode {
 }
 
 const ANALYSIS = {
-  games_stored: 40, games_seen: 40, games_analyzed: 40, excluded_by_color: 0,
+  games_stored: 40, games_seen: 40, games_analyzed: 40, excluded_by_color: 0, excluded_by_date: 0, since_days: null,
   games_skipped: 0, skipped_unreadable: 0, skipped_not_player: 0, skipped_unfinished: 0,
   min_games: 1,
 };
@@ -154,7 +154,7 @@ describe('Openings depth control', () => {
     renderAt(<Openings />);
     await screen.findByTestId('opening-graph');
 
-    expect(mockGetOpenings).toHaveBeenCalledWith('alice', 'both', 12);
+    expect(mockGetOpenings).toHaveBeenCalledWith('alice', 'both', 12, null);
   });
 
   it('refetches deeper when asked', async () => {
@@ -166,7 +166,7 @@ describe('Openings depth control', () => {
     await userEvent.selectOptions(screen.getByLabelText('Tree depth in moves'), '24');
 
     await waitFor(() =>
-      expect(mockGetOpenings).toHaveBeenLastCalledWith('alice', 'both', 24)
+      expect(mockGetOpenings).toHaveBeenLastCalledWith('alice', 'both', 24, null)
     );
   });
 
@@ -182,7 +182,7 @@ describe('Openings depth control', () => {
     renderAt(<Openings />);
     await screen.findByTestId('opening-graph');
 
-    expect(mockGetOpenings).toHaveBeenCalledWith('alice', 'both', 40);
+    expect(mockGetOpenings).toHaveBeenCalledWith('alice', 'both', 40, null);
     expect(await screen.findByText(/played at least 3 times/i)).toBeInTheDocument();
   });
 
@@ -191,7 +191,7 @@ describe('Openings depth control', () => {
     renderAt(<Openings />);
     await screen.findByTestId('opening-graph');
 
-    expect(mockGetOpenings).toHaveBeenCalledWith('alice', 'both', 16);
+    expect(mockGetOpenings).toHaveBeenCalledWith('alice', 'both', 16, null);
   });
 
   it('repairs invalid persisted depth before the first fetch', async () => {
@@ -200,7 +200,7 @@ describe('Openings depth control', () => {
     renderAt(<Openings />);
 
     await screen.findByTestId('opening-graph');
-    expect(mockGetOpenings.mock.calls[0]).toEqual(['alice', 'both', 12]);
+    expect(mockGetOpenings.mock.calls[0]).toEqual(['alice', 'both', 12, null]);
     expect(screen.getByLabelText('Tree depth in moves')).toHaveValue('12');
     expect(localStorage.getItem('knightmind:openings:max_ply')).toBe(JSON.stringify(12));
   });

@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { getOpenings, normaliseDepth, depthLabel, DEPTH_OPTIONS, DEFAULT_MAX_PLY } from './openings';
+import {
+    getOpenings, normaliseDepth, depthLabel, DEPTH_OPTIONS, DEFAULT_MAX_PLY,
+    normalisePeriod, offeredPeriod, periodParam, periodLabel, PERIOD_OPTIONS, DEFAULT_PERIOD,
+} from './openings';
 import { ApiError } from './core';
 
 // Every page test mocks this module out, so nothing else connects the arguments
@@ -63,6 +66,26 @@ describe('getOpenings request', () => {
         expect(requestedUrl().searchParams.has('min_games')).toBe(false);
     });
 
+    it('sends the window as since_days — the name the endpoint reads', async () => {
+        await getOpenings('alice', 'both', 12, 90);
+
+        expect(requestedUrl().searchParams.get('since_days')).toBe('90');
+    });
+
+    it('omits the window entirely for all time', async () => {
+        // The endpoint's own default is the whole archive. A parameter meaning
+        // "no filter" is one more thing that can disagree with itself.
+        await getOpenings('alice', 'both', 12, null);
+
+        expect(requestedUrl().searchParams.has('since_days')).toBe(false);
+    });
+
+    it('defaults to the whole archive', async () => {
+        await getOpenings('alice');
+
+        expect(requestedUrl().searchParams.has('since_days')).toBe(false);
+    });
+
     it('escapes a username that would otherwise break the query', async () => {
         await getOpenings('a&b=c', 'both');
 
@@ -122,5 +145,55 @@ describe('depth options', () => {
 
     it('keeps a depth that is on offer', () => {
         expect(normaliseDepth(40)).toBe(40);
+    });
+});
+
+describe('recency windows', () => {
+    it('offers only windows the endpoint accepts', () => {
+        // The endpoint declares ge=1, le=3650.
+        for (const days of PERIOD_OPTIONS) {
+            if (days === null) continue;
+            expect(days).toBeGreaterThanOrEqual(1);
+            expect(days).toBeLessThanOrEqual(3650);
+        }
+    });
+
+    it('offers the whole archive as a real choice', () => {
+        expect(PERIOD_OPTIONS).toContain(null);
+        expect(DEFAULT_PERIOD).toBeNull();
+    });
+
+    it('labels a window in the units a person would say', () => {
+        expect(periodLabel(null)).toBe('All time');
+        expect(periodLabel(30)).toBe('Last 30 days');
+        expect(periodLabel(365)).toBe('Last 12 months');
+    });
+
+    it('normalises anything not on offer back to the whole archive', () => {
+        expect(normalisePeriod(7)).toBeNull();
+        expect(normalisePeriod('90')).toBeNull();
+        expect(normalisePeriod(undefined)).toBeNull();
+    });
+
+    it('keeps a window that is on offer', () => {
+        expect(normalisePeriod(90)).toBe(90);
+    });
+
+    it('round-trips a window through the URL', () => {
+        for (const days of PERIOD_OPTIONS) {
+            expect(offeredPeriod(periodParam(days))).toBe(days);
+        }
+    });
+
+    it('tells an absent window apart from an explicit all-time one', () => {
+        // The whole reason this parse is three-valued: `all` is a choice whose
+        // value is null, and absent must not read as that choice.
+        expect(offeredPeriod(null)).toBeUndefined();
+        expect(offeredPeriod('all')).toBeNull();
+    });
+
+    it('treats a window it does not offer as unnamed', () => {
+        expect(offeredPeriod('7')).toBeUndefined();
+        expect(offeredPeriod('banana')).toBeUndefined();
     });
 });

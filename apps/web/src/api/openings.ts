@@ -16,6 +16,14 @@ export interface OpeningAnalysis {
     /** Games that actually reached the tree. */
     games_analyzed: number;
     excluded_by_color: number;
+    /**
+     * Games the recency window left out. Beside `excluded_by_color` and read
+     * the same way: the user asked for it, so it is a fact to state rather
+     * than data loss to warn about.
+     */
+    excluded_by_date: number;
+    /** The window applied, or null for the whole archive. */
+    since_days: number | null;
     /** unreadable + not_player + unfinished. */
     games_skipped: number;
     /**
@@ -71,6 +79,49 @@ export function depthLabel(plies: number): string {
 
 export const DEFAULT_MAX_PLY = 12;
 
+/**
+ * Recency windows, in days. `null` is the whole archive and is a real choice,
+ * not the absence of one — a repertoire you are still building is best read
+ * over everything, and a repertoire you have been fixing is not.
+ */
+export const PERIOD_OPTIONS = [null, 30, 90, 365] as const;
+export type Period = (typeof PERIOD_OPTIONS)[number];
+
+export const DEFAULT_PERIOD: Period = null;
+
+export function periodLabel(days: Period): string {
+    if (days === null) return 'All time';
+    if (days % 365 === 0) {
+        const years = days / 365;
+        return years === 1 ? 'Last 12 months' : `Last ${years} years`;
+    }
+    return `Last ${days} days`;
+}
+
+/** Clamp a persisted or hand-edited value onto a window we actually offer. */
+export function normalisePeriod(days: unknown): Period {
+    return PERIOD_OPTIONS.some(offered => offered === days)
+        ? (days as Period)
+        : DEFAULT_PERIOD;
+}
+
+/**
+ * A window named in the URL, or undefined when the URL does not name a usable
+ * one. Three-valued on purpose: `all` is a window the user chose, absent means
+ * fall through to what they last chose on this device.
+ */
+export function offeredPeriod(raw: string | null): Period | undefined {
+    if (raw === null) return undefined;
+    if (raw === 'all') return null;
+    const days = Number(raw);
+    return PERIOD_OPTIONS.some(offered => offered === days) ? (days as Period) : undefined;
+}
+
+/** URL form of a window. */
+export function periodParam(days: Period): string {
+    return days === null ? 'all' : String(days);
+}
+
 /** Clamp a persisted or hand-edited value onto an option we actually offer. */
 export function normaliseDepth(plies: unknown): number {
     return DEPTH_OPTIONS.some(offered => offered === plies)
@@ -99,13 +150,18 @@ export function offeredColor(raw: string | null): ColorFilter | null {
 export async function getOpenings(
     username: string,
     color: ColorFilter = 'both',
-    maxPly: number = DEFAULT_MAX_PLY
+    maxPly: number = DEFAULT_MAX_PLY,
+    sinceDays: Period = DEFAULT_PERIOD
 ): Promise<OpeningNode> {
     const params = new URLSearchParams({
         username,
         color,
         max_ply: maxPly.toString(),
     });
+    // Omitted rather than sent as a sentinel: the endpoint's default is the
+    // whole archive, and a parameter that means "no filter" is one more thing
+    // that can disagree with itself.
+    if (sinceDays !== null) params.set('since_days', String(sinceDays));
 
     try {
         return await request<OpeningNode>(`/openings?${params}`);

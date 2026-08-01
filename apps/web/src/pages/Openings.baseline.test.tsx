@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, act, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import Openings from './Openings';
 import { renderAt } from '../test/router';
 import type { OpeningNode, OpeningBaseline } from '../api';
@@ -41,7 +42,7 @@ const TREE: OpeningNode = {
   ...node('Start', { games_count: 40, wins: 20, draws: 4, losses: 16, win_rate: 55 }),
   children: [{ ...node('e4'), children: [node('c5')] }],
   analysis: {
-    games_stored: 40, games_seen: 40, games_analyzed: 40, excluded_by_color: 0,
+    games_stored: 40, games_seen: 40, games_analyzed: 40, excluded_by_color: 0, excluded_by_date: 0, since_days: null,
     games_skipped: 0, skipped_unreadable: 0, skipped_not_player: 0, skipped_unfinished: 0,
     min_games: 1,
   },
@@ -173,6 +174,24 @@ describe('Openings — comparison against players at the same rating', () => {
     expect(signals).toHaveLength(2);
     expect(signals[0]?.aborted).toBe(true);
     expect(signals[1]?.aborted).toBe(false);
+  });
+
+  it('does not re-ask about a position that has not moved', async () => {
+    // A refetch hands down an equal-but-new tree, so the resolved selection is
+    // a new array even when the line is untouched. Keyed on that object, every
+    // refresh spent a lookup — and a share of the endpoint's rate limit — on a
+    // position that had not changed.
+    mockGetOpenings.mockImplementation(() =>
+      Promise.resolve(JSON.parse(JSON.stringify(TREE)))
+    );
+    const user = userEvent.setup();
+    await selectAs();
+    await waitFor(() => expect(mockGetBaseline).toHaveBeenCalledTimes(1));
+
+    await user.click(screen.getByRole('button', { name: /refresh/i }));
+    await waitFor(() => expect(mockGetOpenings.mock.calls.length).toBeGreaterThan(1));
+
+    expect(mockGetBaseline).toHaveBeenCalledTimes(1);
   });
 
   it('drops the comparison when the selection is cleared', async () => {

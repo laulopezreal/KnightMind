@@ -40,7 +40,7 @@ function emptyTree(analysis: Record<string, number>) {
     move_san: 'Start', ply: 0, games_count: 0, wins: 0, draws: 0, losses: 0,
     win_rate: 0, children: [],
     analysis: {
-      games_stored: 0, games_seen: 0, games_analyzed: 0, excluded_by_color: 0,
+      games_stored: 0, games_seen: 0, games_analyzed: 0, excluded_by_color: 0, excluded_by_date: 0, since_days: null,
       games_skipped: 0, skipped_unreadable: 0, skipped_not_player: 0,
       skipped_unfinished: 0, min_games: 1, ...analysis,
     },
@@ -53,7 +53,7 @@ const POPULATED_TREE = {
     { move_san: 'e4', ply: 1, games_count: 40, wins: 20, draws: 4, losses: 16, win_rate: 55 },
   ],
   analysis: {
-    games_stored: 40, games_seen: 40, games_analyzed: 40, excluded_by_color: 0,
+    games_stored: 40, games_seen: 40, games_analyzed: 40, excluded_by_color: 0, excluded_by_date: 0, since_days: null,
     games_skipped: 0, skipped_unreadable: 0, skipped_not_player: 0, skipped_unfinished: 0,
   min_games: 1,
   },
@@ -127,7 +127,7 @@ describe('Openings — a 200 with an empty tree', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Show all games' }));
 
     await waitFor(() =>
-      expect(mockGetOpenings).toHaveBeenLastCalledWith('alice', 'both', 12)
+      expect(mockGetOpenings).toHaveBeenLastCalledWith('alice', 'both', 12, null)
     );
   });
 
@@ -181,7 +181,7 @@ describe('Openings — partially analysed archive', () => {
       analysis: {
         ...POPULATED_TREE.analysis,
         games_stored: 90, games_seen: 90, games_analyzed: 40,
-        excluded_by_color: 50, games_skipped: 0,
+        excluded_by_color: 50, excluded_by_date: 0, since_days: null, games_skipped: 0,
       },
     });
     renderAt(<Openings />);
