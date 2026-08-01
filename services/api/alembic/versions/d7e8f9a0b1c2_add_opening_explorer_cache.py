@@ -13,8 +13,8 @@ a change to what we ask the explorer for yields different keys and can never
 read back rows that answered a different question. Same discipline as
 ``fen_eval_cache``.
 
-Revision ID: c6d7e8f9a0b1
-Revises: b5c6d7e8f9a0
+Revision ID: d7e8f9a0b1c2
+Revises: c6d7e8f9a0b1
 Create Date: 2026-08-01 00:00:00.000000
 
 """
@@ -25,8 +25,8 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "c6d7e8f9a0b1"
-down_revision: Union[str, Sequence[str], None] = "b5c6d7e8f9a0"
+revision: str = "d7e8f9a0b1c2"
+down_revision: Union[str, Sequence[str], None] = "c6d7e8f9a0b1"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
