@@ -63,6 +63,10 @@ class CauseStat:
     verified_passes: int
     accuracy: float | None
     insufficient_data: bool
+    # The opening family this cause shows up in most, when one dominates. Same
+    # strict-majority rule as the phase: a plurality would let 4 of 10 games
+    # name the cause "your Sicilian problem" while six other openings disagree.
+    dominant_opening: str | None = None
     # Mistakes from games played in the recent window. Keyed on the GAME's
     # end_time, not the puzzle's created_at: puzzles are all generated at import
     # time, so created_at clusters into a few moments and says nothing about
@@ -84,6 +88,8 @@ class DiagnosisWrite:
     primary_strength: float | None = None
     insufficient_evidence: bool = False
     phase: str | None = None
+    # The opening family the game reached, when it was classified at all.
+    opening_family: str | None = None
     evidence: tuple[dict, ...] = ()
     evidence_hash: str | None = None
     source: str = "rules"
@@ -294,6 +300,7 @@ class DiagnosisRepository:
         row.primary_strength = write.primary_strength
         row.insufficient_evidence = write.insufficient_evidence
         row.phase = write.phase
+        row.opening_family = write.opening_family
         row.evidence_json = list(write.evidence)
         row.evidence_hash = write.evidence_hash
         row.source = write.source
@@ -362,6 +369,7 @@ class DiagnosisRepository:
                 PuzzleDiagnosis.puzzle_id,
                 cause_col.label("cause"),
                 PuzzleDiagnosis.phase,
+                PuzzleDiagnosis.opening_family,
             ).where(
                 PuzzleDiagnosis.username == username,
                 PuzzleDiagnosis.status == DiagnosisStatus.OK,
@@ -414,6 +422,7 @@ class DiagnosisRepository:
                 {
                     "mistakes": 0,
                     "phases": {},
+                    "openings": {},
                     "attempts": 0,
                     "passes": 0,
                     "puzzles": 0,
@@ -425,6 +434,10 @@ class DiagnosisRepository:
                 bucket["recent"] += 1
             if row.phase:
                 bucket["phases"][row.phase] = bucket["phases"].get(row.phase, 0) + 1
+            if row.opening_family:
+                bucket["openings"][row.opening_family] = (
+                    bucket["openings"].get(row.opening_family, 0) + 1
+                )
             attempts, passes = by_puzzle.get(row.puzzle_id, (0, 0))
             bucket["attempts"] += attempts
             bucket["passes"] += passes
@@ -438,6 +451,7 @@ class DiagnosisRepository:
                 # Only when one phase actually dominates; a 3/3 split names no
                 # phase rather than picking one by dictionary order.
                 dominant_phase=_dominant(b["phases"]),
+                dominant_opening=_dominant(b["openings"], b["mistakes"]),
                 verified_attempts=b["attempts"],
                 verified_puzzles=b["puzzles"],
                 verified_passes=b["passes"],
@@ -463,8 +477,8 @@ class DiagnosisRepository:
         return stats
 
 
-def _dominant(phases: dict[str, int]) -> str | None:
-    """The phase a cause genuinely concentrates in, or None.
+def _dominant(counts: dict[str, int], total: int | None = None) -> str | None:
+    """The value a cause genuinely concentrates in, or None.
 
     Requires a strict majority, not a plurality. A plurality is too fragile for
     what this drives: it is rendered as "mostly middlegame" and it selects the
@@ -475,9 +489,16 @@ def _dominant(phases: dict[str, int]) -> str | None:
 
     Above half, the claim is true and stable. Below it, saying nothing is both
     more honest and less jumpy.
+
+    ``total`` is the denominator to judge the majority against, for values that
+    are not always present. Openings are the case: two classified Sicilians out
+    of four mistakes is a majority of what was *classified* and not of what
+    happened, and "mostly Sicilian" on half-unknown data is exactly the
+    overclaim this function exists to refuse. Phases are always populated, so
+    they leave it unset and the counted total is the real one.
     """
-    if not phases:
+    if not counts:
         return None
-    total = sum(phases.values())
-    phase, count = max(phases.items(), key=lambda kv: (kv[1], kv[0]))
+    total = sum(counts.values()) if total is None else total
+    phase, count = max(counts.items(), key=lambda kv: (kv[1], kv[0]))
     return phase if count * 2 > total else None

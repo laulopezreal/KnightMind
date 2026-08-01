@@ -10,6 +10,7 @@ function cause(overrides: Partial<MistakeCause> = {}): MistakeCause {
         label: 'Loose piece awareness',
         mistakes: 8,
         dominant_phase: 'middlegame',
+        dominant_opening: null,
         verified_attempts: 10,
         verified_puzzles: 4,
         accuracy: 0.4,
@@ -136,7 +137,20 @@ describe('TopMistakeCausesCard', () => {
             expect(screen.getByText(/0% solved when retried/)).toBeInTheDocument();
         });
 
-        it('omits the phase when none dominates', () => {
+        it('names the opening when one dominates', () => {
+        // The spec's "common in Sicilian / Italian structures" line.
+        show(data({ causes: [cause({ dominant_opening: 'Sicilian Defense' })] }));
+        expect(screen.getByText(/common in Sicilian Defense/)).toBeInTheDocument();
+    });
+
+    it('says nothing about openings when none dominates', () => {
+        // The API withholds this unless one opening holds a real majority, so
+        // silence here is the honest rendering of a split corpus.
+        show(data());
+        expect(screen.queryByText(/common in/)).not.toBeInTheDocument();
+    });
+
+    it('omits the phase when none dominates', () => {
             show(data({ causes: [cause({ dominant_phase: null })] }));
             expect(screen.queryByText(/mostly/i)).not.toBeInTheDocument();
         });

@@ -104,6 +104,14 @@ function CauseRow({ cause, total }: { cause: MistakeCause; total: number }) {
                         mostly {cause.dominant_phase}
                     </span>
                 )}
+                {cause.dominant_opening && (
+                    // Only rendered when one opening holds a real majority of
+                    // this cause's mistakes — see _dominant. "Common in X" off a
+                    // plurality would be a claim the data doesn't carry.
+                    <span className="font-sans text-xs text-primary/60">
+                        common in {cause.dominant_opening}
+                    </span>
+                )}
                 <span className="font-sans text-xs text-primary/60">
                     {accuracyLabel(cause)}
                 </span>

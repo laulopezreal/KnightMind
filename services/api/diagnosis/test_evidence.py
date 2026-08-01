@@ -493,3 +493,41 @@ class TestEvidenceItems:
             i.id for i in to_evidence_items(extract(HANGING_QUEEN, "d1d2", "d1d5"))
         }
         assert {"position.phase", "played.move", "best.move", "eval.swing"} <= items
+
+
+class TestOpeningFamilyEvidence:
+    """The opening the game reached, as a citable fact."""
+
+    RUY = '[Event "x"]\n\n1. e4 e5 2. Nf3 Nc6 3. Bb5 a6 4. Bxc6 dxc6 *'
+    # The position the replay actually reaches at ply 7, so the packet is not
+    # a desync. Bxc6 is the "mistake" under analysis.
+    FEN = "r1bqkbnr/1ppp1ppp/p1n5/1B2p3/4P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 0 4"
+    OTHER_FEN = "6k1/pp3ppp/8/3q4/8/8/PP3PPP/3Q2K1 w - - 0 1"
+
+    def _ctx(self):
+        from services.api.diagnosis.pgn_context import extract_game_context
+
+        return extract_game_context(self.RUY, ply=7, user_is_white=True)
+
+    def test_a_classified_opening_becomes_a_citable_fact(self):
+        packet = extract(self.FEN, "b5c6", "e1g1", ply=7, context=self._ctx())
+        ids = {item.id for item in to_evidence_items(packet)}
+        assert "game.opening_family" in ids
+        assert packet.game.opening_family == "Ruy Lopez"
+
+    def test_an_unclassified_game_emits_no_opening_item(self):
+        # The citation gate is only meaningful because absent facts produce no
+        # item: a model can never cite an opening the game did not reach.
+        packet = extract(self.OTHER_FEN, "d1d2", "d1d5")
+        ids = {item.id for item in to_evidence_items(packet)}
+        assert "game.opening_family" not in ids
+        assert packet.game.opening_family is None
+
+    def test_a_desynced_pgn_drops_the_opening_with_its_other_facts(self):
+        # A replay disagreeing with the stored FEN was not this position, so its
+        # opening must not be attributed here.
+        packet = extract(self.OTHER_FEN, "d1d2", "d1d5", ply=7, context=self._ctx())
+        assert packet.game.pgn_desync is True
+        assert packet.game.opening_family is None
+        ids = {item.id for item in to_evidence_items(packet)}
+        assert "game.opening_family" not in ids

@@ -1622,3 +1622,69 @@ class TestReenrichScope:
         stats.attempts, stats.fail_count = 4, 4
         db_session.commit()
         assert DiagnosisRepository(db_session).unenriched_puzzle_ids(USER)[0] == "often"
+
+
+class TestDominantOpening:
+    """ "Common in Sicilian structures" — the spec's Insights line.
+
+    Reported only when one opening actually dominates. The same strict-majority
+    rule the phase uses: a plurality would let 4 of 10 games rename the cause
+    "your Sicilian problem" while six other openings disagree.
+    """
+
+    def _diagnosed(self, db, pid, opening, ply=41):
+        _puzzle(db, puzzle_id=pid, ply=ply)
+        DiagnosisRepository(db).upsert(
+            DiagnosisWrite(
+                puzzle_id=pid,
+                username=USER,
+                primary_cause="loose_piece_awareness",
+                phase="middlegame",
+                opening_family=opening,
+            )
+        )
+        db.commit()
+
+    def test_names_the_opening_when_one_dominates(self, client, db_session):
+        for i in range(3):
+            self._diagnosed(db_session, f"s{i}", "Sicilian Defense", ply=41 + i * 2)
+
+        stats = DiagnosisRepository(db_session).cause_breakdown(USER)
+        assert stats[0].dominant_opening == "Sicilian Defense"
+
+    def test_reports_nothing_when_openings_are_split(self, client, db_session):
+        self._diagnosed(db_session, "a", "Sicilian Defense", ply=41)
+        self._diagnosed(db_session, "b", "Italian Game", ply=43)
+        self._diagnosed(db_session, "c", "French Defense", ply=45)
+
+        stats = DiagnosisRepository(db_session).cause_breakdown(USER)
+        assert stats[0].dominant_opening is None
+
+    def test_a_plurality_is_not_enough(self, client, db_session):
+        # 2 of 5 is the most common and still not "your Sicilian problem".
+        self._diagnosed(db_session, "a", "Sicilian Defense", ply=41)
+        self._diagnosed(db_session, "b", "Sicilian Defense", ply=43)
+        self._diagnosed(db_session, "c", "Italian Game", ply=45)
+        self._diagnosed(db_session, "d", "French Defense", ply=47)
+        self._diagnosed(db_session, "e", "Caro-Kann Defense", ply=49)
+
+        stats = DiagnosisRepository(db_session).cause_breakdown(USER)
+        assert stats[0].dominant_opening is None
+
+    def test_unclassified_games_do_not_count_toward_a_majority(
+        self, client, db_session
+    ):
+        # Two classified Sicilians out of four games is not a majority of the
+        # games; counting only what was classified would invent one.
+        self._diagnosed(db_session, "a", "Sicilian Defense", ply=41)
+        self._diagnosed(db_session, "b", "Sicilian Defense", ply=43)
+        self._diagnosed(db_session, "c", None, ply=45)
+        self._diagnosed(db_session, "d", None, ply=47)
+
+        stats = DiagnosisRepository(db_session).cause_breakdown(USER)
+        assert stats[0].dominant_opening is None
+
+    def test_is_absent_when_nothing_was_classified(self, client, db_session):
+        self._diagnosed(db_session, "a", None, ply=41)
+        stats = DiagnosisRepository(db_session).cause_breakdown(USER)
+        assert stats[0].dominant_opening is None

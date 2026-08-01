@@ -295,6 +295,7 @@ def _diagnose_one(
             primary_strength=strength,
             insufficient_evidence=assessment.insufficient_evidence,
             phase=packet.position.phase,
+            opening_family=packet.game.opening_family,
             evidence=tuple(
                 {"id": item.id, "label": item.label, "value": item.value}
                 for item in to_evidence_items(packet)

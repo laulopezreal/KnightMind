@@ -172,6 +172,13 @@ export default function Library() {
         () => new URLSearchParams(window.location.search).get('cause') ?? ''
     );
     const [availableCauses, setAvailableCauses] = useState<CauseOption[]>([]);
+    const [phaseFilter, setPhaseFilter] = useState(
+        () => new URLSearchParams(window.location.search).get('phase') ?? ''
+    );
+    const [openingFilter, setOpeningFilter] = useState(
+        () => new URLSearchParams(window.location.search).get('opening') ?? ''
+    );
+    const [availableOpenings, setAvailableOpenings] = useState<string[]>([]);
     const [sort, setSort] = useState<PuzzleSort>('due_soonest');
     const [offset, setOffset] = useState(0);
 
@@ -185,7 +192,7 @@ export default function Library() {
     // Reset offset when filters change
     useEffect(() => {
         setOffset(0);
-    }, [debouncedSearch, statusFilter, difficultyFilter, motifFilter, causeFilter, sort]);
+    }, [debouncedSearch, statusFilter, difficultyFilter, motifFilter, causeFilter, phaseFilter, openingFilter, sort]);
 
     const fetchPuzzles = useCallback(async () => {
         if (!username) return;
@@ -198,6 +205,8 @@ export default function Library() {
                 status: statusFilter || undefined,
                 motif: motifFilter || undefined,
                 cause: causeFilter || undefined,
+                phase: phaseFilter || undefined,
+                opening: openingFilter || undefined,
                 difficulty: difficultyFilter || undefined,
                 sort,
                 limit: PAGE_SIZE,
@@ -207,13 +216,14 @@ export default function Library() {
             setTotal(res.total);
             setAvailableMotifs(res.available_motifs);
             setAvailableCauses(res.available_causes ?? []);
+            setAvailableOpenings(res.available_openings ?? []);
             setCorpusStats(res.stats);
         } catch (err) {
             setError(err instanceof Error ? err.message : 'Failed to load puzzles');
         } finally {
             setIsLoading(false);
         }
-    }, [username, debouncedSearch, statusFilter, difficultyFilter, motifFilter, causeFilter, sort, offset]);
+    }, [username, debouncedSearch, statusFilter, difficultyFilter, motifFilter, causeFilter, phaseFilter, openingFilter, sort, offset]);
 
     useEffect(() => {
         fetchPuzzles();
@@ -338,6 +348,34 @@ export default function Library() {
                             <option value="">All causes</option>
                             {availableCauses.map(c => (
                                 <option key={c.value} value={c.value}>{c.label}</option>
+                            ))}
+                        </select>
+                    )}
+
+                    {/* Phase */}
+                    <select
+                        value={phaseFilter}
+                        onChange={(e) => setPhaseFilter(e.target.value)}
+                        aria-label="Filter by game phase"
+                        className="bg-bg-primary border border-primary/20 rounded-sm px-3 py-1.5 text-primary focus:outline-none focus:border-primary/60"
+                    >
+                        <option value="">All phases</option>
+                        <option value="opening">Opening</option>
+                        <option value="middlegame">Middlegame</option>
+                        <option value="endgame">Endgame</option>
+                    </select>
+
+                    {/* Opening family — only offered once games have been classified */}
+                    {availableOpenings.length > 0 && (
+                        <select
+                            value={openingFilter}
+                            onChange={(e) => setOpeningFilter(e.target.value)}
+                            aria-label="Filter by opening"
+                            className="bg-bg-primary border border-primary/20 rounded-sm px-3 py-1.5 text-primary focus:outline-none focus:border-primary/60"
+                        >
+                            <option value="">All openings</option>
+                            {availableOpenings.map(o => (
+                                <option key={o} value={o}>{o}</option>
                             ))}
                         </select>
                     )}

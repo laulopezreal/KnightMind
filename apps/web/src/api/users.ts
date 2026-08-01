@@ -163,6 +163,8 @@ export interface MistakeCause {
     label: string;
     mistakes: number;
     dominant_phase?: string | null;
+    /** The opening this cause concentrates in, when one genuinely dominates. */
+    dominant_opening?: string | null;
     verified_attempts: number;
     verified_puzzles: number;
     accuracy?: number | null;

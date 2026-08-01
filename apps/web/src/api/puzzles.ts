@@ -221,6 +221,7 @@ export interface LibraryListResponse {
     offset: number;
     available_motifs: string[];
     available_causes: CauseOption[];
+    available_openings: string[];
     stats: LibraryCorpusStats;
 }
 
@@ -230,6 +231,8 @@ export interface LibraryListParams {
     status?: PuzzleStatus;
     motif?: string;
     cause?: string;
+    phase?: string;
+    opening?: string;
     difficulty?: PuzzleDifficulty;
     sort?: PuzzleSort;
     limit?: number;
@@ -255,6 +258,8 @@ export async function getLibraryPuzzles(
     if (params.status) searchParams.append('status', params.status);
     if (params.motif) searchParams.append('motif', params.motif);
     if (params.cause) searchParams.append('cause', params.cause);
+    if (params.phase) searchParams.append('phase', params.phase);
+    if (params.opening) searchParams.append('opening', params.opening);
     if (params.difficulty) searchParams.append('difficulty', params.difficulty);
     if (params.sort) searchParams.append('sort', params.sort);
     if (params.limit !== undefined) searchParams.append('limit', params.limit.toString());
