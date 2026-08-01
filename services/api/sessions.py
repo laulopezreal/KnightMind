@@ -68,6 +68,10 @@ class SessionSummary(BaseModel):
     # depend on how the user navigated back — see the resume path in
     # usePuzzleSession.
     focus_cause: str | None = None
+    # Same reasoning, and the stakes are higher: motif *filters* the queue
+    # rather than merely biasing it, so losing it on resume changes the set of
+    # puzzles, not just their order.
+    motif: str | None = None
 
 
 class UseHintRequest(BaseModel):
@@ -197,6 +201,7 @@ async def get_session(
         best_streak=session.best_streak,
         hints_used=session.hints_used,
         focus_cause=(session.session_data or {}).get("focus_cause"),
+        motif=(session.session_data or {}).get("motif"),
     )
 
 
@@ -253,6 +258,7 @@ async def complete_session(
         best_streak=session.best_streak,
         hints_used=session.hints_used,
         focus_cause=(session.session_data or {}).get("focus_cause"),
+        motif=(session.session_data or {}).get("motif"),
     )
 
     # Best-effort auto-snapshot after response is built
@@ -310,4 +316,5 @@ async def use_hint(
         best_streak=session.best_streak,
         hints_used=session.hints_used,
         focus_cause=(session.session_data or {}).get("focus_cause"),
+        motif=(session.session_data or {}).get("motif"),
     )

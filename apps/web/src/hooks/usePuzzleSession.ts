@@ -20,18 +20,20 @@ export type SessionState = 'idle' | 'loading' | 'active' | 'completing' | 'compl
 /**
  * What to persist alongside a session so it can be resumed faithfully.
  *
- * The focus goes here rather than being re-read from the URL on resume: the
- * order a focused session was served in has to survive the user navigating
- * back without the query parameter, or the restored index lands on a
- * different puzzle.
+ * The focus and the motif go here rather than being re-read from the URL on
+ * resume: the order a filtered or focused session was served in has to survive
+ * the user navigating back without the query parameter, or the restored index
+ * lands on a different puzzle.
  */
 function buildSessionData(
     warmupMode: boolean,
-    focusCause: string | null
+    focusCause: string | null,
+    motifFilter: string | null
 ): Record<string, unknown> | undefined {
     const data: Record<string, unknown> = {};
     if (warmupMode) data.is_warmup = true;
     if (focusCause) data.focus_cause = focusCause;
+    if (motifFilter) data.motif = motifFilter;
     return Object.keys(data).length > 0 ? data : undefined;
 }
 
@@ -263,12 +265,12 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
                         session.requested_n,
                         session.session_type || 'standard',
                         session.target_accuracy,
-                        motifFilter || undefined,
-                        // The session's own focus, not the URL's. A resumed
-                        // session must be ordered the way it was served, or
-                        // the restored index points at a different puzzle and
-                        // the user re-solves one — advancing its interval
-                        // twice.
+                        // The session's own motif and focus, not the URL's. A
+                        // resumed session must be served the way it was
+                        // originally, or the restored index points at a
+                        // different puzzle and the user re-solves one —
+                        // advancing its interval twice.
+                        session.motif || undefined,
                         session.focus_cause || undefined,
                     );
                     setPuzzles(response.puzzles);
@@ -518,7 +520,7 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
                 sessionType,
                 targetAccuracyParam,
                 targetTimeMinutesParam,
-                buildSessionData(warmupMode, focusCause),
+                buildSessionData(warmupMode, focusCause, motifFilter),
             );
             setActiveSessionId(session_id);
 
