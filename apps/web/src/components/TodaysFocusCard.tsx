@@ -57,12 +57,23 @@ export function TodaysFocusCard({ data }: TodaysFocusCardProps) {
                 Why this: {focus.rationale}
             </p>
 
-            <Link
-                to={`/puzzles?focus_cause=${encodeURIComponent(focus.cause)}`}
-                className="km-interactive km-focus-visible inline-block mt-4 border border-primary/40 rounded-sm px-4 py-2 font-sans text-sm text-primary hover:bg-primary/10 transition-colors"
-            >
-                Train this today
-            </Link>
+            {focus.trainable_now && focus.trainable_now > 0 ? (
+                <Link
+                    to={`/puzzles?focus_cause=${encodeURIComponent(focus.cause)}`}
+                    className="km-interactive km-focus-visible inline-block mt-4 border border-primary/40 rounded-sm px-4 py-2 font-sans text-sm text-primary hover:bg-primary/10 transition-colors"
+                >
+                    Train {focus.trainable_now} puzzle
+                    {focus.trainable_now === 1 ? '' : 's'} now
+                </Link>
+            ) : (
+                // Nothing of this pattern is due, and training early would
+                // re-anchor intervals. Naming the pattern is still useful; a
+                // button that served an unrelated queue would not be.
+                <p className="font-sans text-xs text-primary/50 mt-4">
+                    Nothing from this pattern is due right now — it will come
+                    back around.
+                </p>
+            )}
 
             {focus.runner_up && (
                 // Naming the runner-up keeps a close call from reading as a

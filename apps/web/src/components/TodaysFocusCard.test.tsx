@@ -15,6 +15,7 @@ function focus(overrides: Partial<TodaysFocus> = {}): TodaysFocus {
         priority: 12.5,
         rationale: '9 diagnosed mistakes; 4 of them recent; 40% solved when retried.',
         runner_up: null,
+        trainable_now: 5,
         ...overrides,
     };
 }
@@ -52,11 +53,39 @@ describe('TodaysFocusCard', () => {
         expect(screen.getByText(/40% solved when retried/)).toBeInTheDocument();
     });
 
+    it('says how many puzzles it can actually serve', () => {
+        // The spec's "Train next: 5 loose-piece awareness puzzles". The count
+        // is the trainable set, not the corpus — promising more than the
+        // session will serve is the failure this avoids.
+        show(data());
+        expect(screen.getByRole('link', { name: /train 5 puzzles now/i }))
+            .toBeInTheDocument();
+    });
+
+    it('uses the singular for one puzzle', () => {
+        show(data({ focus: focus({ trainable_now: 1 }) }));
+        expect(screen.getByRole('link', { name: /train 1 puzzle now/i }))
+            .toBeInTheDocument();
+    });
+
+    it('offers no session when nothing of the pattern is due', () => {
+        // Training early re-anchors intervals, so a button that served an
+        // unrelated queue would be worse than no button.
+        show(data({ focus: focus({ trainable_now: 0 }) }));
+        expect(screen.queryByRole('link', { name: /train/i })).not.toBeInTheDocument();
+        expect(screen.getByText(/nothing from this pattern is due/i)).toBeInTheDocument();
+    });
+
+    it('still names the habit when nothing is due', () => {
+        show(data({ focus: focus({ trainable_now: 0 }) }));
+        expect(screen.getByText('Loose Piece Syndrome')).toBeInTheDocument();
+    });
+
     it('opens a biased session rather than a filtered library', () => {
         // The distinction is the whole planner: focus_cause reorders what is
         // already due; it does not narrow or extend the queue.
         show(data());
-        expect(screen.getByRole('link', { name: /train this today/i })).toHaveAttribute(
+        expect(screen.getByRole('link', { name: /train 5 puzzles now/i })).toHaveAttribute(
             'href',
             '/puzzles?focus_cause=loose_piece_awareness'
         );
@@ -87,7 +116,7 @@ describe('TodaysFocusCard', () => {
         it('never offers a session it cannot justify', () => {
             show(data({ focus: null, below_threshold: 3 }));
             expect(
-                screen.queryByRole('link', { name: /train this today/i })
+                screen.queryByRole('link', { name: /train/i })
             ).not.toBeInTheDocument();
         });
 

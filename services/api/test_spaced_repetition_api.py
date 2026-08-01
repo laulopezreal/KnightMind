@@ -400,3 +400,134 @@ class TestFocusCauseParameter:
             "/puzzles/due?username=testuser&n=5&focus_cause=king_safety_blindness"
         ).json()
         assert focused["puzzles"][0]["id"] == "p1"
+
+
+class TestQueueReasons:
+    """Why each puzzle is in today's queue.
+
+    The point is that the queue is inspectable rather than a black box. A user
+    who sees an unexpected puzzle should be able to find out why it was served.
+    """
+
+    def _due(self, db, pid, days_ago, fail_count=0):
+        db.add(
+            PuzzleStats(
+                puzzle_id=pid,
+                username="testuser",
+                attempts=1 + fail_count,
+                pass_count=1,
+                fail_count=fail_count,
+                last_result="pass",
+                interval_days=1,
+                ease_factor=2.0,
+                next_due_at=datetime.now(timezone.utc) - timedelta(days=days_ago),
+            )
+        )
+        db.commit()
+
+    def _diagnose(self, db, pid, cause):
+        from services.api.models import DiagnosisStatus, PuzzleDiagnosis
+
+        db.add(
+            PuzzleDiagnosis(
+                puzzle_id=pid,
+                username="testuser",
+                status=DiagnosisStatus.OK,
+                primary_cause=cause,
+                source="rules",
+                evidence_json=[],
+            )
+        )
+        db.commit()
+
+    def test_a_never_trained_puzzle_says_so(self, client, db_session, seed_puzzles):
+        body = client.get("/puzzles/due?username=testuser&n=5").json()
+        reasons = {p["id"]: p["queue_reason"] for p in body["puzzles"]}
+        assert reasons["p1"]["reason"] == "new"
+        assert "not trained this position yet" in reasons["p1"]["explanation"]
+
+    def test_a_due_puzzle_says_how_overdue_it_is(
+        self, client, db_session, seed_puzzles
+    ):
+        self._due(db_session, "p1", 3)
+        body = client.get("/puzzles/due?username=testuser&n=5").json()
+        reason = next(p["queue_reason"] for p in body["puzzles"] if p["id"] == "p1")
+        assert reason["reason"] == "due"
+        assert "3 days ago" in reason["explanation"]
+
+    def test_a_puzzle_due_today_is_not_reported_as_overdue(
+        self, client, db_session, seed_puzzles
+    ):
+        self._due(db_session, "p1", 0)
+        body = client.get("/puzzles/due?username=testuser&n=5").json()
+        reason = next(p["queue_reason"] for p in body["puzzles"] if p["id"] == "p1")
+        assert "ago" not in reason["explanation"]
+
+    def test_a_focus_match_names_the_pattern(self, client, db_session, seed_puzzles):
+        self._due(db_session, "p1", 2)
+        self._diagnose(db_session, "p1", "loose_piece_awareness")
+        body = client.get(
+            "/puzzles/due?username=testuser&n=5&focus_cause=loose_piece_awareness"
+        ).json()
+        reason = next(p["queue_reason"] for p in body["puzzles"] if p["id"] == "p1")
+        assert reason["pattern"] == "Loose Piece Syndrome"
+        assert "Loose Piece Syndrome" in reason["explanation"]
+
+    def test_a_focus_explains_the_order_not_the_presence(
+        self, client, db_session, seed_puzzles
+    ):
+        # The scheduling reason survives. Saying "matches your focus" about a
+        # puzzle that is here because it came due would misrepresent why it was
+        # served — the focus only decided where in the queue it sits.
+        self._due(db_session, "p1", 4)
+        self._diagnose(db_session, "p1", "loose_piece_awareness")
+        body = client.get(
+            "/puzzles/due?username=testuser&n=5&focus_cause=loose_piece_awareness"
+        ).json()
+        reason = next(p["queue_reason"] for p in body["puzzles"] if p["id"] == "p1")
+        assert reason["reason"] == "due"
+        assert "4 days ago" in reason["explanation"]
+
+    def test_puzzles_outside_the_focus_carry_no_pattern(
+        self, client, db_session, seed_puzzles
+    ):
+        self._due(db_session, "p1", 2)
+        self._due(db_session, "p2", 1)
+        self._diagnose(db_session, "p1", "loose_piece_awareness")
+        body = client.get(
+            "/puzzles/due?username=testuser&n=5&focus_cause=loose_piece_awareness"
+        ).json()
+        p2 = next(p["queue_reason"] for p in body["puzzles"] if p["id"] == "p2")
+        assert "pattern" not in p2
+
+    def test_repeat_failures_are_surfaced(self, client, db_session, seed_puzzles):
+        # A repeat failure is the strongest signal in the corpus, and a user
+        # re-seeing a puzzle deserves to know it is a repeat.
+        self._due(db_session, "p1", 1, fail_count=3)
+        body = client.get("/puzzles/due?username=testuser&n=5").json()
+        reason = next(p["queue_reason"] for p in body["puzzles"] if p["id"] == "p1")
+        assert reason["previous_failures"] == 3
+
+    def test_a_never_failed_puzzle_omits_the_count(
+        self, client, db_session, seed_puzzles
+    ):
+        self._due(db_session, "p1", 1)
+        body = client.get("/puzzles/due?username=testuser&n=5").json()
+        reason = next(p["queue_reason"] for p in body["puzzles"] if p["id"] == "p1")
+        assert "previous_failures" not in reason
+
+    def test_the_reason_never_carries_the_solution(
+        self, client, db_session, seed_puzzles
+    ):
+        # The queue reason is served before the attempt, so it sits on the same
+        # side of the solution gate as everything else in this payload.
+        self._due(db_session, "p1", 1)
+        body = client.get("/puzzles/due?username=testuser&n=5").json()
+        for p in body["puzzles"]:
+            blob = str(p["queue_reason"]).lower()
+            assert "best" not in blob and "solution" not in blob
+
+    def test_every_served_puzzle_has_one(self, client, db_session, seed_puzzles):
+        body = client.get("/puzzles/due?username=testuser&n=5").json()
+        assert body["puzzles"]
+        assert all("queue_reason" in p for p in body["puzzles"])

@@ -11,12 +11,14 @@ import {
     type UserStatus,
 } from '../api/users';
 import { getRatingExplain, type ExplainResponse } from '../api/ratings';
+import { getTodaysFocus, type TodaysFocusResponse } from '../api/users';
 import { getRecentSessions, type SessionSummary } from '../api/sessions';
 import { formatMotifName, weakestMotif } from '../utils/motif';
 import { TC_LABEL, type TimeControl } from '../utils/ratings';
 import { useChessUsername } from '../context/ChessUsernameContext';
 import { HeroTrainCard } from '../components/HeroTrainCard';
 import { RecentlyTrickyCard } from '../components/RecentlyTrickyCard';
+import { TodaysFocusCard } from '../components/TodaysFocusCard';
 import { MomentumCard } from '../components/MomentumCard';
 import { StreakCard } from '../components/StreakCard';
 import { RecentSessionsCard } from '../components/RecentSessionsCard';
@@ -60,6 +62,7 @@ export default function Dashboard() {
     const [motifPerf, setMotifPerf] = useState<MotifPerformanceResponse | null>(null);
     const [ratingData, setRatingData] = useState<ExplainResponse | null>(null);
     const [userStatus, setUserStatus] = useState<UserStatus | null>(null);
+    const [todaysFocus, setTodaysFocus] = useState<TodaysFocusResponse | null>(null);
     const [stripLoading, setStripLoading] = useState(true);
     const timeControl = readTimeControl();
 
@@ -136,16 +139,19 @@ export default function Dashboard() {
         setMotifPerf(null);
         setRatingData(null);
         setUserStatus(null);
+        setTodaysFocus(null);
 
         Promise.allSettled([
             getMotifPerformance(username),
             getRatingExplain(username, timeControl),
             getUserStatus(username),
-        ]).then(([motif, rating, status]) => {
+            getTodaysFocus(username),
+        ]).then(([motif, rating, status, focus]) => {
             if (cancelled) return;
             if (motif.status === 'fulfilled') setMotifPerf(motif.value);
             if (rating.status === 'fulfilled') setRatingData(rating.value);
             if (status.status === 'fulfilled') setUserStatus(status.value);
+            if (focus.status === 'fulfilled') setTodaysFocus(focus.value);
             setStripLoading(false);
         });
 
@@ -275,6 +281,10 @@ export default function Dashboard() {
                     )}
                 </div>
             )}
+
+            {/* Today's focus — the daily card the spec asks for. Above Recently
+                Tricky because it says what to do, not what happened. */}
+            {todaysFocus && <TodaysFocusCard data={todaysFocus} />}
 
             {/* SECTION 2: Recently Tricky */}
             {trickyPuzzles && trickyPuzzles.puzzles.length > 0 && (
