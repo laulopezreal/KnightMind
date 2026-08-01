@@ -86,6 +86,28 @@ Known live database contents at restoration time:
 - `rating_snapshots`: 2
 - Alembic current/head in live image: `a1b2c3d4e5f6`
 
+## Outbound dependencies
+
+The API makes egress calls to exactly two third parties. Both are best-effort:
+a failure degrades one feature and never takes the API down.
+
+| Host | Used by | On failure |
+| --- | --- | --- |
+| `api.chess.com` | game import, rating snapshots | the import or snapshot fails and is reported to the caller |
+| `explorer.lichess.ovh` | `/openings/baseline` | serves a stale cached row if one exists, else 503; the Openings page simply omits the comparison |
+
+Notes for the lichess explorer:
+
+- **No user data leaves the box.** The request carries a chess position and a
+  rating band. No username, game, or identifier.
+- **Answers are cached in `opening_explorer_cache`**, keyed by position and
+  band and shared across all accounts (the rows are public aggregates, not
+  anyone's data). TTL is 30 days; a stale row is still served when the explorer
+  is unreachable, because these figures move at the speed of millions of games.
+- **Blocking egress to it is a supported configuration.** The Openings page
+  drops the "vs expected" line and stays fully usable.
+- Per-principal rate limit: `RATE_LIMIT_OPENINGS_BASELINE` (default 60/min).
+
 ## Environment file
 
 The production-like Compose env file is:

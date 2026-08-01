@@ -78,11 +78,18 @@ from services.api.openings import OpeningTreeBuilder, min_games_floor
 from services.api.openings import make_key as make_openings_cache_key
 from services.api.openings import tree_cache as openings_tree_cache
 from services.api.openings import warm as warm_eco
+from services.api.openings.explorer import (
+    ExplorerUnavailable,
+    band_for_rating,
+)
+from services.api.openings.explorer import cache_key as explorer_cache_key
+from services.api.openings.explorer import fetch_stats as fetch_explorer_stats
 from services.api.puzzles.identity import backfill_puzzle_identity
 from services.api.ratelimit import rate_limit
 from services.api.ratings_auto import auto_snapshot, auto_snapshot_throttled
 from services.api.storage import GameRepository, PuzzleRepository
 from services.api.storage.diagnosis_repository import DiagnosisRepository
+from services.api.storage.explorer_repository import ExplorerRepository
 from services.api.storage.game_repository import MANUAL_GAME_ID
 from services.api.storage.spaced_repetition import (
     _utcnow_naive,
@@ -125,6 +132,9 @@ RATE_LIMIT_IMPORT_CHESSCOM = 5  # heavy Chess.com fetch + bulk DB writes
 RATE_LIMIT_PUZZLES_GENERATE = 5  # enqueues a heavy analysis job
 RATE_LIMIT_RATINGS_SNAPSHOT = 10  # outbound Chess.com call per request
 RATE_LIMIT_DIAGNOSE = 5  # enqueues a whole-corpus analysis job
+# Outbound lichess call on a miss, but the cache is shared across users and
+# positions repeat heavily, so most selections never leave the box.
+RATE_LIMIT_OPENINGS_BASELINE = 60
 
 # A FEN is bounded in length (piece placement + 5 short fields); anything much
 # longer than a legal position is junk. Reject oversized input with 400 before
@@ -842,6 +852,125 @@ async def get_openings(
     # every later hit.
     openings_tree_cache.put(cache_key, tree)
     return tree
+
+
+class BaselineBand(BaseModel):
+    low: int
+    high: int | None
+    label: str
+
+
+class OpeningBaselineResponse(BaseModel):
+    """What players around this rating score from this position."""
+
+    games: int
+    # None when the sample is too thin to say anything. Distinct from 0, which
+    # would read as "they score nothing here".
+    expected_score: float | None
+    # None when the user has no imported rating, in which case the figures are
+    # over all ratings and the client must say so.
+    band: BaselineBand | None
+    source: str = "lichess"
+
+
+def _latest_rating(db: Session, username: str) -> int | None:
+    """The user's most recent rating, preferring the pools the baseline covers.
+
+    Rapid first, then blitz: the explorer query excludes bullet, so a bullet
+    rating would place the user in a band the comparison is not drawn from.
+    """
+    for time_control in ("rapid", "blitz"):
+        snapshot = db.execute(
+            select(RatingSnapshot)
+            .where(
+                RatingSnapshot.username == username,
+                RatingSnapshot.time_control == time_control,
+            )
+            .order_by(RatingSnapshot.recorded_at.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+        if snapshot is not None:
+            return snapshot.rating
+    return None
+
+
+@app.get(
+    "/openings/baseline",
+    response_model=OpeningBaselineResponse,
+    dependencies=[
+        Depends(
+            rate_limit("openings_baseline", default_limit=RATE_LIMIT_OPENINGS_BASELINE)
+        )
+    ],
+)
+async def get_opening_baseline(
+    username: Annotated[Username, Query(description="Whose rating sets the band")],
+    fen: Annotated[str, Query(max_length=120, description="Position to look up")],
+    color: Literal["white", "black"] = Query(
+        ..., description="Whose score to report — the side the player had"
+    ),
+    db: Session = Depends(get_db),
+    account: Account | None = Depends(require_account),
+):
+    """How players around this user's rating score from a position.
+
+    A line's own score says how the user did; it cannot say whether that was
+    good. This supplies the missing half.
+
+    Only ``white`` and ``black`` are accepted, deliberately. Under a "both"
+    filter the user's own figure already mixes games from either side of the
+    board, so there is no single expectation to compare it against and any
+    answer would be a fabrication.
+    """
+    assert_owns_username(account, username, db)
+
+    # Normalise to an EPD before it is used as a key or sent upstream: this
+    # validates the position, and it drops the move counters so two routes into
+    # the same position share one cache row and one lookup.
+    try:
+        epd = chess.Board(fen).epd()
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="Not a valid position.") from exc
+
+    band = band_for_rating(_latest_rating(db, username))
+    key = explorer_cache_key(epd, band)
+    repository = ExplorerRepository(db)
+
+    stats = repository.get_fresh(key)
+    if stats is None:
+        # Hand the pooled connection back before waiting on lichess. Everything
+        # above was a read, and SQLAlchemy holds a connection from the first
+        # query until the transaction ends — so without this each in-flight
+        # miss pins one for the length of an outbound call. The pool is 15
+        # deep and this route fires on every line a user selects, so a slow
+        # explorer would starve every other endpoint of connections.
+        db.rollback()
+        try:
+            stats = await fetch_explorer_stats(epd, band)
+        except ExplorerUnavailable as exc:
+            # A stale row beats no answer: these aggregates move at the speed of
+            # millions of games, so month-old numbers are still true enough to
+            # judge a line by, and the alternative is the baseline blinking out
+            # whenever lichess has a bad minute.
+            cached = repository.get(key)
+            if cached is None:
+                logger.info("openings baseline unavailable: %s", exc)
+                raise HTTPException(
+                    status_code=503, detail="Baseline unavailable right now."
+                ) from exc
+            stats = cached.stats
+        else:
+            repository.put(key, epd, stats)
+
+    return OpeningBaselineResponse(
+        games=stats.games,
+        expected_score=stats.expected_score(color),
+        band=(
+            BaselineBand(low=band.low, high=band.high, label=band.label)
+            if band
+            else None
+        ),
+    )
 
 
 @app.get("/engine/status", response_model=EngineStatusResponse)
