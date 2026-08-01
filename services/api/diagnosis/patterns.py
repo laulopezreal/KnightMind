@@ -44,6 +44,12 @@ _PATTERNS: dict[tuple[str, str | None], tuple[str, str]] = {
         "Your pieces come out fast but end up undefended. Before each move in "
         "the opening, check what is protecting what.",
     ),
+    ("alignment_blindness", None): (
+        "Lined-Up Pieces",
+        "You leave two valuable pieces on the same rank, file or diagonal. "
+        "They can be defended and still lost — one move attacks both and only "
+        "one of them can step aside.",
+    ),
     ("forcing_move_blindness", None): (
         "Missed Forcing Moves",
         "You settle on a reasonable-looking quiet move before checking the "

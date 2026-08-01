@@ -402,3 +402,103 @@ def test_a_never_reviewed_puzzle_counts_as_due(db_session):
     db_session.commit()
 
     assert get_due_puzzle_count(db_session, "u") == 1
+
+
+class TestVarietyCap:
+    """One motif must not monopolise a session.
+
+    Five forks in a row is a worse session than four forks and a pin, even when
+    the fifth fork is the next most overdue — the point of a mixed session is
+    that you cannot pattern-match your way through it.
+    """
+
+    def _stats(self, db, pid, motif, days_overdue):
+        from datetime import timedelta
+
+        from services.api.models import PuzzleStats
+
+        db.add(
+            PuzzleStats(
+                puzzle_id=pid,
+                username="u",
+                primary_motif=motif,
+                attempts=1,
+                pass_count=1,
+                ease_factor=2.0,
+                interval_days=1,
+                next_due_at=(
+                    datetime.now(timezone.utc) - timedelta(days=days_overdue)
+                ).replace(tzinfo=None),
+            )
+        )
+
+    def test_caps_one_motif_below_the_whole_session(self, db_session):
+        # Six forks and one pin, the pin least overdue. Without the cap the
+        # session is six forks; with it the pin earns a place.
+        for i in range(6):
+            self._stats(db_session, f"fork{i}", "Fork", 30 - i)
+        self._stats(db_session, "pin0", "Pin", 1)
+        db_session.commit()
+
+        ids = [f"fork{i}" for i in range(6)] + ["pin0"]
+        ordered, _ = get_adaptive_puzzles(db_session, "u", ids, n=5)
+        assert "pin0" in ordered
+        assert sum(1 for p in ordered if p.startswith("fork")) <= 4
+
+    def test_never_shortens_a_session(self, db_session):
+        # The cap reorders; it must never make a session smaller than the
+        # corpus could fill. All one motif here, so it cannot add variety.
+        for i in range(6):
+            self._stats(db_session, f"fork{i}", "Fork", 30 - i)
+        db_session.commit()
+
+        ids = [f"fork{i}" for i in range(6)]
+        ordered, _ = get_adaptive_puzzles(db_session, "u", ids, n=5)
+        assert len(ordered) == 5
+
+    def test_never_changes_the_set(self, db_session):
+        for i in range(4):
+            self._stats(db_session, f"fork{i}", "Fork", 30 - i)
+        db_session.commit()
+
+        ids = [f"fork{i}" for i in range(4)]
+        ordered, _ = get_adaptive_puzzles(db_session, "u", ids, n=10)
+        assert sorted(ordered) == sorted(ids)
+
+    def test_leaves_a_focused_session_concentrated(self, db_session):
+        # A focus is an explicit request for concentration; capping it would
+        # fight the user's own choice.
+        for i in range(6):
+            self._stats(db_session, f"fork{i}", "Fork", 30 - i)
+        self._stats(db_session, "pin0", "Pin", 1)
+        db_session.commit()
+
+        ids = [f"fork{i}" for i in range(6)] + ["pin0"]
+        ordered, _ = get_adaptive_puzzles(
+            db_session, "u", ids, n=5, focus_puzzle_ids={f"fork{i}" for i in range(6)}
+        )
+        assert all(p.startswith("fork") for p in ordered)
+
+    def test_puzzles_without_a_motif_are_exempt(self, db_session):
+        # "Unknown" is not a motif; capping it would penalise exactly the
+        # puzzles the user has seen least.
+        for i in range(6):
+            self._stats(db_session, f"none{i}", None, 30 - i)
+        db_session.commit()
+
+        ids = [f"none{i}" for i in range(6)]
+        ordered, _ = get_adaptive_puzzles(db_session, "u", ids, n=5)
+        assert len(ordered) == 5
+
+    def test_keeps_the_most_overdue_first_within_the_cap(self, db_session):
+        # Variety reorders across motifs; it must not scramble the scheduling
+        # priority inside one.
+        for i in range(3):
+            self._stats(db_session, f"fork{i}", "Fork", 30 - i)
+        self._stats(db_session, "pin0", "Pin", 1)
+        db_session.commit()
+
+        ids = ["pin0"] + [f"fork{i}" for i in range(3)]
+        ordered, _ = get_adaptive_puzzles(db_session, "u", ids, n=4)
+        forks = [p for p in ordered if p.startswith("fork")]
+        assert forks == ["fork0", "fork1", "fork2"]
