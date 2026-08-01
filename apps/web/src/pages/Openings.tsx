@@ -4,7 +4,8 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   getOpenings, ApiError, DEPTH_OPTIONS, DEFAULT_MAX_PLY, depthLabel, normaliseDepth,
   offeredDepth, offeredColor, getBaseline,
-  type OpeningNode, type ColorFilter, type OpeningBaseline,
+  PERIOD_OPTIONS, DEFAULT_PERIOD, periodLabel, normalisePeriod, offeredPeriod, periodParam,
+  type OpeningNode, type ColorFilter, type OpeningBaseline, type Period,
 } from '../api';
 import { useChessUsername } from '../context/ChessUsernameContext';
 import { OpeningGraph, type OpeningGraphHandle, type NodeAnchor } from '../components/OpeningGraph';
@@ -41,6 +42,15 @@ const SCOPE_NOUN: Record<ColorFilter, string> = {
 };
 
 const MAX_PLY_STORAGE_KEY = 'knightmind:openings:max_ply';
+const PERIOD_STORAGE_KEY = 'knightmind:openings:period';
+
+function parsePersistedPeriod(value: string): Period {
+  try {
+    return normalisePeriod(JSON.parse(value));
+  } catch {
+    return DEFAULT_PERIOD;
+  }
+}
 
 function parsePersistedMaxPly(value: string): number {
   let parsed: unknown;
@@ -134,6 +144,11 @@ export default function Openings() {
     DEFAULT_MAX_PLY,
     parsePersistedMaxPly
   );
+  const [storedPeriod, setStoredPeriod] = useLocalStorage<Period>(
+    PERIOD_STORAGE_KEY,
+    DEFAULT_PERIOD,
+    parsePersistedPeriod
+  );
 
   const [treeData, setTreeData] = useState<OpeningNode | null>(null);
   // Which colour the tree on screen actually answers for. The graph is keyed on
@@ -157,6 +172,10 @@ export default function Openings() {
   // per-device storage, so the page looked identical whatever URL you sent.
   const colorFilter = offeredColor(searchParams.get('color')) ?? storedColor;
   const maxPly = offeredDepth(searchParams.get('depth')) ?? storedMaxPly;
+  // `?? ` will not do here: "all time" is a window the user chose and is
+  // itself null, so absent has to be undefined to fall through to storage.
+  const urlPeriod = offeredPeriod(searchParams.get('period'));
+  const period = urlPeriod === undefined ? storedPeriod : urlPeriod;
   // Read with `get`, not a truthiness check: the root *is* a selectable line
   // ("Starting position", with its own Engine link), and it encodes to the
   // empty string. Absent and present-but-empty have to stay distinguishable,
@@ -186,6 +205,11 @@ export default function Openings() {
     setStoredMaxPly(next);
     updateParams(params => params.set('depth', String(next)), true);
   }, [setStoredMaxPly, updateParams]);
+
+  const setPeriod = useCallback((next: Period) => {
+    setStoredPeriod(next);
+    updateParams(params => params.set('period', periodParam(next)), true);
+  }, [setStoredPeriod, updateParams]);
 
   // Clamp the tooltip into the viewport after it renders. Anchoring it blindly
   // to the node put up to 180px of it off-screen for any node in the lower
@@ -240,12 +264,15 @@ export default function Openings() {
   // Fill in whatever the URL does not say, so copying it always yields the
   // view you are actually looking at rather than the next reader's defaults.
   useEffect(() => {
-    if (searchParams.has('color') && searchParams.has('depth')) return;
+    if (
+      searchParams.has('color') && searchParams.has('depth') && searchParams.has('period')
+    ) return;
     updateParams(params => {
       if (!params.has('color')) params.set('color', colorFilter);
       if (!params.has('depth')) params.set('depth', String(maxPly));
+      if (!params.has('period')) params.set('period', periodParam(period));
     }, true);
-  }, [searchParams, colorFilter, maxPly, updateParams]);
+  }, [searchParams, colorFilter, maxPly, period, updateParams]);
 
   // Open the line in the graph when it was not the graph that chose it —
   // a shared link, a reload, or Back. `handleNodeSelect` marks the line as
@@ -335,7 +362,11 @@ export default function Openings() {
       return 'Import your games to build your opening knowledge graph.';
     }
     if (hasOpenings) {
-      return `${username}’s openings ${SCOPE_SUFFIX[colorFilter]}`;
+      // The window belongs in the sentence: a tree over 90 days and a tree
+      // over five years look identical, and reading the wrong one as the whole
+      // picture is the mistake this filter exists to prevent.
+      const window = period === null ? '' : `, ${periodLabel(period).toLowerCase()}`;
+      return `${username}’s openings ${SCOPE_SUFFIX[colorFilter]}${window}`;
     }
     if (treeData) {
       return `No ${SCOPE_NOUN[colorFilter]} to chart yet.`;
@@ -343,7 +374,7 @@ export default function Openings() {
     return 'Load your games to build your opening knowledge graph.';
   })();
 
-  const fetchOpenings = useCallback(async (user: string, color: ColorFilter, plies: number) => {
+  const fetchOpenings = useCallback(async (user: string, color: ColorFilter, plies: number, sinceDays: Period) => {
     // The route guard above redirects when there is no username, so there is
     // nothing actionable to say here.
     if (!user.trim()) return;
@@ -356,7 +387,7 @@ export default function Openings() {
     setNoGamesImported(false);
 
     try {
-      const data = await getOpenings(user, color, plies);
+      const data = await getOpenings(user, color, plies, sinceDays);
       if (token.isStale()) return;
       setTreeData(data);
       setLoadedFilter(color);
@@ -386,15 +417,15 @@ export default function Openings() {
   }, [request]);
 
   const handleFetchClick = () => {
-    fetchOpenings(username, colorFilter, maxPly);
+    fetchOpenings(username, colorFilter, maxPly, period);
   };
 
   // Auto-fetch when page loads with username or when username/color filter changes
   useEffect(() => {
     if (username.trim()) {
-      fetchOpenings(username, colorFilter, maxPly);
+      fetchOpenings(username, colorFilter, maxPly, period);
     }
-  }, [username, colorFilter, maxPly, fetchOpenings]);
+  }, [username, colorFilter, maxPly, period, fetchOpenings]);
 
   /**
    * A 200 with an empty tree has several distinct causes; each needs a
@@ -405,6 +436,20 @@ export default function Openings() {
     // Ordered by what is actually true, not by convenience: with games both
     // excluded by the filter AND skipped as unreadable, blaming the filter
     // alone is simply wrong, and the accurate branch was unreachable.
+    // First, because when nothing reached the builder at all the window is the
+    // whole story — no other filter got a chance to be the cause. Sending
+    // someone with a four-hundred-game archive to the import screen because
+    // they took a month off is the failure this branch exists to prevent.
+    if ((analysis?.games_seen ?? 0) === 0 && (analysis?.excluded_by_date ?? 0) > 0) {
+      return {
+        title: `No games ${periodLabel(period).toLowerCase()}`,
+        description: `You have ${analysis?.excluded_by_date} imported ${
+          analysis?.excluded_by_date === 1 ? 'game' : 'games'
+        }, none of them in this period. Widen it to see the rest of your repertoire.`,
+        actionLabel: 'Show all time',
+        onAction: () => setPeriod(null),
+      };
+    }
     if (
       colorFilter !== 'both' &&
       (analysis?.excluded_by_color ?? 0) > 0 &&
@@ -649,6 +694,21 @@ export default function Openings() {
             >
               {DEPTH_OPTIONS.map(plies => (
                 <option key={plies} value={plies}>{depthLabel(plies)} deep</option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <select
+              value={periodParam(period)}
+              onChange={(e) => setPeriod(offeredPeriod(e.target.value) ?? DEFAULT_PERIOD)}
+              aria-label="Time period covered"
+              className="bg-transparent border-b border-primary/20 py-1 text-primary focus:outline-none focus:border-primary/60 transition-colors font-serif text-lg cursor-pointer"
+            >
+              {PERIOD_OPTIONS.map(days => (
+                <option key={periodParam(days)} value={periodParam(days)}>
+                  {periodLabel(days)}
+                </option>
               ))}
             </select>
           </div>

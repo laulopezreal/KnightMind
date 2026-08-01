@@ -761,6 +761,17 @@ async def get_openings(
             "noise rather than repertoire."
         ),
     ),
+    since_days: int | None = Query(
+        None,
+        ge=1,
+        le=3650,
+        description=(
+            "Only include games finished within this many days. Omit for the "
+            "whole archive. A repertoire is a moving target: a line fixed in "
+            "April still reads as a weakness while two years of losses in it "
+            "are pooled with last week's wins."
+        ),
+    ),
     db: Session = Depends(get_db),
     account: Account | None = Depends(require_account),
 ):
@@ -805,6 +816,14 @@ async def get_openings(
     # table was meant to prevent.
     applied_min_games = max(min_games, min_games_floor(max_ply))
 
+    # Resolved once and reused for the key, the filter and the reported window,
+    # so the three cannot disagree about where the boundary fell.
+    cutoff = (
+        datetime.now(timezone.utc) - timedelta(days=since_days)
+        if since_days is not None
+        else None
+    )
+
     cache_key = make_openings_cache_key(
         username=username,
         color=color,
@@ -812,6 +831,7 @@ async def get_openings(
         game_count=game_count,
         latest_game_time=game_repository.get_latest_game_time(username),
         min_games=applied_min_games,
+        since=cutoff.date().isoformat() if cutoff else "all",
     )
     cached = openings_tree_cache.get(cache_key)
     if cached is not None:
@@ -820,6 +840,15 @@ async def get_openings(
     # Stream all PGNs for the user in bulk batches (one query per batch)
     # instead of one query per game, without holding every blob in memory.
     metadata_list = game_repository.get_all_metadata(username)
+    # Filtered here rather than in the query: the count of what the window left
+    # out is needed to tell "you have played nothing lately" apart from "you
+    # have imported nothing", and those want different things said to them.
+    excluded_by_date = 0
+    if cutoff is not None:
+        cutoff_epoch = int(cutoff.timestamp())
+        in_window = [m for m in metadata_list if m.end_time >= cutoff_epoch]
+        excluded_by_date = len(metadata_list) - len(in_window)
+        metadata_list = in_window
     game_ids = [meta.game_id for meta in metadata_list]
     pgn_count = 0
 
@@ -843,6 +872,11 @@ async def get_openings(
     # reportable instead of silently looking complete.
     tree["analysis"] = {
         "games_stored": game_count,
+        # Reported alongside `excluded_by_color`, and for the same reason: the
+        # user asked for this, so it is a fact to state rather than data loss
+        # to warn about.
+        "excluded_by_date": excluded_by_date,
+        "since_days": since_days,
         # Surfaced rather than applied silently: the client states the filter so
         # a thinner tree reads as a deliberate choice, not missing data.
         "min_games": applied_min_games,

@@ -55,7 +55,7 @@ const TREE: OpeningNode = {
     node('d4'),
   ],
   analysis: {
-    games_stored: 40, games_seen: 40, games_analyzed: 40, excluded_by_color: 0,
+    games_stored: 40, games_seen: 40, games_analyzed: 40, excluded_by_color: 0, excluded_by_date: 0, since_days: null,
     games_skipped: 0, skipped_unreadable: 0, skipped_not_player: 0, skipped_unfinished: 0,
     min_games: 1,
   },
@@ -90,7 +90,7 @@ describe('Openings — the URL holds the view', () => {
 
     // The link is what was shared; the stored value is only a default for a
     // visit that does not name one.
-    expect(mockGetOpenings).toHaveBeenCalledWith('alice', 'black', 24);
+    expect(mockGetOpenings).toHaveBeenCalledWith('alice', 'black', 24, null);
   });
 
   it('falls back to the stored preference when the link names none', async () => {
@@ -98,7 +98,7 @@ describe('Openings — the URL holds the view', () => {
 
     await renderReady();
 
-    expect(mockGetOpenings).toHaveBeenCalledWith('alice', 'white', 12);
+    expect(mockGetOpenings).toHaveBeenCalledWith('alice', 'white', 12, null);
   });
 
   it('ignores a colour or depth the app does not offer', async () => {
@@ -106,7 +106,7 @@ describe('Openings — the URL holds the view', () => {
     // controls cannot represent, nor send junk to the endpoint.
     await renderReady('/openings?color=purple&depth=999');
 
-    expect(mockGetOpenings).toHaveBeenCalledWith('alice', 'both', 12);
+    expect(mockGetOpenings).toHaveBeenCalledWith('alice', 'both', 12, null);
   });
 
   it('writes the view into the URL so copying it shares what you see', async () => {
