@@ -157,6 +157,24 @@ describe('Openings — comparison against players at the same rating', () => {
     await waitFor(() => expect(panel()).toHaveTextContent('49% expected'));
   });
 
+  it('cancels a lookup the user has already moved on from', async () => {
+    // Not just cosmetic: an abandoned lookup still spends the caller's share
+    // of the endpoint's per-principal rate limit, and this route fires on
+    // every line selected.
+    const signals: (AbortSignal | undefined)[] = [];
+    mockGetBaseline.mockImplementation((...args: unknown[]) => {
+      signals.push((args[3] as { signal?: AbortSignal } | undefined)?.signal);
+      return new Promise<OpeningBaseline>(() => {});
+    });
+
+    await selectAs();
+    await act(async () => { emitSelect!([node('Start'), node('e4')]); });
+
+    expect(signals).toHaveLength(2);
+    expect(signals[0]?.aborted).toBe(true);
+    expect(signals[1]?.aborted).toBe(false);
+  });
+
   it('drops the comparison when the selection is cleared', async () => {
     await selectAs();
     await waitFor(() => expect(panel()).toHaveTextContent('expected'));

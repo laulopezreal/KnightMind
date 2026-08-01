@@ -274,7 +274,7 @@ export default function Openings() {
     if (!fen) return;
 
     const token = baselineRequest.begin();
-    getBaseline(username, fen, colorFilter)
+    getBaseline(username, fen, colorFilter, { signal: token.signal })
       .then(result => {
         if (!token.isStale()) setPeerBaseline(result);
       })

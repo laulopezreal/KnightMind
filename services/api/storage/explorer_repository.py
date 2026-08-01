@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from services.api.models import OpeningExplorerCache
@@ -71,7 +72,15 @@ class ExplorerRepository:
 
         Upsert by hand rather than by dialect: this runs on both SQLite (dev,
         tests) and Postgres (production), and the two spell ON CONFLICT
-        differently. The row is a cache, so a lost race just refetches.
+        differently.
+
+        The read-then-write is not atomic, and losing that race must not be
+        fatal. Two requests can miss the same key at once — two tabs, two users
+        first opening a popular line, or one person clicking through
+        transposing lines — and the loser's INSERT then violates the primary
+        key. The row it collided with holds the same public aggregate it was
+        about to write, so the collision is not an error worth surfacing: roll
+        back and let the winner's row stand.
         """
         row = self._row(key)
         if row is None:
@@ -90,4 +99,7 @@ class ExplorerRepository:
             row.draws = stats.draws
             row.black = stats.black
             row.fetched_at = datetime.now(timezone.utc)
-        self.db.commit()
+        try:
+            self.db.commit()
+        except IntegrityError:
+            self.db.rollback()

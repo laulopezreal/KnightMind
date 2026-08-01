@@ -148,8 +148,12 @@ export interface OpeningBaseline {
 export async function getBaseline(
     username: string,
     fen: string,
-    color: 'white' | 'black'
+    color: 'white' | 'black',
+    options: { signal?: AbortSignal } = {}
 ): Promise<OpeningBaseline> {
     const params = new URLSearchParams({ username, fen, color });
-    return request<OpeningBaseline>(`/openings/baseline?${params}`);
+    // The signal is worth forwarding here in a way it is not for the tree: a
+    // selection changes constantly, and an abandoned lookup still spends the
+    // caller's share of the endpoint's rate limit.
+    return request<OpeningBaseline>(`/openings/baseline?${params}`, options);
 }

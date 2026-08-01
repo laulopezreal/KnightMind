@@ -216,6 +216,36 @@ class TestTheCache:
         assert (row.white, row.draws, row.black) == (600, 200, 200)
 
 
+class TestHoldingResources:
+    def test_lets_go_of_the_connection_while_waiting_on_lichess(
+        self, client, db_session, monkeypatch
+    ):
+        """The pool is 15 deep and this route fires on every line selected.
+
+        SQLAlchemy holds a pooled connection from the first query until the
+        transaction ends, so an in-flight miss that kept one would starve every
+        other endpoint whenever the explorer got slow.
+        """
+        observed = {}
+
+        async def watching(epd, band):
+            observed["in_transaction"] = db_session.in_transaction()
+            return ExplorerStats(white=600, draws=200, black=200)
+
+        monkeypatch.setattr("services.api.main.fetch_explorer_stats", watching)
+
+        assert ask(client).status_code == 200
+        assert observed["in_transaction"] is False
+
+    def test_still_writes_what_it_fetched_afterwards(
+        self, client, db_session, upstream
+    ):
+        # Releasing the connection must not cost us the write that follows.
+        ask(client)
+
+        assert db_session.query(OpeningExplorerCache).count() == 1
+
+
 class TestWhenLichessIsDown:
     def test_serves_a_stale_row_rather_than_nothing(
         self, client, db_session, monkeypatch, upstream

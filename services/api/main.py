@@ -938,6 +938,13 @@ async def get_opening_baseline(
 
     stats = repository.get_fresh(key)
     if stats is None:
+        # Hand the pooled connection back before waiting on lichess. Everything
+        # above was a read, and SQLAlchemy holds a connection from the first
+        # query until the transaction ends — so without this each in-flight
+        # miss pins one for the length of an outbound call. The pool is 15
+        # deep and this route fires on every line a user selects, so a slow
+        # explorer would starve every other endpoint of connections.
+        db.rollback()
         try:
             stats = await fetch_explorer_stats(epd, band)
         except ExplorerUnavailable as exc:
