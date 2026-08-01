@@ -330,7 +330,57 @@ def get_adaptive_puzzles(
         return (base_priority, 0 if pid in focus else 1, time_factor, -adaptive_score)
 
     sorted_pids = sorted(puzzle_ids, key=sort_key)
+
+    # A focused session is *asked* to be concentrated, so the variety cap would
+    # be fighting the user's explicit choice. Everywhere else, spread it.
+    if not focus:
+        sorted_pids = _vary_motifs(sorted_pids, all_stats, n)
+
     return sorted_pids[:n], all_stats
+
+
+# At most this share of a session may share one motif. Five forks in a row is a
+# worse session than four forks and a pin, even when the fifth fork is the next
+# most overdue: the point of a mixed session is that you cannot pattern-match
+# your way through it.
+_VARIETY_SHARE = 2 / 3
+
+
+def _vary_motifs(
+    ordered: list[str], all_stats: dict[str, PuzzleStats], n: int
+) -> list[str]:
+    """Reorder so one motif cannot monopolise a session.
+
+    Deferred puzzles are appended rather than dropped, so this can only change
+    the *order* of what was already selectable — never the set, and never the
+    length. A session with nothing else available stays as concentrated as the
+    corpus forces it to be; the cap cannot invent variety that is not there.
+
+    Puzzles with no recorded motif are exempt: "unknown" is not a motif, and
+    treating it as one would cap the very puzzles the user has seen least.
+    """
+    if n <= 1 or len(ordered) <= 1:
+        return ordered
+
+    cap = max(1, int(n * _VARIETY_SHARE))
+    taken: list[str] = []
+    deferred: list[str] = []
+    counts: dict[str, int] = {}
+
+    for pid in ordered:
+        stats = all_stats.get(pid)
+        motif = stats.primary_motif if stats else None
+        if motif is None:
+            taken.append(pid)
+            continue
+        if counts.get(motif, 0) >= cap and len(taken) < n:
+            deferred.append(pid)
+            continue
+        counts[motif] = counts.get(motif, 0) + 1
+        taken.append(pid)
+
+    # Anything held back rejoins immediately after, so the set is unchanged.
+    return taken + deferred
 
 
 def get_due_puzzles(

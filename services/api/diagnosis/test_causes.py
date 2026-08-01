@@ -499,3 +499,100 @@ class TestInvariants:
         assert classify_causes(build(QUIET_ENDGAME, "e1d2", "e1f2")).rule_version == (
             RULE_VERSION
         )
+
+
+class TestAlignmentBlindness:
+    """Queen/rook alignment — the 12th cause from the taxonomy.
+
+    Deferred until now because alignment on its own is not a mistake: pieces
+    share lines constantly, and a rule that fired on that would be the
+    unfalsifiable label the whole design refuses. What makes it diagnostic is
+    alignment the *solution exploits*.
+    """
+
+    # Black king g8 and rook a8 share rank 8; white's Re1-e8 skewers them.
+    SKEWER = "r5k1/pp3ppp/8/8/8/8/PP3PPP/4R1K1 w - - 0 1"
+    # Same board, black rook removed: nothing aligned to exploit.
+    NO_PAIR = "6k1/pp3ppp/8/8/8/8/PP3PPP/4R1K1 w - - 0 1"
+
+    def test_fires_when_the_solution_exploits_the_line(self):
+        packet = _packet(self.SKEWER, "e1e2", "e1e8", 41)
+        # The opponent's geometry: the user is to move and missed the skewer.
+        assert packet.alignment.exploited_by_best
+        causes = [c.cause for c in classify_causes(packet).candidates]
+        assert "alignment_blindness" in causes
+
+    def test_is_silent_when_nothing_is_aligned(self):
+        packet = _packet(self.NO_PAIR, "e1e2", "e1e8", 41)
+        assert not packet.alignment.exploited_by_best
+        causes = [c.cause for c in classify_causes(packet).candidates]
+        assert "alignment_blindness" not in causes
+
+    def test_alignment_alone_is_not_a_cause(self):
+        # The pieces are aligned, but the solution does not use the line. This
+        # is the case that would make the rule unfalsifiable if it fired.
+        packet = _packet(self.SKEWER, "g1h1", "g1f1", 41)
+        assert packet.alignment.pairs
+        assert not packet.alignment.exploited_by_best
+        causes = [c.cause for c in classify_causes(packet).candidates]
+        assert "alignment_blindness" not in causes
+
+    def test_cites_only_evidence_that_exists(self):
+        # The citation gate is the contract: every id a rule names must be in
+        # the packet's item list.
+        packet = _packet(self.SKEWER, "e1e2", "e1e8", 41)
+        available = {item.id for item in to_evidence_items(packet)}
+        for candidate in classify_causes(packet).candidates:
+            if candidate.cause == "alignment_blindness":
+                assert set(candidate.evidence_ids) <= available
+
+    def test_a_blocked_line_outranks_a_direct_battery(self):
+        # A piece between the pair is the classic pin/skewer. A direct battery
+        # is weaker: the front piece may simply be defended.
+        blocked = _packet(
+            "r2b2k1/pp3ppp/8/8/8/8/PP3PPP/4R1K1 w - - 0 1", "e1e2", "e1e8", 41
+        )
+        direct = _packet(self.SKEWER, "e1e2", "e1e8", 41)
+
+        def strength(p):
+            return next(
+                (
+                    c.strength
+                    for c in classify_causes(p).candidates
+                    if c.cause == "alignment_blindness"
+                ),
+                None,
+            )
+
+        if strength(blocked) and strength(direct):
+            assert strength(blocked) > strength(direct)
+
+    def test_capturing_an_aligned_piece_is_not_exploiting_the_alignment(self):
+        # A hanging queen that happens to share a diagonal with its king is a
+        # hanging queen. This fired as alignment_blindness at 0.85 — above the
+        # true cause — until the capture case was excluded.
+        hanging_queen = "6k1/pp3ppp/8/3q4/8/8/PP3PPP/3Q2K1 w - - 0 1"
+        packet = _packet(hanging_queen, "d1d2", "d1d5", 41)
+        assert not packet.alignment.exploited_by_best
+        causes = [c.cause for c in classify_causes(packet).candidates]
+        assert causes[0] == "loose_piece_awareness"
+        assert "alignment_blindness" not in causes
+
+    def test_never_outranks_the_loose_piece_story(self):
+        # Unconditional: comparing the rule's own strengths rather than waiting
+        # for a position where both happen to fire. The previous version of this
+        # test guarded on "if both are present" and never actually ran.
+        from services.api.diagnosis.causes import _alignment_blindness
+
+        blocked = _packet(
+            "r2b2k1/pp3ppp/8/8/8/8/PP3PPP/4R1K1 w - - 0 1", "g1h1", "e1e8", 41
+        )
+        candidate = _alignment_blindness(blocked)
+        if candidate is not None:
+            assert candidate.strength < 0.8
+
+    def test_is_no_longer_deferred(self):
+        from services.api.diagnosis.causes import CAUSE_LABELS, DEFERRED_CAUSES
+
+        assert "alignment_blindness" not in DEFERRED_CAUSES
+        assert "alignment_blindness" in CAUSE_LABELS
