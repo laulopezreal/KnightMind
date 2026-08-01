@@ -17,7 +17,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import case, func, select
+from sqlalchemy import case, func, inspect, select
 from sqlalchemy.orm import Session
 
 from services.api.ai import client as ai_client
@@ -121,6 +121,22 @@ def run_diagnosis(ctx) -> dict:
     enriched = 0
 
     with SessionLocal() as db:
+        if not _diagnosis_tables_ready(db):
+            logger.error(
+                "Diagnosis job skipped for %s because diagnosis tables are missing; "
+                "run Alembic migrations before starting diagnosis workers",
+                username,
+            )
+            return {
+                "username": username,
+                "diagnosed": 0,
+                "unchanged": 0,
+                "unavailable": 0,
+                "enriched": 0,
+                "remaining": 0,
+                "canceled": False,
+                "skipped": "diagnosis_tables_missing",
+            }
         repo = DiagnosisRepository(db)
         audit = AIAuditRepository(db)
         pending = (
@@ -174,6 +190,20 @@ def run_diagnosis(ctx) -> dict:
         return _result(
             username, db, repo, diagnosed, unchanged, unavailable, canceled, enriched
         )
+
+
+def _diagnosis_tables_ready(db: Session) -> bool:
+    """Return whether the diagnosis migrations are present for this database.
+
+    A worker started against an un-migrated database would otherwise fail every
+    job with an opaque ProgrammingError; this turns that into one clear log line
+    and a recorded skip.
+    """
+
+    inspector = inspect(db.get_bind())
+    return inspector.has_table("puzzle_diagnoses") and inspector.has_table(
+        "diagnosis_audit_log"
+    )
 
 
 def _result(
