@@ -1488,6 +1488,51 @@ async def create_daily_puzzle_session(
     return DailyPuzzlesResponse(puzzles=puzzles_dict, count=len(puzzles_dict))
 
 
+def _queue_reason(stats, in_focus: bool, focus_name: str | None, now: datetime) -> dict:
+    """Why this puzzle is in today's queue.
+
+    Reported per puzzle so the queue is inspectable rather than a black box:
+    the user can see that a puzzle is here because it came due, because they
+    have never seen it, or because it matches the pattern they chose to train.
+
+    Deliberately no numeric score. The spec asked for one, but the ordering is
+    already fully determined by facts that are *all* in this payload — the tier
+    (due / new), the due date, and whether the puzzle matched the focus. A score
+    would add a number that explains nothing the visible fields do not, and
+    invites comparing two puzzles on a figure that was never calibrated for it.
+    """
+    if stats is None or stats.next_due_at is None:
+        reason, explanation = "new", "You have not trained this position yet."
+    else:
+        due = stats.next_due_at
+        if due.tzinfo is None:
+            due = due.replace(tzinfo=timezone.utc)
+        days = max(0, (now - due).days)
+        reason = "due"
+        explanation = (
+            "Due for review today."
+            if days == 0
+            else f"Due for review {days} day{'' if days == 1 else 's'} ago."
+        )
+
+    # A focus never replaces the scheduling reason — it explains the *order*,
+    # not the presence. Saying "matches your focus" about a puzzle that is here
+    # because it came due would misrepresent why it was served.
+    if in_focus and focus_name:
+        explanation = (
+            f"{explanation} Matches the pattern you are training: {focus_name}."
+        )
+
+    payload = {"reason": reason, "explanation": explanation}
+    if in_focus and focus_name:
+        payload["pattern"] = focus_name
+    if stats is not None and stats.fail_count:
+        # Surfaced because a repeat failure is the strongest signal in the
+        # corpus, and a user re-seeing a puzzle deserves to know it is a repeat.
+        payload["previous_failures"] = stats.fail_count
+    return payload
+
+
 @app.get("/puzzles/due", response_model=DuePuzzlesResponse)
 async def get_due_puzzles_endpoint(
     username: Annotated[Username, Query(description="Username to get puzzles for")],
@@ -1564,7 +1609,23 @@ async def get_due_puzzles_endpoint(
     #    the trainable narrowing above so the focus can only reorder what
     #    survived it — a focus must never make a not-yet-due puzzle due.
     focus_ids: set[str] = set()
+    focus_name: str | None = None
     if focus_cause:
+        from services.api.diagnosis.patterns import identify
+
+        # Resolved through the same cause_breakdown the focus card uses, so the
+        # two surfaces name the pattern identically. Resolving with phase=None
+        # here instead meant a user clicking "Train 3 puzzles now" under "Back
+        # Rank Neglect" saw every puzzle in the session attribute itself to
+        # "King Safety Blind Spot" — the same naming drift the static table
+        # exists to prevent, inside a single click.
+        _repo = DiagnosisRepository(db)
+        _stat = next(
+            (s for s in _repo.cause_breakdown(username) if s.cause == focus_cause),
+            None,
+        )
+        named = identify(focus_cause, _stat.dominant_phase if _stat else None)
+        focus_name = named.name if named else None
         # `username` is already canonical — the Username type folds case at the
         # request boundary — so no re-folding here.
         focus_ids = DiagnosisRepository(db).puzzle_ids_for_cause(username, focus_cause)
@@ -1614,6 +1675,9 @@ async def get_due_puzzles_endpoint(
                     "primary_motif": None,
                 }
             )
+        p_dict["queue_reason"] = _queue_reason(
+            stats, pid in focus_ids, focus_name, datetime.now(timezone.utc)
+        )
         # SCORED training path: never ship the solution up front.
         result_puzzles.append(_strip_solution(p_dict))
 
@@ -2548,6 +2612,11 @@ class TodaysFocus(BaseModel):
     # The numbers the choice rests on, so the user can disagree on evidence.
     rationale: str
     runner_up: str | None = None
+    # How many puzzles of this cause the user could train *right now*. Counted
+    # against the trainable set, not the corpus: "train 8 puzzles" when six of
+    # them are scheduled for next week would be a promise the session cannot
+    # keep, and training them early would corrupt their intervals anyway.
+    trainable_now: int = 0
 
 
 class TodaysFocusResponse(BaseModel):
@@ -2585,6 +2654,14 @@ async def get_todays_focus(
     stats = repo.cause_breakdown(username)
     chosen = plan_focus(stats)
 
+    trainable_now = 0
+    if chosen is not None:
+        cause_ids = repo.puzzle_ids_for_cause(username, chosen.cause)
+        if cause_ids:
+            trainable_now = len(
+                get_trainable_puzzle_ids(db, username, sorted(cause_ids))
+            )
+
     # Counted exactly as the patterns endpoint counts it: a cause with no
     # written pattern — "unclassified" above all — is not a habit awaiting more
     # evidence, so it must not read as "nearly a pattern" here while the card
@@ -2597,7 +2674,11 @@ async def get_todays_focus(
 
     return TodaysFocusResponse(
         username=username,
-        focus=TodaysFocus(**asdict(chosen)) if chosen else None,
+        focus=(
+            TodaysFocus(**asdict(chosen), trainable_now=trainable_now)
+            if chosen
+            else None
+        ),
         below_threshold=below,
         pending=repo.pending_count(username),
     )

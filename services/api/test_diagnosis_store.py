@@ -1688,3 +1688,54 @@ class TestDominantOpening:
         self._diagnosed(db_session, "a", None, ply=41)
         stats = DiagnosisRepository(db_session).cause_breakdown(USER)
         assert stats[0].dominant_opening is None
+
+
+class TestTrainableNowCount:
+    """ "Train N puzzles now" must be a promise the session can keep."""
+
+    def _diagnosed(self, db, pid, ply, due_days=None):
+        from services.api.models import PuzzleStats
+
+        _puzzle(db, puzzle_id=pid, ply=ply)
+        DiagnosisRepository(db).upsert(
+            DiagnosisWrite(
+                puzzle_id=pid, username=USER, primary_cause="loose_piece_awareness"
+            )
+        )
+        if due_days is not None:
+            stats = db.get(PuzzleStats, pid)
+            if stats is not None:
+                stats.next_due_at = datetime.now(timezone.utc).replace(
+                    tzinfo=None
+                ) + timedelta(days=due_days)
+        db.commit()
+
+    def test_counts_only_what_is_trainable_today(self, client, db_session):
+        # Four mistakes of the cause, two scheduled for next week. Offering to
+        # train four would promise puzzles the session refuses to serve — and
+        # serving them early would re-anchor their intervals.
+        for i in range(4):
+            self._diagnosed(
+                db_session, f"p{i}", 41 + i * 2, due_days=30 if i >= 2 else -1
+            )
+
+        body = client.get(f"/users/{USER}/todays-focus").json()
+        assert body["focus"]["mistakes"] == 4
+        assert body["focus"]["trainable_now"] == 2
+
+    def test_reports_zero_rather_than_omitting_when_nothing_is_due(
+        self, client, db_session
+    ):
+        for i in range(4):
+            self._diagnosed(db_session, f"p{i}", 41 + i * 2, due_days=30)
+
+        body = client.get(f"/users/{USER}/todays-focus").json()
+        assert body["focus"] is not None
+        assert body["focus"]["trainable_now"] == 0
+
+    def test_never_exceeds_the_mistake_count(self, client, db_session):
+        for i in range(4):
+            self._diagnosed(db_session, f"p{i}", 41 + i * 2)
+
+        body = client.get(f"/users/{USER}/todays-focus").json()
+        assert body["focus"]["trainable_now"] <= body["focus"]["mistakes"]

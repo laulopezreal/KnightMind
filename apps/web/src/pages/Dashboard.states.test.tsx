@@ -20,6 +20,7 @@ const mockGetTrickyPuzzles = vi.fn();
 const mockGetRecentSessions = vi.fn();
 const mockGetMotifPerformance = vi.fn();
 const mockGetUserStatus = vi.fn();
+const mockGetTodaysFocus = vi.fn();
 const mockGetRatingExplain = vi.fn();
 
 vi.mock('../api/users', () => ({
@@ -27,6 +28,7 @@ vi.mock('../api/users', () => ({
     getTrickyPuzzles: (...a: unknown[]) => mockGetTrickyPuzzles(...a),
     getMotifPerformance: (...a: unknown[]) => mockGetMotifPerformance(...a),
     getUserStatus: (...a: unknown[]) => mockGetUserStatus(...a),
+    getTodaysFocus: (...a: unknown[]) => mockGetTodaysFocus(...a),
 }));
 vi.mock('../api/ratings', () => ({
     getRatingExplain: (...a: unknown[]) => mockGetRatingExplain(...a),
@@ -67,6 +69,9 @@ describe('Dashboard data states', () => {
         // the core-dashboard assertions below.
         mockGetMotifPerformance.mockResolvedValue({ motifs: [], weakest_motifs: [], total_motifs_practiced: 0 });
         mockGetUserStatus.mockResolvedValue({ has_new_games: false });
+        mockGetTodaysFocus.mockResolvedValue({
+            username: 'alice', focus: null, below_threshold: 0, pending: 0,
+        });
         mockGetRatingExplain.mockResolvedValue({ rating: { net_change: null, start: null, end: null }, stats: { games: 0 }, confidence: 'low' });
     });
     afterEach(() => setOnline(true));
@@ -125,6 +130,9 @@ describe('Dashboard data states', () => {
     it('omits the new-games nudge when there are none', async () => {
         mockGetDashboardSummary.mockResolvedValue(SUMMARY);
         mockGetUserStatus.mockResolvedValue({ has_new_games: false });
+        mockGetTodaysFocus.mockResolvedValue({
+            username: 'alice', focus: null, below_threshold: 0, pending: 0,
+        });
 
         render(<Dashboard />);
 
@@ -164,5 +172,51 @@ describe('Dashboard data states', () => {
 
         expect(screen.queryByRole('alert')).not.toBeInTheDocument();
         expect(screen.getByTestId('hero-card')).toBeInTheDocument();
+    });
+
+    // ── Today's focus (the spec's daily card) ──
+
+    it('shows the focus on the dashboard, where the daily card belongs', async () => {
+        mockGetDashboardSummary.mockReset();
+        mockGetDashboardSummary.mockResolvedValue(SUMMARY);
+        mockGetTodaysFocus.mockResolvedValue({
+            username: 'alice',
+            focus: {
+                cause: 'loose_piece_awareness',
+                name: 'Loose Piece Syndrome',
+                description: 'You skip the loose-piece scan.',
+                mistakes: 9, recent_mistakes: 4, accuracy: 0.4, priority: 12,
+                rationale: '9 diagnosed mistakes.', runner_up: null, trainable_now: 3,
+            },
+            below_threshold: 0, pending: 0,
+        });
+
+        render(<Dashboard />);
+        await waitFor(() => {
+            expect(screen.getByText('Loose Piece Syndrome')).toBeInTheDocument();
+        });
+        // This file's router mock drops `to`, so the anchor carries no href and
+        // has no link role. The destination is asserted in the card's own
+        // tests; here the point is that the count reached the dashboard.
+        expect(screen.getByText(/3 ready/i)).toBeInTheDocument();
+    });
+
+    it('renders no focus card when there is nothing to recommend', async () => {
+        // The dashboard is dense; an empty shell saying "no focus" is noise.
+        mockGetDashboardSummary.mockReset();
+        mockGetDashboardSummary.mockResolvedValue(SUMMARY);
+        render(<Dashboard />);
+        await waitFor(() => expect(mockGetTodaysFocus).toHaveBeenCalled());
+        expect(screen.queryByText(/today’s focus/i)).not.toBeInTheDocument();
+    });
+
+    it('renders the dashboard even when the focus request fails', async () => {
+        // Supplementary data: it must never take the page down with it.
+        mockGetDashboardSummary.mockReset();
+        mockGetDashboardSummary.mockResolvedValue(SUMMARY);
+        mockGetTodaysFocus.mockRejectedValue(new Error('boom'));
+        render(<Dashboard />);
+        await waitFor(() => expect(mockGetDashboardSummary).toHaveBeenCalled());
+        expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     });
 });

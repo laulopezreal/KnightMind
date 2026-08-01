@@ -225,6 +225,8 @@ export interface TodaysFocus {
     /** The numbers the recommendation rests on, so it can be argued with. */
     rationale: string;
     runner_up?: string | null;
+    /** Puzzles of this cause trainable right now — not the corpus total. */
+    trainable_now?: number;
 }
 
 export interface TodaysFocusResponse {

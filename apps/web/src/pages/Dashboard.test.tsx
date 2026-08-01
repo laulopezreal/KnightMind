@@ -19,6 +19,7 @@ vi.mock('../api/users', () => ({
   getTrickyPuzzles: vi.fn().mockRejectedValue(new Error('Not loaded')),
   getMotifPerformance: vi.fn().mockRejectedValue(new Error('Not loaded')),
   getUserStatus: vi.fn().mockRejectedValue(new Error('Not loaded')),
+  getTodaysFocus: vi.fn().mockRejectedValue(new Error('Not loaded')),
 }));
 
 vi.mock('../api/ratings', () => ({
