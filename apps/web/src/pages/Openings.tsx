@@ -3,15 +3,15 @@ import { createPortal } from 'react-dom';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   getOpenings, ApiError, DEPTH_OPTIONS, DEFAULT_MAX_PLY, depthLabel, normaliseDepth,
-  offeredDepth, offeredColor,
-  type OpeningNode, type ColorFilter,
+  offeredDepth, offeredColor, getBaseline,
+  type OpeningNode, type ColorFilter, type OpeningBaseline,
 } from '../api';
 import { useChessUsername } from '../context/ChessUsernameContext';
 import { OpeningGraph, type OpeningGraphHandle, type NodeAnchor } from '../components/OpeningGraph';
 import { getScoreColor } from '../utils/openings';
 import { formatSigned } from '../utils/ratings';
 import {
-  formatLine, engineHrefForPath, resolveMoves, encodeLine, decodeLine, pathMoves,
+  formatLine, engineHrefForPath, resolveMoves, encodeLine, decodeLine, pathMoves, fenForPath,
 } from '../utils/openingLine';
 import { useLocalStorage } from '../hooks/useLocalStorage';
 import { PageHeader } from '../components/PageHeader';
@@ -73,6 +73,32 @@ function formatDelta(delta: number): string {
   const rounded = Math.round(delta * 10) / 10;
   if (rounded === 0) return 'level with';
   return formatSigned(rounded, 1);
+}
+
+/**
+ * One line comparing a score against players at the same rating.
+ *
+ * Returns null when there is simply nothing to say, so the panel stays quiet
+ * rather than carrying a row that explains its own absence. The thin-sample
+ * case is the exception: it *is* worth saying, because the alternative is a
+ * reader assuming the comparison was omitted for a reason that flatters them.
+ */
+function describePeerBaseline(
+  baseline: OpeningBaseline | null,
+  score: number,
+  colorFilter: ColorFilter
+): string | null {
+  if (colorFilter === 'both') {
+    // Not an error state: the figure genuinely cannot exist here, and saying
+    // which control produces it is more useful than showing nothing.
+    return 'Filter by colour to compare with your rating';
+  }
+  if (!baseline) return null;
+  if (baseline.expected_score === null) {
+    return `Too rare to compare (${baseline.games} games)`;
+  }
+  const where = baseline.band ? ` (${baseline.band.label})` : ' (all ratings)';
+  return `${formatDelta(score - baseline.expected_score)} vs ${baseline.expected_score}% expected${where}`;
 }
 
 function countAllNodes(node: OpeningNode): number {
@@ -231,6 +257,33 @@ export default function Openings() {
     revealedRef.current = revealed;
     graphRef.current?.revealPath(pathMoves(selectedPath));
   }, [selectedPath, loadedFilter]);
+
+  // What players around this rating score from the selected position. Kept
+  // apart from the tree fetch: it is a different question of a different
+  // service, it is allowed to fail without touching the page, and a selection
+  // changes far more often than the tree does.
+  const [peerBaseline, setPeerBaseline] = useState<OpeningBaseline | null>(null);
+  const baselineRequest = useLatestRequest();
+
+  useEffect(() => {
+    setPeerBaseline(null);
+    // "Both" mixes games from either side of the board into one figure, so
+    // there is no single expectation to compare it against.
+    if (!selectedPath || colorFilter === 'both' || !username.trim()) return;
+    const fen = fenForPath(selectedPath);
+    if (!fen) return;
+
+    const token = baselineRequest.begin();
+    getBaseline(username, fen, colorFilter)
+      .then(result => {
+        if (!token.isStale()) setPeerBaseline(result);
+      })
+      .catch(() => {
+        // Deliberately silent. The page is already rendered and useful; a
+        // comparison that could not be fetched is a missing extra, not an
+        // error worth interrupting anyone over.
+      });
+  }, [selectedPath, colorFilter, username, baselineRequest]);
 
   /**
    * Record a selection in the URL.
@@ -397,6 +450,7 @@ export default function Openings() {
     if (!selectedPath) return null;
     const node = selectedPath[selectedPath.length - 1];
     const engineHref = engineHrefForPath(selectedPath);
+    const peerLine = describePeerBaseline(peerBaseline, node.win_rate, colorFilter);
 
     return (
       <section
@@ -442,6 +496,15 @@ export default function Openings() {
             {baseline !== null && (
               <dd className="font-sans text-xs text-primary/70 mt-0.5 whitespace-nowrap">
                 {formatDelta(node.win_rate - baseline)} vs your {baseline}%
+              </dd>
+            )}
+            {/* Your own average says whether a line is bad *for you*; it cannot
+                say whether it is bad. Players at the same rating scoring 52%
+                from the same position is the difference between "this opening
+                is hard" and "I am playing this opening badly". */}
+            {peerLine && (
+              <dd className="font-sans text-xs text-primary/70 mt-0.5 whitespace-nowrap">
+                {peerLine}
               </dd>
             )}
           </div>

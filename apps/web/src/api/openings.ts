@@ -116,3 +116,40 @@ export async function getOpenings(
         throw err;
     }
 }
+
+/** The rating band a baseline was drawn from. Null when the rating is unknown. */
+export interface BaselineBand {
+    low: number;
+    high: number | null;
+    /** e.g. "1600–1800", "2500+", "under 1000". */
+    label: string;
+}
+
+export interface OpeningBaseline {
+    /** How many games the figure rests on. */
+    games: number;
+    /**
+     * Score percentage players in the band manage from this position, or null
+     * when the sample is too thin to say. Null is NOT zero — render it as "no
+     * comparison", never as "they score nothing here".
+     */
+    expected_score: number | null;
+    band: BaselineBand | null;
+    source: string;
+}
+
+/**
+ * What players around this user's rating score from a position.
+ *
+ * Only white or black: under a "both" filter the user's own figure already
+ * mixes games from either side of the board, so there is nothing single to
+ * compare it against and the endpoint refuses.
+ */
+export async function getBaseline(
+    username: string,
+    fen: string,
+    color: 'white' | 'black'
+): Promise<OpeningBaseline> {
+    const params = new URLSearchParams({ username, fen, color });
+    return request<OpeningBaseline>(`/openings/baseline?${params}`);
+}

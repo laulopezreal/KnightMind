@@ -531,6 +531,33 @@ class ImportSummary(Base):
     last_new_games: Mapped[int] = mapped_column(Integer, default=0)
 
 
+class OpeningExplorerCache(Base):
+    """Opening-explorer aggregates for one position and rating band.
+
+    Shared across users and not derived from anyone's games: the row is a fact
+    about a position in a public database, so one user's lookup answers
+    everyone else's. That is the point — it keeps a page that shows a baseline
+    on every selection from making an outbound call per selection.
+
+    ``key`` folds in the scheme version, speeds and rating band (see
+    ``explorer.cache_key``), so a change to what we ask for cannot read back
+    rows that answered a different question.
+    """
+
+    __tablename__ = "opening_explorer_cache"
+    __table_args__ = {"extend_existing": True}
+
+    key: Mapped[str] = mapped_column(String, primary_key=True)
+    # Stored beside the key so a row is self-describing when read by hand.
+    epd: Mapped[str] = mapped_column(Text, nullable=False)
+    white: Mapped[int] = mapped_column(Integer, nullable=False)
+    draws: Mapped[int] = mapped_column(Integer, nullable=False)
+    black: Mapped[int] = mapped_column(Integer, nullable=False)
+    fetched_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc), nullable=False
+    )
+
+
 class Game(Base):
     __tablename__ = "games"
     __table_args__ = (
