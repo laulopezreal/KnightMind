@@ -57,13 +57,17 @@ export function TodaysFocusCard({ data }: TodaysFocusCardProps) {
                 Why this: {focus.rationale}
             </p>
 
+            {/* "N ready", not "train N puzzles": a session is a fixed size and
+                will top itself up from the rest of the due queue, so promising
+                a session of exactly N would be a promise it does not keep. The
+                count is still real — it is how many of this pattern could be
+                served right now — and each puzzle says why it was included. */}
             {focus.trainable_now && focus.trainable_now > 0 ? (
                 <Link
                     to={`/puzzles?focus_cause=${encodeURIComponent(focus.cause)}`}
                     className="km-interactive km-focus-visible inline-block mt-4 border border-primary/40 rounded-sm px-4 py-2 font-sans text-sm text-primary hover:bg-primary/10 transition-colors"
                 >
-                    Train {focus.trainable_now} puzzle
-                    {focus.trainable_now === 1 ? '' : 's'} now
+                    Train this pattern · {focus.trainable_now} ready
                 </Link>
             ) : (
                 // Nothing of this pattern is due, and training early would

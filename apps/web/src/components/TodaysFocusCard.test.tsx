@@ -53,19 +53,16 @@ describe('TodaysFocusCard', () => {
         expect(screen.getByText(/40% solved when retried/)).toBeInTheDocument();
     });
 
-    it('says how many puzzles it can actually serve', () => {
-        // The spec's "Train next: 5 loose-piece awareness puzzles". The count
-        // is the trainable set, not the corpus — promising more than the
-        // session will serve is the failure this avoids.
+    it('says how many of the pattern are ready', () => {
         show(data());
-        expect(screen.getByRole('link', { name: /train 5 puzzles now/i }))
-            .toBeInTheDocument();
+        expect(screen.getByRole('link', { name: /5 ready/i })).toBeInTheDocument();
     });
 
-    it('uses the singular for one puzzle', () => {
-        show(data({ focus: focus({ trainable_now: 1 }) }));
-        expect(screen.getByRole('link', { name: /train 1 puzzle now/i }))
-            .toBeInTheDocument();
+    it('does not promise a session of exactly that size', () => {
+        // A session is a fixed size and tops itself up from the rest of the due
+        // queue, so "train 5 puzzles" would be a promise it does not keep.
+        show(data());
+        expect(screen.queryByText(/train 5 puzzles/i)).not.toBeInTheDocument();
     });
 
     it('offers no session when nothing of the pattern is due', () => {
@@ -85,7 +82,7 @@ describe('TodaysFocusCard', () => {
         // The distinction is the whole planner: focus_cause reorders what is
         // already due; it does not narrow or extend the queue.
         show(data());
-        expect(screen.getByRole('link', { name: /train 5 puzzles now/i })).toHaveAttribute(
+        expect(screen.getByRole('link', { name: /train this pattern/i })).toHaveAttribute(
             'href',
             '/puzzles?focus_cause=loose_piece_awareness'
         );

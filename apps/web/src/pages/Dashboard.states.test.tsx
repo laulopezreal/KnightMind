@@ -198,7 +198,7 @@ describe('Dashboard data states', () => {
         // This file's router mock drops `to`, so the anchor carries no href and
         // has no link role. The destination is asserted in the card's own
         // tests; here the point is that the count reached the dashboard.
-        expect(screen.getByText(/train 3 puzzles now/i)).toBeInTheDocument();
+        expect(screen.getByText(/3 ready/i)).toBeInTheDocument();
     });
 
     it('renders no focus card when there is nothing to recommend', async () => {

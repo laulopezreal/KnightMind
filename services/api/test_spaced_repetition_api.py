@@ -531,3 +531,120 @@ class TestQueueReasons:
         body = client.get("/puzzles/due?username=testuser&n=5").json()
         assert body["puzzles"]
         assert all("queue_reason" in p for p in body["puzzles"])
+
+
+class TestFocusNameAgreement:
+    """The queue must name the pattern the way the focus card named it.
+
+    Both resolve through cause_breakdown's dominant phase. Resolving the queue
+    side with phase=None instead meant a user clicking through under "Back Rank
+    Neglect" saw every puzzle attribute itself to "King Safety Blind Spot" —
+    the naming drift the static table exists to prevent, inside one click.
+    """
+
+    def _seed(self, db, pid, phase, cause="king_safety_blindness"):
+        from services.api.models import DiagnosisStatus, PuzzleDiagnosis
+
+        db.add(
+            PuzzleDiagnosis(
+                puzzle_id=pid,
+                username="testuser",
+                status=DiagnosisStatus.OK,
+                primary_cause=cause,
+                phase=phase,
+                source="rules",
+                evidence_json=[],
+            )
+        )
+        db.add(
+            PuzzleStats(
+                puzzle_id=pid,
+                username="testuser",
+                attempts=1,
+                pass_count=1,
+                interval_days=1,
+                ease_factor=2.0,
+                next_due_at=datetime.now(timezone.utc) - timedelta(days=1),
+            )
+        )
+        db.commit()
+
+    def test_uses_the_phase_specific_name_the_focus_card_uses(
+        self, client, db_session, seed_puzzles
+    ):
+        # An endgame-dominant king-safety cause is "Back Rank Neglect", not the
+        # generic "King Safety Blind Spot".
+        for pid in ("p1", "p2", "p3"):
+            self._seed(db_session, pid, "endgame")
+
+        body = client.get(
+            "/puzzles/due?username=testuser&n=5&focus_cause=king_safety_blindness"
+        ).json()
+        names = {
+            p["queue_reason"].get("pattern")
+            for p in body["puzzles"]
+            if "pattern" in p["queue_reason"]
+        }
+        assert names == {"Back Rank Neglect"}
+
+    def test_falls_back_to_the_general_name_when_no_phase_dominates(
+        self, client, db_session, seed_puzzles
+    ):
+        self._seed(db_session, "p1", "endgame")
+        self._seed(db_session, "p2", "middlegame")
+        self._seed(db_session, "p3", "opening")
+
+        body = client.get(
+            "/puzzles/due?username=testuser&n=5&focus_cause=king_safety_blindness"
+        ).json()
+        names = {
+            p["queue_reason"].get("pattern")
+            for p in body["puzzles"]
+            if "pattern" in p["queue_reason"]
+        }
+        assert names == {"King Safety Blind Spot"}
+
+    def _extra_puzzle(self, db, pid, ply):
+        db.add(
+            PuzzleModel(
+                id=pid,
+                username="testuser",
+                source_game_id="g1",
+                ply=ply,
+                fen="rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+                side_to_move="white",
+                played_move_uci="e2e3",
+                best_move_uci="e2e4",
+                eval_before=0.5,
+                eval_after=-0.5,
+                swing=1.0,
+                created_at=datetime.now(timezone.utc),
+            )
+        )
+        db.commit()
+
+    def test_agrees_with_the_todays_focus_endpoint(
+        self, client, db_session, seed_puzzles
+    ):
+        # The strongest form: whatever the focus card would call it, the queue
+        # calls it too. Compared against the endpoint rather than a literal, so
+        # the two cannot drift apart later. Four diagnoses, because below the
+        # ranking threshold there is no focus to agree with.
+        for pid in ("p1", "p2", "p3"):
+            self._seed(db_session, pid, "endgame")
+        self._extra_puzzle(db_session, "p4", 4)
+        self._seed(db_session, "p4", "endgame")
+
+        focus = client.get("/users/testuser/todays-focus").json()["focus"]
+        assert focus is not None
+
+        body = client.get(
+            f"/puzzles/due?username=testuser&n=5&focus_cause={focus['cause']}"
+        ).json()
+        named = [
+            p["queue_reason"]["pattern"]
+            for p in body["puzzles"]
+            if "pattern" in p["queue_reason"]
+        ]
+        assert named
+        assert set(named) == {focus["name"]}

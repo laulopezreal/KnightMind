@@ -1579,7 +1579,18 @@ async def get_due_puzzles_endpoint(
     if focus_cause:
         from services.api.diagnosis.patterns import identify
 
-        named = identify(focus_cause, None)
+        # Resolved through the same cause_breakdown the focus card uses, so the
+        # two surfaces name the pattern identically. Resolving with phase=None
+        # here instead meant a user clicking "Train 3 puzzles now" under "Back
+        # Rank Neglect" saw every puzzle in the session attribute itself to
+        # "King Safety Blind Spot" — the same naming drift the static table
+        # exists to prevent, inside a single click.
+        _repo = DiagnosisRepository(db)
+        _stat = next(
+            (s for s in _repo.cause_breakdown(username) if s.cause == focus_cause),
+            None,
+        )
+        named = identify(focus_cause, _stat.dominant_phase if _stat else None)
         focus_name = named.name if named else None
         # `username` is already canonical — the Username type folds case at the
         # request boundary — so no re-folding here.
