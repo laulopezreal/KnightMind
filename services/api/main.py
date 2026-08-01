@@ -1546,6 +1546,17 @@ async def get_due_puzzles_endpoint(
     motif: str = Query(
         None, description="Filter puzzles by specific motif (e.g., 'Fork', 'Pin')"
     ),
+    focus_opening: str = Query(
+        None,
+        description=(
+            "Bias the order toward puzzles from this opening. Pass the full "
+            "line; add focus_opening_scope=family to widen to the family. Like "
+            "focus_cause this never narrows the session."
+        ),
+    ),
+    focus_opening_scope: str = Query(
+        "line", description="'line' (default) or 'family'"
+    ),
     focus_cause: str = Query(
         None,
         description=(
@@ -1610,6 +1621,18 @@ async def get_due_puzzles_endpoint(
     #    survived it — a focus must never make a not-yet-due puzzle due.
     focus_ids: set[str] = set()
     focus_name: str | None = None
+
+    if focus_opening:
+        # Same bias machinery as focus_cause: it reorders the already-trainable
+        # set and can neither widen nor shorten the session.
+        focus_ids |= DiagnosisRepository(db).puzzle_ids_for_opening(
+            username, focus_opening, family=focus_opening_scope == "family"
+        )
+        focus_name = (
+            focus_opening.split(":", 1)[0].strip()
+            if focus_opening_scope == "family"
+            else focus_opening
+        )
     if focus_cause:
         from services.api.diagnosis.patterns import identify
 

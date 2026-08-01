@@ -38,9 +38,11 @@ describe('PractiseOpeningLink', () => {
         show();
 
         const link = await screen.findByRole('link', { name: /practise this line \(7\)/i });
+        // Train, not the library: the ask was to drill it.
         expect(link).toHaveAttribute(
             'href',
-            '/library?opening_line=Sicilian%20Defense%3A%20Najdorf%20Variation'
+            '/puzzles?focus_opening=Sicilian%20Defense%3A%20Najdorf%20Variation'
+                + '&focus_opening_scope=line'
         );
     });
 
@@ -55,7 +57,10 @@ describe('PractiseOpeningLink', () => {
         const link = await screen.findByRole('link', {
             name: /practise Sicilian Defense \(101\)/i,
         });
-        expect(link).toHaveAttribute('href', '/library?opening=Sicilian%20Defense');
+        expect(link).toHaveAttribute(
+            'href',
+            '/puzzles?focus_opening=Sicilian%20Defense&focus_opening_scope=family'
+        );
         expect(
             screen.getByText(/only 2 puzzles from this exact line/i)
         ).toBeInTheDocument();
@@ -168,7 +173,8 @@ describe('PractiseOpeningLink', () => {
                 screen.getByRole('link', { name: /practise this line \(4\)/i })
             ).toHaveAttribute(
                 'href',
-                '/library?opening_line=French%20Defense%3A%20Advance%20Variation'
+                '/puzzles?focus_opening=French%20Defense%3A%20Advance%20Variation'
+                    + '&focus_opening_scope=line'
             )
         );
     });

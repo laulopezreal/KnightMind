@@ -60,9 +60,15 @@ export function PractiseOpeningLink({ username, openingName }: PractiseOpeningLi
     if (practice.scope === 'none') return null;
 
     const isLine = practice.scope === 'line';
-    const href = isLine
-        ? `/library?opening_line=${encodeURIComponent(practice.opening_name)}`
-        : `/library?opening=${encodeURIComponent(practice.opening_family)}`;
+    // Into Train, not the library: the ask was to drill the line, and browsing
+    // a filtered list is a different thing. The session biases toward these
+    // puzzles rather than filtering to them, so a line with nothing due gives
+    // an ordinary session instead of a dead end — same contract as focus_cause.
+    const target = isLine ? practice.opening_name : practice.opening_family;
+    const scope = isLine ? 'line' : 'family';
+    const href =
+        `/puzzles?focus_opening=${encodeURIComponent(target)}` +
+        `&focus_opening_scope=${scope}`;
     const count = isLine ? practice.line_count : practice.family_count;
 
     return (

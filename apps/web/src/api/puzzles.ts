@@ -134,7 +134,9 @@ export async function getDuePuzzles(
     sessionType: string = "standard",
     targetAccuracy?: number,
     motif?: string,
-    focusCause?: string
+    focusCause?: string,
+    focusOpening?: string,
+    focusOpeningScope?: string
 ): Promise<DuePuzzlesResponse> {
     const params = new URLSearchParams({
         username,
@@ -155,6 +157,11 @@ export async function getDuePuzzles(
     // 404. See get_adaptive_puzzles.
     if (focusCause) {
         params.append('focus_cause', focusCause);
+    }
+
+    if (focusOpening) {
+        params.append('focus_opening', focusOpening);
+        if (focusOpeningScope) params.append('focus_opening_scope', focusOpeningScope);
     }
 
     try {

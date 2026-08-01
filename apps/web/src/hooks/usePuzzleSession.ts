@@ -28,11 +28,17 @@ export type SessionState = 'idle' | 'loading' | 'active' | 'completing' | 'compl
 function buildSessionData(
     warmupMode: boolean,
     focusCause: string | null,
-    motifFilter: string | null
+    motifFilter: string | null,
+    focusOpening: string | null,
+    focusOpeningScope: string | null
 ): Record<string, unknown> | undefined {
     const data: Record<string, unknown> = {};
     if (warmupMode) data.is_warmup = true;
     if (focusCause) data.focus_cause = focusCause;
+    if (focusOpening) {
+        data.focus_opening = focusOpening;
+        data.focus_opening_scope = focusOpeningScope ?? 'line';
+    }
     if (motifFilter) data.motif = motifFilter;
     return Object.keys(data).length > 0 ? data : undefined;
 }
@@ -49,6 +55,9 @@ export interface UsePuzzleSessionOptions {
     motifFilter: string | null;
     /** Mistake cause to bias the queue toward. Never narrows it. */
     focusCause: string | null;
+    /** Opening to bias the queue toward, with its scope. Never narrows it. */
+    focusOpening: string | null;
+    focusOpeningScope: string | null;
     userStatus: UserStatus | null;
     timer: Pick<UsePuzzleTimerReturn, 'startSessionTimer' | 'cleanup' | 'currentPuzzleTime' | 'puzzleStartTime'>;
     checkAchievements: (params: { streak: number; currentPuzzleTime: number }) => void;
@@ -148,6 +157,8 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
         warmupMode,
         motifFilter,
         focusCause,
+        focusOpening,
+        focusOpeningScope,
         userStatus,
         timer,
         checkAchievements,
@@ -272,6 +283,8 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
                         // advancing its interval twice.
                         session.motif || undefined,
                         session.focus_cause || undefined,
+                        session.focus_opening || undefined,
+                        session.focus_opening_scope || undefined,
                     );
                     setPuzzles(response.puzzles);
 
@@ -493,6 +506,8 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
                 sessionType === 'accuracy_goal' ? targetAccuracy : undefined,
                 motifFilter || undefined,
                 focusCause || undefined,
+                focusOpening || undefined,
+                focusOpeningScope || undefined,
             );
             puzzles = response.puzzles;
         } catch (puzErr) {
@@ -520,7 +535,13 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
                 sessionType,
                 targetAccuracyParam,
                 targetTimeMinutesParam,
-                buildSessionData(warmupMode, focusCause, motifFilter),
+                buildSessionData(
+                    warmupMode,
+                    focusCause,
+                    motifFilter,
+                    focusOpening,
+                    focusOpeningScope
+                ),
             );
             setActiveSessionId(session_id);
 
@@ -553,6 +574,8 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
         warmupMode,
         motifFilter,
         focusCause,
+        focusOpening,
+        focusOpeningScope,
         setActiveSessionId,
         setStatus,
         timer.startSessionTimer,

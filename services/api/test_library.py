@@ -1329,6 +1329,36 @@ class TestOpeningPractice:
         ).json()
         assert body["scope"] == "none"
 
+    def test_the_promised_counts_match_what_the_filters_return(
+        self, client, db_session
+    ):
+        # The number in "Practise this line (N)" and the number of puzzles the
+        # filter actually yields are computed by different queries. Comparing
+        # them against each other, rather than against a literal, is what stops
+        # the two drifting — a count that overstates is the same class of defect
+        # as a link to an empty list.
+        _seed_puzzles(db_session, count=5)
+        for i in range(3):
+            self._diag(db_session, f"p-{i}", "Sicilian Defense: Najdorf Variation")
+        self._diag(db_session, "p-3", "Sicilian Defense: Dragon Variation")
+        self._diag(db_session, "p-4", "French Defense: Advance Variation")
+        db_session.commit()
+
+        practice = client.get(
+            "/users/testuser/opening-practice"
+            "?opening_name=Sicilian%20Defense:%20Najdorf%20Variation"
+        ).json()
+        by_line = client.get(
+            "/puzzles/list?username=testuser"
+            "&opening_line=Sicilian%20Defense:%20Najdorf%20Variation"
+        ).json()
+        by_family = client.get(
+            "/puzzles/list?username=testuser&opening=Sicilian%20Defense"
+        ).json()
+
+        assert practice["line_count"] == by_line["total"]
+        assert practice["family_count"] == by_family["total"]
+
 
 class TestOpeningLineFilter:
     def _diag(self, db, pid, name):

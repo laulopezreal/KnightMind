@@ -68,6 +68,8 @@ class SessionSummary(BaseModel):
     # depend on how the user navigated back — see the resume path in
     # usePuzzleSession.
     focus_cause: str | None = None
+    focus_opening: str | None = None
+    focus_opening_scope: str | None = None
     # Same reasoning, and the stakes are higher: motif *filters* the queue
     # rather than merely biasing it, so losing it on resume changes the set of
     # puzzles, not just their order.
@@ -201,6 +203,8 @@ async def get_session(
         best_streak=session.best_streak,
         hints_used=session.hints_used,
         focus_cause=(session.session_data or {}).get("focus_cause"),
+        focus_opening=(session.session_data or {}).get("focus_opening"),
+        focus_opening_scope=(session.session_data or {}).get("focus_opening_scope"),
         motif=(session.session_data or {}).get("motif"),
     )
 
@@ -258,6 +262,8 @@ async def complete_session(
         best_streak=session.best_streak,
         hints_used=session.hints_used,
         focus_cause=(session.session_data or {}).get("focus_cause"),
+        focus_opening=(session.session_data or {}).get("focus_opening"),
+        focus_opening_scope=(session.session_data or {}).get("focus_opening_scope"),
         motif=(session.session_data or {}).get("motif"),
     )
 
@@ -316,5 +322,7 @@ async def use_hint(
         best_streak=session.best_streak,
         hints_used=session.hints_used,
         focus_cause=(session.session_data or {}).get("focus_cause"),
+        focus_opening=(session.session_data or {}).get("focus_opening"),
+        focus_opening_scope=(session.session_data or {}).get("focus_opening_scope"),
         motif=(session.session_data or {}).get("motif"),
     )

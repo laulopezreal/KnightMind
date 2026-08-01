@@ -182,6 +182,28 @@ class DiagnosisRepository:
         )
         return line_count, family_count, family
 
+    def puzzle_ids_for_opening(
+        self, username: str, opening_name: str, *, family: bool = False
+    ) -> set[str]:
+        """Puzzles from one opening line, or from its whole family.
+
+        A set, like ``puzzle_ids_for_cause``: the caller uses it as a
+        membership test when ordering an existing candidate list. A focus
+        re-orders the trainable puzzles, it does not select them.
+        """
+        column = (
+            PuzzleDiagnosis.opening_family if family else PuzzleDiagnosis.opening_name
+        )
+        target = (
+            opening_name.split(":", 1)[0].strip() if family else opening_name.strip()
+        )
+        stmt = select(PuzzleDiagnosis.puzzle_id).where(
+            PuzzleDiagnosis.username == username,
+            PuzzleDiagnosis.status == DiagnosisStatus.OK,
+            func.lower(column) == target.lower(),
+        )
+        return set(self.db.scalars(stmt).all())
+
     def puzzle_ids_for_cause(self, username: str, cause: str) -> set[str]:
         """Every puzzle this user's diagnoses attribute to one cause.
 

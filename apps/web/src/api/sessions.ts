@@ -19,6 +19,8 @@ export interface SessionSummary {
      *  rather than by the URL, so navigating back without the query parameter
      *  cannot shift which puzzle index N is. */
     focus_cause?: string | null;
+    focus_opening?: string | null;
+    focus_opening_scope?: string | null;
     /** The motif this session was filtered to, if any. Resume re-fetches with
      *  this rather than the URL's, so returning via the nav bar cannot widen
      *  the queue and shift which puzzle index N is. */
