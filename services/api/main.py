@@ -34,7 +34,12 @@ from services.api.analytics_confidence import (
 )
 from services.api.auth import require_operator
 from services.api.db import SessionLocal, get_db
-from services.api.diagnosis.job import DIAGNOSIS_BATCH_DEFAULT, DIAGNOSIS_BATCH_MAX
+from services.api.diagnosis.job import (
+    DIAGNOSIS_BATCH_DEFAULT,
+    DIAGNOSIS_BATCH_MAX,
+    SCOPE_PENDING,
+    SCOPE_REENRICH,
+)
 from services.api.engine import (
     EngineNotAvailableError,
     InvalidFenError,
@@ -2059,6 +2064,10 @@ class DiagnosisConfirmRequest(BaseModel):
 class PendingDiagnosisResponse(BaseModel):
     username: str
     pending: int
+    # Already diagnosed, but by the rules alone. Non-zero on a deployment that
+    # backfilled before ANTHROPIC_API_KEY was set: those rows are not pending
+    # (their data versions are current) and no ordinary run will revisit them.
+    unenriched: int = 0
 
 
 def _diagnosis_response(
@@ -2393,8 +2402,11 @@ async def get_pending_diagnoses(
 ):
     """How many puzzles still need diagnosing — drives the backfill CTA."""
     assert_owns_username(account, username, db)
+    repo = DiagnosisRepository(db)
     return PendingDiagnosisResponse(
-        username=username, pending=DiagnosisRepository(db).pending_count(username)
+        username=username,
+        pending=repo.pending_count(username),
+        unenriched=repo.unenriched_count(username),
     )
 
 
@@ -2411,6 +2423,15 @@ async def diagnose_puzzles_endpoint(
         le=DIAGNOSIS_BATCH_MAX,
         description="Maximum puzzles to analyse in this run",
     ),
+    scope: str = Query(
+        SCOPE_PENDING,
+        description=(
+            "'pending' analyses puzzles with no diagnosis yet. 'reenrich' "
+            "re-runs puzzles already diagnosed without the model — use it once "
+            "after adding ANTHROPIC_API_KEY to a deployment that backfilled "
+            "without one."
+        ),
+    ),
     db: Session = Depends(get_db),
     account: Account | None = Depends(require_account),
 ):
@@ -2420,15 +2441,27 @@ async def diagnose_puzzles_endpoint(
     that is what the (username, type) active-job index exists for. A duplicate
     request returns the in-flight job rather than erroring, mirroring
     /puzzles/generate.
+
+    ``scope=reenrich`` exists because version-based staleness cannot see a
+    configuration change: adding an API key moves no data version, so a corpus
+    diagnosed while the key was absent would stay rules-only forever. It is an
+    explicit operator action rather than a standing rule — see
+    ``DiagnosisRepository.unenriched_puzzle_ids`` for why a standing rule would
+    re-attempt a rejected puzzle every day.
     """
     assert_owns_username(account, username, db)
+    if scope not in (SCOPE_PENDING, SCOPE_REENRICH):
+        raise HTTPException(
+            status_code=422,
+            detail=f"scope must be '{SCOPE_PENDING}' or '{SCOPE_REENRICH}'",
+        )
     try:
         job = Job(
             username=username,
             type=JobType.DIAGNOSIS,
             status=JobStatus.QUEUED,
             message="Queued for diagnosis",
-            params={"limit": limit},
+            params={"limit": limit, "scope": scope},
         )
         db.add(job)
         db.commit()

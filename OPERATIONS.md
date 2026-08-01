@@ -235,6 +235,41 @@ docker logs --tail 80 knightmind-api-1
 docker exec knightmind-db-1 sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "select tablename from pg_tables where schemaname='"'"'public'"'"' order by tablename;"'
 ```
 
+## Enabling AI diagnosis on an existing corpus
+
+`ANTHROPIC_API_KEY` goes in `.env.docker` (mode `0600`, never printed or
+committed). `KNIGHTMIND_AI_DIAGNOSIS` defaults ON, so the key is the only
+required setting; `KNIGHTMIND_AI_DIAGNOSIS=0` is the kill switch.
+
+The container must be recreated — a restart does not re-read the env file:
+
+```bash
+docker compose --env-file .env.docker up -d --force-recreate api
+```
+
+Confirm it arrived without printing it:
+
+```bash
+docker compose --env-file .env.docker exec -T api printenv ANTHROPIC_API_KEY | wc -c
+```
+
+**A key added after the backfill does not enrich what already exists.**
+Staleness is a predicate over data versions (`extraction_version`,
+`rule_version`); setting a key moves neither, so diagnoses produced while the
+key was absent stay rules-only and no ordinary run revisits them. Check the
+backlog and sweep it once:
+
+```bash
+curl -s "$API/users/$USER/diagnosis/pending"          # {"pending":N,"unenriched":M}
+curl -sX POST "$API/users/$USER/diagnose?scope=reenrich"
+```
+
+The sweep respects the same daily caps as any other run
+(`KNIGHTMIND_AI_DAILY_CAP_USER`, default 500) and converges: an enriched row
+records its `model_version` and drops out of the query. Re-running is how a
+rejected response gets retried — that is deliberately a manual decision, since
+a standing rule would re-attempt a persistently-rejected puzzle every day.
+
 ## Unsafe without explicit approval
 
 Do not run these without a fresh DB backup and Lau's explicit approval:
