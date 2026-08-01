@@ -1,15 +1,18 @@
 import { useEffect, useRef, useState, useCallback, useLayoutEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   getOpenings, ApiError, DEPTH_OPTIONS, DEFAULT_MAX_PLY, depthLabel, normaliseDepth,
+  offeredDepth, offeredColor,
   type OpeningNode, type ColorFilter,
 } from '../api';
 import { useChessUsername } from '../context/ChessUsernameContext';
 import { OpeningGraph, type OpeningGraphHandle, type NodeAnchor } from '../components/OpeningGraph';
 import { getScoreColor } from '../utils/openings';
 import { formatSigned } from '../utils/ratings';
-import { formatLine, engineHrefForPath, resolvePath } from '../utils/openingLine';
+import {
+  formatLine, engineHrefForPath, resolveMoves, encodeLine, decodeLine, pathMoves,
+} from '../utils/openingLine';
 import { useLocalStorage } from '../hooks/useLocalStorage';
 import { PageHeader } from '../components/PageHeader';
 import {
@@ -90,7 +93,8 @@ export default function Openings() {
   // can only fail again.
   const [noGamesImported, setNoGamesImported] = useState(false);
   const { username } = useChessUsername();
-  const [colorFilter, setColorFilter] = useLocalStorage<ColorFilter>(
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [storedColor, setStoredColor] = useLocalStorage<ColorFilter>(
     'knightmind:openings:color_filter',
     'both'
   );
@@ -99,11 +103,12 @@ export default function Openings() {
   // Validation lives in the storage parser rather than at read time, so a bad
   // persisted value is also repaired in place instead of being re-clamped on
   // every render.
-  const [maxPly, setMaxPly] = useLocalStorage<number>(
+  const [storedMaxPly, setStoredMaxPly] = useLocalStorage<number>(
     MAX_PLY_STORAGE_KEY,
     DEFAULT_MAX_PLY,
     parsePersistedMaxPly
   );
+
   const [treeData, setTreeData] = useState<OpeningNode | null>(null);
   // Which colour the tree on screen actually answers for. The graph is keyed on
   // this rather than on `colorFilter`, because a refresh deliberately keeps the
@@ -112,13 +117,49 @@ export default function Openings() {
   // colour's data, then skip both when the real tree arrived.
   const [loadedFilter, setLoadedFilter] = useState<ColorFilter | null>(null);
   const [tooltip, setTooltip] = useState<{ anchor: NodeAnchor; data: OpeningNode } | null>(null);
-  // Root-to-node path for the activated node. Backs the selection panel, which
-  // is the page's only stable (non-hover) surface for a line's figures and the
-  // only route out of the Opening Explorer into the rest of the app.
-  const [selectedPath, setSelectedPath] = useState<OpeningNode[] | null>(null);
   const tooltipRef = useRef<HTMLDivElement>(null);
+  /** Line the graph has already been told to open, so a refetch does not
+   *  re-open it and drag the view back mid-read. Keyed by the loaded colour
+   *  too, because that remounts the graph and empties what it knows. */
+  const revealedRef = useRef<string | null>(null);
   const online = useOnlineStatus();
   const request = useLatestRequest();
+
+  // The URL says what the view *is*; localStorage only supplies a default for a
+  // visit that does not name one. Held this way round, a link carries a view to
+  // another person or another device — previously the whole thing lived in
+  // per-device storage, so the page looked identical whatever URL you sent.
+  const colorFilter = offeredColor(searchParams.get('color')) ?? storedColor;
+  const maxPly = offeredDepth(searchParams.get('depth')) ?? storedMaxPly;
+  // Read with `get`, not a truthiness check: the root *is* a selectable line
+  // ("Starting position", with its own Engine link), and it encodes to the
+  // empty string. Absent and present-but-empty have to stay distinguishable,
+  // so the parameter is null when missing and '' when the root is selected.
+  const lineParam = searchParams.get('line');
+
+  const updateParams = useCallback(
+    (mutate: (params: URLSearchParams) => void, replace: boolean) => {
+      setSearchParams(previous => {
+        const next = new URLSearchParams(previous);
+        mutate(next);
+        return next;
+      }, { replace });
+    },
+    [setSearchParams]
+  );
+
+  // Controls replace rather than push: nobody wants six presses of Back to
+  // walk out through their own filter fiddling. Selecting a line does push —
+  // see `handleNodeSelect`.
+  const setColorFilter = useCallback((next: ColorFilter) => {
+    setStoredColor(next);
+    updateParams(params => params.set('color', next), true);
+  }, [setStoredColor, updateParams]);
+
+  const setMaxPly = useCallback((next: number) => {
+    setStoredMaxPly(next);
+    updateParams(params => params.set('depth', String(next)), true);
+  }, [setStoredMaxPly, updateParams]);
 
   // Clamp the tooltip into the viewport after it renders. Anchoring it blindly
   // to the node put up to 180px of it off-screen for any node in the lower
@@ -149,18 +190,64 @@ export default function Openings() {
     if (!username) navigate('/');
   }, [username, navigate]);
 
-  // A selection holds nodes from the tree it was made against. Left alone, its
-  // figures go stale on refresh and become plain wrong after a colour-filter
-  // change — the panel would keep showing "1. e4 c5, 31 games" while the graph
-  // beneath it answered a different question. Re-walk the line in the new tree
-  // to pick up current numbers, or drop it when the line is not in this one.
+  // Derived, not stored. The moves in the URL are the durable identity of a
+  // line; the nodes are not, so re-walking them against whatever tree is
+  // currently loaded is both how a link is restored *and* how a selection is
+  // kept honest across a refresh or a colour change. Holding it in state as
+  // well would need the two to be synced, and any two-way sync between state
+  // and the URL fights itself: each side sees the mismatch and writes.
+  const selectedPath = useMemo(
+    () => (treeData && lineParam !== null ? resolveMoves(treeData, decodeLine(lineParam)) : null),
+    [treeData, lineParam]
+  );
+
+  // The line named in the URL is not in the tree now on screen — a link to a
+  // Black line opened under the White filter, or a depth too shallow to reach
+  // it. The panel is already gone; drop the parameter too, so what is in the
+  // address bar keeps matching what is on the page.
   useEffect(() => {
-    setSelectedPath(previous => {
-      if (!previous) return previous;
-      if (!treeData) return null;
-      return resolvePath(treeData, previous);
-    });
-  }, [treeData]);
+    if (lineParam !== null && treeData && !selectedPath) {
+      updateParams(params => params.delete('line'), true);
+    }
+  }, [lineParam, treeData, selectedPath, updateParams]);
+
+  // Fill in whatever the URL does not say, so copying it always yields the
+  // view you are actually looking at rather than the next reader's defaults.
+  useEffect(() => {
+    if (searchParams.has('color') && searchParams.has('depth')) return;
+    updateParams(params => {
+      if (!params.has('color')) params.set('color', colorFilter);
+      if (!params.has('depth')) params.set('depth', String(maxPly));
+    }, true);
+  }, [searchParams, colorFilter, maxPly, updateParams]);
+
+  // Open the line in the graph when it was not the graph that chose it —
+  // a shared link, a reload, or Back. `handleNodeSelect` marks the line as
+  // already shown, so a click here does not bounce the view.
+  useEffect(() => {
+    if (!selectedPath) return;
+    const revealed = `${loadedFilter}:${encodeLine(selectedPath)}`;
+    if (revealed === revealedRef.current) return;
+    revealedRef.current = revealed;
+    graphRef.current?.revealPath(pathMoves(selectedPath));
+  }, [selectedPath, loadedFilter]);
+
+  /**
+   * Record a selection in the URL.
+   *
+   * This one pushes: a selection is somewhere you went, so Back should take
+   * you out of it. Re-selecting the node already selected is a no-op rather
+   * than a second identical history entry.
+   */
+  const handleNodeSelect = useCallback((path: OpeningNode[] | null) => {
+    const line = path ? encodeLine(path) : null;
+    if (line === lineParam) return;
+    revealedRef.current = `${loadedFilter}:${line}`;
+    updateParams(params => {
+      if (line === null) params.delete('line');
+      else params.set('line', line);
+    }, false);
+  }, [lineParam, loadedFilter, updateParams]);
 
   // The API always answers a 200 with a root node, even when nothing matched —
   // so "did anything load" must be judged on the contents, not the container.
@@ -371,7 +458,7 @@ export default function Openings() {
           )}
           <button
             type="button"
-            onClick={() => setSelectedPath(null)}
+            onClick={() => handleNodeSelect(null)}
             className="text-xs uppercase tracking-widest text-primary/70 hover:text-primary km-focus-visible transition-colors"
           >
             Clear
@@ -395,7 +482,7 @@ export default function Openings() {
         data={treeData as OpeningNode}
         onNodeHover={(anchor, node) => setTooltip({ anchor, data: node })}
         onNodeHoverEnd={() => setTooltip(null)}
-        onNodeSelect={setSelectedPath}
+        onNodeSelect={handleNodeSelect}
         onError={setError}
         graphRef={graphRef}
       />

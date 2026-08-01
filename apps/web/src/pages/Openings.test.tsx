@@ -1,13 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import Openings from './Openings';
+import { renderAt } from '../test/router';
 
 let mockUsername = 'testplayer';
 const mockNavigate = vi.fn();
 
-vi.mock('react-router-dom', () => ({
+vi.mock('react-router-dom', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('react-router-dom')>()),
   useNavigate: () => mockNavigate,
-  Link: ({ children, to, ...rest }: { children: React.ReactNode; to: string; [key: string]: unknown }) => <a href={to} {...rest}>{children}</a>,
 }));
 
 vi.mock('../context/ChessUsernameContext', () => ({
@@ -60,28 +61,28 @@ describe('Openings', () => {
 
   it('should render page heading', () => {
     mockGetOpenings.mockReturnValue(new Promise(() => {}));
-    render(<Openings />);
+    renderAt(<Openings />);
 
     expect(screen.getByText('Opening Explorer')).toBeInTheDocument();
   });
 
   it('should redirect when no username', () => {
     mockUsername = '';
-    render(<Openings />);
+    renderAt(<Openings />);
 
     expect(mockNavigate).toHaveBeenCalledWith('/');
   });
 
   it('should show color filter options', () => {
     mockGetOpenings.mockReturnValue(new Promise(() => {}));
-    render(<Openings />);
+    renderAt(<Openings />);
 
     expect(screen.getByDisplayValue('All games')).toBeInTheDocument();
   });
 
   it('should show Analyzing button while loading', () => {
     mockGetOpenings.mockReturnValue(new Promise(() => {}));
-    render(<Openings />);
+    renderAt(<Openings />);
 
     // Auto-fetch triggers on mount, so button shows "Analyzing..."
     expect(screen.getByText('Analyzing...')).toBeInTheDocument();
@@ -89,14 +90,14 @@ describe('Openings', () => {
 
   it('should show loading state while fetching', () => {
     mockGetOpenings.mockReturnValue(new Promise(() => {}));
-    render(<Openings />);
+    renderAt(<Openings />);
 
     expect(screen.getByRole('status')).toBeInTheDocument();
   });
 
   it('should show error when fetch fails', async () => {
     mockGetOpenings.mockRejectedValue(new Error('Network error'));
-    render(<Openings />);
+    renderAt(<Openings />);
 
     await waitFor(() => {
       expect(screen.getByText('Network error')).toBeInTheDocument();
@@ -105,14 +106,14 @@ describe('Openings', () => {
 
   it('should show score legend once a tree is loaded', async () => {
     mockGetOpenings.mockResolvedValue(MOCK_TREE);
-    render(<Openings />);
+    renderAt(<Openings />);
 
     expect(await screen.findByText('Score:')).toBeInTheDocument();
   });
 
   it('labels the metric as score, never as win rate', async () => {
     mockGetOpenings.mockResolvedValue(MOCK_TREE);
-    render(<Openings />);
+    renderAt(<Openings />);
 
     // (wins + half draws) / games is a score, not a win rate: a line drawn
     // every time scores 50% while winning none of them.
@@ -123,7 +124,7 @@ describe('Openings', () => {
 
   it('should not show the score legend on error (no graph to explain)', async () => {
     mockGetOpenings.mockRejectedValue(new Error('Network error'));
-    render(<Openings />);
+    renderAt(<Openings />);
 
     // Error card + Retry appear; the graph legend must not, since there is no
     // graph rendered beneath it.
@@ -142,7 +143,7 @@ describe('Openings', () => {
         { move_san: 'd4', ply: 1, games_count: 1, wins: 1, draws: 0, losses: 0, win_rate: 100 },
       ],
     });
-    render(<Openings />);
+    renderAt(<Openings />);
 
     expect(await screen.findByText('Move Sequences')).toBeInTheDocument();
     // Root ("Start") is excluded — it is not a move.

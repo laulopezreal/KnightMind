@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { Chess } from 'chess.js';
-import { pathMoves, formatLine, fenForPath, engineHrefForPath, resolvePath } from './openingLine';
+import {
+  pathMoves, formatLine, fenForPath, engineHrefForPath, resolveMoves, encodeLine, decodeLine,
+} from './openingLine';
 import type { OpeningNode } from '../api';
 
 function node(move_san: string): OpeningNode {
@@ -67,7 +69,7 @@ describe('fenForPath', () => {
   });
 });
 
-describe('resolvePath', () => {
+describe('resolveMoves', () => {
   const tree: OpeningNode = {
     ...node('Start'),
     games_count: 40,
@@ -77,18 +79,17 @@ describe('resolvePath', () => {
     ],
   };
 
-  it('returns the same line with the new tree’s figures', () => {
+  it('returns the line with this tree’s figures', () => {
     // A selection made against an older tree must not keep reporting its
     // numbers after a refetch.
-    const stale = [node('Start'), { ...node('e4'), games_count: 999 }];
-    const fresh = resolvePath(tree, stale)!;
+    const fresh = resolveMoves(tree, ['e4'])!;
 
     expect(fresh.map((n) => n.move_san)).toEqual(['Start', 'e4']);
     expect(fresh[1].games_count).toBe(30);
   });
 
   it('resolves a deeper line', () => {
-    const fresh = resolvePath(tree, [node('Start'), node('e4'), node('c5')])!;
+    const fresh = resolveMoves(tree, ['e4', 'c5'])!;
 
     expect(fresh).toHaveLength(3);
     expect(fresh[2].games_count).toBe(12);
@@ -96,15 +97,52 @@ describe('resolvePath', () => {
 
   it('returns null when the line is absent from this tree', () => {
     // e.g. the same selection after switching to "as Black".
-    expect(resolvePath(tree, [node('Start'), node('e4'), node('e5')])).toBeNull();
+    expect(resolveMoves(tree, ['e4', 'e5'])).toBeNull();
   });
 
   it('returns null when a whole branch is gone', () => {
-    expect(resolvePath(tree, [node('Start'), node('Nf3')])).toBeNull();
+    expect(resolveMoves(tree, ['Nf3'])).toBeNull();
   });
 
   it('resolves the bare root', () => {
-    expect(resolvePath(tree, [node('Start')])).toEqual([tree]);
+    expect(resolveMoves(tree, [])).toEqual([tree]);
+  });
+});
+
+describe('line encoding', () => {
+  it('round-trips a line through the query string', () => {
+    const line = path('e4', 'c5', 'Nf3');
+    const encoded = encodeLine(line);
+
+    expect(encoded).toBe('e4_c5_Nf3');
+    expect(decodeLine(encoded)).toEqual(['e4', 'c5', 'Nf3']);
+  });
+
+  it('survives URLSearchParams without escaping the common case', () => {
+    // The separator is an underscore precisely because a comma comes back as
+    // %2C — a line is something people paste into chat.
+    const params = new URLSearchParams({ line: encodeLine(path('e4', 'c5')) });
+
+    expect(params.toString()).toBe('line=e4_c5');
+  });
+
+  it('round-trips notation that does need escaping', () => {
+    // Checks, captures, promotions and castling all appear in real lines.
+    const line = path('O-O', 'Bxf7+', 'e8=Q#');
+    const params = new URLSearchParams({ line: encodeLine(line) });
+    const roundTripped = new URLSearchParams(params.toString()).get('line');
+
+    expect(decodeLine(roundTripped)).toEqual(['O-O', 'Bxf7+', 'e8=Q#']);
+  });
+
+  it('drops the synthetic root rather than encoding it', () => {
+    expect(encodeLine([node('Start')])).toBe('');
+  });
+
+  it('reads a missing or empty parameter as no line', () => {
+    expect(decodeLine(null)).toEqual([]);
+    expect(decodeLine('')).toEqual([]);
+    expect(decodeLine('__')).toEqual([]);
   });
 });
 

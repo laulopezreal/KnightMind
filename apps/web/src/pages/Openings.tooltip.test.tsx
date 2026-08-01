@@ -1,14 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, act } from '@testing-library/react';
+import { screen, waitFor, act } from '@testing-library/react';
 import Openings from './Openings';
+import { renderAt } from '../test/router';
 import type { NodeAnchor } from '../components/OpeningGraph';
 
 // The tooltip was anchored blindly to the hovered node, putting up to 180px of
 // it off-screen for any node in the lower right — reachable just by panning.
 
-vi.mock('react-router-dom', () => ({
+vi.mock('react-router-dom', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('react-router-dom')>()),
   useNavigate: () => vi.fn(),
-  Link: ({ children, to, ...rest }: { children: React.ReactNode; to: string; [key: string]: unknown }) => <a href={to} {...rest}>{children}</a>,
 }));
 vi.mock('../context/ChessUsernameContext', () => ({
   useChessUsername: () => ({ username: 'alice' }),
@@ -63,7 +64,7 @@ beforeEach(() => {
 });
 
 async function hoverAt(anchor: NodeAnchor) {
-  render(<Openings />);
+  renderAt(<Openings />);
   await screen.findByTestId('opening-graph');
   // The real callback fires from a native d3 listener, outside React's event
   // system, so the resulting state update needs wrapping here.
