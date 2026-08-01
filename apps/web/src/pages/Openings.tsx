@@ -156,7 +156,11 @@ export default function Openings() {
   // old tree while the new one loads — keying on the control would remount the
   // graph immediately and let it auto-collapse and fit against the *previous*
   // colour's data, then skip both when the real tree arrived.
-  const [loadedFilter, setLoadedFilter] = useState<ColorFilter | null>(null);
+  // Identity of the tree on screen — which colour *and* which window it
+  // answers for. Both are questions rather than refreshes: switching from five
+  // years to thirty days can turn a wide tree into three nodes, and a view
+  // fitted to the old one then frames mostly empty space.
+  const [loadedView, setLoadedView] = useState<string | null>(null);
   const [tooltip, setTooltip] = useState<{ anchor: NodeAnchor; data: OpeningNode } | null>(null);
   const tooltipRef = useRef<HTMLDivElement>(null);
   /** Line the graph has already been told to open, so a refetch does not
@@ -279,11 +283,11 @@ export default function Openings() {
   // already shown, so a click here does not bounce the view.
   useEffect(() => {
     if (!selectedPath) return;
-    const revealed = `${loadedFilter}:${encodeLine(selectedPath)}`;
+    const revealed = `${loadedView}:${encodeLine(selectedPath)}`;
     if (revealed === revealedRef.current) return;
     revealedRef.current = revealed;
     graphRef.current?.revealPath(pathMoves(selectedPath));
-  }, [selectedPath, loadedFilter]);
+  }, [selectedPath, loadedView]);
 
   // What players around this rating score from the selected position. Kept
   // apart from the tree fetch: it is a different question of a different
@@ -292,16 +296,24 @@ export default function Openings() {
   const [peerBaseline, setPeerBaseline] = useState<OpeningBaseline | null>(null);
   const baselineRequest = useLatestRequest();
 
+  // Keyed on the position, not the selection object. A refetch hands down an
+  // equal-but-new tree, so the resolved path is a new array every time even
+  // when the line is untouched — and depending on it re-asked lichess about a
+  // position that had not moved, on every refresh and every window change.
+  // A FEN is a string, so an unchanged position is an unchanged dependency.
+  const selectedFen = useMemo(
+    () => (selectedPath ? fenForPath(selectedPath) : null),
+    [selectedPath]
+  );
+
   useEffect(() => {
     setPeerBaseline(null);
     // "Both" mixes games from either side of the board into one figure, so
     // there is no single expectation to compare it against.
-    if (!selectedPath || colorFilter === 'both' || !username.trim()) return;
-    const fen = fenForPath(selectedPath);
-    if (!fen) return;
+    if (!selectedFen || colorFilter === 'both' || !username.trim()) return;
 
     const token = baselineRequest.begin();
-    getBaseline(username, fen, colorFilter, { signal: token.signal })
+    getBaseline(username, selectedFen, colorFilter, { signal: token.signal })
       .then(result => {
         if (!token.isStale()) setPeerBaseline(result);
       })
@@ -310,7 +322,7 @@ export default function Openings() {
         // comparison that could not be fetched is a missing extra, not an
         // error worth interrupting anyone over.
       });
-  }, [selectedPath, colorFilter, username, baselineRequest]);
+  }, [selectedFen, colorFilter, username, baselineRequest]);
 
   /**
    * Record a selection in the URL.
@@ -322,12 +334,12 @@ export default function Openings() {
   const handleNodeSelect = useCallback((path: OpeningNode[] | null) => {
     const line = path ? encodeLine(path) : null;
     if (line === lineParam) return;
-    revealedRef.current = `${loadedFilter}:${line}`;
+    revealedRef.current = `${loadedView}:${line}`;
     updateParams(params => {
       if (line === null) params.delete('line');
       else params.set('line', line);
     }, false);
-  }, [lineParam, loadedFilter, updateParams]);
+  }, [lineParam, loadedView, updateParams]);
 
   // The API always answers a 200 with a root node, even when nothing matched —
   // so "did anything load" must be judged on the contents, not the container.
@@ -390,7 +402,7 @@ export default function Openings() {
       const data = await getOpenings(user, color, plies, sinceDays);
       if (token.isStale()) return;
       setTreeData(data);
-      setLoadedFilter(color);
+      setLoadedView(`${color}:${periodParam(sinceDays)}`);
     } catch (err) {
       if (token.isStale()) return;
       let isMissingGames = false;
@@ -583,10 +595,10 @@ export default function Openings() {
     // wasted while the tree was squeezed into the rest.
     <section className="relative h-[60vh] min-h-[360px] max-h-[720px] bg-primary/5 border border-primary/10 rounded-sm overflow-hidden">
       <OpeningGraph
-        // Remount when the loaded colour changes — a different question
-        // deserves a fresh view. A plain Refresh keeps the same instance, and
-        // so keeps the user's zoom and expanded lines.
-        key={loadedFilter ?? 'initial'}
+        // Remount when the loaded colour or window changes — a different
+        // question deserves a fresh view. A plain Refresh keeps the same
+        // instance, and so keeps the user's zoom and expanded lines.
+        key={loadedView ?? 'initial'}
         data={treeData as OpeningNode}
         onNodeHover={(anchor, node) => setTooltip({ anchor, data: node })}
         onNodeHoverEnd={() => setTooltip(null)}

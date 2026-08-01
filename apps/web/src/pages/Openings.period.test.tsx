@@ -22,9 +22,18 @@ vi.mock('../api', async (importOriginal) => ({
   getBaseline: vi.fn().mockRejectedValue(new Error('not under test')),
 }));
 
-vi.mock('../components/OpeningGraph', () => ({
-  OpeningGraph: () => <div data-testid="opening-graph" />,
-}));
+// Counts mounts, so "the graph was rebuilt" can be told apart from "the graph
+// re-rendered with new data" — the whole difference this filter turns on.
+const mounts = { count: 0 };
+vi.mock('../components/OpeningGraph', async () => {
+  const { useEffect } = await import('react');
+  return {
+    OpeningGraph: () => {
+      useEffect(() => { mounts.count += 1; }, []);
+      return <div data-testid="opening-graph" />;
+    },
+  };
+});
 
 function node(move_san: string, over: Partial<OpeningNode> = {}): OpeningNode {
   return {
@@ -62,7 +71,13 @@ const NOTHING_LATELY: OpeningNode = {
 beforeEach(() => {
   vi.clearAllMocks();
   localStorage.clear();
-  mockGetOpenings.mockResolvedValue(TREE);
+  mounts.count = 0;
+  // A real fetch parses fresh JSON each time, so it is never the same object.
+  // Returning one shared reference would let React skip the state update and
+  // hide every re-render this file is about.
+  mockGetOpenings.mockImplementation(() =>
+    Promise.resolve(JSON.parse(JSON.stringify(TREE)))
+  );
 });
 
 const periodControl = () => screen.getByLabelText('Time period covered');
@@ -217,5 +232,32 @@ describe('Openings — nothing played lately', () => {
     await ready('/openings?color=white');
 
     expect(await screen.findByText(/No games as White yet/i)).toBeInTheDocument();
+  });
+});
+
+describe('Openings — the graph follows the window', () => {
+  it('rebuilds the view when the window changes', async () => {
+    const user = userEvent.setup();
+    await ready();
+    expect(mounts.count).toBe(1);
+
+    await user.selectOptions(periodControl(), '30');
+
+    // Same reasoning as the colour filter, which has always remounted: five
+    // years and thirty days are different questions, and a zoom fitted to a
+    // wide tree frames mostly empty space over a narrow one.
+    await waitFor(() => expect(mounts.count).toBe(2));
+  });
+
+  it('keeps the view across a plain refresh', async () => {
+    const user = userEvent.setup();
+    await ready();
+
+    await user.click(screen.getByRole('button', { name: /refresh/i }));
+    await waitFor(() => expect(mockGetOpenings.mock.calls.length).toBeGreaterThan(1));
+
+    // Refresh asks the same question again; throwing away the user's zoom and
+    // expanded lines for it is the thing the remount key must not do.
+    expect(mounts.count).toBe(1);
   });
 });
