@@ -307,6 +307,11 @@ class GameMetaFacts:
     # context is replaced with EMPTY_GAME_CONTEXT above, so no separate guard
     # is needed here and adding one would imply the drop is per-field.
     opening_family: str | None = None
+    # The full line ("Sicilian Defense: Najdorf Variation") and its ECO code.
+    # The family is the part of the name before the colon — one derivation, so
+    # the coarse and fine keys can never disagree.
+    opening_name: str | None = None
+    opening_eco: str | None = None
 
 
 @dataclass(frozen=True)
@@ -398,6 +403,8 @@ def extract_evidence(
             plies_in_game=context.plies_in_game,
             pgn_desync=desync,
             opening_family=context.opening_family,
+            opening_name=context.opening_name,
+            opening_eco=context.opening_eco,
         ),
         history=history,
         eval_before=puzzle.eval_before,

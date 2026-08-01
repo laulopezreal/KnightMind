@@ -1213,3 +1213,165 @@ class TestPhaseAndOpeningFilters:
         db_session.commit()
         body = client.get("/puzzles/list?username=testuser").json()
         assert body["available_openings"] == []
+
+
+class TestOpeningPractice:
+    """What an explorer line can actually offer, and at what granularity.
+
+    The join key is the part of the name before the colon. That derivation
+    lives in exactly one place; these tests exist partly to keep it there.
+    """
+
+    def _diag(self, db, pid, name):
+        family = name.split(":", 1)[0].strip() if name else None
+        db.add(
+            PuzzleDiagnosis(
+                puzzle_id=pid,
+                username="testuser",
+                status=DiagnosisStatus.OK,
+                primary_cause="loose_piece_awareness",
+                opening_name=name,
+                opening_family=family,
+                source="rules",
+                evidence_json=[],
+            )
+        )
+        db.flush()
+
+    def test_offers_the_line_when_it_has_enough(self, client, db_session):
+        _seed_puzzles(db_session, count=4)
+        for i in range(3):
+            self._diag(db_session, f"p-{i}", "Sicilian Defense: Najdorf Variation")
+        self._diag(db_session, "p-3", "Sicilian Defense: Dragon Variation")
+        db_session.commit()
+
+        body = client.get(
+            "/users/testuser/opening-practice"
+            "?opening_name=Sicilian%20Defense:%20Najdorf%20Variation"
+        ).json()
+        assert body["scope"] == "line"
+        assert body["line_count"] == 3
+        assert body["family_count"] == 4
+        assert body["opening_family"] == "Sicilian Defense"
+
+    def test_falls_back_to_the_family_when_the_line_is_thin(self, client, db_session):
+        # Two puzzles is not practice — a session that keeps repeating the same
+        # position is worse than a broader one.
+        _seed_puzzles(db_session, count=4)
+        for i in range(2):
+            self._diag(db_session, f"p-{i}", "Sicilian Defense: Najdorf Variation")
+        for i in range(2, 4):
+            self._diag(db_session, f"p-{i}", "Sicilian Defense: Dragon Variation")
+        db_session.commit()
+
+        body = client.get(
+            "/users/testuser/opening-practice"
+            "?opening_name=Sicilian%20Defense:%20Najdorf%20Variation"
+        ).json()
+        assert body["scope"] == "family"
+        assert body["line_count"] == 2
+        assert body["family_count"] == 4
+
+    def test_reports_none_when_the_opening_is_unplayed(self, client, db_session):
+        # A link that leads to an empty list is worse than no link, so the
+        # caller is told there is nothing rather than left to discover it.
+        _seed_puzzles(db_session, count=2)
+        self._diag(db_session, "p-0", "French Defense: Advance Variation")
+        db_session.commit()
+
+        body = client.get(
+            "/users/testuser/opening-practice"
+            "?opening_name=Sicilian%20Defense:%20Najdorf%20Variation"
+        ).json()
+        assert body["scope"] == "none"
+        assert body["line_count"] == 0
+        assert body["family_count"] == 0
+
+    def test_derives_the_family_server_side(self, client, db_session):
+        # The frontend must never re-implement the split. If it did, this is
+        # the contract that would have let the two drift.
+        _seed_puzzles(db_session, count=1)
+        db_session.commit()
+        body = client.get(
+            "/users/testuser/opening-practice"
+            "?opening_name=Queen%27s%20Gambit%20Declined:%20Exchange%20Variation"
+        ).json()
+        assert body["opening_family"] == "Queen's Gambit Declined"
+
+    def test_a_family_only_name_is_its_own_family(self, client, db_session):
+        _seed_puzzles(db_session, count=1)
+        self._diag(db_session, "p-0", "Bird Opening")
+        db_session.commit()
+        body = client.get(
+            "/users/testuser/opening-practice?opening_name=Bird%20Opening"
+        ).json()
+        assert body["opening_family"] == "Bird Opening"
+        assert body["line_count"] == 1
+
+    def test_is_scoped_to_the_requesting_user(self, client, db_session):
+        _seed_puzzles(db_session, count=1, username="testuser")
+        db_session.add(
+            PuzzleDiagnosis(
+                puzzle_id="p-0",
+                username="other",
+                status=DiagnosisStatus.OK,
+                primary_cause="loose_piece_awareness",
+                opening_name="Sicilian Defense: Najdorf Variation",
+                opening_family="Sicilian Defense",
+                source="rules",
+                evidence_json=[],
+            )
+        )
+        db_session.commit()
+        body = client.get(
+            "/users/testuser/opening-practice"
+            "?opening_name=Sicilian%20Defense:%20Najdorf%20Variation"
+        ).json()
+        assert body["scope"] == "none"
+
+
+class TestOpeningLineFilter:
+    def _diag(self, db, pid, name):
+        db.add(
+            PuzzleDiagnosis(
+                puzzle_id=pid,
+                username="testuser",
+                status=DiagnosisStatus.OK,
+                primary_cause="loose_piece_awareness",
+                opening_name=name,
+                opening_family=name.split(":", 1)[0].strip(),
+                source="rules",
+                evidence_json=[],
+            )
+        )
+        db.flush()
+
+    def test_narrows_to_one_line_within_a_family(self, client, db_session):
+        _seed_puzzles(db_session, count=3)
+        self._diag(db_session, "p-0", "Sicilian Defense: Najdorf Variation")
+        self._diag(db_session, "p-1", "Sicilian Defense: Dragon Variation")
+        self._diag(db_session, "p-2", "Sicilian Defense: Najdorf Variation")
+        db_session.commit()
+
+        body = client.get(
+            "/puzzles/list?username=testuser"
+            "&opening_line=Sicilian%20Defense:%20Najdorf%20Variation"
+        ).json()
+        assert {p["id"] for p in body["puzzles"]} == {"p-0", "p-2"}
+
+    def test_is_narrower_than_the_family_filter(self, client, db_session):
+        _seed_puzzles(db_session, count=3)
+        self._diag(db_session, "p-0", "Sicilian Defense: Najdorf Variation")
+        self._diag(db_session, "p-1", "Sicilian Defense: Dragon Variation")
+        self._diag(db_session, "p-2", "Sicilian Defense: Dragon Variation")
+        db_session.commit()
+
+        line = client.get(
+            "/puzzles/list?username=testuser"
+            "&opening_line=Sicilian%20Defense:%20Najdorf%20Variation"
+        ).json()
+        family = client.get(
+            "/puzzles/list?username=testuser&opening=Sicilian%20Defense"
+        ).json()
+        assert line["total"] == 1
+        assert family["total"] == 3

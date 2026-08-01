@@ -591,3 +591,67 @@ describe('Library phase and opening filters', () => {
         );
     });
 });
+
+describe('Library opening-line filter (the Openings → Train destination)', () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+        // Fresh object per call so a re-fetch genuinely re-renders.
+        mockGetLibraryPuzzles.mockImplementation(() =>
+            Promise.resolve({ ...EMPTY_RESPONSE, available_openings: [] })
+        );
+    });
+
+    afterEach(() => {
+        window.history.replaceState({}, '', '/library');
+    });
+
+    it('applies ?opening_line= from the URL', async () => {
+        // The other half of the explorer link. Asserting the href alone in the
+        // link's own tests proves nothing about the destination honouring it.
+        window.history.replaceState(
+            {}, '', '/library?opening_line=Sicilian%20Defense%3A%20Najdorf%20Variation'
+        );
+        render(<Library />);
+        await waitFor(() => {
+            expect(mockGetLibraryPuzzles).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    opening_line: 'Sicilian Defense: Najdorf Variation',
+                })
+            );
+        });
+    });
+
+    it('shows the arriving line as a removable chip', async () => {
+        window.history.replaceState(
+            {}, '', '/library?opening_line=Sicilian%20Defense%3A%20Najdorf%20Variation'
+        );
+        render(<Library />);
+        expect(
+            await screen.findByText('Sicilian Defense: Najdorf Variation')
+        ).toBeInTheDocument();
+    });
+
+    it('lets the user clear a line they arrived with', async () => {
+        window.history.replaceState(
+            {}, '', '/library?opening_line=Sicilian%20Defense%3A%20Najdorf%20Variation'
+        );
+        render(<Library />);
+
+        const clear = await screen.findByLabelText(/clear the .* filter/i);
+        fireEvent.click(clear);
+
+        await waitFor(() => {
+            expect(mockGetLibraryPuzzles).toHaveBeenLastCalledWith(
+                expect.objectContaining({ opening_line: undefined })
+            );
+        });
+    });
+
+    it('sends no line filter when the URL carries none', async () => {
+        render(<Library />);
+        await waitFor(() => expect(mockGetLibraryPuzzles).toHaveBeenCalled());
+        expect(mockGetLibraryPuzzles).toHaveBeenCalledWith(
+            expect.objectContaining({ opening_line: undefined })
+        );
+    });
+});

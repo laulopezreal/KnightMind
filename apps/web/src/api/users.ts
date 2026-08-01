@@ -242,3 +242,28 @@ export async function getTodaysFocus(username: string): Promise<TodaysFocusRespo
         `/users/${encodeURIComponent(username)}/todays-focus`
     );
 }
+
+// --- Opening practice (Openings -> Train) ---
+
+export interface OpeningPractice {
+    username: string;
+    opening_name: string;
+    /** Derived server-side from opening_name. Never re-derive it here: a second
+     *  copy of the split rule is how the two ends drift apart. */
+    opening_family: string;
+    line_count: number;
+    family_count: number;
+    /** "line" when the exact line is worth drilling, "family" when only the
+     *  broader family is, "none" when there is nothing to practise. */
+    scope: 'line' | 'family' | 'none';
+}
+
+export async function getOpeningPractice(
+    username: string,
+    openingName: string
+): Promise<OpeningPractice> {
+    const params = new URLSearchParams({ opening_name: openingName });
+    return await request<OpeningPractice>(
+        `/users/${encodeURIComponent(username)}/opening-practice?${params}`
+    );
+}

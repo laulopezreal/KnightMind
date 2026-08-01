@@ -233,6 +233,7 @@ export interface LibraryListParams {
     cause?: string;
     phase?: string;
     opening?: string;
+    opening_line?: string;
     difficulty?: PuzzleDifficulty;
     sort?: PuzzleSort;
     limit?: number;
@@ -260,6 +261,7 @@ export async function getLibraryPuzzles(
     if (params.cause) searchParams.append('cause', params.cause);
     if (params.phase) searchParams.append('phase', params.phase);
     if (params.opening) searchParams.append('opening', params.opening);
+    if (params.opening_line) searchParams.append('opening_line', params.opening_line);
     if (params.difficulty) searchParams.append('difficulty', params.difficulty);
     if (params.sort) searchParams.append('sort', params.sort);
     if (params.limit !== undefined) searchParams.append('limit', params.limit.toString());

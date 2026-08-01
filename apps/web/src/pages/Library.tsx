@@ -178,6 +178,12 @@ export default function Library() {
     const [openingFilter, setOpeningFilter] = useState(
         () => new URLSearchParams(window.location.search).get('opening') ?? ''
     );
+    // Line-level, set only by the Openings explorer link. There is no control
+    // for it: the family select is the browsable axis, and a dropdown of every
+    // line the corpus contains would be unusable.
+    const [openingLineFilter, setOpeningLineFilter] = useState(
+        () => new URLSearchParams(window.location.search).get('opening_line') ?? ''
+    );
     const [availableOpenings, setAvailableOpenings] = useState<string[]>([]);
     const [sort, setSort] = useState<PuzzleSort>('due_soonest');
     const [offset, setOffset] = useState(0);
@@ -192,7 +198,7 @@ export default function Library() {
     // Reset offset when filters change
     useEffect(() => {
         setOffset(0);
-    }, [debouncedSearch, statusFilter, difficultyFilter, motifFilter, causeFilter, phaseFilter, openingFilter, sort]);
+    }, [debouncedSearch, statusFilter, difficultyFilter, motifFilter, causeFilter, phaseFilter, openingFilter, openingLineFilter, sort]);
 
     const fetchPuzzles = useCallback(async () => {
         if (!username) return;
@@ -207,6 +213,7 @@ export default function Library() {
                 cause: causeFilter || undefined,
                 phase: phaseFilter || undefined,
                 opening: openingFilter || undefined,
+                opening_line: openingLineFilter || undefined,
                 difficulty: difficultyFilter || undefined,
                 sort,
                 limit: PAGE_SIZE,
@@ -223,7 +230,7 @@ export default function Library() {
         } finally {
             setIsLoading(false);
         }
-    }, [username, debouncedSearch, statusFilter, difficultyFilter, motifFilter, causeFilter, phaseFilter, openingFilter, sort, offset]);
+    }, [username, debouncedSearch, statusFilter, difficultyFilter, motifFilter, causeFilter, phaseFilter, openingFilter, openingLineFilter, sort, offset]);
 
     useEffect(() => {
         fetchPuzzles();
@@ -350,6 +357,24 @@ export default function Library() {
                                 <option key={c.value} value={c.value}>{c.label}</option>
                             ))}
                         </select>
+                    )}
+
+                    {/* An arriving line filter has no select of its own — a
+                        dropdown of every line in the corpus would be unusable —
+                        so it appears as a removable chip. Without it the list is
+                        narrowed with no visible reason and no way out. */}
+                    {openingLineFilter && (
+                        <span className="inline-flex items-center gap-2 bg-primary/10 border border-primary/20 rounded-sm px-3 py-1.5 text-primary font-sans text-sm">
+                            {openingLineFilter}
+                            <button
+                                type="button"
+                                onClick={() => setOpeningLineFilter('')}
+                                aria-label={`Clear the ${openingLineFilter} filter`}
+                                className="km-focus-visible text-primary/70 hover:text-primary transition-colors"
+                            >
+                                ×
+                            </button>
+                        </span>
                     )}
 
                     {/* Phase */}

@@ -152,6 +152,10 @@ class GameContext:
     # None means the position left book before it was ever classified, which is
     # ordinary for irregular openings. It never means "we did not look".
     opening_family: str | None = None
+    # The full line the family was derived from, e.g. "Sicilian Defense:
+    # Najdorf Variation". Kept beside the family so a line-level filter and a
+    # family-level one can never disagree about which opening was played.
+    opening_name: str | None = None
     opening_eco: str | None = None
 
 
@@ -280,6 +284,7 @@ def extract_game_context(
         fen_before_move=fen_before_move,
         plies_in_game=plies,
         opening_family=family,
+        opening_name=opening_name,
         opening_eco=opening_eco,
     )
 
