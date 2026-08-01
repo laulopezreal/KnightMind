@@ -39,7 +39,11 @@ from services.api.diagnosis.pgn_context import (
 # Bumped whenever extraction changes shape or meaning. Folded into
 # ``evidence_hash`` so cached diagnoses self-invalidate on a change, the same
 # discipline the FEN eval cache uses for its conversion/engine versions.
-EXTRACTION_VERSION = 1
+#
+# 2: opening family. The packet now carries which opening the game reached,
+#    which changes what the rules see and what the model may cite, so every
+#    stored diagnosis predates evidence that could have changed it.
+EXTRACTION_VERSION = 2
 
 _PIECE_VALUE = {
     chess.PAWN: 1,
@@ -266,6 +270,13 @@ class GameMetaFacts:
     # PGN-derived facts are then dropped rather than attributed to the wrong
     # position — a desync is surfaced, never silently analysed.
     pgn_desync: bool
+    # Opening family the game reached before the mistake, e.g. "Sicilian
+    # Defense". None when the position left book unclassified, which is
+    # ordinary for irregular openings — it never means "we did not look".
+    # Dropped on desync along with every other PGN-derived fact: the whole
+    # context is replaced with EMPTY_GAME_CONTEXT above, so no separate guard
+    # is needed here and adding one would imply the drop is per-field.
+    opening_family: str | None = None
 
 
 @dataclass(frozen=True)
@@ -354,6 +365,7 @@ def extract_evidence(
             rated=game.rated,
             plies_in_game=context.plies_in_game,
             pgn_desync=desync,
+            opening_family=context.opening_family,
         ),
         history=history,
         eval_before=puzzle.eval_before,
@@ -743,6 +755,18 @@ def to_evidence_items(packet: EvidencePacket) -> tuple[EvidenceItem, ...]:
             str(packet.king.ring_attackers),
         ),
     ]
+
+    if packet.game.opening_family:
+        # Only when the game was actually classified. An unclassified position
+        # emits nothing rather than "unknown", so a citation can never point at
+        # an opening the game never reached.
+        items.append(
+            EvidenceItem(
+                "game.opening_family",
+                "Opening family",
+                packet.game.opening_family,
+            )
+        )
 
     if packet.loose.own:
         items.append(

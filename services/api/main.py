@@ -646,6 +646,7 @@ class PuzzleListResponse(BaseModel):
     offset: int
     available_motifs: list[str]
     available_causes: list[CauseOption] = []
+    available_openings: list[str] = []
     stats: PuzzleCorpusStats
 
 
@@ -1651,6 +1652,12 @@ async def list_puzzles(
         description="Filter by diagnosed mistake cause (comma-separated for OR). "
         "This is what the Insights 'practise this' links target.",
     ),
+    phase: str = Query(
+        None, description="Filter by game phase: opening, middlegame, endgame"
+    ),
+    opening: str = Query(
+        None, description="Filter by opening family, e.g. 'Sicilian Defense'"
+    ),
     difficulty: str = Query(None, description="Filter: easy, medium, hard"),
     sort: str = Query(
         "due_soonest",
@@ -1765,6 +1772,17 @@ async def list_puzzles(
     # Carries its own label rather than a bare slug: the label table lives in
     # causes.py, and shipping a second copy to the frontend would let the two
     # drift the moment a cause is renamed.
+    openings_stmt = (
+        select(PuzzleDiagnosis.opening_family)
+        .where(
+            PuzzleDiagnosis.username == username_lower,
+            PuzzleDiagnosis.status == DiagnosisStatus.OK,
+            PuzzleDiagnosis.opening_family.isnot(None),
+        )
+        .distinct()
+    )
+    available_openings = sorted(row[0] for row in db.execute(openings_stmt).all())
+
     available_causes = [
         CauseOption(value=value, label=CAUSE_LABELS.get(value, value))
         for value in sorted(row[0] for row in db.execute(causes_stmt).all() if row[0])
@@ -1819,6 +1837,20 @@ async def list_puzzles(
         base_stmt = base_stmt.where(
             PuzzleDiagnosis.status == DiagnosisStatus.OK,
             func.lower(diagnosis_cause).in_(cause_values),
+        )
+
+    # Phase and opening: both live on the diagnosis, both analysable rows only,
+    # so they compose with the cause filter rather than fighting it.
+    if phase:
+        base_stmt = base_stmt.where(
+            PuzzleDiagnosis.status == DiagnosisStatus.OK,
+            func.lower(PuzzleDiagnosis.phase) == phase.strip().lower(),
+        )
+
+    if opening:
+        base_stmt = base_stmt.where(
+            PuzzleDiagnosis.status == DiagnosisStatus.OK,
+            func.lower(PuzzleDiagnosis.opening_family) == opening.strip().lower(),
         )
 
     # Difficulty filter
@@ -1913,6 +1945,7 @@ async def list_puzzles(
         offset=offset,
         available_motifs=available_motifs,
         available_causes=available_causes,
+        available_openings=available_openings,
         stats=PuzzleCorpusStats(
             total=corpus_total,
             due=cr.cnt_due or 0,
@@ -2178,6 +2211,8 @@ class MistakeCause(BaseModel):
     label: str
     mistakes: int
     dominant_phase: str | None = None
+    # The opening this cause concentrates in, when one actually dominates.
+    dominant_opening: str | None = None
     verified_attempts: int = 0
     # How many distinct puzzles those attempts covered. Exposed so the UI can
     # say how broad the sample is, not just how large.
@@ -2380,6 +2415,7 @@ async def get_mistake_causes(
                 label=CAUSE_LABELS.get(s.cause, s.cause),
                 mistakes=s.mistakes,
                 dominant_phase=s.dominant_phase,
+                dominant_opening=s.dominant_opening,
                 verified_attempts=s.verified_attempts,
                 verified_puzzles=s.verified_puzzles,
                 accuracy=s.accuracy,

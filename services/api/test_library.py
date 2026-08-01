@@ -1100,3 +1100,116 @@ class TestAvailableCauses:
 
         body = client.get("/puzzles/list?username=testuser").json()
         assert body["available_causes"] == []
+
+
+class TestPhaseAndOpeningFilters:
+    """The remaining two filters the spec asked for.
+
+    Both live on the diagnosis rather than the puzzle, so both narrow to
+    analysable rows the same way the cause filter does, and all three compose.
+    """
+
+    def _diag(
+        self,
+        db,
+        pid,
+        *,
+        phase="middlegame",
+        opening=None,
+        cause="loose_piece_awareness",
+    ):
+        db.add(
+            PuzzleDiagnosis(
+                puzzle_id=pid,
+                username="testuser",
+                status=DiagnosisStatus.OK,
+                primary_motif="fork",
+                primary_cause=cause,
+                phase=phase,
+                opening_family=opening,
+                source="rules",
+                evidence_json=[],
+            )
+        )
+        db.flush()
+
+    def test_narrows_by_phase(self, client, db_session):
+        _seed_puzzles(db_session, count=3)
+        self._diag(db_session, "p-0", phase="opening")
+        self._diag(db_session, "p-1", phase="endgame")
+        self._diag(db_session, "p-2", phase="opening")
+        db_session.commit()
+
+        body = client.get("/puzzles/list?username=testuser&phase=opening").json()
+        assert {p["id"] for p in body["puzzles"]} == {"p-0", "p-2"}
+
+    def test_phase_matching_ignores_case(self, client, db_session):
+        _seed_puzzles(db_session, count=1)
+        self._diag(db_session, "p-0", phase="endgame")
+        db_session.commit()
+        body = client.get("/puzzles/list?username=testuser&phase=ENDGAME").json()
+        assert [p["id"] for p in body["puzzles"]] == ["p-0"]
+
+    def test_narrows_by_opening_family(self, client, db_session):
+        # The spec's "common in Sicilian / Italian structures" needs this.
+        _seed_puzzles(db_session, count=2)
+        self._diag(db_session, "p-0", opening="Sicilian Defense")
+        self._diag(db_session, "p-1", opening="Italian Game")
+        db_session.commit()
+
+        body = client.get(
+            "/puzzles/list?username=testuser&opening=Sicilian%20Defense"
+        ).json()
+        assert [p["id"] for p in body["puzzles"]] == ["p-0"]
+
+    def test_an_unclassified_game_is_excluded_rather_than_grouped(
+        self, client, db_session
+    ):
+        # A game that never left book unclassified must not be swept into some
+        # other family — an absence is not a match.
+        _seed_puzzles(db_session, count=2)
+        self._diag(db_session, "p-0", opening="Sicilian Defense")
+        self._diag(db_session, "p-1", opening=None)
+        db_session.commit()
+
+        body = client.get(
+            "/puzzles/list?username=testuser&opening=Sicilian%20Defense"
+        ).json()
+        assert [p["id"] for p in body["puzzles"]] == ["p-0"]
+        assert body["available_openings"] == ["Sicilian Defense"]
+
+    def test_the_three_diagnosis_filters_compose(self, client, db_session):
+        _seed_puzzles(db_session, count=3)
+        self._diag(db_session, "p-0", phase="opening", opening="Sicilian Defense")
+        self._diag(db_session, "p-1", phase="endgame", opening="Sicilian Defense")
+        self._diag(
+            db_session,
+            "p-2",
+            phase="opening",
+            opening="Sicilian Defense",
+            cause="king_safety_blindness",
+        )
+        db_session.commit()
+
+        body = client.get(
+            "/puzzles/list?username=testuser&opening=Sicilian%20Defense"
+            "&phase=opening&cause=loose_piece_awareness"
+        ).json()
+        assert [p["id"] for p in body["puzzles"]] == ["p-0"]
+
+    def test_available_openings_is_scoped_to_the_user(self, client, db_session):
+        _seed_puzzles(db_session, count=1, username="testuser")
+        db_session.add(
+            PuzzleDiagnosis(
+                puzzle_id="p-0",
+                username="other",
+                status=DiagnosisStatus.OK,
+                primary_cause="loose_piece_awareness",
+                opening_family="Sicilian Defense",
+                source="rules",
+                evidence_json=[],
+            )
+        )
+        db_session.commit()
+        body = client.get("/puzzles/list?username=testuser").json()
+        assert body["available_openings"] == []

@@ -29,6 +29,7 @@ const EMPTY_RESPONSE = {
     offset: 0,
     available_motifs: [],
     available_causes: [],
+    available_openings: [],
     stats: { total: 0, due: 0, new: 0, learning: 0, mastered: 0 },
 };
 
@@ -524,5 +525,69 @@ describe('Library cause filter', () => {
         expect(
             screen.queryByLabelText('Filter by mistake cause')
         ).not.toBeInTheDocument();
+    });
+});
+
+describe('Library phase and opening filters', () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+        mockGetLibraryPuzzles.mockResolvedValue({
+            ...EMPTY_RESPONSE,
+            available_openings: ['Sicilian Defense', 'Italian Game'],
+        });
+    });
+
+    afterEach(() => {
+        window.history.replaceState({}, '', '/library');
+    });
+
+    it('applies ?phase= from the URL', async () => {
+        window.history.replaceState({}, '', '/library?phase=endgame');
+        render(<Library />);
+        await waitFor(() => {
+            expect(mockGetLibraryPuzzles).toHaveBeenCalledWith(
+                expect.objectContaining({ phase: 'endgame' })
+            );
+        });
+    });
+
+    it('applies ?opening= from the URL', async () => {
+        window.history.replaceState({}, '', '/library?opening=Sicilian%20Defense');
+        render(<Library />);
+        await waitFor(() => {
+            expect(mockGetLibraryPuzzles).toHaveBeenCalledWith(
+                expect.objectContaining({ opening: 'Sicilian Defense' })
+            );
+        });
+    });
+
+    it('offers the phases as a fixed list', async () => {
+        // Phase is always populated on a diagnosis, so unlike openings there is
+        // no "only offer what exists" question — all three always apply.
+        render(<Library />);
+        const select = await screen.findByLabelText('Filter by game phase');
+        expect(select).toBeInTheDocument();
+        expect(screen.getByRole('option', { name: 'Middlegame' })).toBeInTheDocument();
+    });
+
+    it('offers only openings the corpus actually contains', async () => {
+        render(<Library />);
+        expect(await screen.findByRole('option', { name: 'Sicilian Defense' }))
+            .toBeInTheDocument();
+    });
+
+    it('hides the opening control when nothing has been classified', async () => {
+        mockGetLibraryPuzzles.mockResolvedValue(EMPTY_RESPONSE);
+        render(<Library />);
+        await waitFor(() => expect(mockGetLibraryPuzzles).toHaveBeenCalled());
+        expect(screen.queryByLabelText('Filter by opening')).not.toBeInTheDocument();
+    });
+
+    it('sends neither filter when the URL carries none', async () => {
+        render(<Library />);
+        await waitFor(() => expect(mockGetLibraryPuzzles).toHaveBeenCalled());
+        expect(mockGetLibraryPuzzles).toHaveBeenCalledWith(
+            expect.objectContaining({ phase: undefined, opening: undefined })
+        );
     });
 });
