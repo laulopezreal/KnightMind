@@ -294,6 +294,11 @@ class PuzzleDiagnosis(Base):
     # Needs an ECO mapping that does not exist yet; NULL until then rather than
     # guessed at.
     opening_family: Mapped[str | None] = mapped_column(String, nullable=True)
+    # The full line and its ECO code, beside the family. All three are derived
+    # from one classification pass, so they cannot disagree about which opening
+    # the game played.
+    opening_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    opening_eco: Mapped[str | None] = mapped_column(String, nullable=True)
 
     # The citable facts (id/label/value), i.e. exactly what the UI renders and
     # what an AI citation is validated against. The full packet is not stored:

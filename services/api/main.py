@@ -1546,6 +1546,17 @@ async def get_due_puzzles_endpoint(
     motif: str = Query(
         None, description="Filter puzzles by specific motif (e.g., 'Fork', 'Pin')"
     ),
+    focus_opening: str = Query(
+        None,
+        description=(
+            "Bias the order toward puzzles from this opening. Pass the full "
+            "line; add focus_opening_scope=family to widen to the family. Like "
+            "focus_cause this never narrows the session."
+        ),
+    ),
+    focus_opening_scope: str = Query(
+        "line", description="'line' (default) or 'family'"
+    ),
     focus_cause: str = Query(
         None,
         description=(
@@ -1610,6 +1621,18 @@ async def get_due_puzzles_endpoint(
     #    survived it — a focus must never make a not-yet-due puzzle due.
     focus_ids: set[str] = set()
     focus_name: str | None = None
+
+    if focus_opening:
+        # Same bias machinery as focus_cause: it reorders the already-trainable
+        # set and can neither widen nor shorten the session.
+        focus_ids |= DiagnosisRepository(db).puzzle_ids_for_opening(
+            username, focus_opening, family=focus_opening_scope == "family"
+        )
+        focus_name = (
+            focus_opening.split(":", 1)[0].strip()
+            if focus_opening_scope == "family"
+            else focus_opening
+        )
     if focus_cause:
         from services.api.diagnosis.patterns import identify
 
@@ -1939,6 +1962,13 @@ async def list_puzzles(
     opening: str = Query(
         None, description="Filter by opening family, e.g. 'Sicilian Defense'"
     ),
+    opening_line: str = Query(
+        None,
+        description=(
+            "Filter by the full opening line, e.g. 'Sicilian Defense: Najdorf "
+            "Variation'. Narrower than `opening`, which matches the whole family."
+        ),
+    ),
     difficulty: str = Query(None, description="Filter: easy, medium, hard"),
     sort: str = Query(
         "due_soonest",
@@ -2126,6 +2156,12 @@ async def list_puzzles(
         base_stmt = base_stmt.where(
             PuzzleDiagnosis.status == DiagnosisStatus.OK,
             func.lower(PuzzleDiagnosis.phase) == phase.strip().lower(),
+        )
+
+    if opening_line:
+        base_stmt = base_stmt.where(
+            PuzzleDiagnosis.status == DiagnosisStatus.OK,
+            func.lower(PuzzleDiagnosis.opening_name) == opening_line.strip().lower(),
         )
 
     if opening:
@@ -2681,6 +2717,65 @@ async def get_todays_focus(
         ),
         below_threshold=below,
         pending=repo.pending_count(username),
+    )
+
+
+class OpeningPracticeResponse(BaseModel):
+    """What practice a given opening line can actually offer.
+
+    Reports both granularities and which one to use, rather than making the
+    client choose from counts it would have to interpret. ``scope`` is the
+    honest label: "line" when the exact line has enough puzzles to be worth
+    drilling, "family" when it does not, "none" when neither does.
+
+    The family is derived server-side from the same split the extraction uses.
+    Deriving it in the frontend instead is how the two drift the first time
+    that rule changes.
+    """
+
+    username: str
+    opening_name: str
+    opening_family: str
+    line_count: int
+    family_count: int
+    scope: str  # "line" | "family" | "none"
+
+
+# Below this a "line" is not worth drilling on its own — a two-puzzle session
+# that keeps repeating is worse practice than a broader one.
+MIN_PUZZLES_FOR_LINE_PRACTICE = 3
+
+
+@app.get("/users/{username}/opening-practice", response_model=OpeningPracticeResponse)
+async def get_opening_practice(
+    username: Username,
+    opening_name: str = Query(
+        ..., description="Full opening name from the explorer tree node"
+    ),
+    db: Session = Depends(get_db),
+    account: Account | None = Depends(require_account),
+):
+    """Whether an explorer line has puzzles to practise, and at what granularity."""
+    assert_owns_username(account, username, db)
+
+    line_count, family_count, family = DiagnosisRepository(db).opening_practice_counts(
+        username, opening_name
+    )
+
+    if line_count >= MIN_PUZZLES_FOR_LINE_PRACTICE:
+        scope = "line"
+    elif family_count > 0:
+        scope = "family"
+    else:
+        scope = "none"
+
+    return OpeningPracticeResponse(
+        username=username,
+        opening_name=opening_name,
+        opening_family=family,
+        line_count=line_count,
+        family_count=family_count,
+        scope=scope,
     )
 
 

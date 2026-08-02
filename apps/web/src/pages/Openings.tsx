@@ -9,6 +9,7 @@ import {
 } from '../api';
 import { useChessUsername } from '../context/ChessUsernameContext';
 import { OpeningGraph, type OpeningGraphHandle, type NodeAnchor } from '../components/OpeningGraph';
+import { PractiseOpeningLink } from '../components/PractiseOpeningLink';
 import { getScoreColor } from '../utils/openings';
 import { formatSigned } from '../utils/ratings';
 import {
@@ -576,6 +577,9 @@ export default function Openings() {
               Analyse in Engine →
             </Link>
           )}
+          {/* Analysis answers "what happens here"; practice answers "so drill
+              it". The link renders nothing when the opening has no puzzles. */}
+          <PractiseOpeningLink username={username} openingName={node.opening_name} />
           <button
             type="button"
             onClick={() => handleNodeSelect(null)}

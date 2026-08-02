@@ -75,6 +75,8 @@ export default function Puzzles() {
     // A bias rather than a filter, so — unlike motif — it never leaves the user
     // in a dead-end empty session and needs no escape hatch.
     const focusCause = searchParams.get('focus_cause');
+    const focusOpening = searchParams.get('focus_opening');
+    const focusOpeningScope = searchParams.get('focus_opening_scope');
     const isWarmupMode = searchParams.get('warmup') === 'true';
 
     // Warmup state
@@ -132,6 +134,8 @@ export default function Puzzles() {
         warmupMode,
         motifFilter,
         focusCause,
+        focusOpening,
+        focusOpeningScope,
         userStatus,
         timer,
         checkAchievements,

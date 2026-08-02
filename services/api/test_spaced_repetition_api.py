@@ -648,3 +648,126 @@ class TestFocusNameAgreement:
         ]
         assert named
         assert set(named) == {focus["name"]}
+
+
+class TestFocusOpeningParameter:
+    """`focus_opening` on /puzzles/due — the Openings → Train path.
+
+    Same contract as focus_cause: a bias, never a filter. The explorer sends
+    users here from a line they are losing, and a line with nothing due today
+    must give an ordinary session rather than an error or an empty one.
+    """
+
+    def _diagnose(self, db, pid, name):
+        from services.api.models import DiagnosisStatus, PuzzleDiagnosis
+
+        db.add(
+            PuzzleDiagnosis(
+                puzzle_id=pid,
+                username="testuser",
+                status=DiagnosisStatus.OK,
+                primary_cause="loose_piece_awareness",
+                opening_name=name,
+                opening_family=name.split(":", 1)[0].strip(),
+                source="rules",
+                evidence_json=[],
+            )
+        )
+        db.commit()
+
+    def _due(self, db, pid, days_ago):
+        db.add(
+            PuzzleStats(
+                puzzle_id=pid,
+                username="testuser",
+                attempts=1,
+                pass_count=1,
+                last_result="pass",
+                interval_days=1,
+                ease_factor=2.0,
+                next_due_at=datetime.now(timezone.utc) - timedelta(days=days_ago),
+            )
+        )
+        db.commit()
+
+    def test_serves_the_line_first(self, client, db_session, seed_puzzles):
+        self._due(db_session, "p1", 10)
+        self._due(db_session, "p2", 1)
+        self._diagnose(db_session, "p2", "Sicilian Defense: Najdorf Variation")
+
+        body = client.get(
+            "/puzzles/due?username=testuser&n=5"
+            "&focus_opening=Sicilian%20Defense:%20Najdorf%20Variation"
+        ).json()
+        assert body["puzzles"][0]["id"] == "p2"
+
+    def test_family_scope_widens_beyond_the_exact_line(
+        self, client, db_session, seed_puzzles
+    ):
+        self._due(db_session, "p1", 10)
+        self._due(db_session, "p2", 1)
+        self._diagnose(db_session, "p2", "Sicilian Defense: Dragon Variation")
+
+        # The Najdorf line itself has nothing; the family does.
+        line = client.get(
+            "/puzzles/due?username=testuser&n=5"
+            "&focus_opening=Sicilian%20Defense:%20Najdorf%20Variation"
+        ).json()
+        family = client.get(
+            "/puzzles/due?username=testuser&n=5"
+            "&focus_opening=Sicilian%20Defense&focus_opening_scope=family"
+        ).json()
+        assert line["puzzles"][0]["id"] == "p1"
+        assert family["puzzles"][0]["id"] == "p2"
+
+    def test_an_opening_with_nothing_due_gives_an_ordinary_session(
+        self, client, db_session, seed_puzzles
+    ):
+        self._due(db_session, "p1", 3)
+        plain = client.get("/puzzles/due?username=testuser&n=5").json()
+        focused = client.get(
+            "/puzzles/due?username=testuser&n=5"
+            "&focus_opening=French%20Defense:%20Advance%20Variation"
+        )
+        assert focused.status_code == 200
+        assert [p["id"] for p in focused.json()["puzzles"]] == [
+            p["id"] for p in plain["puzzles"]
+        ]
+
+    def test_never_serves_more_than_the_session_size(
+        self, client, db_session, seed_puzzles
+    ):
+        for pid in ("p1", "p2", "p3"):
+            self._due(db_session, pid, 2)
+            self._diagnose(db_session, pid, "Sicilian Defense: Najdorf Variation")
+
+        body = client.get(
+            "/puzzles/due?username=testuser&n=2"
+            "&focus_opening=Sicilian%20Defense:%20Najdorf%20Variation"
+        ).json()
+        assert len(body["puzzles"]) == 2
+
+    def test_is_scoped_to_the_requesting_user(self, client, db_session, seed_puzzles):
+        from services.api.models import DiagnosisStatus, PuzzleDiagnosis
+
+        self._due(db_session, "p1", 10)
+        self._due(db_session, "p2", 1)
+        db_session.add(
+            PuzzleDiagnosis(
+                puzzle_id="p2",
+                username="someone_else",
+                status=DiagnosisStatus.OK,
+                primary_cause="loose_piece_awareness",
+                opening_name="Sicilian Defense: Najdorf Variation",
+                opening_family="Sicilian Defense",
+                source="rules",
+                evidence_json=[],
+            )
+        )
+        db_session.commit()
+
+        body = client.get(
+            "/puzzles/due?username=testuser&n=5"
+            "&focus_opening=Sicilian%20Defense:%20Najdorf%20Variation"
+        ).json()
+        assert body["puzzles"][0]["id"] == "p1"

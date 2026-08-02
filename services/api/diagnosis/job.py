@@ -296,6 +296,8 @@ def _diagnose_one(
             insufficient_evidence=assessment.insufficient_evidence,
             phase=packet.position.phase,
             opening_family=packet.game.opening_family,
+            opening_name=packet.game.opening_name,
+            opening_eco=packet.game.opening_eco,
             evidence=tuple(
                 {"id": item.id, "label": item.label, "value": item.value}
                 for item in to_evidence_items(packet)

@@ -90,6 +90,8 @@ class DiagnosisWrite:
     phase: str | None = None
     # The opening family the game reached, when it was classified at all.
     opening_family: str | None = None
+    opening_name: str | None = None
+    opening_eco: str | None = None
     evidence: tuple[dict, ...] = ()
     evidence_hash: str | None = None
     source: str = "rules"
@@ -136,6 +138,71 @@ class DiagnosisRepository:
                 or_(PuzzleDiagnosis.puzzle_id.is_(None), self._stale_clause()),
             )
         )
+
+    def opening_practice_counts(
+        self, username: str, opening_name: str
+    ) -> tuple[int, int, str]:
+        """How many puzzles this opening can offer, at line and family level.
+
+        Returns ``(line_count, family_count, family)``. The caller decides which
+        to offer; this only reports what exists, so the UI never has to guess
+        and never has to re-derive the family itself.
+
+        The family is computed here, from the same ``split(":", 1)`` the
+        extraction uses, precisely so the frontend does not. A second copy of
+        that rule in TypeScript is how the two drift the first time the
+        derivation changes.
+        """
+        family = opening_name.split(":", 1)[0].strip()
+        base = (
+            PuzzleDiagnosis.username == username,
+            PuzzleDiagnosis.status == DiagnosisStatus.OK,
+        )
+        line_count = (
+            self.db.scalar(
+                select(func.count())
+                .select_from(PuzzleDiagnosis)
+                .where(
+                    *base,
+                    func.lower(PuzzleDiagnosis.opening_name) == opening_name.lower(),
+                )
+            )
+            or 0
+        )
+        family_count = (
+            self.db.scalar(
+                select(func.count())
+                .select_from(PuzzleDiagnosis)
+                .where(
+                    *base,
+                    func.lower(PuzzleDiagnosis.opening_family) == family.lower(),
+                )
+            )
+            or 0
+        )
+        return line_count, family_count, family
+
+    def puzzle_ids_for_opening(
+        self, username: str, opening_name: str, *, family: bool = False
+    ) -> set[str]:
+        """Puzzles from one opening line, or from its whole family.
+
+        A set, like ``puzzle_ids_for_cause``: the caller uses it as a
+        membership test when ordering an existing candidate list. A focus
+        re-orders the trainable puzzles, it does not select them.
+        """
+        column = (
+            PuzzleDiagnosis.opening_family if family else PuzzleDiagnosis.opening_name
+        )
+        target = (
+            opening_name.split(":", 1)[0].strip() if family else opening_name.strip()
+        )
+        stmt = select(PuzzleDiagnosis.puzzle_id).where(
+            PuzzleDiagnosis.username == username,
+            PuzzleDiagnosis.status == DiagnosisStatus.OK,
+            func.lower(column) == target.lower(),
+        )
+        return set(self.db.scalars(stmt).all())
 
     def puzzle_ids_for_cause(self, username: str, cause: str) -> set[str]:
         """Every puzzle this user's diagnoses attribute to one cause.
@@ -301,6 +368,8 @@ class DiagnosisRepository:
         row.insufficient_evidence = write.insufficient_evidence
         row.phase = write.phase
         row.opening_family = write.opening_family
+        row.opening_name = write.opening_name
+        row.opening_eco = write.opening_eco
         row.evidence_json = list(write.evidence)
         row.evidence_hash = write.evidence_hash
         row.source = write.source
