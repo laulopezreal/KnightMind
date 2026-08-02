@@ -1103,7 +1103,7 @@ export default function Puzzles() {
                             />
                         </div>
                         {/* Compact board-adjacent context: mobile-only, non-interactive meta */}
-                        <div data-testid="mobile-puzzle-context" className="lg:hidden mt-3 flex items-center justify-between text-xs font-sans text-primary/60 px-1">
+                        <div data-testid="mobile-puzzle-context" className="lg:hidden mt-3 flex items-center justify-between text-xs font-sans text-primary/70 px-1">
                             <span className="uppercase tracking-wide">
                                 {currentPuzzle.side_to_move === 'white' ? 'White to move' : 'Black to move'}
                             </span>

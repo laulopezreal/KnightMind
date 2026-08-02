@@ -48,8 +48,33 @@ All UI changes must follow this guide to maintain the "Chess Intelligence" aesth
 ## Typography
 
 -   **Headings**: `font-serif font-medium` (e.g., `text-4xl`)
--   **Body/UI**: `font-sans text-primary/60` (for labels, secondary text)
+-   **Body/UI**: `font-sans text-primary/70` (for labels, secondary text)
 -   **Data/Move notation**: `font-mono`
+
+### Ink opacity and contrast
+
+Secondary text is dimmed with an **alpha colour** (`text-primary/70`), never with
+`opacity-*`. Element opacity composites after paint, so contrast tooling measures
+the underlying colour and the real ratio goes unchecked. (`disabled:opacity-*` on
+inactive controls is fine — WCAG exempts them.)
+
+`/70` is the **floor for text under 18px**, and the reason is the surfaces, not the
+token. Cards tint themselves with `bg-primary/5`, and each tint layer pulls the
+surface toward ink and erodes contrast by roughly 0.16. In the day theme
+`text-primary/60` measures 4.65:1 on the bare body — and 4.49:1 on a `bg-primary/5`
+panel, 4.33:1 on `bg-primary/10`. It fails AA everywhere it is actually used.
+`/70` clears the bar on every surface in both themes (worst case 5.57:1).
+
+| surface | day `/60` | day `/70` | night `/60` | night `/70` |
+| --- | --- | --- | --- | --- |
+| plain body | 4.65 | 6.52 | 6.55 | 8.54 |
+| `bg-primary/5` | **4.49** | 6.21 | 6.19 | 7.93 |
+| `bg-primary/10` | **4.33** | 5.89 | 5.68 | 7.16 |
+
+So **measure in context**: a token checked against the body background passes and
+still ships a failure. Larger text keeps its 3:1 bar and needs none of this, and
+non-text marks (e.g. the flat-trend `Sparkline` stroke) are governed by 1.4.11's
+3:1, so they stay at `/60` deliberately.
 
 ## Spacing
 

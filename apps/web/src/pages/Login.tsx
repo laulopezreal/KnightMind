@@ -65,7 +65,7 @@ export default function Login() {
         <div className="max-w-[420px] mx-auto space-y-8 animate-teedin">
             <header className="space-y-2">
                 <h1 className="text-4xl font-serif font-medium text-primary">Sign in</h1>
-                <p className="font-sans text-primary/60">
+                <p className="font-sans text-primary/70">
                     Access your KnightMind training account.
                 </p>
             </header>
@@ -74,7 +74,7 @@ export default function Login() {
                 <div className="space-y-2">
                     <label
                         htmlFor="login-email"
-                        className="block text-xs font-sans uppercase tracking-widest text-primary/60"
+                        className="block text-xs font-sans uppercase tracking-widest text-primary/70"
                     >
                         Email
                     </label>
@@ -94,7 +94,7 @@ export default function Login() {
                 <div className="space-y-2">
                     <label
                         htmlFor="login-password"
-                        className="block text-xs font-sans uppercase tracking-widest text-primary/60"
+                        className="block text-xs font-sans uppercase tracking-widest text-primary/70"
                     >
                         Password
                     </label>
