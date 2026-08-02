@@ -72,7 +72,12 @@ export function PractiseOpeningLink({ username, openingName }: PractiseOpeningLi
     const count = isLine ? practice.line_count : practice.family_count;
 
     return (
-        <div className="flex flex-col gap-1">
+        // `relative flex` + an absolutely-positioned note keeps this element
+        // exactly one button tall. Letting the note grow the wrapper made it the
+        // tallest item in an `items-center` row, which centred it and left this
+        // button 10px above "Analyse in Engine"; `flex` then removes the
+        // inline-block baseline gap that kept a 2px offset after that.
+        <div className="relative flex">
             <Link
                 to={href}
                 className="px-4 py-2 border border-primary/20 text-primary rounded-sm font-serif text-sm km-interactive km-focus-visible transition-all"
@@ -83,7 +88,7 @@ export function PractiseOpeningLink({ username, openingName }: PractiseOpeningLi
             </Link>
             {!isLine && (
                 // Naming the shortfall is what keeps the widened offer honest.
-                <span className="font-sans text-xs text-primary/60">
+                <span className="absolute top-full left-0 mt-1 whitespace-nowrap font-sans text-xs text-primary/70">
                     Only {practice.line_count} puzzle
                     {practice.line_count === 1 ? '' : 's'} from this exact line.
                 </span>
