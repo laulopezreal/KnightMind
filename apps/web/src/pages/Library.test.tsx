@@ -665,3 +665,48 @@ describe('Library opening-line filter (the Openings → Train destination)', () 
         );
     });
 });
+
+describe('Library live regions', () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+    });
+
+    it('announces an initial load from exactly one region', async () => {
+        // Both the result-count indicator and the full-page loader carry
+        // role="status" aria-live="polite". Rendering both on a first load made
+        // two regions read the same sentence at once.
+        let resolve!: (v: unknown) => void;
+        mockGetLibraryPuzzles.mockImplementation(
+            () => new Promise((r) => { resolve = r; })
+        );
+        render(<Library />);
+
+        await waitFor(() => {
+            expect(screen.getAllByRole('status').length).toBe(1);
+        });
+        resolve({ ...EMPTY_RESPONSE });
+    });
+
+    it('uses a distinct message when refreshing an already-loaded list', async () => {
+        // The two states are different events and should not read alike.
+        mockGetLibraryPuzzles.mockImplementation(() =>
+            Promise.resolve({ ...EMPTY_RESPONSE, puzzles: [...MOCK_PUZZLES], total: 2 })
+        );
+        render(<Library />);
+        await screen.findByText(/2 puzzles/);
+
+        let resolve!: (v: unknown) => void;
+        mockGetLibraryPuzzles.mockImplementation(
+            () => new Promise((r) => { resolve = r; })
+        );
+        fireEvent.change(screen.getByLabelText('Filter by game phase'), {
+            target: { value: 'endgame' },
+        });
+
+        await waitFor(() => {
+            expect(screen.getByText(/refreshing library puzzles/i)).toBeInTheDocument();
+        });
+        expect(screen.getAllByRole('status').length).toBe(1);
+        resolve({ ...EMPTY_RESPONSE });
+    });
+});

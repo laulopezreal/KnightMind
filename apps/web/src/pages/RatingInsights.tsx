@@ -65,6 +65,11 @@ export default function RatingInsights() {
     // History has its own error slot: explain's setError(null) must not be able
     // to swallow a history failure (and vice versa) now that they fetch apart.
     const [historyError, setHistoryError] = useState<string | null>(null);
+    // Named because two places need to agree on it: the skeleton renders on it,
+    // and the sessions loader has to stay quiet while it does, or the two
+    // aria-live regions talk over each other.
+    const showLoadingSkeleton =
+        (loading || sessionsLoading) && !data && !error && !historyError;
     const online = useOnlineStatus();
     // Explain and history fetch independently, so each needs its own
     // stale-response guard — sharing one generation counter would make
@@ -382,7 +387,11 @@ export default function RatingInsights() {
                                 </button>
                             </div>
                         )}
-                        {sessionsLoading && (
+                        {/* Suppressed while the main skeleton is up: both carry
+                            role="status" aria-live="polite", so the pair announced
+                            "Loading sessions..." and "Analyzing games..." over each
+                            other. The skeleton already covers this phase. */}
+                        {sessionsLoading && !showLoadingSkeleton && (
                             <div className="ml-1">
                                 <DataStateLoading label="Loading sessions..." compact />
                             </div>
@@ -441,7 +450,7 @@ export default function RatingInsights() {
                 gating on `loading` alone left the main area blank for the whole
                 sessions request on slow connections — visibly broken. Skeletons
                 mirror the loaded layout (metadata line, chart, stat cards). */}
-            {(loading || sessionsLoading) && !data && !error && !historyError && (
+            {showLoadingSkeleton && (
                 <DataStateSkeleton label="Analyzing games..." className="space-y-8">
                     <div className="h-4 w-80 max-w-full bg-primary/5 rounded-sm animate-pulse" />
                     <div className="h-[284px] bg-primary/5 border border-primary/10 rounded-sm animate-pulse" />

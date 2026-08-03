@@ -417,9 +417,14 @@ export default function Library() {
                 {/* Result count — hidden on error so it can't contradict the error box */}
                 {!error && (
                     <div className="text-xs font-sans text-primary/70">
-                        {isLoading ? (
-                            <DataStateLoading label="Loading library puzzles..." compact />
-                        ) : (
+                        {/* Only while refreshing a list that is already on screen.
+                            On a first load the full-page loader below is showing,
+                            and both carry role="status" aria-live="polite" — two
+                            regions announcing the same sentence at once. This is
+                            the refresh indicator; that one is the initial load. */}
+                        {isLoading && puzzles.length > 0 ? (
+                            <DataStateLoading label="Refreshing library puzzles..." compact />
+                        ) : isLoading ? null : (
                             <span>{total} puzzle{total !== 1 ? 's' : ''}</span>
                         )}
                     </div>

@@ -62,4 +62,39 @@ describe('TimeControlOverview', () => {
     // rapid (3 pts) + blitz (2 pts) draw sparklines; bullet (0) does not.
     expect(container.querySelectorAll('svg polyline')).toHaveLength(2);
   });
+
+  describe('accessible name', () => {
+    it('separates the control, its rating and its movement', async () => {
+      // Without an explicit label the name is built by concatenating the child
+      // text nodes, which ran them together as "Bullet+661486".
+      render(<TimeControlOverview username="alice" active="rapid" onSelect={vi.fn()} />);
+
+      const rapid = await screen.findByRole('button', { name: /^Rapid: 1524/ });
+      expect(rapid).toBeInTheDocument();
+      expect(rapid.getAttribute('aria-label')).toMatch(/Rapid: 1524, \+24 across your last 3 snapshots/);
+    });
+
+    it('does not run the rating into the delta', async () => {
+      render(<TimeControlOverview username="alice" active="rapid" onSelect={vi.fn()} />);
+      const blitz = await screen.findByRole('button', { name: /^Blitz:/ });
+      // "1468-12" would be the concatenated form.
+      expect(blitz.getAttribute('aria-label')).not.toMatch(/1468-12/);
+      expect(blitz.getAttribute('aria-label')).toMatch(/1468, -12/);
+    });
+
+    it('says so plainly when a control has no rating yet', async () => {
+      render(<TimeControlOverview username="alice" active="rapid" onSelect={vi.fn()} />);
+      const bullet = await screen.findByRole('button', { name: /Bullet: no rating recorded yet/ });
+      expect(bullet).toBeInTheDocument();
+    });
+
+    it('omits the movement clause when there is no movement', async () => {
+      mockGetRatingHistory.mockImplementation((_u: string, tc: string) =>
+        tc === 'rapid' ? Promise.resolve(hist([1500, 1500])) : Promise.resolve([])
+      );
+      render(<TimeControlOverview username="alice" active="rapid" onSelect={vi.fn()} />);
+      const rapid = await screen.findByRole('button', { name: /^Rapid: 1500$/ });
+      expect(rapid).toBeInTheDocument();
+    });
+  });
 });
