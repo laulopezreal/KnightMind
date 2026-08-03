@@ -119,9 +119,10 @@ describe('Puzzles', () => {
 
     render(<Puzzles />);
 
-    await waitFor(() => {
-      expect(screen.getByText(/Connect your Chess.com account to start training/i)).toBeInTheDocument();
-    });
+    // The sentence spans a link plus a trailing text node, so match on the
+    // paragraph's own text rather than a single text node.
+    const prompt = await screen.findByRole('link', { name: /Connect your Chess.com account/i });
+    expect(prompt.closest('p')).toHaveTextContent('Connect your Chess.com account to start training.');
   });
 
   it('offers a working route to connect an account, not a dead button', async () => {
@@ -133,22 +134,28 @@ describe('Puzzles', () => {
     // UsernameDisplay, which Layout only mounts once a username exists — so it
     // did nothing in the one state that rendered it. Home's onboarding is the
     // only way in, so this must be a real navigation.
-    const link = await screen.findByRole('link', { name: 'Connect account' });
+    const link = await screen.findByRole('link', { name: /Connect your Chess.com account/i });
     expect(link).toHaveAttribute('href', '/');
     expect(screen.queryByRole('button', { name: /Set Username/i })).not.toBeInTheDocument();
   });
 
-  it('does not tell a disconnected user to do something this page cannot do', async () => {
+  it('states the connect message once, not twice', async () => {
     mockUsername = '';
 
     render(<Puzzles />);
 
-    // The disabled-control explanation used to read "Set your username first",
-    // naming an action with no control anywhere on the page.
-    await waitFor(() => {
-      expect(screen.getByText(/Connect your Chess.com account first to start training/i)).toBeInTheDocument();
-    });
+    await screen.findByRole('link', { name: /Connect your Chess.com account/i });
+
+    // The disabled-control explanation is the same message as the panel beside
+    // the buttons, so without an account it is suppressed — two near-identical
+    // sentences stacked read as a rendering bug. It still reaches the buttons'
+    // title tooltips, which is where a per-button reason belongs.
+    expect(screen.getAllByText(/to start training/i)).toHaveLength(1);
     expect(screen.queryByText(/Set your username first/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Start Session' })).toHaveAttribute(
+      'title',
+      'Connect your Chess.com account first to start training.'
+    );
   });
 
   it('should render page heading', async () => {

@@ -750,15 +750,21 @@ export default function Puzzles() {
                             // Layout only mounts it once a username exists, so
                             // setEditorOpen had nothing to open in exactly this
                             // state. Home's onboarding is the only way in.
-                            <div className="h-full flex items-center">
-                                <span className="text-primary/70 font-sans mr-2">Connect your Chess.com account to start training.</span>
-                                <Link
-                                    to="/"
-                                    className="km-interactive km-focus-visible km-inline-link text-primary"
-                                >
-                                    Connect account
-                                </Link>
-                            </div>
+                            // The link sits inside the sentence rather than
+                            // beside it: as flex siblings the span took its
+                            // natural width and squeezed the link into a
+                            // two-line orphan.
+                            <p className="h-full flex items-center text-primary/70 font-sans">
+                                <span>
+                                    <Link
+                                        to="/"
+                                        className="km-interactive km-focus-visible km-inline-link text-primary"
+                                    >
+                                        Connect your Chess.com account
+                                    </Link>
+                                    {' '}to start training.
+                                </span>
+                            </p>
                         ) : (
                             <div className="text-xl font-serif text-primary py-2 border-b border-primary/20">
                                 {username}
@@ -787,7 +793,12 @@ export default function Puzzles() {
                     </div>
                 </div>
 
-                {(startSessionDisabledReason || generateDisabledReason) && (
+                {/* Suppressed without an account: both reasons are the connect
+                    message, which the panel beside the buttons already states —
+                    and states with a working link. Two near-identical sentences
+                    stacked read as a rendering bug. The reasons still reach the
+                    buttons' own title tooltips. */}
+                {username && (startSessionDisabledReason || generateDisabledReason) && (
                     <p className="text-sm text-primary/70 font-sans" role="status" aria-live="polite">
                         {startSessionDisabledReason ?? generateDisabledReason}
                     </p>
