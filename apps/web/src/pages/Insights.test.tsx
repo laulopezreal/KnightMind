@@ -64,11 +64,12 @@ describe('Insights', () => {
     mockGetTodaysFocus.mockResolvedValue({ username: 'testuser', focus: null, below_threshold: 0, pending: 0 });
   });
 
-  it('should redirect to home when no username', () => {
+  it('should explain itself in place when no username', () => {
     mockUsername = '';
     render(<Insights />);
 
-    expect(mockNavigate).toHaveBeenCalledWith('/');
+    expect(screen.getByText('Connect your Chess.com account')).toBeInTheDocument();
+    expect(mockNavigate).not.toHaveBeenCalled();
   });
 
   it('should show loading spinner initially', () => {

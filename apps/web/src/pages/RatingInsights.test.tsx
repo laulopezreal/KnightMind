@@ -58,12 +58,15 @@ describe('RatingInsights', () => {
     vi.unstubAllGlobals();
   });
 
-  it('should show prompt when no username', () => {
+  it('should show a connect-account prompt when no username', () => {
     mockUsername = '';
     render(<RatingInsights />);
 
-    expect(screen.getByText(/set a username/i)).toBeInTheDocument();
-    expect(screen.getByText('Set Username')).toBeInTheDocument();
+    expect(screen.getByText('Connect your Chess.com account')).toBeInTheDocument();
+    // The old prompt's button called setEditorOpen, but that editor is not
+    // mounted while the username is empty — so it could never do anything.
+    expect(screen.queryByText('Set Username')).not.toBeInTheDocument();
+    expect(mockSetEditorOpen).not.toHaveBeenCalled();
   });
 
   it('should render page heading', () => {

@@ -10,6 +10,7 @@ import { MotifTrends } from '../components/MotifTrends';
 import { RecentlyTrickyCard } from '../components/RecentlyTrickyCard';
 import { PageHeader } from '../components/PageHeader';
 import { DataStateEmpty, DataStateError, DataStateLoading, DataStateOffline } from '../components/DataState';
+import { ConnectAccountEmpty } from '../components/ConnectAccountEmpty';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
 import { useLatestRequest } from '../hooks/useLatestRequest';
 
@@ -29,13 +30,6 @@ export default function Insights() {
 
     const online = useOnlineStatus();
     const request = useLatestRequest();
-
-    // Redirect if no username
-    useEffect(() => {
-        if (!username) {
-            navigate('/');
-        }
-    }, [username, navigate]);
 
     // Load insights data
     const loadInsightsData = useCallback(async () => {
@@ -112,6 +106,17 @@ export default function Insights() {
     const hasCauses = !!causes && (causes.causes.length > 0 || causes.pending > 0);
     const hasTrends = trends && trends.motif_trends.length > 0;
     const hasTrickyPuzzles = trickyPuzzles && trickyPuzzles.puzzles.length > 0;
+
+    // No account connected. Explain in place instead of redirecting to Home —
+    // the bounce announced nothing, so the sidebar link read as broken.
+    if (!username) {
+        return (
+            <div className="container mx-auto p-6 max-w-7xl space-y-8">
+                <PageHeader title="Insights" subtitle="Deep analysis of your puzzle performance" />
+                <ConnectAccountEmpty description="Insights read the tactical patterns out of your own games and puzzle history. Connect your Chess.com account to start building them." />
+            </div>
+        );
+    }
 
     return (
         <div className="container mx-auto p-6 max-w-7xl space-y-8">
