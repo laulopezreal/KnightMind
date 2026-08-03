@@ -62,14 +62,20 @@ export function RecentSessionsCard({
                                 role="listitem"
                                 aria-label={`Session from ${sessionDate}: ${session.pass_count} passed, ${session.fail_count} failed, ${accuracy}% accuracy${session.best_streak > 0 ? `, best streak ${session.best_streak}` : ''}`}
                             >
+                                {/* No aria-label on these spans: ARIA prohibits it on a
+                                    generic element and AT support is unreliable, so the
+                                    expansions were never dependable. The row above already
+                                    carries the full sentence as its accessible name, which
+                                    is what a screen reader announces — the abbreviations
+                                    are the visual shorthand for sighted users. */}
                                 <div className="flex gap-4">
-                                    <span className="text-primary/70" aria-label={`${session.pass_count} passed`}>{session.pass_count}P</span>
-                                    <span className="text-primary/70" aria-label={`${session.fail_count} failed`}>{session.fail_count}F</span>
+                                    <span className="text-primary/70">{session.pass_count}P</span>
+                                    <span className="text-primary/70">{session.fail_count}F</span>
                                     <span className="text-primary/70">
                                         {accuracy}%
                                     </span>
                                     {session.best_streak > 0 && (
-                                        <span className="text-primary/80" aria-label={`Best streak: ${session.best_streak}`}>🔥{session.best_streak}</span>
+                                        <span className="text-primary/80">🔥{session.best_streak}</span>
                                     )}
                                 </div>
                                 <div className="flex gap-2">

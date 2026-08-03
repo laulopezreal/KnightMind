@@ -1,6 +1,24 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
-import { DataStateOffline, DataStatePartial, DataStateStale } from './DataState';
+import { DataStateError, DataStateOffline, DataStatePartial, DataStateStale } from './DataState';
+
+describe('DataStateError', () => {
+    it('breaks long unbroken words so server text cannot escape the panel', () => {
+        // The message can be backend text. Measured in a browser at 375px, an
+        // exception string containing a long URL painted ~38px outside this
+        // panel and left the whole page scrolling sideways.
+        render(
+            <DataStateError
+                message="HTTPSConnectionPool(host='api.chess.com',port=443):/pub/player/hikaru/games/2026/07?include_archived=true"
+                onRetry={() => {}}
+                retryLabel="Retry"
+                ariaLabel="Retry"
+            />,
+        );
+        const message = screen.getByRole('alert').querySelector('p');
+        expect(message).toHaveClass('break-words');
+    });
+});
 
 describe('DataStateOffline', () => {
     it('announces the offline state with an alert role and a non-colour text cue', () => {
