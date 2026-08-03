@@ -90,6 +90,40 @@ describe('Dashboard data states', () => {
         expect(status).toHaveTextContent(/loading dashboard/i);
     });
 
+    // Every state must keep the page's level-one heading. The states used to be
+    // early-returned in place of the whole page, which took the <h1> with them:
+    // axe flagged `page-has-heading-one`, and a screen-reader user navigating by
+    // headings could not tell which page had failed. getByRole is the right probe
+    // here — it ignores aria-hidden subtrees, so a skeleton placeholder block
+    // can't satisfy it, only a real heading outside the aria-hidden wrapper.
+    it('keeps the page h1 while loading', () => {
+        mockGetDashboardSummary.mockReturnValue(new Promise(() => {}));
+
+        render(<Dashboard />);
+
+        expect(screen.getByRole('heading', { level: 1, name: 'Dashboard' })).toBeInTheDocument();
+    });
+
+    it('keeps the page h1 in the error state', async () => {
+        setOnline(true);
+        mockGetDashboardSummary.mockRejectedValue(new Error('Boom'));
+
+        render(<Dashboard />);
+
+        await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Boom'));
+        expect(screen.getByRole('heading', { level: 1, name: 'Dashboard' })).toBeInTheDocument();
+    });
+
+    it('keeps the page h1 in the offline state', async () => {
+        setOnline(false);
+        mockGetDashboardSummary.mockRejectedValue(new Error('Network request failed'));
+
+        render(<Dashboard />);
+
+        await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/offline/i));
+        expect(screen.getByRole('heading', { level: 1, name: 'Dashboard' })).toBeInTheDocument();
+    });
+
     it('omits both improvement tiles for a brand-new user (no games, no motifs)', async () => {
         mockGetDashboardSummary.mockResolvedValue(SUMMARY);
         // beforeEach defaults: motifs empty, rating games 0 — the first-run case.
