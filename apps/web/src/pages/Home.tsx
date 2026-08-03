@@ -384,7 +384,7 @@ export default function Home() {
                 <button
                   type="button"
                   onClick={() => setShowConnect(false)}
-                  className="text-sm font-sans text-primary/70 km-interactive km-focus-visible"
+                  className="text-sm font-sans font-normal text-primary/70 km-interactive km-focus-visible"
                 >
                   Cancel
                 </button>

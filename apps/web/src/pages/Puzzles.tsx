@@ -1252,7 +1252,7 @@ export default function Puzzles() {
                                                     aria-controls="session-details-panel"
                                                     aria-label={sessionDetailsA11yCopy.toggleLabel}
                                                     aria-describedby="session-details-helper"
-                                                    className="text-xs font-sans text-primary/70 km-inline-link km-focus-visible"
+                                                    className="text-xs font-sans font-normal text-primary/70 km-inline-link km-focus-visible"
                                                 >
                                                     {showSessionDetails ? 'Hide details' : 'Show details'}
                                                 </button>

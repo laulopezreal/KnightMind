@@ -252,13 +252,23 @@ body {
     font-family: var(--font-serif);
     font-weight: 500;
   }
-}
 
+  /* Buttons carry the same display type, and were caught by the same trap for
+     the same reason — unlayered, they defeated every font utility on every
+     `<button>` in the app. This rule declares three properties, so it shadowed
+     three families of utility, not one: `font-sans` (family), `font-light`/
+     `font-normal` (weight), and `tracking-*` (letter-spacing). Measured before
+     the move: Engine's control buttons asked for `font-sans tracking-widest`
+     and rendered Cormorant Garamond at 0.6px — the 0.05em below — while the
+     `<label>` beside them, carrying an identical class list, rendered Inter at
+     1.2px. Only the buttons fell out of the micro-label system.
 
-button {
-  font-family: var(--font-serif);
-  font-weight: 500;
-  letter-spacing: 0.05em;
+     Keep this layered, for the same reason as the headings above. */
+  button {
+    font-family: var(--font-serif);
+    font-weight: 500;
+    letter-spacing: 0.05em;
+  }
 }
 
 nav,
