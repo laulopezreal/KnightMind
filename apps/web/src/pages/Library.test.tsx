@@ -4,14 +4,20 @@ import Library from './Library';
 
 let mockUsername = 'testplayer';
 
+const mockNavigate = vi.fn();
+const mockSetEditorOpen = vi.fn();
+
 vi.mock('react-router-dom', () => ({
     Link: ({ children, to, ...props }: { children: React.ReactNode; to: string; [key: string]: unknown }) => (
         <a href={to} {...props}>{children}</a>
     ),
+    // Read lazily so the const above is initialised by the time it is called —
+    // this factory runs when Library is imported, before the file's consts.
+    useNavigate: () => mockNavigate,
 }));
 
 vi.mock('../context/ChessUsernameContext', () => ({
-    useChessUsername: () => ({ username: mockUsername, setEditorOpen: vi.fn() }),
+    useChessUsername: () => ({ username: mockUsername, setEditorOpen: mockSetEditorOpen }),
 }));
 
 const mockGetLibraryPuzzles = vi.fn();
@@ -100,11 +106,15 @@ describe('Library', () => {
 
     // --- No username state ---
 
-    it('should show set username prompt when no username', async () => {
+    it('should show a connect-account prompt when no username', async () => {
         mockUsername = '';
         render(<Library />);
-        expect(screen.getByText(/Set your username/i)).toBeInTheDocument();
-        expect(screen.getByRole('button', { name: /Set Username/i })).toBeInTheDocument();
+        expect(screen.getByText('Connect your Chess.com account')).toBeInTheDocument();
+        // The old prompt's button called setEditorOpen, but that editor lives
+        // in UsernameDisplay, which Layout only mounts once a username exists —
+        // so it could never open anything in the one state that rendered it.
+        expect(screen.queryByText('Set Username')).not.toBeInTheDocument();
+        expect(mockSetEditorOpen).not.toHaveBeenCalled();
     });
 
     it('should not fetch puzzles when no username', () => {
