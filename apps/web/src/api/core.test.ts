@@ -83,6 +83,26 @@ describe('request()', () => {
         expect(err.message).toBe('Could not find rating for rapid in Chess.com response');
     });
 
+    it('should genericise an oversized 5xx detail (raw exception text)', async () => {
+        // Observed in a browser: the backend raises `HTTPException(502,
+        // detail=str(e))` around a requests error, and the whole thing — API
+        // URL, query string, SSL trace — rendered as the page's error message.
+        // Same status as the curated 502 above, so length is the discriminator.
+        const raw = "HTTPSConnectionPool(host='api.chess.com', port=443): Max retries exceeded with url: "
+            + '/pub/player/hikaru/games/2026/07?include_archived=true&format=pgn '
+            + "(Caused by SSLError(SSLCertVerificationError(1, '[SSL: CERTIFICATE_VERIFY_FAILED] "
+            + "certificate verify failed: unable to get local issuer certificate')))";
+        mockFetch.mockReturnValue(jsonResponse({ detail: raw }, 502));
+
+        const err = await request('/import/chesscom').catch((e: unknown) => e) as ApiError;
+        expect(err.statusCode).toBe(502);
+        expect(err.message).not.toContain('HTTPSConnectionPool');
+        expect(err.message).not.toContain('api.chess.com');
+        expect(err.message).toMatch(/try again/i);
+        // Still available to whoever is debugging.
+        expect(err.detail).toBe(raw);
+    });
+
     it('should still surface a curated 503 detail (e.g. re-import guidance)', async () => {
         mockFetch.mockReturnValue(jsonResponse(
             { detail: 'Games found but PGN content is missing. Re-import games to populate PGN data.' },

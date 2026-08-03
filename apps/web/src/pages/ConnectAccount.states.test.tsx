@@ -104,6 +104,19 @@ describe.each(PAGES)('$name without a Chess.com username', ({ Component, heading
         expect(screen.getByRole('heading', { level: 1, name: heading })).toBeInTheDocument();
     });
 
+    it('puts the state title in the heading map, one level below the page heading', () => {
+        renderAt(<Component />);
+
+        // The title is the heading for what the page shows *instead of* its
+        // content. Styled as a plain <p> it was invisible to heading
+        // navigation, so a screen-reader user jumped from the page <h1>
+        // straight past the only thing on the page. Level 2 because the test
+        // above pins the <h1> — together they assert h1 -> h2, no level skipped.
+        expect(
+            screen.getByRole('heading', { level: 2, name: /connect your chess\.com account/i }),
+        ).toBeInTheDocument();
+    });
+
     it('offers a working route to connect an account', async () => {
         renderAt(<Component />);
 

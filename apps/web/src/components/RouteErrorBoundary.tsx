@@ -1,6 +1,7 @@
 import { useEffect, useRef, type ReactNode } from 'react';
 import { useLocation } from 'react-router-dom';
 import { ErrorBoundary } from './ErrorBoundary';
+import { ErrorDetails } from './ErrorDetails';
 import { ISSUES_URL } from '../utils/links';
 
 interface RouteErrorBoundaryProps {
@@ -55,9 +56,6 @@ function RouteErrorFallback({ error, reset, pathname }: RouteErrorFallbackProps)
       {/* h1: the page's own heading is gone, and Layout has none, so anything
           lower leaves the document with no top-level heading. */}
       <h1 className="text-2xl font-serif text-primary mb-3">This page didn’t load</h1>
-      <p className="text-negative font-sans text-sm mb-2">
-        {error?.message || 'An unexpected error occurred'}
-      </p>
       <p className="text-primary/70 font-sans text-sm mb-6">
         The rest of KnightMind still works — pick another page from the menu, or try again.
       </p>
@@ -87,6 +85,7 @@ function RouteErrorFallback({ error, reset, pathname }: RouteErrorFallbackProps)
       >
         Report this
       </a>
+      <ErrorDetails error={error} />
     </div>
   );
 }
