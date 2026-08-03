@@ -89,4 +89,52 @@ describe('RouteErrorBoundary', () => {
     expect(screen.getByText('Dashboard content')).toBeInTheDocument();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
+
+  // Keyed on location rather than pathname so the current page's own nav link
+  // retries instead of looking like a dead button.
+  it('retries when the user re-clicks the link for the page they are on', async () => {
+    render(<Harness />);
+    expect(screen.getByRole('alert')).toBeInTheDocument();
+
+    shouldPageThrow = false;
+    await user.click(screen.getByRole('link', { name: 'Dashboard' }));
+
+    expect(screen.getByText('Dashboard content')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  // Focus falls to <body> when the fallback mounts, which drops a keyboard
+  // user at the top of the document — worst on a repeated failure, where the
+  // button they just pressed is unmounted out from under them.
+  it('moves focus to the alert, and back to it when Try Again throws again', async () => {
+    render(<Harness />);
+
+    const alert = screen.getByRole('alert');
+    expect(document.activeElement).toBe(alert);
+
+    // Still broken: pressing Try Again re-throws and remounts the fallback.
+    await user.click(screen.getByRole('button', { name: /try loading this page again/i }));
+
+    expect(document.activeElement).toBe(screen.getByRole('alert'));
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it('offers a report link carrying the route and the message', () => {
+    render(<Harness />);
+
+    const link = screen.getByRole('link', { name: 'Report this' });
+    const href = link.getAttribute('href') ?? '';
+    // URLSearchParams encodes spaces as "+", which decodeURIComponent leaves alone.
+    const decoded = decodeURIComponent(href).replace(/\+/g, ' ');
+
+    expect(href).toContain('/issues/new?');
+    expect(decoded).toContain('/dashboard');
+    expect(decoded).toContain("reading 'color'");
+  });
+
+  it('titles the fallback as the page-level heading', () => {
+    render(<Harness />);
+
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('This page didn’t load');
+  });
 });
