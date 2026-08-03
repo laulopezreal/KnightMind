@@ -83,10 +83,20 @@ interface DataStateEmptyProps {
   onAction: () => void;
 }
 
+/**
+ * Empty/first-run panel: a title, a line of explanation, and the one action
+ * that fills the state in.
+ *
+ * The title is an `<h2>` because it *is* the heading for whatever the page is
+ * showing instead of its content — every call site sits directly beneath the
+ * `<h1>` from `PageHeader`, so h2 is the right level and no page skips one.
+ * Styled as an h2 it would jump to Cormorant 500, so `km-heading-sans` keeps
+ * the body face; see the note on that class in `index.css`.
+ */
 export function DataStateEmpty({ title, description, actionLabel, onAction }: DataStateEmptyProps) {
   return (
     <div className="bg-primary/5 border border-primary/10 rounded-sm p-10 text-center">
-      <p className="text-primary/70 font-sans text-lg mb-3">{title}</p>
+      <h2 className="text-primary/70 km-heading-sans text-lg mb-3">{title}</h2>
       <p className="text-primary/70 font-sans text-sm mb-6">{description}</p>
       <button
         type="button"

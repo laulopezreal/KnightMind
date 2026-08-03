@@ -112,6 +112,21 @@ describe('Insights', () => {
     expect(screen.getByText('Start Puzzles')).toBeInTheDocument();
   });
 
+  it('should expose the empty-state title as a heading under the page heading', async () => {
+    mockGetMotifPerformance.mockResolvedValue({ motifs: [] });
+    mockGetMotifTrends.mockResolvedValue({ motif_trends: [], window_days: 30 });
+
+    render(<Insights />);
+
+    // With no data at all the sibling cards that carry their own <h2> are not
+    // rendered, so this is the page's only second-level heading — if it is not
+    // in the heading map, heading navigation stops at the <h1>.
+    expect(
+      await screen.findByRole('heading', { level: 2, name: 'No puzzle data yet' }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1, name: 'Insights' })).toBeInTheDocument();
+  });
+
   it('should render TacticalRadar when motif data exists', async () => {
     mockGetMotifPerformance.mockResolvedValue({
       motifs: [

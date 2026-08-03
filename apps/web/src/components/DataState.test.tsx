@@ -1,6 +1,12 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
-import { DataStateError, DataStateOffline, DataStatePartial, DataStateStale } from './DataState';
+import {
+    DataStateEmpty,
+    DataStateError,
+    DataStateOffline,
+    DataStatePartial,
+    DataStateStale,
+} from './DataState';
 
 describe('DataStateError', () => {
     it('breaks long unbroken words so server text cannot escape the panel', () => {
@@ -17,6 +23,47 @@ describe('DataStateError', () => {
         );
         const message = screen.getByRole('alert').querySelector('p');
         expect(message).toHaveClass('break-words');
+    });
+});
+
+describe('DataStateEmpty', () => {
+    const renderEmpty = (onAction = vi.fn()) =>
+        render(
+            <DataStateEmpty
+                title="No games imported yet"
+                description="Import your Chess.com games to chart the openings you play."
+                actionLabel="Import games"
+                onAction={onAction}
+            />,
+        );
+
+    it('exposes the title as a level-2 heading, not just styled text', () => {
+        renderEmpty();
+
+        // Every call site sits directly under a PageHeader <h1>, so h2 is the
+        // right level and nothing is skipped. As a <p> this title was missing
+        // from the heading map entirely.
+        expect(
+            screen.getByRole('heading', { level: 2, name: 'No games imported yet' }),
+        ).toBeInTheDocument();
+    });
+
+    it('leaves the description as body text', () => {
+        renderEmpty();
+
+        // Only the title is a heading — promoting the explanation too would
+        // clutter the heading map with a full sentence.
+        expect(screen.getAllByRole('heading')).toHaveLength(1);
+        expect(screen.getByText(/Import your Chess\.com games/)).toBeInTheDocument();
+    });
+
+    it('invokes the action handler', () => {
+        const onAction = vi.fn();
+        renderEmpty(onAction);
+
+        fireEvent.click(screen.getByRole('button', { name: 'Import games' }));
+
+        expect(onAction).toHaveBeenCalledTimes(1);
     });
 });
 
