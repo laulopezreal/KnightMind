@@ -2,6 +2,8 @@ import { LOCALE } from '../utils/locale';
 import { useEffect, useRef, useState } from 'react';
 import { Link, useSearchParams, useNavigate } from 'react-router-dom';
 import { AccessibleChessboard } from '../components/AccessibleChessboard';
+import { PageHeader } from '../components/PageHeader';
+import { ConnectAccountEmpty } from '../components/ConnectAccountEmpty';
 import { Chess } from 'chess.js';
 import { generatePuzzles, getDailyPuzzles, cancelJob, checkPuzzle, revealPuzzle, ApiError } from '../api';
 import { JobStatusCard } from '../components/JobStatusCard';
@@ -217,11 +219,12 @@ export default function Puzzles() {
     const generateNewDisabled = !controlsEnabled || isLoading || isGenerating || !userStatus?.has_new_games;
     const { selectedModeLabel, screenReaderModeLabel } = getModeLabels(sessionType);
     const modeAvailabilityLabel = sessionType === 'standard' ? 'Active' : 'Beta';
-    const startSessionDisabledReason = !username
-        ? 'Connect your Chess.com account first to start training.'
+    // No `!username` arm: the page returns ConnectAccountEmpty above, so these
+    // reasons are only ever read by a signed-in user.
+    const startSessionDisabledReason =
         // A session is running (the Start button is hidden), so there is nothing
         // "loading or generating" to wait on — don't show a start reason at all.
-        : activeSessionId
+        activeSessionId
             ? null
             : controlsDisabled
                 ? 'Please wait for the current task to finish.'
@@ -234,9 +237,7 @@ export default function Puzzles() {
                         : sessionType !== 'standard'
                             ? 'Only Standard mode can start sessions for now. Switch mode in the sidebar.'
                             : null;
-    const generateDisabledReason = !username
-        ? 'Connect your Chess.com account first to generate puzzles.'
-        : isGenerating
+    const generateDisabledReason = isGenerating
             ? 'Puzzle generation is already in progress.'
             : activeSessionId
                 ? 'Finish your current session before generating new puzzles.'
@@ -698,6 +699,24 @@ export default function Puzzles() {
     // heading and its sr-only counterpart below can never drift apart.
     const pageTitle = motifFilter ? `${formatMotifName(motifFilter)} Puzzles` : 'Daily Puzzles';
 
+    // Every other account-dependent page (Dashboard, Library, Insights, Rating
+    // Insights, Openings) swaps to this in place rather than rendering its
+    // controls disabled. Puzzles was the exception: a full training console with
+    // every button dead and an inline sentence explaining why. Same state, same
+    // answer — and it puts the one working way in (Home's onboarding) behind a
+    // real button instead of an inline link.
+    if (!username) {
+        return (
+            <div className="flex flex-col gap-12 animate-teedin">
+                <PageHeader
+                    title={pageTitle}
+                    subtitle="Puzzles built from your own blunders, scheduled so they come back before you forget them."
+                />
+                <ConnectAccountEmpty description="Training sessions are drawn from puzzles generated out of your own games. Connect your Chess.com account to start building them." />
+            </div>
+        );
+    }
+
     return (
         <div className="flex flex-col gap-12 animate-teedin pb-20 md:pb-0">
             {/* In-session below `lg` the header block collapses to give the board
@@ -759,27 +778,12 @@ export default function Puzzles() {
                 {/* Top row: Username and buttons */}
                 <div className="flex flex-col md:flex-row gap-6 items-end">
                     <div className="flex-1 relative min-w-[300px]">
-                        {!username ? (
-                            // Links to Home: the username editor lives in
-                            // UsernameDisplay, which Layout only mounts once a
-                            // username exists, so there is nothing to open in
-                            // this state. Underlined because inline in a
-                            // sentence the link is 2.51:1 against the text
-                            // around it, under the 3:1 colour alone needs.
-                            <p className="py-2 text-primary/70 font-sans">
-                                <Link
-                                    to="/"
-                                    className="km-interactive km-focus-visible km-inline-link text-primary underline decoration-primary/30 underline-offset-4"
-                                >
-                                    Connect your Chess.com account
-                                </Link>
-                                {' '}to start training.
-                            </p>
-                        ) : (
-                            <div className="text-xl font-serif text-primary py-2 border-b border-primary/20">
-                                {username}
-                            </div>
-                        )}
+                        {/* No empty branch: the page returns ConnectAccountEmpty
+                            above when there is no username, so this only ever
+                            renders for a signed-in user. */}
+                        <div className="text-xl font-serif text-primary py-2 border-b border-primary/20">
+                            {username}
+                        </div>
                     </div>
                     <div className="flex gap-4 flex-wrap">
                         {!activeSessionId && (
