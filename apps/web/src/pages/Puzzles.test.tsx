@@ -120,8 +120,35 @@ describe('Puzzles', () => {
     render(<Puzzles />);
 
     await waitFor(() => {
-      expect(screen.getByText(/Set your Chess.com username/i)).toBeInTheDocument();
+      expect(screen.getByText(/Connect your Chess.com account to start training/i)).toBeInTheDocument();
     });
+  });
+
+  it('offers a working route to connect an account, not a dead button', async () => {
+    mockUsername = '';
+
+    render(<Puzzles />);
+
+    // Was a "Set Username" button calling setEditorOpen. That editor lives in
+    // UsernameDisplay, which Layout only mounts once a username exists — so it
+    // did nothing in the one state that rendered it. Home's onboarding is the
+    // only way in, so this must be a real navigation.
+    const link = await screen.findByRole('link', { name: 'Connect account' });
+    expect(link).toHaveAttribute('href', '/');
+    expect(screen.queryByRole('button', { name: /Set Username/i })).not.toBeInTheDocument();
+  });
+
+  it('does not tell a disconnected user to do something this page cannot do', async () => {
+    mockUsername = '';
+
+    render(<Puzzles />);
+
+    // The disabled-control explanation used to read "Set your username first",
+    // naming an action with no control anywhere on the page.
+    await waitFor(() => {
+      expect(screen.getByText(/Connect your Chess.com account first to start training/i)).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/Set your username first/i)).not.toBeInTheDocument();
   });
 
   it('should render page heading', async () => {

@@ -490,8 +490,14 @@ export default function Engine() {
 
                   {saveError && <p role="alert" className="text-negative text-xs font-sans">{saveError}</p>}
 
+                  {/* Named an action with nowhere to perform it — the username
+                      editor is not mounted while the username is empty, so the
+                      only way in is Home's onboarding. Say so, and link there. */}
                   {!username && (
-                    <p className="text-primary/70 text-xs font-sans">Set your Chess.com username to save puzzles.</p>
+                    <p className="text-primary/70 text-xs font-sans">
+                      <Link to="/" className="km-interactive km-focus-visible km-inline-link text-primary">Connect your Chess.com account</Link>
+                      {' '}to save puzzles.
+                    </p>
                   )}
 
                   <button

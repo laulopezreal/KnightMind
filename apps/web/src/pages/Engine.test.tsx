@@ -540,6 +540,23 @@ describe('Engine - Clue Functionality', () => {
     });
   });
 
+  describe('Save panel without a connected account', () => {
+    it('offers a working route to connect, not a dead instruction', async () => {
+      // The provider reads this key; clear it explicitly rather than relying on
+      // the file's ambient localStorage state.
+      localStorage.removeItem('knightmind:chesscom_username');
+      renderEngine();
+
+      await evaluatePosition();
+
+      // Naming the action is not enough — it has to be reachable. The username
+      // editor is unmounted while the username is empty, so Home is the way in.
+      const link = await screen.findByRole('link', { name: /Connect your Chess.com account/i });
+      expect(link).toHaveAttribute('href', '/');
+      expect(screen.getByText(/to save puzzles/i)).toBeInTheDocument();
+    });
+  });
+
   describe('Invalid FEN accessibility', () => {
     it('exposes the FEN validation error to assistive tech', async () => {
       renderEngine();
