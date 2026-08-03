@@ -258,6 +258,22 @@ nav,
   font-family: var(--font-serif);
 }
 
+/* A heading that should read as body text, not as display type.
+
+   Some headings exist for structure (so screen-reader users can navigate by
+   heading) while deliberately looking like the surrounding copy — data-state
+   titles, small uppercase section labels. Tailwind's `font-sans` cannot do this
+   on its own: it lives in `@layer utilities`, whereas the `h1..h6` rule above is
+   unlayered, and unlayered CSS beats layered CSS regardless of specificity. So
+   `<h2 class="font-sans">` silently renders in Cormorant at weight 500.
+
+   This rule sits in the same (unlayered) origin as `h1..h6`, where a class
+   simply outranks an element selector — no `!important` needed. */
+.km-heading-sans {
+  font-family: var(--font-sans);
+  font-weight: 400;
+}
+
 /* Rating-trend line colors. SVG presentation attributes cannot consume var(),
    so recharts' stroke/fill props can't take theme tokens directly — these
    class-scoped rules resolve at paint time instead, which also means a theme
