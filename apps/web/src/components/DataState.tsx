@@ -60,7 +60,10 @@ interface DataStateErrorProps {
 export function DataStateError({ message, onRetry, retryLabel, ariaLabel, compact = false }: DataStateErrorProps) {
   return (
     <div className={`${compact ? "text-left p-4" : "max-w-md mx-auto mt-24 text-center p-8"} bg-red-500/5 border border-red-500/20 rounded-sm`} role="alert" aria-live="assertive">
-      <p className="text-negative mb-4">{message}</p>
+      {/* break-words: the message can be server text, and one long unbroken
+          token (a URL in an exception string) otherwise paints outside this
+          panel and makes the whole page scroll sideways on a phone. */}
+      <p className="text-negative mb-4 break-words">{message}</p>
       <button
         type="button"
         onClick={onRetry}
