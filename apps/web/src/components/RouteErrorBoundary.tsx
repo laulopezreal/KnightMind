@@ -1,8 +1,7 @@
 import { useEffect, useRef, type ReactNode } from 'react';
 import { useLocation } from 'react-router-dom';
 import { ErrorBoundary } from './ErrorBoundary';
-
-const ISSUES_URL = 'https://github.com/laulopezreal/KnightMind/issues';
+import { ISSUES_URL } from '../utils/links';
 
 interface RouteErrorBoundaryProps {
   children: ReactNode;
