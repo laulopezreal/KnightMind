@@ -391,9 +391,20 @@ body.night .km-toggle-option:hover:not(:disabled, [aria-disabled='true'], .km-in
    - It keys off `:disabled`/`aria-disabled`, not only the class, so a control
      cannot be disabled-in-behaviour but full-strength-in-paint. Every call site
      that carries `km-interactive-disabled` today also sets the real attribute;
-     the class stays for controls that are not natively disableable. */
+     the class stays for controls that are not natively disableable.
+   - The `aria-disabled` arm is scoped to native control ELEMENTS, and
+     deliberately not to interactive roles. Bare `[aria-disabled='true']`
+     matches anything, and react-chessboard spreads both `role="button"` and
+     `aria-disabled` onto the `<div>` wrapping every piece (see the querySelector
+     in AccessibleChessboard). Today that renders `undefined`, so React omits it
+     — but `allowDragging={false}` for a solved or review-only board is a natural
+     thing to reach for, and it would put a wash, a dashed outline and a
+     not-allowed cursor on all 32 pieces. A `[role='button']` arm would NOT have
+     prevented that; only the element list does. Custom controls that genuinely
+     need the treatment carry `km-interactive-disabled`, which is what the
+     previous note says the class is for. */
 .km-interactive-disabled,
-[aria-disabled='true'],
+:is(a, button, input, select, textarea)[aria-disabled='true'],
 button:disabled,
 input:disabled,
 select:disabled,
@@ -431,9 +442,10 @@ textarea:disabled {
 .km-toggle-option[aria-disabled='true'] {
   background-color: transparent;
 }
-/* Focus stays visible on `aria-disabled` controls, which remain focusable. */
+/* Focus stays visible on `aria-disabled` controls, which remain focusable
+   (unlike `:disabled` ones). Scoped the same way as the rule above. */
 .km-interactive-disabled:focus-visible,
-[aria-disabled='true']:focus-visible {
+:is(a, button, input, select, textarea)[aria-disabled='true']:focus-visible {
   outline: 2px solid var(--border-primary);
   outline-offset: 2px;
 }

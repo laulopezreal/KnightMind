@@ -42,6 +42,27 @@ describe('disabled controls are styled by colour, not element opacity', () => {
         expect(disabledBlock).toContain('.km-interactive-disabled');
     });
 
+    it('scopes the aria-disabled arm to native control elements', () => {
+        // Bare `[aria-disabled='true']` matches ANY element.
+        expect(disabledBlock).not.toMatch(/^\s*\[aria-disabled='true'\]\s*[,:{]/m);
+
+        const arm = disabledBlock.match(/:is\(([^)]*)\)\[aria-disabled='true'\]/);
+        expect(arm, 'the aria-disabled arm must be scoped with :is(...)').not.toBeNull();
+
+        // Element names only — no role selectors. react-chessboard spreads BOTH
+        // role="button" and aria-disabled onto the div wrapping every piece, so
+        // a `[role='button']` arm would still paint all 32 pieces the moment a
+        // board passed allowDragging={false}. Only the element list prevents it.
+        expect(arm![1]).not.toContain('role=');
+        expect(arm![1].split(',').map((s) => s.trim())).toEqual([
+            'a',
+            'button',
+            'input',
+            'select',
+            'textarea',
+        ]);
+    });
+
     it('signals disabled without relying on colour alone', () => {
         expect(disabledBlock).toMatch(/cursor:\s*not-allowed/);
         expect(disabledBlock).toMatch(/outline:\s*1px dashed/);
