@@ -98,7 +98,10 @@ describe.each(PAGES)('$name without a Chess.com username', ({ Component, heading
     it('keeps the user oriented by still rendering the page heading', () => {
         renderAt(<Component />);
 
-        expect(screen.getByText(heading)).toBeInTheDocument();
+        // Role + level, not bare text: "orienting the user" means the page keeps
+        // a level-one heading for anyone navigating by headings, which is what
+        // getByText would not have caught if a branch downgraded or dropped it.
+        expect(screen.getByRole('heading', { level: 1, name: heading })).toBeInTheDocument();
     });
 
     it('offers a working route to connect an account', async () => {
