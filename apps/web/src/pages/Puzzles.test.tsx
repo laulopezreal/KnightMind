@@ -152,11 +152,11 @@ describe('Puzzles', () => {
     expect(link.className).toMatch(/\bunderline\b/);
   });
 
-  it('offers a working connect route on the error card too', async () => {
-    // The error card's connect control is only reachable by a narrow path:
-    // generate with an account, hit an error, then clear the account. Narrow
-    // is not unreachable, and it carried the same dead button — so drive the
-    // real path rather than leave the second fix untested.
+  it('does not stack a second connect control on the error card', async () => {
+    // Reachable only by a narrow path: generate with an account, hit an error,
+    // then clear the account. The error card used to add its own "Connect
+    // account" button here — a second link to the same place, worded
+    // differently, beside the panel that already offers one.
     mockUsername = 'testplayer';
     mockGetUserStatus.mockResolvedValue({
       games_count: 50,
@@ -180,8 +180,12 @@ describe('Puzzles', () => {
     mockUsername = '';
     rerender(<Puzzles />);
 
-    const links = await screen.findAllByRole('link', { name: 'Connect account' });
-    expect(links[0]).toHaveAttribute('href', '/');
+    // Exactly one route to Home, and it is the controls panel's inline link —
+    // singular query on purpose, so a second one reappearing fails here.
+    const connect = await screen.findByRole('link', { name: /Connect your Chess.com account/i });
+    expect(connect).toHaveAttribute('href', '/');
+    expect(screen.getAllByRole('link').filter(l => l.getAttribute('href') === '/')).toHaveLength(1);
+    expect(screen.queryByRole('link', { name: 'Connect account' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Set Username/i })).not.toBeInTheDocument();
   });
 

@@ -745,29 +745,20 @@ export default function Puzzles() {
                 <div className="flex flex-col md:flex-row gap-6 items-end">
                     <div className="flex-1 relative min-w-[300px]">
                         {!username ? (
-                            // Links to Home rather than opening the username
-                            // editor: that editor lives in UsernameDisplay, and
-                            // Layout only mounts it once a username exists, so
-                            // setEditorOpen had nothing to open in exactly this
-                            // state. Home's onboarding is the only way in.
-                            // The link sits inside the sentence rather than
-                            // beside it: as flex siblings the span took its
-                            // natural width and squeezed the link into a
-                            // two-line orphan.
-                            <p className="h-full flex items-center text-primary/70 font-sans">
-                                <span>
-                                    {/* Underlined, not colour-coded: inline in a
-                                        sentence, the link is only 2.51:1 against
-                                        the surrounding text, under the 3:1 that
-                                        colour-alone distinction requires. */}
-                                    <Link
-                                        to="/"
-                                        className="km-interactive km-focus-visible km-inline-link text-primary underline decoration-primary/30 underline-offset-4"
-                                    >
-                                        Connect your Chess.com account
-                                    </Link>
-                                    {' '}to start training.
-                                </span>
+                            // Links to Home: the username editor lives in
+                            // UsernameDisplay, which Layout only mounts once a
+                            // username exists, so there is nothing to open in
+                            // this state. Underlined because inline in a
+                            // sentence the link is 2.51:1 against the text
+                            // around it, under the 3:1 colour alone needs.
+                            <p className="py-2 text-primary/70 font-sans">
+                                <Link
+                                    to="/"
+                                    className="km-interactive km-focus-visible km-inline-link text-primary underline decoration-primary/30 underline-offset-4"
+                                >
+                                    Connect your Chess.com account
+                                </Link>
+                                {' '}to start training.
                             </p>
                         ) : (
                             <div className="text-xl font-serif text-primary py-2 border-b border-primary/20">
@@ -943,7 +934,7 @@ export default function Puzzles() {
                         "Ready to train — click Start Session", which was a dead
                         instruction (every control above is disabled without a
                         username). The fix is not a second card: the panel above
-                        already states the problem AND offers "Connect account",
+                        already states the problem AND links to Home to fix it,
                         so anything here is a duplicate of the control beside it. */}
                     {statusLoadFailed && (
                         <div className="bg-negative-soft border border-negative-soft rounded-sm p-6 text-center space-y-4" role="alert" aria-live="assertive">
@@ -983,14 +974,12 @@ export default function Puzzles() {
                                         Generate New
                                     </button>
                                 )}
-                                {!username && (
-                                    <Link
-                                        to="/"
-                                        className="px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-colors km-interactive km-focus-visible"
-                                    >
-                                        Connect account
-                                    </Link>
-                                )}
+                                {/* No connect control here. The panel above is
+                                    rendered whenever there is no username and
+                                    already offers one — a second link to the
+                                    same place, worded differently, reads as two
+                                    different actions. Same reasoning as the
+                                    absent no-username card below. */}
                             </div>
                         </div>
                     )}
