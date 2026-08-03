@@ -60,6 +60,31 @@ export function TimeControlOverview({ username, active, onSelect }: TimeControlO
                         type="button"
                         onClick={() => onSelect(tc)}
                         aria-pressed={isActive}
+                        // Without this the accessible name is built by
+                        // concatenating the child text nodes, which runs the
+                        // label, the delta and the rating together as one
+                        // unbroken string — "Bullet+661486". Spelling it out
+                        // also says what the delta measures, which the visible
+                        // tile only conveys through a hover title.
+                        aria-label={
+                            latest !== null
+                                ? `${TC_LABEL[tc]}: ${latest}` +
+                                  (delta !== null && delta !== 0
+                                      ? `, ${formatSigned(delta)} across your last ${points.length} snapshots`
+                                      : '')
+                                // Mirrors the visible status word for word. The
+                                // two empty cases are different facts — a null
+                                // history is a *failed request*, an empty one is
+                                // a control never played — and collapsing them
+                                // told a screen-reader user their data does not
+                                // exist when it merely failed to load. Reusing
+                                // the visible wording also keeps the accessible
+                                // name a superset of what is on screen, which is
+                                // what voice control matches against.
+                                : history === null
+                                    ? `${TC_LABEL[tc]}: unavailable`
+                                    : `${TC_LABEL[tc]}: no games yet`
+                        }
                         className={`text-left p-4 rounded-sm border transition-all km-interactive km-focus-visible ${
                             isActive
                                 ? 'bg-primary/10 border-primary/40'
