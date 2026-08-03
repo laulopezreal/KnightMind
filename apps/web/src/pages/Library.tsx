@@ -14,6 +14,7 @@ import {
 } from '../api/puzzles';
 import { PageHeader } from '../components/PageHeader';
 import { DataStateError, DataStateLoading } from '../components/DataState';
+import { ConnectAccountEmpty } from '../components/ConnectAccountEmpty';
 
 const PAGE_SIZE = 50;
 
@@ -150,7 +151,7 @@ function PuzzleRow({ puzzle }: { puzzle: LibraryPuzzle }) {
 }
 
 export default function Library() {
-    const { username, setEditorOpen } = useChessUsername();
+    const { username } = useChessUsername();
 
     // Data
     const [puzzles, setPuzzles] = useState<LibraryPuzzle[]>([]);
@@ -239,6 +240,10 @@ export default function Library() {
     const totalPages = Math.ceil(total / PAGE_SIZE);
     const currentPage = Math.floor(offset / PAGE_SIZE) + 1;
 
+    // No account connected. Was a bespoke block whose "Set Username" button
+    // called setEditorOpen — but that editor lives in UsernameDisplay, which
+    // Layout only mounts once a username exists, so the button did nothing in
+    // the one state that rendered it. Home's onboarding is the way in.
     if (!username) {
         return (
             <div className="space-y-12 animate-teedin">
@@ -246,16 +251,7 @@ export default function Library() {
                     title="Library"
                     subtitle="Puzzles from your own games. Every position here is a moment you can learn from."
                 />
-                <div className="bg-primary/5 border border-primary/10 rounded-sm p-6 text-center space-y-4">
-                    <h3 className="font-serif text-xl text-primary">Set your username to get started</h3>
-                    <button
-                        type="button"
-                        onClick={() => setEditorOpen(true)}
-                        className="px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-colors km-interactive km-focus-visible"
-                    >
-                        Set Username
-                    </button>
-                </div>
+                <ConnectAccountEmpty description="Your library collects the puzzles generated from your own games, with what you have solved and what is due for review. Connect your Chess.com account to start filling it." />
             </div>
         );
     }

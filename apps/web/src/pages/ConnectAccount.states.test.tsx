@@ -3,6 +3,7 @@ import { screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import Dashboard from './Dashboard';
 import Insights from './Insights';
+import Library from './Library';
 import Openings from './Openings';
 import RatingInsights from './RatingInsights';
 import { renderAt } from '../test/router';
@@ -11,8 +12,8 @@ import { setupMockLocalStorage } from '../test/helpers';
 // Every account-dependent page must handle "no Chess.com username" the same
 // way: explain in place. Dashboard, Insights and Openings used to redirect to
 // Home, which announced nothing and made the sidebar links read as broken;
-// Rating Insights explained itself but offered a button that could not work.
-// One file so the four can't drift apart again.
+// Rating Insights and Library explained themselves but offered a button that
+// could not work. One file so the five can't drift apart again.
 
 const mockNavigate = vi.fn();
 
@@ -56,6 +57,10 @@ vi.mock('../api/sessions', async (importOriginal) => ({
     ...(await importOriginal<typeof import('../api/sessions')>()),
     getRecentSessions: shouldNotFetch,
 }));
+vi.mock('../api/puzzles', async (importOriginal) => ({
+    ...(await importOriginal<typeof import('../api/puzzles')>()),
+    getLibraryPuzzles: shouldNotFetch,
+}));
 
 // Heavy renderers the connect-account state never reaches.
 vi.mock('../components/OpeningGraph', () => ({ OpeningGraph: () => <div /> }));
@@ -74,6 +79,7 @@ const PAGES = [
     { name: 'Insights', Component: Insights, heading: 'Insights', describes: /tactical patterns/i },
     { name: 'Openings', Component: Openings, heading: 'Opening Explorer', describes: /opening graph/i },
     { name: 'Rating Insights', Component: RatingInsights, heading: 'Rating Insights', describes: /rating over time/i },
+    { name: 'Library', Component: Library, heading: 'Library', describes: /puzzles generated from your own games/i },
 ] as const;
 
 describe.each(PAGES)('$name without a Chess.com username', ({ Component, heading, describes }) => {
