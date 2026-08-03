@@ -99,7 +99,7 @@ export function MistakeDiagnosisCard({
 
                 {diagnosis.training_recommendation && (
                     <div className="border-l-2 border-primary/30 pl-4">
-                        <h3 className="font-sans text-xs uppercase tracking-widest text-primary/70 mb-1">
+                        <h3 className="font-sans font-normal text-xs uppercase tracking-widest text-primary/70 mb-1">
                             Next time
                         </h3>
                         <p className="font-sans text-sm text-primary/80">
@@ -123,7 +123,7 @@ export function MistakeDiagnosisCard({
 
                 {evidence.length > 0 && (
                     <div>
-                        <h3 className="font-sans text-xs uppercase tracking-widest text-primary/70 mb-2">
+                        <h3 className="font-sans font-normal text-xs uppercase tracking-widest text-primary/70 mb-2">
                             {diagnosis.explanation ? 'Evidence' : 'Why'}
                         </h3>
                         <dl className="space-y-1">
@@ -163,7 +163,7 @@ function Shell({ children }: { children: React.ReactNode }) {
         >
             <h2
                 id="mistake-diagnosis-heading"
-                className="font-sans text-xs uppercase tracking-widest text-primary/70 mb-3"
+                className="font-sans font-normal text-xs uppercase tracking-widest text-primary/70 mb-3"
             >
                 Mistake diagnosis
             </h2>

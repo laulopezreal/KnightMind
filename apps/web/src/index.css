@@ -232,14 +232,26 @@ body {
   }
 }
 
-h1,
-h2,
-h3,
-h4,
-h5,
-h6 {
-  font-family: var(--font-serif);
-  font-weight: 500;
+/* Headings are display type by default. This lives in `@layer base` on purpose:
+   Tailwind v4 emits utilities into `@layer utilities`, and unlayered CSS beats
+   layered CSS regardless of specificity — so while this rule sat outside a
+   layer it silently defeated `font-sans`/`font-normal` on every heading in the
+   app, and `<h2 class="font-sans">` rendered Cormorant 500. Inside `base` the
+   normal layer order applies and a utility can override it, which is what makes
+   the small uppercase section labels legible as the sans they are marked up as.
+
+   Keep this rule layered. Moving it back out re-breaks every font utility on
+   every heading, and the class list gives no hint that it happened. */
+@layer base {
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    font-family: var(--font-serif);
+    font-weight: 500;
+  }
 }
 
 
