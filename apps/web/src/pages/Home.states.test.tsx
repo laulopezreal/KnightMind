@@ -70,17 +70,6 @@ describe('Home data states', () => {
     expect(screen.getByRole('heading', { level: 1, name: 'KnightMind' })).toBeInTheDocument();
   });
 
-  it('keeps the page h1 once loaded', async () => {
-    mockGetUserStatus.mockResolvedValue({
-      games_count: 50, puzzles_count: 10, due_count: 0, has_new_games: false, next_due_at: null,
-    });
-    mockGetImportStatus.mockResolvedValue({ last_imported_at: null, last_new_games: null });
-
-    render(<Home />);
-
-    await waitFor(() =>
-      expect(screen.getByRole('heading', { level: 1, name: 'KnightMind' })).toBeInTheDocument(),
-    );
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
-  });
+  // The loaded state's h1 is asserted in Home.test.tsx ("should render the page
+  // title as the level-one heading"), rather than a third time here.
 });

@@ -57,15 +57,8 @@ describe('LibraryPuzzle data states', () => {
         expect(screen.getByRole('heading', { level: 1, name: 'Puzzle' })).toBeInTheDocument();
     });
 
-    it('keeps a page h1 in the offline state', async () => {
-        setOnline(false);
-        mockGetLibraryPuzzle.mockRejectedValue(new Error('Network request failed'));
-
-        render(<LibraryPuzzle />);
-
-        await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/offline/i));
-        expect(screen.getByRole('heading', { level: 1, name: 'Puzzle' })).toBeInTheDocument();
-    });
+    // The offline branch is asserted alongside the rest of the offline
+    // behaviour in LibraryPuzzle.offline.test.tsx, rather than a second time here.
 
     it('keeps a page h1 when the puzzle is not found', async () => {
         // A 404 is terminal (no Retry), so it renders a different branch than

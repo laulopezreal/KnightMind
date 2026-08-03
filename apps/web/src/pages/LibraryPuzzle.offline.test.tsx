@@ -45,6 +45,10 @@ describe('LibraryPuzzle offline handling', () => {
         });
         // The raw network error message is not surfaced as the primary state.
         expect(screen.queryByText('Network request failed')).not.toBeInTheDocument();
+        // ...and the offline card does not replace the page: the heading stays,
+        // so heading navigation still identifies where the user is. The other
+        // state branches are covered in LibraryPuzzle.states.test.tsx.
+        expect(screen.getByRole('heading', { level: 1, name: 'Puzzle' })).toBeInTheDocument();
     });
 
     it('shows the standard error card when a fetch fails while online', async () => {
