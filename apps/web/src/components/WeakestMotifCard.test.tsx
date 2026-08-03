@@ -26,6 +26,19 @@ describe('WeakestMotifCard', () => {
     expect(screen.queryByText('Skewer')).not.toBeInTheDocument();
   });
 
+  it('falls back to the raw tier when the server sends an unknown rank', () => {
+    // The cast is the test: `rank` is a closed union in the frontend's types but
+    // an unvalidated server field at runtime, so a new backend tier reaches this
+    // component as a value no label exists for. It must degrade to the raw tier
+    // name, never to the literal string "undefined".
+    render(<WeakestMotifCard motifs={[
+      motif({ name: 'back_rank', accuracy: 0.13, rank: 'critical' as MotifPerformance['rank'] }),
+    ]} />);
+
+    expect(screen.getByText('13% · critical')).toBeInTheDocument();
+    expect(screen.queryByText(/undefined/)).not.toBeInTheDocument();
+  });
+
   it('deep-links "Train this" to the raw motif key', () => {
     render(<WeakestMotifCard motifs={[motif({ name: 'back_rank', accuracy: 0.39 })]} />);
     expect(screen.getByRole('link', { name: 'Train this' })).toHaveAttribute('href', '/puzzles?motif=back_rank');

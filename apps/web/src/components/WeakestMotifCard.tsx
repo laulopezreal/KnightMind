@@ -14,6 +14,18 @@ const RANK_LABEL: Record<MotifPerformance['rank'], string> = {
 };
 
 /**
+ * `rank` is typed as a closed union but arrives from the server, so a tier the
+ * frontend doesn't know about is possible at runtime. The cast widens the key
+ * type only at the point of read — the map keeps its exhaustive declaration, so
+ * adding a tier to the union still fails the build until a label exists — while
+ * making the fallback live rather than dead code. Showing the raw tier name
+ * beats rendering the string "undefined" at the user.
+ */
+function rankLabel(rank: MotifPerformance['rank']): string {
+  return (RANK_LABEL as Record<string, string | undefined>)[rank] ?? rank;
+}
+
+/**
  * Surfaces the user's weakest tactical motif from their own games — the single
  * most actionable, app-specific signal — with a one-click targeted-training
  * deep link. Mirrors the weakest-selection rule used by the Insights radar:
@@ -63,7 +75,7 @@ export function WeakestMotifCard({ motifs }: WeakestMotifCardProps) {
     <StatCard
       label="Weakest motif"
       value={formatMotifName(weakest.name)}
-      sub={`${Math.round(weakest.accuracy * 100)}% · ${RANK_LABEL[weakest.rank]}`}
+      sub={`${Math.round(weakest.accuracy * 100)}% · ${rankLabel(weakest.rank)}`}
       footer={
         <div className="flex items-center gap-4">
           <Link
