@@ -35,7 +35,7 @@ export function TodaysFocusCard({ data }: TodaysFocusCardProps) {
         }
         return (
             <Shell>
-                <p className="font-sans text-sm text-primary/60">
+                <p className="font-sans text-sm text-primary/70">
                     {pending > 0
                         ? 'Still analysing your mistakes — a focus appears once a habit recurs.'
                         : 'No habit has recurred often enough to build a plan on yet. Keep playing — this fills in on its own.'}
@@ -53,7 +53,7 @@ export function TodaysFocusCard({ data }: TodaysFocusCardProps) {
 
             {/* The evidence, not a score. A bare priority number would be
                 unfalsifiable; these are the figures it was computed from. */}
-            <p className="font-sans text-xs text-primary/60 mt-3">
+            <p className="font-sans text-xs text-primary/70 mt-3">
                 Why this: {focus.rationale}
             </p>
 
@@ -73,7 +73,7 @@ export function TodaysFocusCard({ data }: TodaysFocusCardProps) {
                 // Nothing of this pattern is due, and training early would
                 // re-anchor intervals. Naming the pattern is still useful; a
                 // button that served an unrelated queue would not be.
-                <p className="font-sans text-xs text-primary/50 mt-4">
+                <p className="font-sans text-xs text-primary/70 mt-4">
                     Nothing from this pattern is due right now — it will come
                     back around.
                 </p>
@@ -82,7 +82,7 @@ export function TodaysFocusCard({ data }: TodaysFocusCardProps) {
             {focus.runner_up && (
                 // Naming the runner-up keeps a close call from reading as a
                 // landslide, and answers "what about the other thing?".
-                <p className="font-sans text-xs text-primary/50 mt-3">
+                <p className="font-sans text-xs text-primary/70 mt-3">
                     After that: {focus.runner_up}.
                 </p>
             )}
@@ -98,7 +98,7 @@ function Shell({ children }: { children: React.ReactNode }) {
         >
             <h2
                 id="todays-focus-heading"
-                className="font-sans text-xs uppercase tracking-widest text-primary/60 mb-3"
+                className="font-sans text-xs uppercase tracking-widest text-primary/70 mb-3"
             >
                 Today’s focus
             </h2>
