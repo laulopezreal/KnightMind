@@ -39,8 +39,8 @@ vi.mock('../api/sessions', () => ({
 
 vi.mock('../components/HeroTrainCard', () => ({ HeroTrainCard: () => <div data-testid="hero-card" /> }));
 vi.mock('../components/RecentlyTrickyCard', () => ({ RecentlyTrickyCard: () => <div /> }));
-vi.mock('../components/MomentumCard', () => ({ MomentumCard: () => <div /> }));
-vi.mock('../components/StreakCard', () => ({ StreakCard: () => <div /> }));
+vi.mock('../components/MomentumCard', () => ({ MomentumCard: () => <div data-testid="momentum-card" /> }));
+vi.mock('../components/StreakCard', () => ({ StreakCard: () => <div data-testid="streak-card" /> }));
 vi.mock('../components/RecentSessionsCard', () => ({ RecentSessionsCard: () => <div /> }));
 vi.mock('../components/WeakestMotifCard', () => ({ WeakestMotifCard: () => <div data-testid="weakest-card" /> }));
 vi.mock('../components/RatingDeltaCard', () => ({ RatingDeltaCard: () => <div data-testid="rating-card" /> }));
@@ -50,7 +50,13 @@ const SUMMARY = {
     needs_warmup: false,
     days_since_last_session: 0,
     total_sessions: 3,
-    recent_form: [],
+    recent_form: {
+        last_20_results: [],
+        accuracy: 0,
+        trend: 'steady' as const,
+        sample_size: 0,
+        insufficient_data: true,
+    },
     training_streak_days: 0,
     last_session_at: null,
 };
@@ -252,5 +258,58 @@ describe('Dashboard data states', () => {
         render(<Dashboard />);
         await waitFor(() => expect(mockGetDashboardSummary).toHaveBeenCalled());
         expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
+
+    // ── Empty-state tiles (UX audit finding 2) ──
+
+    // Built from SUMMARY so it carries every field the page needs; only the
+    // has-ever-trained signals differ.
+    const NEVER_TRAINED = { ...SUMMARY };
+
+    it('hides the momentum and streak tiles for a user who has never trained', async () => {
+        // The strip above already hides itself with no data. A tile that can
+        // only say "0%" reads as a score the user has somehow already earned.
+        mockGetDashboardSummary.mockReset();
+        mockGetDashboardSummary.mockResolvedValue({ ...NEVER_TRAINED });
+
+        render(<Dashboard />);
+        await waitFor(() => expect(mockGetDashboardSummary).toHaveBeenCalled());
+
+        expect(screen.queryByTestId('momentum-card')).not.toBeInTheDocument();
+        expect(screen.queryByTestId('streak-card')).not.toBeInTheDocument();
+    });
+
+    it('keeps a genuine zero streak for someone who has trained before', async () => {
+        // A broken streak is real information — hiding it would delete a fact,
+        // not spare the user a meaningless one.
+        mockGetDashboardSummary.mockReset();
+        mockGetDashboardSummary.mockResolvedValue({
+            ...NEVER_TRAINED,
+            training_streak_days: 0,
+            last_session_at: '2026-07-28T10:00:00Z',
+        });
+
+        render(<Dashboard />);
+        await waitFor(() => expect(mockGetDashboardSummary).toHaveBeenCalled());
+        expect(await screen.findByTestId('streak-card')).toBeInTheDocument();
+    });
+
+    it('still shows both tiles once there is data', async () => {
+        mockGetDashboardSummary.mockReset();
+        mockGetDashboardSummary.mockResolvedValue({
+            ...NEVER_TRAINED,
+            training_streak_days: 3,
+            last_session_at: '2026-08-01T10:00:00Z',
+            recent_form: {
+                ...SUMMARY.recent_form,
+                last_20_results: ['pass' as const, 'fail' as const, 'pass' as const],
+                accuracy: 0.67, trend: 'up' as const, sample_size: 3,
+                insufficient_data: false,
+            },
+        });
+
+        render(<Dashboard />);
+        expect(await screen.findByTestId('momentum-card')).toBeInTheDocument();
+        expect(screen.getByTestId('streak-card')).toBeInTheDocument();
     });
 });

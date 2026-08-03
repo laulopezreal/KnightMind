@@ -59,7 +59,16 @@ const SUMMARY = {
     needs_warmup: false,
     days_since_last_session: 0,
     total_sessions: 3,
-    recent_form: [],
+    // A real RecentFormData, not `[]`. The page now hides the momentum tile for
+    // a user who has never trained, so an empty form would mean the tile — and
+    // the error boundary this test is about — never render at all.
+    recent_form: {
+        last_20_results: ['pass' as const, 'fail' as const],
+        accuracy: 0.5,
+        trend: 'steady' as const,
+        sample_size: 2,
+        insufficient_data: false,
+    },
     training_streak_days: 4,
     last_session_at: null,
 };
