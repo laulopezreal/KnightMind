@@ -120,10 +120,11 @@ describe('Puzzles', () => {
 
     render(<Puzzles />);
 
-    // The sentence spans a link plus a trailing text node, so match on the
-    // paragraph's own text rather than a single text node.
-    const prompt = await screen.findByRole('link', { name: /Connect your Chess.com account/i });
-    expect(prompt.closest('p')).toHaveTextContent('Connect your Chess.com account to start training.');
+    // The shared connect state, same as every other account-dependent page.
+    expect(
+      await screen.findByRole('heading', { level: 2, name: /connect your chess\.com account/i })
+    ).toBeInTheDocument();
+    expect(screen.getByText(/generated out of your own games/i)).toBeInTheDocument();
   });
 
   it('offers a working route to connect an account, not a dead button', async () => {
@@ -135,28 +136,32 @@ describe('Puzzles', () => {
     // UsernameDisplay, which Layout only mounts once a username exists — so it
     // did nothing in the one state that rendered it. Home's onboarding is the
     // only way in, so this must be a real navigation.
-    const link = await screen.findByRole('link', { name: /Connect your Chess.com account/i });
-    expect(link).toHaveAttribute('href', '/');
+    expect(
+      await screen.findByRole('button', { name: /connect account/i })
+    ).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Set Username/i })).not.toBeInTheDocument();
   });
 
-  it('marks the inline connect link with more than colour', async () => {
+  it('shows the shared connect state, not a disabled training console', async () => {
+    // Every other account-dependent page swaps to ConnectAccountEmpty in place.
+    // Puzzles used to render its whole console with every control dead and an
+    // inline sentence explaining why.
     mockUsername = '';
 
     render(<Puzzles />);
 
-    // Inline in a sentence the link is 2.51:1 against the surrounding text,
-    // under the 3:1 that colour-alone distinction requires — so it carries a
-    // persistent underline, not just a darker shade.
-    const link = await screen.findByRole('link', { name: /Connect your Chess.com account/i });
-    expect(link.className).toMatch(/\bunderline\b/);
+    expect(
+      await screen.findByRole('heading', { level: 2, name: /connect your chess\.com account/i })
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Start Session' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Generate New/i })).not.toBeInTheDocument();
   });
 
   it('does not stack a second connect control on the error card', async () => {
     // Reachable only by a narrow path: generate with an account, hit an error,
     // then clear the account. The error card used to add its own "Connect
-    // account" button here — a second link to the same place, worded
-    // differently, beside the panel that already offers one.
+    // account" button — a second control to the same place, worded differently,
+    // beside the one the page already offers.
     mockUsername = 'testplayer';
     mockGetUserStatus.mockResolvedValue({
       games_count: 50,
@@ -180,12 +185,11 @@ describe('Puzzles', () => {
     mockUsername = '';
     rerender(<Puzzles />);
 
-    // Exactly one route to Home, and it is the controls panel's inline link —
-    // singular query on purpose, so a second one reappearing fails here.
-    const connect = await screen.findByRole('link', { name: /Connect your Chess.com account/i });
-    expect(connect).toHaveAttribute('href', '/');
-    expect(screen.getAllByRole('link').filter(l => l.getAttribute('href') === '/')).toHaveLength(1);
-    expect(screen.queryByRole('link', { name: 'Connect account' })).not.toBeInTheDocument();
+    // Exactly one way to connect, singular on purpose so a second reappearing
+    // fails here.
+    expect(
+      await screen.findAllByRole('button', { name: /connect account/i })
+    ).toHaveLength(1);
     expect(screen.queryByRole('button', { name: /Set Username/i })).not.toBeInTheDocument();
   });
 
@@ -194,18 +198,17 @@ describe('Puzzles', () => {
 
     render(<Puzzles />);
 
-    await screen.findByRole('link', { name: /Connect your Chess.com account/i });
+    await screen.findByRole('button', { name: /connect account/i });
 
-    // The disabled-control explanation is the same message as the panel beside
-    // the buttons, so without an account it is suppressed — two near-identical
-    // sentences stacked read as a rendering bug. It still reaches the buttons'
-    // title tooltips, which is where a per-button reason belongs.
-    expect(screen.getAllByText(/to start training/i)).toHaveLength(1);
+    // Exactly one heading, not the old panel message stacked beside a
+    // near-identical disabled-control explanation. The description repeating
+    // the phrase is the house pattern — every page's copy ends that way — so
+    // the contract is on the heading, not on raw text occurrences.
+    expect(
+      screen.getAllByRole('heading', { name: /connect your chess\.com account/i })
+    ).toHaveLength(1);
     expect(screen.queryByText(/Set your username first/i)).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Start Session' })).toHaveAttribute(
-      'title',
-      'Connect your Chess.com account first to start training.'
-    );
+    expect(screen.queryByText(/to start training\./i)).not.toBeInTheDocument();
   });
 
   it('should render page heading', async () => {

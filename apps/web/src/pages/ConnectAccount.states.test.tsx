@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import Dashboard from './Dashboard';
 import Insights from './Insights';
 import Library from './Library';
+import Puzzles from './Puzzles';
 import Openings from './Openings';
 import RatingInsights from './RatingInsights';
 import { renderAt } from '../test/router';
@@ -22,6 +23,19 @@ const mockNavigate = vi.fn();
 vi.mock('react-router-dom', async (importOriginal) => ({
     ...(await importOriginal<typeof import('react-router-dom')>()),
     useNavigate: () => mockNavigate,
+}));
+
+// Puzzles reads the training-mode context. Its provider is mounted by the app
+// shell, which these page-level renders bypass.
+vi.mock('../context/PuzzleModeContext', () => ({
+    usePuzzleMode: () => ({
+        sessionType: 'standard',
+        setSessionType: vi.fn(),
+        targetAccuracy: 80,
+        setTargetAccuracy: vi.fn(),
+        targetTimeMinutes: 10,
+        setTargetTimeMinutes: vi.fn(),
+    }),
 }));
 
 vi.mock('../context/ChessUsernameContext', () => ({
@@ -80,6 +94,7 @@ const PAGES = [
     { name: 'Openings', Component: Openings, heading: 'Opening Explorer', describes: /opening graph/i },
     { name: 'Rating Insights', Component: RatingInsights, heading: 'Rating Insights', describes: /rating over time/i },
     { name: 'Library', Component: Library, heading: 'Library', describes: /puzzles generated from your own games/i },
+    { name: 'Puzzles', Component: Puzzles, heading: 'Daily Puzzles', describes: /puzzles generated out of your own games/i },
 ] as const;
 
 describe.each(PAGES)('$name without a Chess.com username', ({ Component, heading, describes }) => {
