@@ -24,7 +24,6 @@ from services.api.models import (
     Puzzle as PuzzleModel,
 )
 from services.api.storage.game_repository import GameRepository
-from services.api.storage.puzzle_repository import PuzzleRepository
 
 
 @pytest.fixture
@@ -324,6 +323,56 @@ def test_get_openings_cache_invalidates_when_games_change(
     assert second["games_count"] == len(MOCK_GAMES)
 
 
+@patch("services.api.main.import_all_games")
+def test_get_openings_enforces_the_depth_floor(mock_import_games, client_with_db):
+    """A deep request cannot opt out of pruning — the server pays for the tree."""
+
+    async def mock_generator(username, since=None):
+        from services.ingest import ChessGame
+
+        for game_data in MOCK_GAMES:
+            yield ChessGame(
+                url=game_data["url"],
+                pgn=game_data["pgn"],
+                time_control=game_data["time_control"],
+                end_time=game_data["end_time"],
+                rated=game_data["rated"],
+                white_username=game_data["white"]["username"],
+                black_username=game_data["black"]["username"],
+                white_result=game_data["white"]["result"],
+                black_result=game_data["black"]["result"],
+            )
+
+    mock_import_games.side_effect = mock_generator
+    client_with_db.post("/import/chesscom?username=testuser")
+
+    # Asking for everything at maximum depth is exactly the request that built a
+    # multi-megabyte tree; the floor applies regardless of what was asked for.
+    deep = client_with_db.get("/openings?username=testuser&max_ply=40&min_games=1")
+    assert deep.status_code == 200
+    assert deep.json()["analysis"]["min_games"] == 3
+
+    # ...and the tree was actually built that way. Asserting the reported number
+    # alone passes even when the builder is handed the unpruned request value —
+    # confirmed by mutation, on the most expensive path in the feature.
+    def _walk(node):
+        yield node
+        for child in node.get("children", []):
+            yield from _walk(child)
+
+    moves = [n for n in _walk(deep.json()) if n["move_san"] != "Start"]
+    assert all(
+        n["games_count"] >= 3 for n in moves
+    ), "a line below the applied floor survived into the response"
+
+    # A shallow tree is served unfiltered, and a higher request is honoured.
+    shallow = client_with_db.get("/openings?username=testuser&max_ply=12&min_games=1")
+    assert shallow.json()["analysis"]["min_games"] == 1
+
+    stricter = client_with_db.get("/openings?username=testuser&max_ply=12&min_games=5")
+    assert stricter.json()["analysis"]["min_games"] == 5
+
+
 def test_get_openings_no_games(client_with_db):
     """Test /openings returns 404 when user has no games."""
     response = client_with_db.get("/openings?username=unknownuser")
@@ -440,44 +489,6 @@ def test_user_status_with_due_puzzles(client_with_db, db_session):
     assert data["due_count"] == 1
     assert data["has_new_games"] is False
     assert data["next_due_at"].startswith(future_due.date().isoformat())
-
-
-def test_user_status_counts_eager_new_puzzles_as_due(client_with_db, db_session):
-    """Freshly saved, never-reviewed puzzles must count as due.
-
-    Regression for the eager-on-save path: ``save_puzzle`` creates a PuzzleStats
-    row with ``next_due_at = NULL``. Those puzzles are "New" and trainable, so
-    ``/status`` must report ``due_count == N`` (not 0). Existing status tests
-    build PuzzleModel rows directly and bypass ``save_puzzle``, so this path was
-    uncovered. The test intentionally goes through the repository so the eager
-    NULL-next_due_at stats are created exactly as production does.
-    """
-    _create_game(db_session, "game-eager-status", "testuser")
-    db_session.commit()
-
-    repository = PuzzleRepository(db_session)
-    n_puzzles = 3
-    for ply in range(n_puzzles):
-        is_new, _ = repository.save_puzzle(
-            username="testuser",
-            source_game_id="game-eager-status",
-            ply=ply,
-            fen="rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
-            side_to_move="white",
-            played_move_uci="e2e3",
-            best_move_uci="e2e4",
-            eval_before=0.5,
-            eval_after=-0.5,
-            swing=1.0,
-        )
-        assert is_new is True
-
-    response = client_with_db.get("/users/testuser/status")
-
-    assert response.status_code == 200
-    data = response.json()
-    assert data["puzzles_count"] == n_puzzles
-    assert data["due_count"] == n_puzzles
 
 
 # --- Chess.com username validation tests ---

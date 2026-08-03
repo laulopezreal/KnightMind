@@ -39,7 +39,11 @@ from services.api.diagnosis.pgn_context import (
 # Bumped whenever extraction changes shape or meaning. Folded into
 # ``evidence_hash`` so cached diagnoses self-invalidate on a change, the same
 # discipline the FEN eval cache uses for its conversion/engine versions.
-EXTRACTION_VERSION = 1
+#
+# 2: opening family. The packet now carries which opening the game reached,
+#    which changes what the rules see and what the model may cite, so every
+#    stored diagnosis predates evidence that could have changed it.
+EXTRACTION_VERSION = 2
 
 _PIECE_VALUE = {
     chess.PAWN: 1,
@@ -223,6 +227,36 @@ class LooseFacts:
 
 
 @dataclass(frozen=True)
+class AlignedPair:
+    """Two aligned enemy king/queen/rooks, and what sits between them."""
+
+    a: str  # e.g. "Q on d8"
+    b: str
+    line: str  # "rank" | "file" | "diagonal"
+    blockers: int  # pieces of either colour strictly between them
+
+
+@dataclass(frozen=True)
+class AlignmentFacts:
+    """Queen/rook/king geometry — the precondition for skewers and pins.
+
+    Alignment alone is not a mistake: pieces share lines constantly. What makes
+    it diagnostic is alignment the *solution exploits* — the user's best move
+    attacking one of two enemy majors that stand on a shared line.
+
+    ``exploited_by_best`` is the whole point. Without it this would fire on
+    every position where a rook happens to share a file with its king, which is
+    most positions, and would be exactly the unfalsifiable label the taxonomy
+    refuses to ship.
+    """
+
+    pairs: tuple[AlignedPair, ...] = ()
+    exploited_by_best: bool = False
+    # The pair the solution exploits, when it exploits one.
+    exploited_pair: AlignedPair | None = None
+
+
+@dataclass(frozen=True)
 class ThreatFacts:
     legal_checks: int
     legal_captures: int
@@ -266,6 +300,18 @@ class GameMetaFacts:
     # PGN-derived facts are then dropped rather than attributed to the wrong
     # position — a desync is surfaced, never silently analysed.
     pgn_desync: bool
+    # Opening family the game reached before the mistake, e.g. "Sicilian
+    # Defense". None when the position left book unclassified, which is
+    # ordinary for irregular openings — it never means "we did not look".
+    # Dropped on desync along with every other PGN-derived fact: the whole
+    # context is replaced with EMPTY_GAME_CONTEXT above, so no separate guard
+    # is needed here and adding one would imply the drop is per-field.
+    opening_family: str | None = None
+    # The full line ("Sicilian Defense: Najdorf Variation") and its ECO code.
+    # The family is the part of the name before the colon — one derivation, so
+    # the coarse and fine keys can never disagree.
+    opening_name: str | None = None
+    opening_eco: str | None = None
 
 
 @dataclass(frozen=True)
@@ -279,6 +325,7 @@ class EvidencePacket:
     played: PlayedMoveFacts
     best: BestMoveFacts
     loose: LooseFacts
+    alignment: AlignmentFacts
     threats: ThreatFacts
     king: KingFacts
     clock: ClockFacts
@@ -344,6 +391,7 @@ def extract_evidence(
         played=_played_facts(board, played, context),
         best=_best_facts(board, best, puzzle, context),
         loose=_loose_facts(board, user),
+        alignment=_alignment_facts(board, user, best),
         threats=_threat_facts(board, played),
         king=_king_facts(board, user, context),
         clock=_clock_facts(context, game.time_control),
@@ -354,6 +402,9 @@ def extract_evidence(
             rated=game.rated,
             plies_in_game=context.plies_in_game,
             pgn_desync=desync,
+            opening_family=context.opening_family,
+            opening_name=context.opening_name,
+            opening_eco=context.opening_eco,
         ),
         history=history,
         eval_before=puzzle.eval_before,
@@ -526,6 +577,107 @@ def _captures_undefended(board: chess.Board, move: chess.Move) -> bool:
     after = board.copy(stack=False)
     after.push(move)
     return not after.attackers(not mover, move.to_square)
+
+
+# Pieces worth aligning on: losing one to a skewer or pin is what makes the
+# geometry matter. A bishop or knight on the line is not the story.
+_ALIGNMENT_PIECES = (chess.KING, chess.QUEEN, chess.ROOK)
+
+
+def _alignment_facts(
+    board: chess.Board, user: chess.Color, best: chess.Move
+) -> AlignmentFacts:
+    """Aligned enemy pieces, and whether the solution exploits one.
+
+    The *opponent's* geometry, not the user's: a puzzle is a position where the
+    user is to move, so ``best`` is the user's move and what it can exploit is
+    the opponent's alignment. The cause this feeds is "you did not scan for
+    lined-up enemy pieces", which is the missed-tactic form — the same shape as
+    the strong branch of the loose-piece rule.
+
+    A pair counts when both pieces are the opponent's, both are king/queen/rook,
+    they share a rank, file or diagonal, and at most one piece stands between
+    them. One blocker is the classic pin/skewer setup — zero is a direct
+    battery. More than one and the line is not realistically exploitable, so
+    reporting it would be geometry trivia rather than a cause.
+
+    "Exploited" means the best move ends on that same line and, from there, an
+    enemy long-range piece bears on it. That is deliberately strict: the point
+    is to fire on tactics the alignment *caused*, not on every position where
+    two rooks share a file.
+    """
+    victim = not user
+    squares = [
+        sq
+        for sq in board.pieces(chess.QUEEN, victim)
+        | board.pieces(chess.ROOK, victim)
+        | board.pieces(chess.KING, victim)
+    ]
+    pairs: list[AlignedPair] = []
+    for i, a in enumerate(squares):
+        for b in squares[i + 1 :]:
+            if not chess.ray(a, b):
+                continue
+            between = chess.SquareSet(chess.between(a, b))
+            blockers = sum(1 for sq in between if board.piece_at(sq))
+            if blockers > 1:
+                continue
+            pairs.append(
+                AlignedPair(
+                    a=_describe(board, a),
+                    b=_describe(board, b),
+                    line=_line_kind(a, b),
+                    blockers=blockers,
+                )
+            )
+
+    exploited: AlignedPair | None = None
+    if pairs:
+        mover = board.piece_at(best.from_square)
+        # Only a long-range piece can exploit a line; a knight landing "on the
+        # line" attacks nothing along it.
+        if mover and mover.piece_type in (chess.QUEEN, chess.ROOK, chess.BISHOP):
+            after = board.copy(stack=False)
+            after.push(best)
+            for pair in pairs:
+                a = chess.parse_square(pair.a.split()[-1])
+                b = chess.parse_square(pair.b.split()[-1])
+                line = chess.SquareSet(chess.ray(a, b))
+                if best.to_square not in line:
+                    continue
+                # The tactic is the mover hitting one of the aligned pieces
+                # *from its new square*, with the other still behind it. Landing
+                # on the line is not enough — a rook stepping onto a file behind
+                # its own pawn exploits nothing.
+                # Note what is NOT here: landing *on* one of the pair does not
+                # count. Capturing a piece that happened to share a line is a
+                # capture, not a skewer — allowing it made "you missed a hanging
+                # queen" report as alignment blindness, above the true cause.
+                after_attacks = after.attacks(best.to_square)
+                if a in after_attacks or b in after_attacks:
+                    exploited = pair
+                    break
+
+    return AlignmentFacts(
+        pairs=tuple(pairs),
+        exploited_by_best=exploited is not None,
+        exploited_pair=exploited,
+    )
+
+
+def _describe(board: chess.Board, square: int) -> str:
+    """ "queen on d8" — same shape the loose-piece facts use."""
+    piece = board.piece_at(square)
+    name = chess.piece_name(piece.piece_type) if piece else "piece"
+    return f"{name} on {chess.square_name(square)}"
+
+
+def _line_kind(a: int, b: int) -> str:
+    if chess.square_rank(a) == chess.square_rank(b):
+        return "rank"
+    if chess.square_file(a) == chess.square_file(b):
+        return "file"
+    return "diagonal"
 
 
 def _loose_facts(board: chess.Board, user: chess.Color) -> LooseFacts:
@@ -743,6 +895,29 @@ def to_evidence_items(packet: EvidencePacket) -> tuple[EvidenceItem, ...]:
             str(packet.king.ring_attackers),
         ),
     ]
+
+    if packet.alignment.exploited_by_best and packet.alignment.exploited_pair:
+        pair = packet.alignment.exploited_pair
+        items.append(
+            EvidenceItem(
+                "alignment.exploited",
+                "Aligned pieces the solution exploits",
+                f"{pair.a} and {pair.b} share a {pair.line}"
+                + (" with one piece between" if pair.blockers else ""),
+            )
+        )
+
+    if packet.game.opening_family:
+        # Only when the game was actually classified. An unclassified position
+        # emits nothing rather than "unknown", so a citation can never point at
+        # an opening the game never reached.
+        items.append(
+            EvidenceItem(
+                "game.opening_family",
+                "Opening family",
+                packet.game.opening_family,
+            )
+        )
 
     if packet.loose.own:
         items.append(

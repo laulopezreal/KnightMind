@@ -63,6 +63,17 @@ class SessionSummary(BaseModel):
     current_streak: int = 0
     best_streak: int = 0
     hints_used: int = 0
+    # Surfaced from session_data so a resumed session is ordered the same way
+    # it was served. Reading the focus back off the URL instead made the order
+    # depend on how the user navigated back — see the resume path in
+    # usePuzzleSession.
+    focus_cause: str | None = None
+    focus_opening: str | None = None
+    focus_opening_scope: str | None = None
+    # Same reasoning, and the stakes are higher: motif *filters* the queue
+    # rather than merely biasing it, so losing it on resume changes the set of
+    # puzzles, not just their order.
+    motif: str | None = None
 
 
 class UseHintRequest(BaseModel):
@@ -191,6 +202,10 @@ async def get_session(
         current_streak=session.current_streak,
         best_streak=session.best_streak,
         hints_used=session.hints_used,
+        focus_cause=(session.session_data or {}).get("focus_cause"),
+        focus_opening=(session.session_data or {}).get("focus_opening"),
+        focus_opening_scope=(session.session_data or {}).get("focus_opening_scope"),
+        motif=(session.session_data or {}).get("motif"),
     )
 
 
@@ -246,6 +261,10 @@ async def complete_session(
         current_streak=session.current_streak,
         best_streak=session.best_streak,
         hints_used=session.hints_used,
+        focus_cause=(session.session_data or {}).get("focus_cause"),
+        focus_opening=(session.session_data or {}).get("focus_opening"),
+        focus_opening_scope=(session.session_data or {}).get("focus_opening_scope"),
+        motif=(session.session_data or {}).get("motif"),
     )
 
     # Best-effort auto-snapshot after response is built
@@ -302,4 +321,8 @@ async def use_hint(
         current_streak=session.current_streak,
         best_streak=session.best_streak,
         hints_used=session.hints_used,
+        focus_cause=(session.session_data or {}).get("focus_cause"),
+        focus_opening=(session.session_data or {}).get("focus_opening"),
+        focus_opening_scope=(session.session_data or {}).get("focus_opening_scope"),
+        motif=(session.session_data or {}).get("motif"),
     )

@@ -10,9 +10,11 @@ import {
     type PuzzleStatus,
     type PuzzleDifficulty,
     type PuzzleSort,
+    type CauseOption,
 } from '../api/puzzles';
 import { PageHeader } from '../components/PageHeader';
 import { DataStateError, DataStateLoading } from '../components/DataState';
+import { ConnectAccountEmpty } from '../components/ConnectAccountEmpty';
 
 const PAGE_SIZE = 50;
 
@@ -149,7 +151,7 @@ function PuzzleRow({ puzzle }: { puzzle: LibraryPuzzle }) {
 }
 
 export default function Library() {
-    const { username, setEditorOpen } = useChessUsername();
+    const { username } = useChessUsername();
 
     // Data
     const [puzzles, setPuzzles] = useState<LibraryPuzzle[]>([]);
@@ -164,6 +166,26 @@ export default function Library() {
     const [statusFilter, setStatusFilter] = useState<PuzzleStatus | ''>('');
     const [difficultyFilter, setDifficultyFilter] = useState<PuzzleDifficulty | ''>('');
     const [motifFilter, setMotifFilter] = useState('');
+    // Seeded from the URL so the Insights "practise this" links land filtered.
+    // Without this the CTA silently dropped its parameter and dumped the user
+    // in the unfiltered library.
+    const [causeFilter, setCauseFilter] = useState(
+        () => new URLSearchParams(window.location.search).get('cause') ?? ''
+    );
+    const [availableCauses, setAvailableCauses] = useState<CauseOption[]>([]);
+    const [phaseFilter, setPhaseFilter] = useState(
+        () => new URLSearchParams(window.location.search).get('phase') ?? ''
+    );
+    const [openingFilter, setOpeningFilter] = useState(
+        () => new URLSearchParams(window.location.search).get('opening') ?? ''
+    );
+    // Line-level, set only by the Openings explorer link. There is no control
+    // for it: the family select is the browsable axis, and a dropdown of every
+    // line the corpus contains would be unusable.
+    const [openingLineFilter, setOpeningLineFilter] = useState(
+        () => new URLSearchParams(window.location.search).get('opening_line') ?? ''
+    );
+    const [availableOpenings, setAvailableOpenings] = useState<string[]>([]);
     const [sort, setSort] = useState<PuzzleSort>('due_soonest');
     const [offset, setOffset] = useState(0);
 
@@ -177,7 +199,7 @@ export default function Library() {
     // Reset offset when filters change
     useEffect(() => {
         setOffset(0);
-    }, [debouncedSearch, statusFilter, difficultyFilter, motifFilter, sort]);
+    }, [debouncedSearch, statusFilter, difficultyFilter, motifFilter, causeFilter, phaseFilter, openingFilter, openingLineFilter, sort]);
 
     const fetchPuzzles = useCallback(async () => {
         if (!username) return;
@@ -189,6 +211,10 @@ export default function Library() {
                 q: debouncedSearch || undefined,
                 status: statusFilter || undefined,
                 motif: motifFilter || undefined,
+                cause: causeFilter || undefined,
+                phase: phaseFilter || undefined,
+                opening: openingFilter || undefined,
+                opening_line: openingLineFilter || undefined,
                 difficulty: difficultyFilter || undefined,
                 sort,
                 limit: PAGE_SIZE,
@@ -197,13 +223,15 @@ export default function Library() {
             setPuzzles(res.puzzles);
             setTotal(res.total);
             setAvailableMotifs(res.available_motifs);
+            setAvailableCauses(res.available_causes ?? []);
+            setAvailableOpenings(res.available_openings ?? []);
             setCorpusStats(res.stats);
         } catch (err) {
             setError(err instanceof Error ? err.message : 'Failed to load puzzles');
         } finally {
             setIsLoading(false);
         }
-    }, [username, debouncedSearch, statusFilter, difficultyFilter, motifFilter, sort, offset]);
+    }, [username, debouncedSearch, statusFilter, difficultyFilter, motifFilter, causeFilter, phaseFilter, openingFilter, openingLineFilter, sort, offset]);
 
     useEffect(() => {
         fetchPuzzles();
@@ -212,6 +240,10 @@ export default function Library() {
     const totalPages = Math.ceil(total / PAGE_SIZE);
     const currentPage = Math.floor(offset / PAGE_SIZE) + 1;
 
+    // No account connected. Was a bespoke block whose "Set Username" button
+    // called setEditorOpen — but that editor lives in UsernameDisplay, which
+    // Layout only mounts once a username exists, so the button did nothing in
+    // the one state that rendered it. Home's onboarding is the way in.
     if (!username) {
         return (
             <div className="space-y-12 animate-teedin">
@@ -219,16 +251,7 @@ export default function Library() {
                     title="Library"
                     subtitle="Puzzles from your own games. Every position here is a moment you can learn from."
                 />
-                <div className="bg-primary/5 border border-primary/10 rounded-sm p-6 text-center space-y-4">
-                    <h3 className="font-serif text-xl text-primary">Set your username to get started</h3>
-                    <button
-                        type="button"
-                        onClick={() => setEditorOpen(true)}
-                        className="px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-colors km-interactive km-focus-visible"
-                    >
-                        Set Username
-                    </button>
-                </div>
+                <ConnectAccountEmpty description="Your library collects the puzzles generated from your own games, with what you have solved and what is due for review. Connect your Chess.com account to start filling it." />
             </div>
         );
     }
@@ -317,6 +340,67 @@ export default function Library() {
                         </select>
                     )}
 
+                    {/* Mistake cause — the target of the Insights "practise this" links */}
+                    {availableCauses.length > 0 && (
+                        <select
+                            value={causeFilter}
+                            onChange={(e) => setCauseFilter(e.target.value)}
+                            aria-label="Filter by mistake cause"
+                            className="bg-bg-primary border border-primary/20 rounded-sm px-3 py-1.5 text-primary focus:outline-none focus:border-primary/60"
+                        >
+                            <option value="">All causes</option>
+                            {availableCauses.map(c => (
+                                <option key={c.value} value={c.value}>{c.label}</option>
+                            ))}
+                        </select>
+                    )}
+
+                    {/* An arriving line filter has no select of its own — a
+                        dropdown of every line in the corpus would be unusable —
+                        so it appears as a removable chip. Without it the list is
+                        narrowed with no visible reason and no way out. */}
+                    {openingLineFilter && (
+                        <span className="inline-flex items-center gap-2 bg-primary/10 border border-primary/20 rounded-sm px-3 py-1.5 text-primary font-sans text-sm">
+                            {openingLineFilter}
+                            <button
+                                type="button"
+                                onClick={() => setOpeningLineFilter('')}
+                                aria-label={`Clear the ${openingLineFilter} filter`}
+                                className="km-focus-visible text-primary/70 hover:text-primary transition-colors"
+                            >
+                                ×
+                            </button>
+                        </span>
+                    )}
+
+                    {/* Phase */}
+                    <select
+                        value={phaseFilter}
+                        onChange={(e) => setPhaseFilter(e.target.value)}
+                        aria-label="Filter by game phase"
+                        className="bg-bg-primary border border-primary/20 rounded-sm px-3 py-1.5 text-primary focus:outline-none focus:border-primary/60"
+                    >
+                        <option value="">All phases</option>
+                        <option value="opening">Opening</option>
+                        <option value="middlegame">Middlegame</option>
+                        <option value="endgame">Endgame</option>
+                    </select>
+
+                    {/* Opening family — only offered once games have been classified */}
+                    {availableOpenings.length > 0 && (
+                        <select
+                            value={openingFilter}
+                            onChange={(e) => setOpeningFilter(e.target.value)}
+                            aria-label="Filter by opening"
+                            className="bg-bg-primary border border-primary/20 rounded-sm px-3 py-1.5 text-primary focus:outline-none focus:border-primary/60"
+                        >
+                            <option value="">All openings</option>
+                            {availableOpenings.map(o => (
+                                <option key={o} value={o}>{o}</option>
+                            ))}
+                        </select>
+                    )}
+
                     {/* Sort */}
                     <select
                         value={sort}
@@ -333,9 +417,14 @@ export default function Library() {
                 {/* Result count — hidden on error so it can't contradict the error box */}
                 {!error && (
                     <div className="text-xs font-sans text-primary/70">
-                        {isLoading ? (
-                            <DataStateLoading label="Loading library puzzles..." compact />
-                        ) : (
+                        {/* Only while refreshing a list that is already on screen.
+                            On a first load the full-page loader below is showing,
+                            and both carry role="status" aria-live="polite" — two
+                            regions announcing the same sentence at once. This is
+                            the refresh indicator; that one is the initial load. */}
+                        {isLoading && puzzles.length > 0 ? (
+                            <DataStateLoading label="Refreshing library puzzles..." compact />
+                        ) : isLoading ? null : (
                             <span>{total} puzzle{total !== 1 ? 's' : ''}</span>
                         )}
                     </div>
@@ -399,7 +488,7 @@ export default function Library() {
                         type="button"
                         onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}
                         disabled={offset === 0}
-                        className="px-4 py-2 border border-primary/20 rounded-sm text-primary km-interactive km-focus-visible disabled:opacity-30 disabled:cursor-default"
+                        className="px-4 py-2 border border-primary/20 rounded-sm text-primary km-interactive km-focus-visible"
                     >
                         Previous
                     </button>
@@ -410,7 +499,7 @@ export default function Library() {
                         type="button"
                         onClick={() => setOffset(offset + PAGE_SIZE)}
                         disabled={currentPage >= totalPages}
-                        className="px-4 py-2 border border-primary/20 rounded-sm text-primary km-interactive km-focus-visible disabled:opacity-30 disabled:cursor-default"
+                        className="px-4 py-2 border border-primary/20 rounded-sm text-primary km-interactive km-focus-visible"
                     >
                         Next
                     </button>

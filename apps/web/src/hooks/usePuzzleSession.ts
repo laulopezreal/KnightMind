@@ -17,6 +17,32 @@ import type { UsePuzzleTimerReturn } from './usePuzzleTimer';
 export type PuzzleStatus = 'solving' | 'correct' | 'incorrect' | 'revealed';
 export type SessionState = 'idle' | 'loading' | 'active' | 'completing' | 'completed' | 'error';
 
+/**
+ * What to persist alongside a session so it can be resumed faithfully.
+ *
+ * The focus and the motif go here rather than being re-read from the URL on
+ * resume: the order a filtered or focused session was served in has to survive
+ * the user navigating back without the query parameter, or the restored index
+ * lands on a different puzzle.
+ */
+function buildSessionData(
+    warmupMode: boolean,
+    focusCause: string | null,
+    motifFilter: string | null,
+    focusOpening: string | null,
+    focusOpeningScope: string | null
+): Record<string, unknown> | undefined {
+    const data: Record<string, unknown> = {};
+    if (warmupMode) data.is_warmup = true;
+    if (focusCause) data.focus_cause = focusCause;
+    if (focusOpening) {
+        data.focus_opening = focusOpening;
+        data.focus_opening_scope = focusOpeningScope ?? 'line';
+    }
+    if (motifFilter) data.motif = motifFilter;
+    return Object.keys(data).length > 0 ? data : undefined;
+}
+
 export interface UsePuzzleSessionOptions {
     activeSessionId: string | null;
     setActiveSessionId: (id: string | null) => void;
@@ -27,6 +53,11 @@ export interface UsePuzzleSessionOptions {
     targetTimeMinutes: number;
     warmupMode: boolean;
     motifFilter: string | null;
+    /** Mistake cause to bias the queue toward. Never narrows it. */
+    focusCause: string | null;
+    /** Opening to bias the queue toward, with its scope. Never narrows it. */
+    focusOpening: string | null;
+    focusOpeningScope: string | null;
     userStatus: UserStatus | null;
     timer: Pick<UsePuzzleTimerReturn, 'startSessionTimer' | 'cleanup' | 'currentPuzzleTime' | 'puzzleStartTime'>;
     checkAchievements: (params: { streak: number; currentPuzzleTime: number }) => void;
@@ -125,6 +156,9 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
         targetTimeMinutes,
         warmupMode,
         motifFilter,
+        focusCause,
+        focusOpening,
+        focusOpeningScope,
         userStatus,
         timer,
         checkAchievements,
@@ -242,7 +276,15 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
                         session.requested_n,
                         session.session_type || 'standard',
                         session.target_accuracy,
-                        motifFilter || undefined,
+                        // The session's own motif and focus, not the URL's. A
+                        // resumed session must be served the way it was
+                        // originally, or the restored index points at a
+                        // different puzzle and the user re-solves one —
+                        // advancing its interval twice.
+                        session.motif || undefined,
+                        session.focus_cause || undefined,
+                        session.focus_opening || undefined,
+                        session.focus_opening_scope || undefined,
                     );
                     setPuzzles(response.puzzles);
 
@@ -463,6 +505,9 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
                 sessionType,
                 sessionType === 'accuracy_goal' ? targetAccuracy : undefined,
                 motifFilter || undefined,
+                focusCause || undefined,
+                focusOpening || undefined,
+                focusOpeningScope || undefined,
             );
             puzzles = response.puzzles;
         } catch (puzErr) {
@@ -490,7 +535,13 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
                 sessionType,
                 targetAccuracyParam,
                 targetTimeMinutesParam,
-                warmupMode ? { is_warmup: true } : undefined,
+                buildSessionData(
+                    warmupMode,
+                    focusCause,
+                    motifFilter,
+                    focusOpening,
+                    focusOpeningScope
+                ),
             );
             setActiveSessionId(session_id);
 
@@ -522,6 +573,9 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
         targetTimeMinutes,
         warmupMode,
         motifFilter,
+        focusCause,
+        focusOpening,
+        focusOpeningScope,
         setActiveSessionId,
         setStatus,
         timer.startSessionTimer,

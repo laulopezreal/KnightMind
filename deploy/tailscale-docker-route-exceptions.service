@@ -1,0 +1,21 @@
+# Install with:
+#   sudo cp /home/lauureal/apps/knightmind/deploy/tailscale-docker-route-exceptions.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now tailscale-docker-route-exceptions.service
+#
+# Purpose: keep Docker bridge subnets out of Tailscale's exit-node table 52 so
+# host/Caddy/Tailscale-Serve traffic can reach local Docker containers.
+
+[Unit]
+Description=Keep Docker bridge routes local when Tailscale exit-node routing is active
+Documentation=file:/home/lauureal/apps/knightmind/OPERATIONS.md
+Wants=docker.service tailscaled.service
+After=docker.service tailscaled.service network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/home/lauureal/apps/knightmind/deploy/tailscale-docker-route-exceptions.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

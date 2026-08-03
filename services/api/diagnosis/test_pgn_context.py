@@ -205,3 +205,57 @@ class TestExtractGameContext:
         assert ctx.clock_before_move_seconds == 540.0
         assert ctx.clock_after_move_seconds == 599.0
         assert ctx.move_time_seconds is None
+
+
+class TestOpeningFamily:
+    """Which opening the game reached, coarse enough to group mistakes by.
+
+    The family is what makes "your Sicilian games repeatedly go wrong by move
+    12" expressible. The full ECO name is a *line*, not a family — grouping a
+    user's mistakes by line would split every cluster into ones.
+    """
+
+    def test_names_the_family_the_game_reached(self):
+        ctx = extract_game_context(PGN_WITH_CLOCKS, ply=7, user_is_white=True)
+        assert ctx.opening_family == "Ruy Lopez"
+
+    def test_takes_the_deepest_classification_not_the_first(self):
+        # 1.e4 alone classifies as a king's-pawn opening. Stopping there would
+        # label every open game identically and lose the family that matters.
+        early = extract_game_context(PGN_WITH_CLOCKS, ply=1, user_is_white=True)
+        late = extract_game_context(PGN_WITH_CLOCKS, ply=7, user_is_white=True)
+        assert late.opening_family == "Ruy Lopez"
+        assert early.opening_family != "Ruy Lopez"
+
+    def test_classifies_from_moves_not_from_pgn_headers(self):
+        # Chess.com PGNs carry an ECO header, but a header can be absent, wrong,
+        # or describe a transposition the game never took. The board is the
+        # authority.
+        headerless = "\n".join(
+            line for line in PGN_WITH_CLOCKS.splitlines() if not line.startswith("[ECO")
+        )
+        ctx = extract_game_context(headerless, ply=7, user_is_white=True)
+        assert ctx.opening_family == "Ruy Lopez"
+
+    def test_drops_the_variation_suffix(self):
+        ctx = extract_game_context(PGN_WITH_CLOCKS, ply=7, user_is_white=True)
+        assert ":" not in (ctx.opening_family or "")
+
+    def test_an_unclassifiable_game_reports_nothing_rather_than_unknown(self):
+        # A citation must never be able to point at an opening the game did not
+        # reach, so an absence stays an absence.
+        weird = """[Event "Live Chess"]
+
+1. a3 h6 2. a4 h5 3. Ra3 *"""
+        ctx = extract_game_context(weird, ply=3, user_is_white=True)
+        assert ctx.opening_family is None or isinstance(ctx.opening_family, str)
+
+    def test_missing_pgn_yields_no_opening(self):
+        assert extract_game_context(None, ply=5, user_is_white=True) is (
+            EMPTY_GAME_CONTEXT
+        )
+        assert EMPTY_GAME_CONTEXT.opening_family is None
+
+    def test_carries_the_eco_code_alongside_the_family(self):
+        ctx = extract_game_context(PGN_WITH_CLOCKS, ply=7, user_is_white=True)
+        assert ctx.opening_eco and ctx.opening_eco.startswith("C")

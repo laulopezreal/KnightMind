@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import Puzzles from './Puzzles';
+import { generatePuzzles } from '../api';
 import { setupMockLocalStorage } from '../test/helpers';
 
 const mockNavigate = vi.fn();
@@ -119,9 +120,95 @@ describe('Puzzles', () => {
 
     render(<Puzzles />);
 
-    await waitFor(() => {
-      expect(screen.getByText(/Set your Chess.com username/i)).toBeInTheDocument();
+    // The shared connect state, same as every other account-dependent page.
+    expect(
+      await screen.findByRole('heading', { level: 2, name: /connect your chess\.com account/i })
+    ).toBeInTheDocument();
+    expect(screen.getByText(/generated out of your own games/i)).toBeInTheDocument();
+  });
+
+  it('offers a working route to connect an account, not a dead button', async () => {
+    mockUsername = '';
+
+    render(<Puzzles />);
+
+    // Was a "Set Username" button calling setEditorOpen. That editor lives in
+    // UsernameDisplay, which Layout only mounts once a username exists — so it
+    // did nothing in the one state that rendered it. Home's onboarding is the
+    // only way in, so this must be a real navigation.
+    expect(
+      await screen.findByRole('button', { name: /connect account/i })
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Set Username/i })).not.toBeInTheDocument();
+  });
+
+  it('shows the shared connect state, not a disabled training console', async () => {
+    // Every other account-dependent page swaps to ConnectAccountEmpty in place.
+    // Puzzles used to render its whole console with every control dead and an
+    // inline sentence explaining why.
+    mockUsername = '';
+
+    render(<Puzzles />);
+
+    expect(
+      await screen.findByRole('heading', { level: 2, name: /connect your chess\.com account/i })
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Start Session' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Generate New/i })).not.toBeInTheDocument();
+  });
+
+  it('does not stack a second connect control on the error card', async () => {
+    // Reachable only by a narrow path: generate with an account, hit an error,
+    // then clear the account. The error card used to add its own "Connect
+    // account" button — a second control to the same place, worded differently,
+    // beside the one the page already offers.
+    mockUsername = 'testplayer';
+    mockGetUserStatus.mockResolvedValue({
+      games_count: 50,
+      puzzles_count: 20,
+      due_count: 5,
+      has_new_games: true,
     });
+    vi.mocked(generatePuzzles).mockRejectedValue(new Error('generation blew up'));
+
+    const { rerender } = render(<Puzzles />);
+
+    const generate = await screen.findByRole('button', { name: /Generate New/i });
+    await waitFor(() => expect(generate).toBeEnabled());
+    generate.click();
+
+    // JobStatusCard is stubbed to null in this suite, so the error text itself
+    // never renders — the card's own Retry button is the observable signal.
+    await screen.findByRole('button', { name: 'Retry' });
+
+    // Now the account goes away underneath the error state.
+    mockUsername = '';
+    rerender(<Puzzles />);
+
+    // Exactly one way to connect, singular on purpose so a second reappearing
+    // fails here.
+    expect(
+      await screen.findAllByRole('button', { name: /connect account/i })
+    ).toHaveLength(1);
+    expect(screen.queryByRole('button', { name: /Set Username/i })).not.toBeInTheDocument();
+  });
+
+  it('states the connect message once, not twice', async () => {
+    mockUsername = '';
+
+    render(<Puzzles />);
+
+    await screen.findByRole('button', { name: /connect account/i });
+
+    // Exactly one heading, not the old panel message stacked beside a
+    // near-identical disabled-control explanation. The description repeating
+    // the phrase is the house pattern — every page's copy ends that way — so
+    // the contract is on the heading, not on raw text occurrences.
+    expect(
+      screen.getAllByRole('heading', { name: /connect your chess\.com account/i })
+    ).toHaveLength(1);
+    expect(screen.queryByText(/Set your username first/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/to start training\./i)).not.toBeInTheDocument();
   });
 
   it('should render page heading', async () => {

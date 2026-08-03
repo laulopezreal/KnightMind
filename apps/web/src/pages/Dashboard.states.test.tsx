@@ -20,6 +20,7 @@ const mockGetTrickyPuzzles = vi.fn();
 const mockGetRecentSessions = vi.fn();
 const mockGetMotifPerformance = vi.fn();
 const mockGetUserStatus = vi.fn();
+const mockGetTodaysFocus = vi.fn();
 const mockGetRatingExplain = vi.fn();
 
 vi.mock('../api/users', () => ({
@@ -27,6 +28,7 @@ vi.mock('../api/users', () => ({
     getTrickyPuzzles: (...a: unknown[]) => mockGetTrickyPuzzles(...a),
     getMotifPerformance: (...a: unknown[]) => mockGetMotifPerformance(...a),
     getUserStatus: (...a: unknown[]) => mockGetUserStatus(...a),
+    getTodaysFocus: (...a: unknown[]) => mockGetTodaysFocus(...a),
 }));
 vi.mock('../api/ratings', () => ({
     getRatingExplain: (...a: unknown[]) => mockGetRatingExplain(...a),
@@ -37,8 +39,8 @@ vi.mock('../api/sessions', () => ({
 
 vi.mock('../components/HeroTrainCard', () => ({ HeroTrainCard: () => <div data-testid="hero-card" /> }));
 vi.mock('../components/RecentlyTrickyCard', () => ({ RecentlyTrickyCard: () => <div /> }));
-vi.mock('../components/MomentumCard', () => ({ MomentumCard: () => <div /> }));
-vi.mock('../components/StreakCard', () => ({ StreakCard: () => <div /> }));
+vi.mock('../components/MomentumCard', () => ({ MomentumCard: () => <div data-testid="momentum-card" /> }));
+vi.mock('../components/StreakCard', () => ({ StreakCard: () => <div data-testid="streak-card" /> }));
 vi.mock('../components/RecentSessionsCard', () => ({ RecentSessionsCard: () => <div /> }));
 vi.mock('../components/WeakestMotifCard', () => ({ WeakestMotifCard: () => <div data-testid="weakest-card" /> }));
 vi.mock('../components/RatingDeltaCard', () => ({ RatingDeltaCard: () => <div data-testid="rating-card" /> }));
@@ -48,7 +50,13 @@ const SUMMARY = {
     needs_warmup: false,
     days_since_last_session: 0,
     total_sessions: 3,
-    recent_form: [],
+    recent_form: {
+        last_20_results: [],
+        accuracy: 0,
+        trend: 'steady' as const,
+        sample_size: 0,
+        insufficient_data: true,
+    },
     training_streak_days: 0,
     last_session_at: null,
 };
@@ -67,6 +75,9 @@ describe('Dashboard data states', () => {
         // the core-dashboard assertions below.
         mockGetMotifPerformance.mockResolvedValue({ motifs: [], weakest_motifs: [], total_motifs_practiced: 0 });
         mockGetUserStatus.mockResolvedValue({ has_new_games: false });
+        mockGetTodaysFocus.mockResolvedValue({
+            username: 'alice', focus: null, below_threshold: 0, pending: 0,
+        });
         mockGetRatingExplain.mockResolvedValue({ rating: { net_change: null, start: null, end: null }, stats: { games: 0 }, confidence: 'low' });
     });
     afterEach(() => setOnline(true));
@@ -83,6 +94,40 @@ describe('Dashboard data states', () => {
         // accessible name — assert both the region and its announcement.
         const status = screen.getByRole('status');
         expect(status).toHaveTextContent(/loading dashboard/i);
+    });
+
+    // Every state must keep the page's level-one heading. The states used to be
+    // early-returned in place of the whole page, which took the <h1> with them:
+    // axe flagged `page-has-heading-one`, and a screen-reader user navigating by
+    // headings could not tell which page had failed. getByRole is the right probe
+    // here — it ignores aria-hidden subtrees, so a skeleton placeholder block
+    // can't satisfy it, only a real heading outside the aria-hidden wrapper.
+    it('keeps the page h1 while loading', () => {
+        mockGetDashboardSummary.mockReturnValue(new Promise(() => {}));
+
+        render(<Dashboard />);
+
+        expect(screen.getByRole('heading', { level: 1, name: 'Dashboard' })).toBeInTheDocument();
+    });
+
+    it('keeps the page h1 in the error state', async () => {
+        setOnline(true);
+        mockGetDashboardSummary.mockRejectedValue(new Error('Boom'));
+
+        render(<Dashboard />);
+
+        await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Boom'));
+        expect(screen.getByRole('heading', { level: 1, name: 'Dashboard' })).toBeInTheDocument();
+    });
+
+    it('keeps the page h1 in the offline state', async () => {
+        setOnline(false);
+        mockGetDashboardSummary.mockRejectedValue(new Error('Network request failed'));
+
+        render(<Dashboard />);
+
+        await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/offline/i));
+        expect(screen.getByRole('heading', { level: 1, name: 'Dashboard' })).toBeInTheDocument();
     });
 
     it('omits both improvement tiles for a brand-new user (no games, no motifs)', async () => {
@@ -125,6 +170,9 @@ describe('Dashboard data states', () => {
     it('omits the new-games nudge when there are none', async () => {
         mockGetDashboardSummary.mockResolvedValue(SUMMARY);
         mockGetUserStatus.mockResolvedValue({ has_new_games: false });
+        mockGetTodaysFocus.mockResolvedValue({
+            username: 'alice', focus: null, below_threshold: 0, pending: 0,
+        });
 
         render(<Dashboard />);
 
@@ -164,5 +212,104 @@ describe('Dashboard data states', () => {
 
         expect(screen.queryByRole('alert')).not.toBeInTheDocument();
         expect(screen.getByTestId('hero-card')).toBeInTheDocument();
+    });
+
+    // ── Today's focus (the spec's daily card) ──
+
+    it('shows the focus on the dashboard, where the daily card belongs', async () => {
+        mockGetDashboardSummary.mockReset();
+        mockGetDashboardSummary.mockResolvedValue(SUMMARY);
+        mockGetTodaysFocus.mockResolvedValue({
+            username: 'alice',
+            focus: {
+                cause: 'loose_piece_awareness',
+                name: 'Loose Piece Syndrome',
+                description: 'You skip the loose-piece scan.',
+                mistakes: 9, recent_mistakes: 4, accuracy: 0.4, priority: 12,
+                rationale: '9 diagnosed mistakes.', runner_up: null, trainable_now: 3,
+            },
+            below_threshold: 0, pending: 0,
+        });
+
+        render(<Dashboard />);
+        await waitFor(() => {
+            expect(screen.getByText('Loose Piece Syndrome')).toBeInTheDocument();
+        });
+        // This file's router mock drops `to`, so the anchor carries no href and
+        // has no link role. The destination is asserted in the card's own
+        // tests; here the point is that the count reached the dashboard.
+        expect(screen.getByText(/3 ready/i)).toBeInTheDocument();
+    });
+
+    it('renders no focus card when there is nothing to recommend', async () => {
+        // The dashboard is dense; an empty shell saying "no focus" is noise.
+        mockGetDashboardSummary.mockReset();
+        mockGetDashboardSummary.mockResolvedValue(SUMMARY);
+        render(<Dashboard />);
+        await waitFor(() => expect(mockGetTodaysFocus).toHaveBeenCalled());
+        expect(screen.queryByText(/today’s focus/i)).not.toBeInTheDocument();
+    });
+
+    it('renders the dashboard even when the focus request fails', async () => {
+        // Supplementary data: it must never take the page down with it.
+        mockGetDashboardSummary.mockReset();
+        mockGetDashboardSummary.mockResolvedValue(SUMMARY);
+        mockGetTodaysFocus.mockRejectedValue(new Error('boom'));
+        render(<Dashboard />);
+        await waitFor(() => expect(mockGetDashboardSummary).toHaveBeenCalled());
+        expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
+
+    // ── Empty-state tiles (UX audit finding 2) ──
+
+    // Built from SUMMARY so it carries every field the page needs; only the
+    // has-ever-trained signals differ.
+    const NEVER_TRAINED = { ...SUMMARY };
+
+    it('hides the momentum and streak tiles for a user who has never trained', async () => {
+        // The strip above already hides itself with no data. A tile that can
+        // only say "0%" reads as a score the user has somehow already earned.
+        mockGetDashboardSummary.mockReset();
+        mockGetDashboardSummary.mockResolvedValue({ ...NEVER_TRAINED });
+
+        render(<Dashboard />);
+        await waitFor(() => expect(mockGetDashboardSummary).toHaveBeenCalled());
+
+        expect(screen.queryByTestId('momentum-card')).not.toBeInTheDocument();
+        expect(screen.queryByTestId('streak-card')).not.toBeInTheDocument();
+    });
+
+    it('keeps a genuine zero streak for someone who has trained before', async () => {
+        // A broken streak is real information — hiding it would delete a fact,
+        // not spare the user a meaningless one.
+        mockGetDashboardSummary.mockReset();
+        mockGetDashboardSummary.mockResolvedValue({
+            ...NEVER_TRAINED,
+            training_streak_days: 0,
+            last_session_at: '2026-07-28T10:00:00Z',
+        });
+
+        render(<Dashboard />);
+        await waitFor(() => expect(mockGetDashboardSummary).toHaveBeenCalled());
+        expect(await screen.findByTestId('streak-card')).toBeInTheDocument();
+    });
+
+    it('still shows both tiles once there is data', async () => {
+        mockGetDashboardSummary.mockReset();
+        mockGetDashboardSummary.mockResolvedValue({
+            ...NEVER_TRAINED,
+            training_streak_days: 3,
+            last_session_at: '2026-08-01T10:00:00Z',
+            recent_form: {
+                ...SUMMARY.recent_form,
+                last_20_results: ['pass' as const, 'fail' as const, 'pass' as const],
+                accuracy: 0.67, trend: 'up' as const, sample_size: 3,
+                insufficient_data: false,
+            },
+        });
+
+        render(<Dashboard />);
+        expect(await screen.findByTestId('momentum-card')).toBeInTheDocument();
+        expect(screen.getByTestId('streak-card')).toBeInTheDocument();
     });
 });

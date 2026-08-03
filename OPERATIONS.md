@@ -1,5 +1,5 @@
 ---
-last_edited_at: 2026-07-20T15:03:00+02:00
+last_edited_at: 2026-08-01T19:32:26+02:00
 ---
 # KnightMind Operations
 
@@ -86,6 +86,28 @@ Known live database contents at restoration time:
 - `rating_snapshots`: 2
 - Alembic current/head in live image: `a1b2c3d4e5f6`
 
+## Outbound dependencies
+
+The API makes egress calls to exactly two third parties. Both are best-effort:
+a failure degrades one feature and never takes the API down.
+
+| Host | Used by | On failure |
+| --- | --- | --- |
+| `api.chess.com` | game import, rating snapshots | the import or snapshot fails and is reported to the caller |
+| `explorer.lichess.ovh` | `/openings/baseline` | serves a stale cached row if one exists, else 503; the Openings page simply omits the comparison |
+
+Notes for the lichess explorer:
+
+- **No user data leaves the box.** The request carries a chess position and a
+  rating band. No username, game, or identifier.
+- **Answers are cached in `opening_explorer_cache`**, keyed by position and
+  band and shared across all accounts (the rows are public aggregates, not
+  anyone's data). TTL is 30 days; a stale row is still served when the explorer
+  is unreachable, because these figures move at the speed of millions of games.
+- **Blocking egress to it is a supported configuration.** The Openings page
+  drops the "vs expected" line and stays fully usable.
+- Per-principal rate limit: `RATE_LIMIT_OPENINGS_BASELINE` (default 60/min).
+
 ## Environment file
 
 The production-like Compose env file is:
@@ -162,22 +184,42 @@ Root-cause evidence gathered during the repair:
 - Tailscale table 52 had a broad default route via `tailscale0` and only a `throw 172.20.0.0/16` Docker/LAN exception. It did not exempt KnightMind's `172.18.0.0/16` Docker network.
 - Docker port publishing to `65.108.67.53:80/443` also timed out even though docker-proxy listeners and DNAT rules existed. Host-network Caddy with an explicit `bind {$PUBLIC_IP}` value is the working public-ingress pattern.
 
-Root-level route repair keeps Docker bridge traffic out of the Tailscale exit-node catch-all:
+Root-level route repair keeps Docker bridge traffic out of the Tailscale exit-node catch-all.
+
+First diagnostic order when host/public/tailnet API calls time out but the API container is healthy:
 
 ```bash
-sudo ip route replace throw 172.17.0.0/16 table 52
-sudo ip route replace throw 172.18.0.0/16 table 52
-sudo ip route replace throw 172.19.0.0/16 table 52
-sudo ip route replace throw 172.20.0.0/16 table 52
-sudo ip rule add pref 91 iif km-bridge lookup main
-sudo ip route flush cache
+systemctl status tailscale-docker-route-exceptions.service --no-pager -l
+ip route get 172.18.0.2
+ip route show table 52 | grep 'throw 172.'
+ip rule show | grep 'iif .* lookup main'
 ```
 
-Helper script prepared at:
+The durable helper is:
 
 `/home/lauureal/apps/knightmind/deploy/tailscale-docker-route-exceptions.sh`
 
-Running it without root fails with `RTNETLINK answers: Operation not permitted`; `sudo -n` also fails because this session does not have a sudo credential. After root applies it, verify:
+It dynamically discovers Docker bridge networks and Linux bridge addresses, adds `throw` routes for each local Docker bridge subnet into Tailscale table 52, and adds bridge-to-main-table policy rules for all Docker bridges. It must run as root.
+
+The matching systemd unit template is tracked beside it:
+
+`/home/lauureal/apps/knightmind/deploy/tailscale-docker-route-exceptions.service`
+
+Install once as root:
+
+```bash
+sudo cp /home/lauureal/apps/knightmind/deploy/tailscale-docker-route-exceptions.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now tailscale-docker-route-exceptions.service
+```
+
+Manual one-shot repair is only the fallback if the service is missing or inactive:
+
+```bash
+sudo /home/lauureal/apps/knightmind/deploy/tailscale-docker-route-exceptions.sh
+```
+
+Running it without root fails; `sudo -n` also fails from Hermes when the session does not have a sudo credential. After root applies it, verify:
 
 ```bash
 ip route get 172.18.0.2
@@ -235,6 +277,41 @@ docker logs --tail 80 knightmind-api-1
 docker exec knightmind-db-1 sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "select tablename from pg_tables where schemaname='"'"'public'"'"' order by tablename;"'
 ```
 
+## Enabling AI diagnosis on an existing corpus
+
+`ANTHROPIC_API_KEY` goes in `.env.docker` (mode `0600`, never printed or
+committed). `KNIGHTMIND_AI_DIAGNOSIS` defaults ON, so the key is the only
+required setting; `KNIGHTMIND_AI_DIAGNOSIS=0` is the kill switch.
+
+The container must be recreated — a restart does not re-read the env file:
+
+```bash
+docker compose --env-file .env.docker up -d --force-recreate api
+```
+
+Confirm it arrived without printing it:
+
+```bash
+docker compose --env-file .env.docker exec -T api printenv ANTHROPIC_API_KEY | wc -c
+```
+
+**A key added after the backfill does not enrich what already exists.**
+Staleness is a predicate over data versions (`extraction_version`,
+`rule_version`); setting a key moves neither, so diagnoses produced while the
+key was absent stay rules-only and no ordinary run revisits them. Check the
+backlog and sweep it once:
+
+```bash
+curl -s "$API/users/$USER/diagnosis/pending"          # {"pending":N,"unenriched":M}
+curl -sX POST "$API/users/$USER/diagnose?scope=reenrich"
+```
+
+The sweep respects the same daily caps as any other run
+(`KNIGHTMIND_AI_DAILY_CAP_USER`, default 500) and converges: an enriched row
+records its `model_version` and drops out of the query. Re-running is how a
+rejected response gets retried — that is deliberately a manual decision, since
+a standing rule would re-attempt a persistently-rejected puzzle every day.
+
 ## Unsafe without explicit approval
 
 Do not run these without a fresh DB backup and Lau's explicit approval:
@@ -258,9 +335,14 @@ Some migrations are not freely reversible. Check here before running `alembic do
 
 ## Current open follow-up
 
-No public API ingress repair remains after 2026-07-10. Useful follow-ups are operational hardening, not emergency repair:
+The Tailscale/Docker route regression recurred on 2026-08-01 because table 52 lost the Docker `throw` routes and bridge rules. The unit is now installed, `enabled` and `active` on claw-home, and the route was verified back on `km-bridge`.
 
-1. Persist the Tailscale/Docker route helper as a systemd oneshot that runs after Docker and Tailscale.
+1. **A deploy reverts uncommitted work in the deploy checkout.** `deploy.yaml`
+   runs `git reset --hard origin/main` before building, so any local edit to
+   `deploy/tailscale-docker-route-exceptions.sh` is silently replaced with
+   whatever `main` carries — while the installed unit keeps executing that
+   path. Land script changes in `main` before deploying, or the running fix
+   quietly regresses to an older version.
 2. Decide separately whether to keep or remove the `*.guessme.world -> pixie.porkbun.com` wildcard fallback.
 3. Verify the browser frontend flow against `https://api.guessme.world` after any frontend rebuild or Cloudflare Pages deploy.
 4. If `knightmind.dev` becomes the canonical production domain later, update DNS, Caddy, SEO metadata, and this operations doc together.

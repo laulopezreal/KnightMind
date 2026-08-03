@@ -27,13 +27,13 @@ from typing import Any
 
 # Bump when the serialized tree's shape changes, so old entries cannot be
 # served against new client expectations.
-SCHEME_VERSION = "v2"
+SCHEME_VERSION = "v3"  # v3: key gained the recency window
 
 # Trees are the largest thing held here; a few dozen covers a single user
 # flipping filters plus a handful of concurrent users without unbounded growth.
 DEFAULT_MAX_ENTRIES = 32
 
-CacheKey = tuple[str, str, int, int, str, str]
+CacheKey = tuple[str, str, int, int, int, str, str, str]
 
 
 def make_key(
@@ -43,6 +43,8 @@ def make_key(
     max_ply: int,
     game_count: int,
     latest_game_time: datetime | None,
+    min_games: int = 1,
+    since: str = "all",
 ) -> CacheKey:
     """
     Build a self-invalidating key.
@@ -50,14 +52,24 @@ def make_key(
     `game_count` alone is not enough: re-importing can replace games without
     changing the count. Pairing it with the newest game's timestamp catches
     both growth and replacement.
+
+    `since` is the *resolved cutoff date*, not the requested window, and that
+    distinction is load-bearing. "Last 90 days" names a boundary that moves:
+    an entry built under it is wrong tomorrow, and nothing about the stored
+    games changes to say so. Keying on the date the window resolves to retires
+    yesterday's answer by construction. Date granularity rather than the raw
+    timestamp keeps it to one entry per window per day instead of one per
+    request.
     """
     return (
         SCHEME_VERSION,
         username.strip().lower(),
         max_ply,
+        min_games,
         game_count,
         latest_game_time.isoformat() if latest_game_time else "none",
         color,
+        since,
     )
 
 

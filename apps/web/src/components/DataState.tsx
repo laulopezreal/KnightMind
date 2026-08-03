@@ -60,7 +60,10 @@ interface DataStateErrorProps {
 export function DataStateError({ message, onRetry, retryLabel, ariaLabel, compact = false }: DataStateErrorProps) {
   return (
     <div className={`${compact ? "text-left p-4" : "max-w-md mx-auto mt-24 text-center p-8"} bg-red-500/5 border border-red-500/20 rounded-sm`} role="alert" aria-live="assertive">
-      <p className="text-negative mb-4">{message}</p>
+      {/* break-words: the message can be server text, and one long unbroken
+          token (a URL in an exception string) otherwise paints outside this
+          panel and makes the whole page scroll sideways on a phone. */}
+      <p className="text-negative mb-4 break-words">{message}</p>
       <button
         type="button"
         onClick={onRetry}
@@ -80,10 +83,20 @@ interface DataStateEmptyProps {
   onAction: () => void;
 }
 
+/**
+ * Empty/first-run panel: a title, a line of explanation, and the one action
+ * that fills the state in.
+ *
+ * The title is an `<h2>` because it *is* the heading for whatever the page is
+ * showing instead of its content — every call site sits directly beneath the
+ * `<h1>` from `PageHeader`, so h2 is the right level and no page skips one.
+ * Styled as an h2 it would jump to Cormorant 500, so `km-heading-sans` keeps
+ * the body face; see the note on that class in `index.css`.
+ */
 export function DataStateEmpty({ title, description, actionLabel, onAction }: DataStateEmptyProps) {
   return (
     <div className="bg-primary/5 border border-primary/10 rounded-sm p-10 text-center">
-      <p className="text-primary/70 font-sans text-lg mb-3">{title}</p>
+      <h2 className="text-primary/70 km-heading-sans text-lg mb-3">{title}</h2>
       <p className="text-primary/70 font-sans text-sm mb-6">{description}</p>
       <button
         type="button"
@@ -136,7 +149,7 @@ export function DataStatePartial({
             type="button"
             onClick={onRetry}
             disabled={retryPending}
-            className={`px-4 py-1.5 border border-primary/20 text-primary rounded-sm font-serif text-sm transition-all km-focus-visible ${retryPending ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'}`}
+            className={`px-4 py-1.5 border border-primary/20 text-primary rounded-sm font-serif text-sm transition-all km-focus-visible ${retryPending ? 'km-interactive-disabled' : 'km-interactive'}`}
           >
             {retryPending ? `${retryLabel}…` : retryLabel}
           </button>
@@ -185,7 +198,7 @@ export function DataStateStale({
             type="button"
             onClick={onRefresh}
             disabled={refreshPending}
-            className={`px-4 py-1.5 border border-primary/20 text-primary rounded-sm font-serif text-sm transition-all km-focus-visible ${refreshPending ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'}`}
+            className={`px-4 py-1.5 border border-primary/20 text-primary rounded-sm font-serif text-sm transition-all km-focus-visible ${refreshPending ? 'km-interactive-disabled' : 'km-interactive'}`}
           >
             {refreshPending ? `${refreshLabel}…` : refreshLabel}
           </button>

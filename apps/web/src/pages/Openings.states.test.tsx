@@ -1,15 +1,16 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, act } from '@testing-library/react';
 import Openings from './Openings';
+import { renderAt } from '../test/router';
 
 // Dim 25: offline affordance + stale-response guard on username change.
 
 let mockUsername = 'alice';
 const mockNavigate = vi.fn();
 
-vi.mock('react-router-dom', () => ({
+vi.mock('react-router-dom', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('react-router-dom')>()),
   useNavigate: () => mockNavigate,
-  Link: ({ children, to, ...rest }: { children: React.ReactNode; to: string; [key: string]: unknown }) => <a href={to} {...rest}>{children}</a>,
 }));
 vi.mock('../context/ChessUsernameContext', () => ({
     useChessUsername: () => ({ username: mockUsername }),
@@ -27,9 +28,15 @@ vi.mock('../components/OpeningGraph', () => ({
     OpeningGraph: () => <div data-testid="opening-graph" />,
 }));
 
+// Matches the wire contract: the root is 'Start' (load-bearing — pathMoves
+// filters on it) and win_rate is a percentage, not a fraction.
 const MOCK_TREE = {
-    move_san: 'start', ply: 0, games_count: 42, wins: 20, draws: 12, losses: 10,
-    win_rate: 0.48, children: [],
+    move_san: 'Start', ply: 0, games_count: 42, wins: 20, draws: 12, losses: 10,
+    win_rate: 48, eco: null, opening_name: null,
+    children: [{
+        move_san: 'e4', ply: 1, games_count: 42, wins: 20, draws: 12, losses: 10,
+        win_rate: 48, eco: null, opening_name: null,
+    }],
 };
 
 function setOnline(value: boolean) {
@@ -47,7 +54,7 @@ describe('Openings data states', () => {
         setOnline(false);
         mockGetOpenings.mockRejectedValue(new Error('Network request failed'));
 
-        render(<Openings />);
+        renderAt(<Openings />);
 
         await waitFor(() => {
             expect(screen.getByRole('alert')).toHaveTextContent(/offline/i);
@@ -56,23 +63,27 @@ describe('Openings data states', () => {
     });
 
     it('ignores a stale response from a superseded username', async () => {
+        // A late *rejection* proves nothing: the page already keeps the tree on
+        // any error and renders it as a polite status, so this passed with the
+        // whole stale-request guard deleted. The real hazard is a late
+        // *resolution* — alice's slow tree landing on top of bob's.
         setOnline(true);
-        let rejectAlice!: (reason?: unknown) => void;
+        let resolveAlice!: (value: unknown) => void;
         mockGetOpenings
-            .mockImplementationOnce(() => new Promise((_, rej) => { rejectAlice = rej; }))
-            .mockResolvedValue(MOCK_TREE);
+            .mockImplementationOnce(() => new Promise((res) => { resolveAlice = res; }))
+            .mockResolvedValue({ ...MOCK_TREE, games_count: 77 });
 
-        const { rerender } = render(<Openings />);
+        const { rerender } = renderAt(<Openings />);
 
         mockUsername = 'bob';
         rerender(<Openings />);
         await waitFor(() => expect(screen.getByTestId('opening-graph')).toBeInTheDocument());
+        await waitFor(() => expect(screen.getByText('77')).toBeInTheDocument());
 
-        // A superseded response failing must not clear the newer tree or show an error.
-        rejectAlice(new Error('alice stale error'));
-        await new Promise((r) => setTimeout(r, 20));
+        // Alice's request finishes last and must not overwrite bob's tree.
+        await act(async () => { resolveAlice({ ...MOCK_TREE, games_count: 11 }); });
 
-        expect(screen.queryByRole('alert')).not.toBeInTheDocument();
-        expect(screen.getByTestId('opening-graph')).toBeInTheDocument();
+        expect(screen.getByText('77')).toBeInTheDocument();
+        expect(screen.queryByText('11')).not.toBeInTheDocument();
     });
 });

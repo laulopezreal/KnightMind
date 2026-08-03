@@ -13,7 +13,7 @@ export default function AuthControl() {
     return (
         <div className="font-sans space-y-1">
             {auth.account?.email && (
-                <p className="text-xs text-primary/60 truncate" title={auth.account.email}>
+                <p className="text-xs text-primary/70 truncate" title={auth.account.email}>
                     {auth.account.email}
                 </p>
             )}

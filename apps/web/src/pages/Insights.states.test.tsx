@@ -18,11 +18,17 @@ vi.mock('../context/ChessUsernameContext', () => ({
 const mockGetMotifPerformance = vi.fn();
 const mockGetMotifTrends = vi.fn();
 const mockGetTrickyPuzzles = vi.fn();
+const mockGetMistakeCauses = vi.fn();
+const mockGetTodaysFocus = vi.fn();
+const mockGetMistakePatterns = vi.fn();
 
 vi.mock('../api/users', () => ({
     getMotifPerformance: (...a: unknown[]) => mockGetMotifPerformance(...a),
     getMotifTrends: (...a: unknown[]) => mockGetMotifTrends(...a),
     getTrickyPuzzles: (...a: unknown[]) => mockGetTrickyPuzzles(...a),
+    getMistakeCauses: (...a: unknown[]) => mockGetMistakeCauses(...a),
+    getTodaysFocus: (...a: unknown[]) => mockGetTodaysFocus(...a),
+    getMistakePatterns: (...a: unknown[]) => mockGetMistakePatterns(...a),
 }));
 
 vi.mock('../components/TacticalRadar', () => ({
@@ -40,6 +46,20 @@ describe('Insights data states', () => {
         vi.clearAllMocks();
         mockUsername = 'alice';
         mockGetTrickyPuzzles.mockResolvedValue({ puzzles: [], total_count: 0 });
+        mockGetMistakeCauses.mockResolvedValue({
+      username: 'testuser',
+      causes: [],
+      total_diagnosed: 0,
+      pending: 0,
+      min_for_ranking: 4,
+    });
+        mockGetTodaysFocus.mockResolvedValue({
+            username: 'testuser',
+            focus: null,
+            below_threshold: 0,
+            pending: 0,
+        });
+    mockGetMistakePatterns.mockResolvedValue({ username: 'testuser', patterns: [], below_threshold: 0, pending: 0 });
     });
     afterEach(() => setOnline(true));
 
@@ -54,6 +74,29 @@ describe('Insights data states', () => {
             expect(screen.getByRole('alert')).toHaveTextContent(/offline/i);
         });
         expect(screen.queryByText('Network request failed')).not.toBeInTheDocument();
+    });
+
+    // The header now comes from a single InsightsShell wrapping every branch.
+    // These pin that: re-inlining a header into one branch (and dropping it from
+    // another) is exactly how this page grew a duplicate in the first place.
+    it('keeps the page h1 while loading', () => {
+        mockGetMotifPerformance.mockReturnValue(new Promise(() => {}));
+        mockGetMotifTrends.mockReturnValue(new Promise(() => {}));
+
+        render(<Insights />);
+
+        expect(screen.getByRole('heading', { level: 1, name: 'Insights' })).toBeInTheDocument();
+    });
+
+    it('keeps the page h1 in the error state', async () => {
+        setOnline(true);
+        mockGetMotifPerformance.mockRejectedValue(new Error('Boom 500'));
+        mockGetMotifTrends.mockRejectedValue(new Error('Boom 500'));
+
+        render(<Insights />);
+
+        await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Boom 500'));
+        expect(screen.getByRole('heading', { level: 1, name: 'Insights' })).toBeInTheDocument();
     });
 
     it('ignores a stale error from a superseded username', async () => {

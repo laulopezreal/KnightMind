@@ -294,6 +294,11 @@ class PuzzleDiagnosis(Base):
     # Needs an ECO mapping that does not exist yet; NULL until then rather than
     # guessed at.
     opening_family: Mapped[str | None] = mapped_column(String, nullable=True)
+    # The full line and its ECO code, beside the family. All three are derived
+    # from one classification pass, so they cannot disagree about which opening
+    # the game played.
+    opening_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    opening_eco: Mapped[str | None] = mapped_column(String, nullable=True)
 
     # The citable facts (id/label/value), i.e. exactly what the UI renders and
     # what an AI citation is validated against. The full packet is not stored:
@@ -646,3 +651,30 @@ class Puzzle(Base):
         DateTime, default=lambda: datetime.now(timezone.utc)
     )
     source_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class OpeningExplorerCache(Base):
+    """Opening-explorer aggregates for one position and rating band.
+
+    Shared across users and not derived from anyone's games: the row is a fact
+    about a position in a public database, so one user's lookup answers
+    everyone else's. That is the point — it keeps a page that shows a baseline
+    on every selection from making an outbound call per selection.
+
+    ``key`` folds in the scheme version, speeds and rating band (see
+    ``explorer.cache_key``), so a change to what we ask for cannot read back
+    rows that answered a different question.
+    """
+
+    __tablename__ = "opening_explorer_cache"
+    __table_args__ = {"extend_existing": True}
+
+    key: Mapped[str] = mapped_column(String, primary_key=True)
+    # Stored beside the key so a row is self-describing when read by hand.
+    epd: Mapped[str] = mapped_column(Text, nullable=False)
+    white: Mapped[int] = mapped_column(Integer, nullable=False)
+    draws: Mapped[int] = mapped_column(Integer, nullable=False)
+    black: Mapped[int] = mapped_column(Integer, nullable=False)
+    fetched_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc), nullable=False
+    )

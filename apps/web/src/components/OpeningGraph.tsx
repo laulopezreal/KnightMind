@@ -46,6 +46,11 @@ export interface OpeningGraphHandle {
   fitToView: () => void;
   zoomIn: () => void;
   zoomOut: () => void;
+  /**
+   * Open every ancestor of a move sequence, mark it as the graph's selection
+   * and bring it into view. Returns false when the line is not in this tree.
+   */
+  revealPath: (moves: string[]) => boolean;
 }
 
 /** Extended hierarchy node with collapsible _children storage and a stable key */
@@ -192,6 +197,7 @@ export function OpeningGraph({ data, onNodeHover, onNodeHoverEnd, onNodeSelect, 
   const gRef = useRef<SVGGElement>(null);
   const zoomBehaviorRef = useRef<d3.ZoomBehavior<SVGSVGElement, unknown> | null>(null);
   const fitRef = useRef<(animate?: boolean) => void>(() => {});
+  const revealRef = useRef<(moves: string[]) => boolean>(() => false);
   const callbacksRef = useRef({ onNodeHover, onNodeHoverEnd, onNodeSelect, onError });
   callbacksRef.current = { onNodeHover, onNodeHoverEnd, onNodeSelect, onError };
 
@@ -203,6 +209,20 @@ export function OpeningGraph({ data, onNodeHover, onNodeHoverEnd, onNodeSelect, 
   const focusedKeyRef = useRef<string | null>(null);
   /** True once the user has zoomed or panned by hand, rather than us fitting. */
   const userAdjustedRef = useRef(false);
+  /** True while one of our own fits is being applied.
+   *
+   *  d3-zoom keeps a gesture alive on the element for 150ms after the last
+   *  wheel notch, and reuses it for any transform applied in that window —
+   *  including ours, which then arrives carrying the wheel's `sourceEvent`.
+   *  Read literally that says "the user chose this view", so clicking Fit
+   *  straight after wheel-zooming re-set the flag it had just cleared and
+   *  resize-refitting stayed dead for the rest of the mount. */
+  const applyingFitRef = useRef(false);
+  /** True once a tree has been built here, so a rebuild is told apart from a
+   *  first build. Inferring it from the expanded-key set was wrong: collapsing
+   *  the last open node empties the set, and the next refresh then re-expanded
+   *  and refitted as though the component had just mounted. */
+  const hasBuiltRef = useRef(false);
 
   useImperativeHandle(graphRef, () => ({
     // Actually fits the visible tree to the panel. This used to reset the zoom
@@ -218,14 +238,19 @@ export function OpeningGraph({ data, onNodeHover, onNodeHoverEnd, onNodeSelect, 
       const svgEl = svgRef.current;
       const zoom = zoomBehaviorRef.current;
       if (!svgEl || !zoom) return;
+      // d3 reports sourceEvent: null for a programmatic transform, so the zoom
+      // handler cannot tell this from our own fit — mark it here instead.
+      userAdjustedRef.current = true;
       d3.select(svgEl).transition().duration(300).call(zoom.scaleBy as never, 1.3);
     },
     zoomOut: () => {
       const svgEl = svgRef.current;
       const zoom = zoomBehaviorRef.current;
       if (!svgEl || !zoom) return;
+      userAdjustedRef.current = true;
       d3.select(svgEl).transition().duration(300).call(zoom.scaleBy as never, 0.7);
     },
+    revealPath: (moves: string[]) => revealRef.current(moves),
   }), []);
 
   useEffect(() => {
@@ -250,7 +275,7 @@ export function OpeningGraph({ data, onNodeHover, onNodeHoverEnd, onNodeSelect, 
       // first build, auto-collapse decides what is open and we record it; on a
       // rebuild the recorded set is authoritative, so the user's expanded lines
       // survive instead of snapping back to the default three plies.
-      const isRebuild = expandedKeysRef.current.size > 0;
+      const isRebuild = hasBuiltRef.current;
       if (isRebuild) {
         applyExpansion(root, expandedKeysRef.current);
       } else {
@@ -259,6 +284,7 @@ export function OpeningGraph({ data, onNodeHover, onNodeHoverEnd, onNodeSelect, 
         }
         collectExpanded(root, expandedKeysRef.current);
       }
+      hasBuiltRef.current = true;
 
       // `role="presentation"` on the plumbing groups. A tree's owned elements
       // are supposed to be treeitems (or groups of them), and three plain <g>
@@ -612,10 +638,51 @@ export function OpeningGraph({ data, onNodeHover, onNodeHoverEnd, onNodeSelect, 
         const transform = d3.zoomIdentity.translate(tx, ty).scale(k);
 
         const target = d3.select(svgEl!);
-        (animate && !reducedMotion ? target.transition().duration(500) : target)
-          .call(zoom.transform as never, transform);
+        applyingFitRef.current = true;
+        if (animate && !reducedMotion) {
+          // Cleared on interrupt as well as end, so a real gesture during the
+          // animation resumes marking the view as the user's from that point.
+          target.transition().duration(500)
+            .call(zoom.transform as never, transform)
+            .on('end interrupt', () => { applyingFitRef.current = false; });
+        } else {
+          target.call(zoom.transform as never, transform);
+          applyingFitRef.current = false;
+        }
       }
       fitRef.current = fit;
+
+      /**
+       * Open a line and make it the graph's current node.
+       *
+       * Does not report a selection: this runs *because* the page's selection
+       * changed (a link opened, or Back pressed), so calling back would only
+       * echo. Nor does it move DOM focus — that would scroll the page out from
+       * under someone who opened a link to read it. The node still becomes the
+       * tab stop, so Tab lands on the line the link was about.
+       */
+      function reveal(moves: string[]): boolean {
+        let node = root;
+        for (const san of moves) {
+          const children = (node.children ?? node._children ?? []) as CollapsibleNode[];
+          const next = children.find(child => child.data.move_san === san);
+          if (!next) return false;
+          if (node._children) {
+            node.children = node._children;
+            node._children = undefined;
+          }
+          if (node.key) expandedKeysRef.current.add(node.key);
+          node = next;
+        }
+        focusedKey = node.key ?? null;
+        focusedKeyRef.current = focusedKey;
+        update(node);
+        // A line the viewer cannot see is a link that failed to do its job:
+        // the branch is open now, so refit to bring it on screen.
+        fit(true);
+        return true;
+      }
+      revealRef.current = reveal;
 
       const zoomBehavior = d3.zoom<SVGSVGElement, unknown>()
         .scaleExtent(LAYOUT.zoomExtent)
@@ -648,7 +715,7 @@ export function OpeningGraph({ data, onNodeHover, onNodeHoverEnd, onNodeSelect, 
           // `sourceEvent` is null for programmatic transforms (our own fit) and
           // set for real gestures, which is what distinguishes "the user chose
           // this view" from "we placed it".
-          if (event.sourceEvent) userAdjustedRef.current = true;
+          if (event.sourceEvent && !applyingFitRef.current) userAdjustedRef.current = true;
         })
         .on('end', () => d3.select(svgEl).style('cursor', 'grab'));
 
@@ -694,6 +761,7 @@ export function OpeningGraph({ data, onNodeHover, onNodeHoverEnd, onNodeSelect, 
       d3.select(gEl).selectAll('*').remove();
       zoomBehaviorRef.current = null;
       fitRef.current = () => {};
+      revealRef.current = () => false;
     };
   }, [data]);
 

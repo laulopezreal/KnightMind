@@ -2,6 +2,8 @@ import { LOCALE } from '../utils/locale';
 import { useEffect, useRef, useState } from 'react';
 import { Link, useSearchParams, useNavigate } from 'react-router-dom';
 import { AccessibleChessboard } from '../components/AccessibleChessboard';
+import { PageHeader } from '../components/PageHeader';
+import { ConnectAccountEmpty } from '../components/ConnectAccountEmpty';
 import { Chess } from 'chess.js';
 import { generatePuzzles, getDailyPuzzles, cancelJob, checkPuzzle, revealPuzzle, ApiError } from '../api';
 import { JobStatusCard } from '../components/JobStatusCard';
@@ -36,7 +38,7 @@ const motifRankStyle = (rank: string) =>
     MOTIF_RANK_STYLE[rank as keyof typeof MOTIF_RANK_STYLE] ?? MOTIF_RANK_STYLE.needs_work;
 
 export default function Puzzles() {
-    const { username, setEditorOpen } = useChessUsername();
+    const { username } = useChessUsername();
     const { sessionType, targetAccuracy, setTargetAccuracy, targetTimeMinutes, setTargetTimeMinutes } = usePuzzleMode();
     const navigate = useNavigate();
     const [userMove, setUserMove] = useState('');
@@ -72,6 +74,11 @@ export default function Puzzles() {
     // Get motif filter and warmup mode from URL query params
     const [searchParams] = useSearchParams();
     const motifFilter = searchParams.get('motif');
+    // A bias rather than a filter, so — unlike motif — it never leaves the user
+    // in a dead-end empty session and needs no escape hatch.
+    const focusCause = searchParams.get('focus_cause');
+    const focusOpening = searchParams.get('focus_opening');
+    const focusOpeningScope = searchParams.get('focus_opening_scope');
     const isWarmupMode = searchParams.get('warmup') === 'true';
 
     // Warmup state
@@ -128,6 +135,9 @@ export default function Puzzles() {
         targetTimeMinutes,
         warmupMode,
         motifFilter,
+        focusCause,
+        focusOpening,
+        focusOpeningScope,
         userStatus,
         timer,
         checkAchievements,
@@ -209,11 +219,12 @@ export default function Puzzles() {
     const generateNewDisabled = !controlsEnabled || isLoading || isGenerating || !userStatus?.has_new_games;
     const { selectedModeLabel, screenReaderModeLabel } = getModeLabels(sessionType);
     const modeAvailabilityLabel = sessionType === 'standard' ? 'Active' : 'Beta';
-    const startSessionDisabledReason = !username
-        ? 'Set your username first to start training.'
+    // No `!username` arm: the page returns ConnectAccountEmpty above, so these
+    // reasons are only ever read by a signed-in user.
+    const startSessionDisabledReason =
         // A session is running (the Start button is hidden), so there is nothing
         // "loading or generating" to wait on — don't show a start reason at all.
-        : activeSessionId
+        activeSessionId
             ? null
             : controlsDisabled
                 ? 'Please wait for the current task to finish.'
@@ -226,9 +237,7 @@ export default function Puzzles() {
                         : sessionType !== 'standard'
                             ? 'Only Standard mode can start sessions for now. Switch mode in the sidebar.'
                             : null;
-    const generateDisabledReason = !username
-        ? 'Set your username first to generate puzzles.'
-        : isGenerating
+    const generateDisabledReason = isGenerating
             ? 'Puzzle generation is already in progress.'
             : activeSessionId
                 ? 'Finish your current session before generating new puzzles.'
@@ -684,8 +693,45 @@ export default function Puzzles() {
         }
     };
 
+    // formatMotifName, not the raw query param: the Dashboard link that sends
+    // users here already says "Back rank mate", so printing "back_rank_mate"
+    // made the two screens disagree mid-flow. Hoisted to a const so the visible
+    // heading and its sr-only counterpart below can never drift apart.
+    const pageTitle = motifFilter ? `${formatMotifName(motifFilter)} Puzzles` : 'Daily Puzzles';
+
+    // Every other account-dependent page (Dashboard, Library, Insights, Rating
+    // Insights, Openings) swaps to this in place rather than rendering its
+    // controls disabled. Puzzles was the exception: a full training console with
+    // every button dead and an inline sentence explaining why. Same state, same
+    // answer — and it puts the one working way in (Home's onboarding) behind a
+    // real button instead of an inline link.
+    if (!username) {
+        return (
+            <div className="flex flex-col gap-12 animate-teedin">
+                <PageHeader
+                    title={pageTitle}
+                    subtitle="Puzzles built from your own blunders, scheduled so they come back before you forget them."
+                />
+                <ConnectAccountEmpty description="Training sessions are drawn from puzzles generated out of your own games. Connect your Chess.com account to start building them." />
+            </div>
+        );
+    }
+
     return (
         <div className="flex flex-col gap-12 animate-teedin pb-20 md:pb-0">
+            {/* In-session below `lg` the header block collapses to give the board
+                room — and it took the page's only <h1> with it, leaving mobile
+                users mid-session on a page with no level-one heading (axe:
+                page-has-heading-one; the outline started at the sr-only h2).
+                This copy carries the heading at those widths and `lg:hidden`
+                yields to the visible one above `lg`, so exactly one h1 is ever
+                exposed. `sr-only` is absolutely positioned, so it adds no
+                `gap-12` row. Caveat for tests: both are in the DOM at once
+                in-session, and jsdom applies no breakpoints — query headings by
+                text, not a bare getByRole('heading', { level: 1 }). */}
+            {activeSessionId && currentPuzzle && (
+                <h1 className="sr-only lg:hidden">{pageTitle}</h1>
+            )}
             <section className={activeSessionId && currentPuzzle ? 'hidden lg:block' : ''}>
                 <Link to="/dashboard" className="text-primary/70 hover:text-primary mb-4 inline-block font-sans text-sm tracking-widest uppercase transition-colors">
                     ← Back to Dashboard
@@ -693,11 +739,7 @@ export default function Puzzles() {
                 <div className="flex justify-between items-end">
                     <div>
                         <h1 className="text-4xl md:text-5xl font-serif text-primary mb-2">
-                            {/* formatMotifName, not the raw query param: the
-                                Dashboard link that sends users here already says
-                                "Back rank mate", so printing "back_rank_mate"
-                                made the two screens disagree mid-flow. */}
-                            {motifFilter ? `${formatMotifName(motifFilter)} Puzzles` : 'Daily Puzzles'}
+                            {pageTitle}
                         </h1>
                         <div className={`${activeSessionId && currentPuzzle ? 'hidden lg:flex' : 'flex'} items-center gap-2 mb-3`}>
                             <span className="text-xs font-sans uppercase tracking-wider px-2 py-1 rounded-sm border border-primary/20 bg-primary/5 text-primary/80">
@@ -736,22 +778,12 @@ export default function Puzzles() {
                 {/* Top row: Username and buttons */}
                 <div className="flex flex-col md:flex-row gap-6 items-end">
                     <div className="flex-1 relative min-w-[300px]">
-                        {!username ? (
-                            <div className="h-full flex items-center">
-                                <span className="text-primary/70 font-sans mr-2">Set your Chess.com username to continue.</span>
-                                <button
-                                    type="button"
-                                    onClick={() => setEditorOpen(true)}
-                                    className="km-interactive km-focus-visible km-inline-link text-primary"
-                                >
-                                    Set Username
-                                </button>
-                            </div>
-                        ) : (
-                            <div className="text-xl font-serif text-primary py-2 border-b border-primary/20">
-                                {username}
-                            </div>
-                        )}
+                        {/* No empty branch: the page returns ConnectAccountEmpty
+                            above when there is no username, so this only ever
+                            renders for a signed-in user. */}
+                        <div className="text-xl font-serif text-primary py-2 border-b border-primary/20">
+                            {username}
+                        </div>
                     </div>
                     <div className="flex gap-4 flex-wrap">
                         {!activeSessionId && (
@@ -760,7 +792,7 @@ export default function Puzzles() {
                                 onClick={handleStartSession}
                                 disabled={controlsDisabled || !userStatus || userStatus.puzzles_count === 0 || userStatus.due_count === 0 || sessionType !== 'standard'}
                                 title={startSessionDisabledReason ?? 'Start a new training session'}
-                                className={`px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-opacity km-focus-visible ${(controlsDisabled || !userStatus || userStatus.puzzles_count === 0 || userStatus.due_count === 0 || sessionType !== 'standard') ? 'km-interactive-disabled disabled:opacity-50' : 'hover:opacity-90 cursor-pointer'}`}>
+                                className={`px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-opacity km-focus-visible ${(controlsDisabled || !userStatus || userStatus.puzzles_count === 0 || userStatus.due_count === 0 || sessionType !== 'standard') ? 'km-interactive-disabled' : 'hover:opacity-90 cursor-pointer'}`}>
                                 Start Session
                             </button>
                         )}
@@ -769,13 +801,18 @@ export default function Puzzles() {
                             onClick={handleGeneratePuzzles}
                             disabled={generateNewDisabled}
                             title={generateDisabledReason ?? 'Generate puzzles from new games'}
-                            className={`px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-colors km-focus-visible ${generateNewDisabled ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'}`}>
+                            className={`px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-colors km-focus-visible ${generateNewDisabled ? 'km-interactive-disabled' : 'km-interactive'}`}>
                             {generateButtonLabel}
                         </button>
                     </div>
                 </div>
 
-                {(startSessionDisabledReason || generateDisabledReason) && (
+                {/* Suppressed without an account: both reasons are the connect
+                    message, which the panel beside the buttons already states —
+                    and states with a working link. Two near-identical sentences
+                    stacked read as a rendering bug. The reasons still reach the
+                    buttons' own title tooltips. */}
+                {username && (startSessionDisabledReason || generateDisabledReason) && (
                     <p className="text-sm text-primary/70 font-sans" role="status" aria-live="polite">
                         {startSessionDisabledReason ?? generateDisabledReason}
                     </p>
@@ -876,7 +913,7 @@ export default function Puzzles() {
                                         type="button"
                                         onClick={handleGeneratePuzzles}
                                         disabled={controlsDisabled}
-                                        className={`px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-colors km-focus-visible ${controlsDisabled ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'}`}
+                                        className={`px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-colors km-focus-visible ${controlsDisabled ? 'km-interactive-disabled' : 'km-interactive'}`}
                                     >
                                         Generate Puzzles
                                     </button>
@@ -894,7 +931,7 @@ export default function Puzzles() {
                                             type="button"
                                             onClick={handleGeneratePuzzles}
                                             disabled={controlsDisabled}
-                                            className={`px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-colors km-focus-visible ${controlsDisabled ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'}`}
+                                            className={`px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-colors km-focus-visible ${controlsDisabled ? 'km-interactive-disabled' : 'km-interactive'}`}
                                         >
                                             Generate from New Games
                                         </button>
@@ -916,8 +953,8 @@ export default function Puzzles() {
                         "Ready to train — click Start Session", which was a dead
                         instruction (every control above is disabled without a
                         username). The fix is not a second card: the panel above
-                        already states the problem AND offers "Set Username", so
-                        anything here is a duplicate of the control beside it. */}
+                        already states the problem AND links to Home to fix it,
+                        so anything here is a duplicate of the control beside it. */}
                     {statusLoadFailed && (
                         <div className="bg-negative-soft border border-negative-soft rounded-sm p-6 text-center space-y-4" role="alert" aria-live="assertive">
                             <h3 className="font-serif text-xl text-primary">Couldn&apos;t load your training data</h3>
@@ -928,7 +965,7 @@ export default function Puzzles() {
                                 type="button"
                                 onClick={handleRefreshInsights}
                                 disabled={isRefreshingInsights}
-                                className={`px-6 py-2 border border-primary/20 text-primary rounded-sm font-serif transition-all km-focus-visible ${isRefreshingInsights ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'}`}
+                                className={`px-6 py-2 border border-primary/20 text-primary rounded-sm font-serif transition-all km-focus-visible ${isRefreshingInsights ? 'km-interactive-disabled' : 'km-interactive'}`}
                             >
                                 {isRefreshingInsights ? 'Retrying...' : 'Retry'}
                             </button>
@@ -942,7 +979,7 @@ export default function Puzzles() {
                                     type="button"
                                     onClick={handleStartSession}
                                     disabled={!canRetryLoad}
-                                    className={`px-6 py-2 border border-primary/20 text-primary rounded-sm font-serif transition-all km-focus-visible ${!canRetryLoad ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'}`}
+                                    className={`px-6 py-2 border border-primary/20 text-primary rounded-sm font-serif transition-all km-focus-visible ${!canRetryLoad ? 'km-interactive-disabled' : 'km-interactive'}`}
                                 >
                                     Retry
                                 </button>
@@ -951,20 +988,17 @@ export default function Puzzles() {
                                         type="button"
                                         onClick={handleGeneratePuzzles}
                                         disabled={!canRetryLoad}
-                                        className={`px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-colors km-focus-visible ${!canRetryLoad ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'}`}
+                                        className={`px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-colors km-focus-visible ${!canRetryLoad ? 'km-interactive-disabled' : 'km-interactive'}`}
                                     >
                                         Generate New
                                     </button>
                                 )}
-                                {!username && (
-                                    <button
-                                        type="button"
-                                        onClick={() => setEditorOpen(true)}
-                                        className="px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-colors km-interactive km-focus-visible"
-                                    >
-                                        Set Username
-                                    </button>
-                                )}
+                                {/* No connect control here. The panel above is
+                                    rendered whenever there is no username and
+                                    already offers one — a second link to the
+                                    same place, worded differently, reads as two
+                                    different actions. Same reasoning as the
+                                    absent no-username card below. */}
                             </div>
                         </div>
                     )}
@@ -993,7 +1027,7 @@ export default function Puzzles() {
                                 type="button"
                                 onClick={handleRefreshInsights}
                                 disabled={isRefreshingInsights}
-                                className={`px-6 py-2 border border-primary/20 text-primary rounded-sm font-serif transition-all km-focus-visible ${isRefreshingInsights ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'}`}
+                                className={`px-6 py-2 border border-primary/20 text-primary rounded-sm font-serif transition-all km-focus-visible ${isRefreshingInsights ? 'km-interactive-disabled' : 'km-interactive'}`}
                             >
                                 {isRefreshingInsights ? 'Refreshing...' : 'Refresh Insights'}
                             </button>
@@ -1095,7 +1129,7 @@ export default function Puzzles() {
                             />
                         </div>
                         {/* Compact board-adjacent context: mobile-only, non-interactive meta */}
-                        <div data-testid="mobile-puzzle-context" className="lg:hidden mt-3 flex items-center justify-between text-xs font-sans text-primary/60 px-1">
+                        <div data-testid="mobile-puzzle-context" className="lg:hidden mt-3 flex items-center justify-between text-xs font-sans text-primary/70 px-1">
                             <span className="uppercase tracking-wide">
                                 {currentPuzzle.side_to_move === 'white' ? 'White to move' : 'Black to move'}
                             </span>
@@ -1218,7 +1252,7 @@ export default function Puzzles() {
                                                     aria-controls="session-details-panel"
                                                     aria-label={sessionDetailsA11yCopy.toggleLabel}
                                                     aria-describedby="session-details-helper"
-                                                    className="text-xs font-sans text-primary/70 km-inline-link km-focus-visible"
+                                                    className="text-xs font-sans font-normal text-primary/70 km-inline-link km-focus-visible"
                                                 >
                                                     {showSessionDetails ? 'Hide details' : 'Show details'}
                                                 </button>
@@ -1415,7 +1449,7 @@ export default function Puzzles() {
                                         onClick={handleCheckAnswer}
                                         disabled={!userMove}
                                         aria-label={puzzleActionA11yCopy.checkMoveLabel}
-                                        className={`px-2 py-3 md:px-6 md:py-4 bg-primary text-bg-primary rounded-sm font-serif text-sm md:text-lg transition-all shadow-lg shadow-primary/5 km-focus-visible disabled:opacity-50 ${!userMove ? 'km-interactive-disabled' : 'km-interactive'}`}>
+                                        className={`px-2 py-3 md:px-6 md:py-4 bg-primary text-bg-primary rounded-sm font-serif text-sm md:text-lg transition-all shadow-lg shadow-primary/5 km-focus-visible ${!userMove ? 'km-interactive-disabled' : 'km-interactive'}`}>
                                         Check Move
                                     </button>
                                     <button
@@ -1423,7 +1457,7 @@ export default function Puzzles() {
                                         onClick={handleHint}
                                         disabled={!currentPuzzle || clue.isExhausted}
                                         aria-label={puzzleActionA11yCopy.hintLabel}
-                                        className="px-2 py-3 md:px-6 md:py-4 border border-primary/20 text-primary rounded-sm font-serif text-sm md:text-lg transition-all km-interactive km-focus-visible disabled:opacity-50 disabled:cursor-default">
+                                        className="px-2 py-3 md:px-6 md:py-4 border border-primary/20 text-primary rounded-sm font-serif text-sm md:text-lg transition-all km-interactive km-focus-visible">
                                         {/* Short enough to stay on one line in the
                                             three-up action grid; the full "Hint 1 of 3:
                                             …" phrasing lives in the aria-label. */}

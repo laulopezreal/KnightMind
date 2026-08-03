@@ -111,21 +111,29 @@ export async function request<T>(endpoint: string, options: RequestOptions = {})
             // never surface a raw statusText, an empty string, or a non-string
             // detail (e.g. FastAPI 422 arrays) as the message.
             const backendDetail = typeof errorData.detail === 'string' ? errorData.detail : undefined;
-            // Most backend details are user-actionable and safe to display: 4xx
-            // ("No games found", "User not found") and some deliberate 5xx — e.g.
-            // /openings raises 503 "Re-import games to populate PGN data". The one
-            // detail we suppress here is a bare 500 (explicit HTTPException(500),
-            // whose detail is an opaque "Internal server error: ..." wrapper) —
-            // it blames nothing the user can act on. Show a friendly generic
-            // there, keeping the raw detail in `detail` for logging. Scoped to
-            // 500 (not >= 500) so curated 503s still reach the user.
-            // NOTE: some other 5xx still pass their detail through unchanged
-            // (e.g. /engine/eval 503 surfaces a Stockfish install hint) — those
-            // are pre-existing and out of scope here; friendlying them is a
-            // separate follow-up.
+            // 4xx details are written for the user ("No games found", "User not
+            // found") and pass through unchanged.
+            //
+            // 5xx is where curated and raw text share a status code. A bare 500
+            // is always an opaque wrapper, so it is always genericised. The rest
+            // are mixed: the same 502 that carries "Could not find rating for
+            // rapid in Chess.com response" is also raised as
+            // `HTTPException(502, detail=str(e))` in several places
+            // (services/api/main.py), where `str(e)` is raw Python. One observed
+            // case put the full Chess.com URL and an SSL trace on the page.
+            //
+            // Length is what actually separates the two, so that is the test: a
+            // curated 5xx message is a sentence, a connection-pool dump or stack
+            // trace is not. Anything over the cap is replaced with the friendly
+            // generic and kept in `detail` for the console. This is a blast
+            // radius limiter, not a security boundary — secrets do not belong in
+            // exception text in the first place.
+            const CURATED_DETAIL_MAX = 160;
             const isOpaqueServerError = response.status === 500;
+            const isOversizedServerDetail = response.status > 500
+                && (backendDetail?.length ?? 0) > CURATED_DETAIL_MAX;
             const isServerError = response.status >= 500;
-            const message = (!isOpaqueServerError && backendDetail)
+            const message = (!isOpaqueServerError && !isOversizedServerDetail && backendDetail)
                 ? backendDetail
                 // "on our end" only blames the server for actual 5xx; a detail-less
                 // 4xx (e.g. a bare 400) is a client-side issue, so stay neutral.

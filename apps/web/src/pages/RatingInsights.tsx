@@ -11,6 +11,7 @@ import { ConfidenceBadge } from '../components/ConfidenceBadge';
 import { TimeControlOverview } from '../components/TimeControlOverview';
 import { TC_LABEL, formatSigned } from '../utils/ratings';
 import { DataStateError, DataStateLoading, DataStateOffline, DataStateSkeleton } from '../components/DataState';
+import { ConnectAccountEmpty } from '../components/ConnectAccountEmpty';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
 import { useLatestRequest } from '../hooks/useLatestRequest';
 
@@ -25,7 +26,7 @@ const HIGH_CONFIDENCE_THRESHOLD = 20;
 
 export default function RatingInsights() {
     const navigate = useNavigate();
-    const { username, setEditorOpen } = useChessUsername();
+    const { username } = useChessUsername();
     const [data, setData] = useState<ExplainResponse | null>(null);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -64,6 +65,11 @@ export default function RatingInsights() {
     // History has its own error slot: explain's setError(null) must not be able
     // to swallow a history failure (and vice versa) now that they fetch apart.
     const [historyError, setHistoryError] = useState<string | null>(null);
+    // Named because two places need to agree on it: the skeleton renders on it,
+    // and the sessions loader has to stay quiet while it does, or the two
+    // aria-live regions talk over each other.
+    const showLoadingSkeleton =
+        (loading || sessionsLoading) && !data && !error && !historyError;
     const online = useOnlineStatus();
     // Explain and history fetch independently, so each needs its own
     // stale-response guard — sharing one generation counter would make
@@ -269,16 +275,18 @@ export default function RatingInsights() {
         ? 'up'
         : 'down';
 
+    // No account connected. Was a bespoke block whose "Set Username" button
+    // called setEditorOpen — but that editor lives in UsernameDisplay, which
+    // Layout only mounts once a username exists, so the button did nothing in
+    // the one state that rendered it. Home's onboarding is the way in.
     if (!username) {
         return (
-            <div className="h-full flex flex-col justify-center items-center space-y-4">
-                <p className="text-primary/70 font-sans text-lg">Please set a username to see rating insights.</p>
-                <button
-                    onClick={() => setEditorOpen(true)}
-                    className="text-primary underline hover:text-primary/80 font-medium font-serif text-xl"
-                >
-                    Set Username
-                </button>
+            <div className="space-y-8 animate-teedin">
+                <PageHeader
+                    title="Rating Insights"
+                    subtitle="Connect your Chess.com account to track your rating."
+                />
+                <ConnectAccountEmpty description="Rating insights follow your Chess.com rating over time and explain what moved it. Connect your account to start recording it." />
             </div>
         );
     }
@@ -352,7 +360,7 @@ export default function RatingInsights() {
                                 onClick={() => setWindowSource('session')}
                                 disabled={hasSessions === false}
                                 aria-pressed={windowSource === 'session'}
-                                className={`km-toggle-option km-focus-visible px-3 py-2 text-sm font-sans transition-all rounded-sm ${windowSource === 'session' ? 'km-toggle-selected bg-primary text-bg-primary shadow-sm' : 'text-primary/70'} ${hasSessions === false ? 'km-interactive-disabled' : ''}`}
+                                className={`km-toggle-option km-focus-visible px-3 py-2 text-sm font-sans font-normal transition-all rounded-sm ${windowSource === 'session' ? 'km-toggle-selected bg-primary text-bg-primary shadow-sm' : 'text-primary/70'} ${hasSessions === false ? 'km-interactive-disabled' : ''}`}
                             >
                                 Since Session
                             </button>
@@ -360,7 +368,7 @@ export default function RatingInsights() {
                                 type="button"
                                 onClick={() => setWindowSource('fallback_7d')}
                                 aria-pressed={windowSource === 'fallback_7d'}
-                                className={`km-toggle-option km-focus-visible px-3 py-2 text-sm font-sans transition-all rounded-sm ${windowSource === 'fallback_7d' ? 'km-toggle-selected bg-primary text-bg-primary shadow-sm' : 'text-primary/70'}`}
+                                className={`km-toggle-option km-focus-visible px-3 py-2 text-sm font-sans font-normal transition-all rounded-sm ${windowSource === 'fallback_7d' ? 'km-toggle-selected bg-primary text-bg-primary shadow-sm' : 'text-primary/70'}`}
                             >
                                 Last 7 Days
                             </button>
@@ -379,7 +387,11 @@ export default function RatingInsights() {
                                 </button>
                             </div>
                         )}
-                        {sessionsLoading && (
+                        {/* Suppressed while the main skeleton is up: both carry
+                            role="status" aria-live="polite", so the pair announced
+                            "Loading sessions..." and "Analyzing games..." over each
+                            other. The skeleton already covers this phase. */}
+                        {sessionsLoading && !showLoadingSkeleton && (
                             <div className="ml-1">
                                 <DataStateLoading label="Loading sessions..." compact />
                             </div>
@@ -438,7 +450,7 @@ export default function RatingInsights() {
                 gating on `loading` alone left the main area blank for the whole
                 sessions request on slow connections — visibly broken. Skeletons
                 mirror the loaded layout (metadata line, chart, stat cards). */}
-            {(loading || sessionsLoading) && !data && !error && !historyError && (
+            {showLoadingSkeleton && (
                 <DataStateSkeleton label="Analyzing games..." className="space-y-8">
                     <div className="h-4 w-80 max-w-full bg-primary/5 rounded-sm animate-pulse" />
                     <div className="h-[284px] bg-primary/5 border border-primary/10 rounded-sm animate-pulse" />
@@ -670,7 +682,7 @@ const RatingChart = ({ chartData, trend, source }: { chartData: { label: string;
         aria-label={`Rating over time, ${chartData.length} points from ${chartData[0].rating} to ${chartData[chartData.length - 1].rating}`}
     >
         <div className="flex items-baseline justify-between gap-3 mb-4">
-            <h2 className="text-sm font-sans uppercase tracking-widest text-primary/70">Rating Over Time</h2>
+            <h2 className="text-sm font-sans font-normal uppercase tracking-widest text-primary/70">Rating Over Time</h2>
             <span className="text-[10px] font-sans text-primary/70">
                 {source === 'games'
                     ? 'From your games in this window'

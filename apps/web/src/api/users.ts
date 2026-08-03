@@ -155,3 +155,115 @@ export async function getMotifTrends(username: string, windowDays: number = 30):
 export async function getTrickyPuzzles(username: string, limit: number = 5): Promise<TrickyPuzzlesResponse> {
     return request<TrickyPuzzlesResponse>(`/users/${encodeURIComponent(username)}/puzzles/tricky?limit=${limit}`);
 }
+
+// --- Mistake causes (Insights) ---
+
+export interface MistakeCause {
+    cause: string;
+    label: string;
+    mistakes: number;
+    dominant_phase?: string | null;
+    /** The opening this cause concentrates in, when one genuinely dominates. */
+    dominant_opening?: string | null;
+    verified_attempts: number;
+    verified_puzzles: number;
+    accuracy?: number | null;
+    insufficient_data: boolean;
+    is_unclassified: boolean;
+}
+
+export interface MistakeCausesResponse {
+    username: string;
+    causes: MistakeCause[];
+    total_diagnosed: number;
+    pending: number;
+    min_for_ranking: number;
+}
+
+export async function getMistakeCauses(username: string): Promise<MistakeCausesResponse> {
+    return await request<MistakeCausesResponse>(
+        `/users/${encodeURIComponent(username)}/mistake-causes`
+    );
+}
+
+export interface MistakePattern {
+    cause: string;
+    name: string;
+    description: string;
+    mistakes: number;
+    recent_mistakes: number;
+    dominant_phase?: string | null;
+    accuracy?: number | null;
+    priority: number;
+}
+
+export interface MistakePatternsResponse {
+    username: string;
+    patterns: MistakePattern[];
+    below_threshold: number;
+    pending: number;
+}
+
+export async function getMistakePatterns(
+    username: string
+): Promise<MistakePatternsResponse> {
+    return await request<MistakePatternsResponse>(
+        `/users/${encodeURIComponent(username)}/mistake-patterns`
+    );
+}
+
+// --- Today's focus (training planner) ---
+
+export interface TodaysFocus {
+    cause: string;
+    name: string;
+    description: string;
+    mistakes: number;
+    recent_mistakes: number;
+    accuracy?: number | null;
+    priority: number;
+    /** The numbers the recommendation rests on, so it can be argued with. */
+    rationale: string;
+    runner_up?: string | null;
+    /** Puzzles of this cause trainable right now — not the corpus total. */
+    trainable_now?: number;
+}
+
+export interface TodaysFocusResponse {
+    username: string;
+    /** Null whenever no pattern has recurred enough to recommend. */
+    focus: TodaysFocus | null;
+    below_threshold: number;
+    pending: number;
+}
+
+export async function getTodaysFocus(username: string): Promise<TodaysFocusResponse> {
+    return await request<TodaysFocusResponse>(
+        `/users/${encodeURIComponent(username)}/todays-focus`
+    );
+}
+
+// --- Opening practice (Openings -> Train) ---
+
+export interface OpeningPractice {
+    username: string;
+    opening_name: string;
+    /** Derived server-side from opening_name. Never re-derive it here: a second
+     *  copy of the split rule is how the two ends drift apart. */
+    opening_family: string;
+    line_count: number;
+    family_count: number;
+    /** "line" when the exact line is worth drilling, "family" when only the
+     *  broader family is, "none" when there is nothing to practise. */
+    scope: 'line' | 'family' | 'none';
+}
+
+export async function getOpeningPractice(
+    username: string,
+    openingName: string
+): Promise<OpeningPractice> {
+    const params = new URLSearchParams({ opening_name: openingName });
+    return await request<OpeningPractice>(
+        `/users/${encodeURIComponent(username)}/opening-practice?${params}`
+    );
+}

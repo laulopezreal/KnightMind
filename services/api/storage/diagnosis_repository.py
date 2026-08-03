@@ -8,14 +8,70 @@ no cursor that can drift out of step with what is actually stored.
 """
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import Select, func, or_, select
+from sqlalchemy import Select, case, func, or_, select
 from sqlalchemy.orm import Session
 
+from services.api.analytics_confidence import (
+    MIN_ATTEMPTS_FOR_MOTIF_RANK,
+    MIN_DIAGNOSES_FOR_CAUSE_RANK,
+    MIN_PUZZLES_FOR_CAUSE_ACCURACY,
+)
 from services.api.diagnosis.causes import RULE_VERSION
 from services.api.diagnosis.evidence import EXTRACTION_VERSION
-from services.api.models import DiagnosisStatus, Puzzle, PuzzleDiagnosis, PuzzleStats
+from services.api.models import (
+    DiagnosisStatus,
+    Game,
+    Puzzle,
+    PuzzleDiagnosis,
+    PuzzleResult,
+    PuzzleReview,
+    PuzzleStats,
+)
+
+# How far back a game counts as "recent" for pattern prioritisation. Long
+# enough that a casual player still has a populated window, short enough that a
+# habit fixed six months ago stops being weighted as current.
+RECENT_WINDOW_DAYS = 90
+
+
+@dataclass(frozen=True)
+class CauseStat:
+    """How often one cause explains this user's mistakes, and how they fare on it.
+
+    Two independent numbers, deliberately not merged:
+
+    ``mistakes`` is always trustworthy — every puzzle in the corpus is a real
+    blunder from a real game, so this is a direct count, not a sample.
+
+    ``accuracy`` is a proportion over *server-verified* training attempts only,
+    and is None until there are enough of them. Self-reported results are
+    excluded on purpose: the codebase already refuses to present them as
+    verified skill (see ``PuzzleReview.verified``), and a pass rate is exactly
+    the kind of claim that would launder them.
+    """
+
+    cause: str
+    mistakes: int
+    dominant_phase: str | None
+    verified_attempts: int
+    # Distinct puzzles behind those attempts. Attempts alone are not
+    # independent observations: six tries at one puzzle measure recall of that
+    # puzzle, not competence at the cause.
+    verified_puzzles: int
+    verified_passes: int
+    accuracy: float | None
+    insufficient_data: bool
+    # The opening family this cause shows up in most, when one dominates. Same
+    # strict-majority rule as the phase: a plurality would let 4 of 10 games
+    # name the cause "your Sicilian problem" while six other openings disagree.
+    dominant_opening: str | None = None
+    # Mistakes from games played in the recent window. Keyed on the GAME's
+    # end_time, not the puzzle's created_at: puzzles are all generated at import
+    # time, so created_at clusters into a few moments and says nothing about
+    # when the habit was actually happening.
+    recent_mistakes: int = 0
 
 
 @dataclass(frozen=True)
@@ -32,6 +88,10 @@ class DiagnosisWrite:
     primary_strength: float | None = None
     insufficient_evidence: bool = False
     phase: str | None = None
+    # The opening family the game reached, when it was classified at all.
+    opening_family: str | None = None
+    opening_name: str | None = None
+    opening_eco: str | None = None
     evidence: tuple[dict, ...] = ()
     evidence_hash: str | None = None
     source: str = "rules"
@@ -79,6 +139,92 @@ class DiagnosisRepository:
             )
         )
 
+    def opening_practice_counts(
+        self, username: str, opening_name: str
+    ) -> tuple[int, int, str]:
+        """How many puzzles this opening can offer, at line and family level.
+
+        Returns ``(line_count, family_count, family)``. The caller decides which
+        to offer; this only reports what exists, so the UI never has to guess
+        and never has to re-derive the family itself.
+
+        The family is computed here, from the same ``split(":", 1)`` the
+        extraction uses, precisely so the frontend does not. A second copy of
+        that rule in TypeScript is how the two drift the first time the
+        derivation changes.
+        """
+        family = opening_name.split(":", 1)[0].strip()
+        base = (
+            PuzzleDiagnosis.username == username,
+            PuzzleDiagnosis.status == DiagnosisStatus.OK,
+        )
+        line_count = (
+            self.db.scalar(
+                select(func.count())
+                .select_from(PuzzleDiagnosis)
+                .where(
+                    *base,
+                    func.lower(PuzzleDiagnosis.opening_name) == opening_name.lower(),
+                )
+            )
+            or 0
+        )
+        family_count = (
+            self.db.scalar(
+                select(func.count())
+                .select_from(PuzzleDiagnosis)
+                .where(
+                    *base,
+                    func.lower(PuzzleDiagnosis.opening_family) == family.lower(),
+                )
+            )
+            or 0
+        )
+        return line_count, family_count, family
+
+    def puzzle_ids_for_opening(
+        self, username: str, opening_name: str, *, family: bool = False
+    ) -> set[str]:
+        """Puzzles from one opening line, or from its whole family.
+
+        A set, like ``puzzle_ids_for_cause``: the caller uses it as a
+        membership test when ordering an existing candidate list. A focus
+        re-orders the trainable puzzles, it does not select them.
+        """
+        column = (
+            PuzzleDiagnosis.opening_family if family else PuzzleDiagnosis.opening_name
+        )
+        target = (
+            opening_name.split(":", 1)[0].strip() if family else opening_name.strip()
+        )
+        stmt = select(PuzzleDiagnosis.puzzle_id).where(
+            PuzzleDiagnosis.username == username,
+            PuzzleDiagnosis.status == DiagnosisStatus.OK,
+            func.lower(column) == target.lower(),
+        )
+        return set(self.db.scalars(stmt).all())
+
+    def puzzle_ids_for_cause(self, username: str, cause: str) -> set[str]:
+        """Every puzzle this user's diagnoses attribute to one cause.
+
+        A set, not a list: the caller uses it as a membership test when
+        ordering an existing candidate list, and returning an ordered result
+        would invite treating it as the queue itself. It is not — a focus
+        re-orders the trainable puzzles, it does not select them.
+
+        Same predicate as the Insights counts and the library filter:
+        correction over computed cause, analysable rows only.
+        """
+        cause_col = func.coalesce(
+            PuzzleDiagnosis.user_confirmed_cause, PuzzleDiagnosis.primary_cause
+        )
+        stmt = select(PuzzleDiagnosis.puzzle_id).where(
+            PuzzleDiagnosis.username == username,
+            PuzzleDiagnosis.status == DiagnosisStatus.OK,
+            cause_col == cause,
+        )
+        return set(self.db.scalars(stmt).all())
+
     def pending_puzzle_ids(self, username: str, limit: int | None = None) -> list[str]:
         """Puzzles with no current diagnosis, most diagnostic first.
 
@@ -95,23 +241,69 @@ class DiagnosisRepository:
            plays now than one from two years ago.
         3. **Largest swing** — among equals, the costliest blunders first.
         """
-        stats_join = (PuzzleStats.puzzle_id == Puzzle.id) & (
-            PuzzleStats.username == username
-        )
-        stmt = (
-            self._pending_query(username)
-            .outerjoin(PuzzleStats, stats_join)
-            .order_by(
-                # COALESCE so a puzzle never attempted (no stats row) sorts as
-                # zero failures rather than last-by-NULL on Postgres.
-                func.coalesce(PuzzleStats.fail_count, 0).desc(),
-                Puzzle.created_at.desc(),
-                Puzzle.swing.desc(),
-            )
-        )
+        stmt = self._diagnostic_order(self._pending_query(username), username)
         if limit is not None:
             stmt = stmt.limit(limit)
         return list(self.db.scalars(stmt).all())
+
+    def _diagnostic_order(self, stmt: Select, username: str) -> Select:
+        """The backfill's priority rule: most diagnostic puzzle first.
+
+        Shared by the pending and re-enrichment queries so a run cut short — by
+        cancellation, the batch limit, or the daily budget — spends what it has
+        on the same puzzles in either mode.
+        """
+        stats_join = (PuzzleStats.puzzle_id == Puzzle.id) & (
+            PuzzleStats.username == username
+        )
+        return stmt.outerjoin(PuzzleStats, stats_join).order_by(
+            # COALESCE so a puzzle never attempted (no stats row) sorts as
+            # zero failures rather than last-by-NULL on Postgres.
+            func.coalesce(PuzzleStats.fail_count, 0).desc(),
+            Puzzle.created_at.desc(),
+            Puzzle.swing.desc(),
+        )
+
+    def unenriched_puzzle_ids(
+        self, username: str, limit: int | None = None
+    ) -> list[str]:
+        """Diagnoses that were produced without the model, most diagnostic first.
+
+        This is the "a key just arrived" query. Version-based staleness cannot
+        see this case by design: adding ``ANTHROPIC_API_KEY`` changes no data
+        version, so a corpus diagnosed while the key was absent stays
+        rules-only forever without an explicit sweep.
+
+        Deliberately NOT folded into ``_stale_clause``. A row whose model
+        response is rejected keeps ``model_version = NULL``, so a standing rule
+        would re-attempt that puzzle every run for the life of the deployment,
+        spending budget daily on an answer that keeps failing validation. This
+        is an operator action instead: it re-attempts on demand, and re-running
+        it is how a transient failure gets retried.
+
+        UNAVAILABLE rows are excluded — a puzzle that could not be analysed at
+        all has nothing for the model to explain.
+        """
+        stmt = (
+            select(Puzzle.id)
+            .join(
+                PuzzleDiagnosis,
+                (PuzzleDiagnosis.puzzle_id == Puzzle.id)
+                & (PuzzleDiagnosis.username == username),
+            )
+            .where(
+                Puzzle.username == username,
+                PuzzleDiagnosis.status == DiagnosisStatus.OK,
+                PuzzleDiagnosis.model_version.is_(None),
+            )
+        )
+        stmt = self._diagnostic_order(stmt, username)
+        if limit is not None:
+            stmt = stmt.limit(limit)
+        return list(self.db.scalars(stmt).all())
+
+    def unenriched_count(self, username: str) -> int:
+        return len(self.unenriched_puzzle_ids(username))
 
     def pending_count(self, username: str) -> int:
         return (
@@ -175,6 +367,9 @@ class DiagnosisRepository:
         row.primary_strength = write.primary_strength
         row.insufficient_evidence = write.insufficient_evidence
         row.phase = write.phase
+        row.opening_family = write.opening_family
+        row.opening_name = write.opening_name
+        row.opening_eco = write.opening_eco
         row.evidence_json = list(write.evidence)
         row.evidence_hash = write.evidence_hash
         row.source = write.source
@@ -226,3 +421,153 @@ class DiagnosisRepository:
             .order_by(func.count().desc(), cause)
         )
         return [(row.cause, row.n) for row in self.db.execute(stmt).all()]
+
+    def cause_breakdown(self, username: str) -> list[CauseStat]:
+        """Per-cause counts, dominant phase, and verified accuracy.
+
+        Assembled from two small queries rather than one clever join. The
+        corpus is a few hundred rows per user, so the readable version costs
+        nothing measurable — and a mode-of-phase plus a verified-only pass rate
+        expressed in SQL would be considerably harder to check than to write.
+        """
+        cause_col = func.coalesce(
+            PuzzleDiagnosis.user_confirmed_cause, PuzzleDiagnosis.primary_cause
+        )
+        rows = self.db.execute(
+            select(
+                PuzzleDiagnosis.puzzle_id,
+                cause_col.label("cause"),
+                PuzzleDiagnosis.phase,
+                PuzzleDiagnosis.opening_family,
+            ).where(
+                PuzzleDiagnosis.username == username,
+                PuzzleDiagnosis.status == DiagnosisStatus.OK,
+                cause_col.isnot(None),
+            )
+        ).all()
+        if not rows:
+            return []
+
+        # Server-verified attempts only — see CauseStat's docstring.
+        verified = self.db.execute(
+            select(
+                PuzzleReview.puzzle_id,
+                func.count().label("attempts"),
+                func.sum(
+                    case((PuzzleReview.result == PuzzleResult.PASS, 1), else_=0)
+                ).label("passes"),
+            )
+            .where(
+                PuzzleReview.username == username,
+                PuzzleReview.verified.is_(True),
+            )
+            .group_by(PuzzleReview.puzzle_id)
+        ).all()
+        by_puzzle = {r.puzzle_id: (r.attempts or 0, r.passes or 0) for r in verified}
+
+        # Which puzzles came from recently-played games.
+        cutoff = int(
+            (
+                datetime.now(timezone.utc) - timedelta(days=RECENT_WINDOW_DAYS)
+            ).timestamp()
+        )
+        recent_ids = {
+            row[0]
+            for row in self.db.execute(
+                select(Puzzle.id)
+                .join(
+                    Game,
+                    (Game.game_id == Puzzle.source_game_id)
+                    & (Game.username == Puzzle.username),
+                )
+                .where(Puzzle.username == username, Game.end_time >= cutoff)
+            ).all()
+        }
+
+        buckets: dict[str, dict] = {}
+        for row in rows:
+            bucket = buckets.setdefault(
+                row.cause,
+                {
+                    "mistakes": 0,
+                    "phases": {},
+                    "openings": {},
+                    "attempts": 0,
+                    "passes": 0,
+                    "puzzles": 0,
+                    "recent": 0,
+                },
+            )
+            bucket["mistakes"] += 1
+            if row.puzzle_id in recent_ids:
+                bucket["recent"] += 1
+            if row.phase:
+                bucket["phases"][row.phase] = bucket["phases"].get(row.phase, 0) + 1
+            if row.opening_family:
+                bucket["openings"][row.opening_family] = (
+                    bucket["openings"].get(row.opening_family, 0) + 1
+                )
+            attempts, passes = by_puzzle.get(row.puzzle_id, (0, 0))
+            bucket["attempts"] += attempts
+            bucket["passes"] += passes
+            if attempts:
+                bucket["puzzles"] += 1
+
+        stats = [
+            CauseStat(
+                cause=cause,
+                mistakes=b["mistakes"],
+                # Only when one phase actually dominates; a 3/3 split names no
+                # phase rather than picking one by dictionary order.
+                dominant_phase=_dominant(b["phases"]),
+                dominant_opening=_dominant(b["openings"], b["mistakes"]),
+                verified_attempts=b["attempts"],
+                verified_puzzles=b["puzzles"],
+                verified_passes=b["passes"],
+                # Two gates, because they fail differently. The attempt floor
+                # is the usual small-sample guard. The distinct-puzzle floor
+                # exists because attempts concentrated on one puzzle are not
+                # independent: solving the same position six times says you
+                # remember it, not that you have stopped making the mistake.
+                accuracy=(
+                    b["passes"] / b["attempts"]
+                    if b["attempts"] >= MIN_ATTEMPTS_FOR_MOTIF_RANK
+                    and b["puzzles"] >= MIN_PUZZLES_FOR_CAUSE_ACCURACY
+                    else None
+                ),
+                insufficient_data=b["mistakes"] < MIN_DIAGNOSES_FOR_CAUSE_RANK,
+                recent_mistakes=b["recent"],
+            )
+            for cause, b in buckets.items()
+        ]
+        # Most frequent first; name breaks ties so the order is stable across
+        # requests rather than following dict insertion.
+        stats.sort(key=lambda s: (-s.mistakes, s.cause))
+        return stats
+
+
+def _dominant(counts: dict[str, int], total: int | None = None) -> str | None:
+    """The value a cause genuinely concentrates in, or None.
+
+    Requires a strict majority, not a plurality. A plurality is too fragile for
+    what this drives: it is rendered as "mostly middlegame" and it selects the
+    pattern's *name*, so at 4-3 a single new puzzle would flip a user's named
+    weakness from "King Safety Blind Spot" to "Back Rank Neglect" with no
+    explanation — the same week-to-week drift that keeping names out of the
+    model was meant to prevent.
+
+    Above half, the claim is true and stable. Below it, saying nothing is both
+    more honest and less jumpy.
+
+    ``total`` is the denominator to judge the majority against, for values that
+    are not always present. Openings are the case: two classified Sicilians out
+    of four mistakes is a majority of what was *classified* and not of what
+    happened, and "mostly Sicilian" on half-unknown data is exactly the
+    overclaim this function exists to refuse. Phases are always populated, so
+    they leave it unset and the counted total is the real one.
+    """
+    if not counts:
+        return None
+    total = sum(counts.values()) if total is None else total
+    phase, count = max(counts.items(), key=lambda kv: (kv[1], kv[0]))
+    return phase if count * 2 > total else None

@@ -34,7 +34,12 @@ from services.api.analytics_confidence import (
 )
 from services.api.auth import require_operator
 from services.api.db import SessionLocal, get_db
-from services.api.diagnosis.job import DIAGNOSIS_BATCH_DEFAULT, DIAGNOSIS_BATCH_MAX
+from services.api.diagnosis.job import (
+    DIAGNOSIS_BATCH_DEFAULT,
+    DIAGNOSIS_BATCH_MAX,
+    SCOPE_PENDING,
+    SCOPE_REENRICH,
+)
 from services.api.engine import (
     EngineNotAvailableError,
     InvalidFenError,
@@ -69,14 +74,22 @@ from services.api.models import (
     Puzzle as PuzzleModel,
 )
 from services.api.motifs import MotifPerformanceResponse, get_user_motif_performance
-from services.api.openings import OpeningTreeBuilder
+from services.api.openings import OpeningTreeBuilder, min_games_floor
 from services.api.openings import make_key as make_openings_cache_key
 from services.api.openings import tree_cache as openings_tree_cache
+from services.api.openings import warm as warm_eco
+from services.api.openings.explorer import (
+    ExplorerUnavailable,
+    band_for_rating,
+)
+from services.api.openings.explorer import cache_key as explorer_cache_key
+from services.api.openings.explorer import fetch_stats as fetch_explorer_stats
 from services.api.puzzles.identity import backfill_puzzle_identity
 from services.api.ratelimit import rate_limit
 from services.api.ratings_auto import auto_snapshot, auto_snapshot_throttled
 from services.api.storage import GameRepository, PuzzleRepository, normalized_position
 from services.api.storage.diagnosis_repository import DiagnosisRepository
+from services.api.storage.explorer_repository import ExplorerRepository
 from services.api.storage.game_repository import MANUAL_GAME_ID
 from services.api.storage.spaced_repetition import (
     _utcnow_naive,
@@ -119,6 +132,9 @@ RATE_LIMIT_IMPORT_CHESSCOM = 5  # heavy Chess.com fetch + bulk DB writes
 RATE_LIMIT_PUZZLES_GENERATE = 5  # enqueues a heavy analysis job
 RATE_LIMIT_RATINGS_SNAPSHOT = 10  # outbound Chess.com call per request
 RATE_LIMIT_DIAGNOSE = 5  # enqueues a whole-corpus analysis job
+# Outbound lichess call on a miss, but the cache is shared across users and
+# positions repeat heavily, so most selections never leave the box.
+RATE_LIMIT_OPENINGS_BASELINE = 60
 
 # A FEN is bounded in length (piece placement + 5 short fields); anything much
 # longer than a legal position is junk. Reject oversized input with 400 before
@@ -184,6 +200,12 @@ async def lifespan(app: FastAPI):
             backfill_puzzle_identity(db)
 
     await anyio.to_thread.run_sync(_run_backfill)
+
+    # Build the ECO table off the request path. /openings is an `async def`
+    # handler, so FastAPI runs it on the event loop rather than the threadpool,
+    # and the image runs a single worker — left lazy, the first request after a
+    # deploy stalls every other in-flight request behind ~370ms of replay.
+    await anyio.to_thread.run_sync(warm_eco)
 
     # Start session cleanup background task if not disabled
     cleanup_task = None
@@ -622,12 +644,19 @@ class PuzzleCorpusStats(BaseModel):
     mastered: int
 
 
+class CauseOption(BaseModel):
+    value: str
+    label: str
+
+
 class PuzzleListResponse(BaseModel):
     puzzles: list[PuzzleListItem]
     total: int
     limit: int
     offset: int
     available_motifs: list[str]
+    available_causes: list[CauseOption] = []
+    available_openings: list[str] = []
     stats: PuzzleCorpusStats
 
 
@@ -722,6 +751,27 @@ async def get_openings(
     max_ply: int = Query(
         12, ge=1, le=40, description="Maximum number of half-moves to include"
     ),
+    min_games: int = Query(
+        1,
+        ge=1,
+        le=100,
+        description=(
+            "Omit lines played fewer than this many times. At depth, one-off "
+            "tails dominate the tree (96% of a measured 40-ply tree) and are "
+            "noise rather than repertoire."
+        ),
+    ),
+    since_days: int | None = Query(
+        None,
+        ge=1,
+        le=3650,
+        description=(
+            "Only include games finished within this many days. Omit for the "
+            "whole archive. A repertoire is a moving target: a line fixed in "
+            "April still reads as a weakness while two years of losses in it "
+            "are pooled with last week's wins."
+        ),
+    ),
     db: Session = Depends(get_db),
     account: Account | None = Depends(require_account),
 ):
@@ -760,12 +810,28 @@ async def get_openings(
     # Rebuilding re-parses every stored PGN, and the client refetches on mount
     # and on every colour-filter change. The key folds in the game count and the
     # newest game's timestamp, so an import invalidates this by construction.
+    # The requested floor is a hint; the depth-based floor is a cost control and
+    # wins. Without it `?max_ply=40&min_games=1` still builds and caches the
+    # multi-megabyte tree for anyone who asks, which is exactly what the client
+    # table was meant to prevent.
+    applied_min_games = max(min_games, min_games_floor(max_ply))
+
+    # Resolved once and reused for the key, the filter and the reported window,
+    # so the three cannot disagree about where the boundary fell.
+    cutoff = (
+        datetime.now(timezone.utc) - timedelta(days=since_days)
+        if since_days is not None
+        else None
+    )
+
     cache_key = make_openings_cache_key(
         username=username,
         color=color,
         max_ply=max_ply,
         game_count=game_count,
         latest_game_time=game_repository.get_latest_game_time(username),
+        min_games=applied_min_games,
+        since=cutoff.date().isoformat() if cutoff else "all",
     )
     cached = openings_tree_cache.get(cache_key)
     if cached is not None:
@@ -774,6 +840,15 @@ async def get_openings(
     # Stream all PGNs for the user in bulk batches (one query per batch)
     # instead of one query per game, without holding every blob in memory.
     metadata_list = game_repository.get_all_metadata(username)
+    # Filtered here rather than in the query: the count of what the window left
+    # out is needed to tell "you have played nothing lately" apart from "you
+    # have imported nothing", and those want different things said to them.
+    excluded_by_date = 0
+    if cutoff is not None:
+        cutoff_epoch = int(cutoff.timestamp())
+        in_window = [m for m in metadata_list if m.end_time >= cutoff_epoch]
+        excluded_by_date = len(metadata_list) - len(in_window)
+        metadata_list = in_window
     game_ids = [meta.game_id for meta in metadata_list]
     pgn_count = 0
 
@@ -790,17 +865,147 @@ async def get_openings(
             detail="Games found but PGN content is missing. Re-import games to populate PGN data.",
         )
 
-    tree = builder.build_tree()
+    tree = builder.build_tree(min_games=applied_min_games)
     # Attached to the root node rather than wrapping the response so existing
     # clients keep reading the tree at the top level. `games_stored` comes from
     # the repository, so a tree built from a fraction of a user's games is
     # reportable instead of silently looking complete.
-    tree["analysis"] = {"games_stored": game_count, **builder.report.to_dict()}
+    tree["analysis"] = {
+        "games_stored": game_count,
+        # Reported alongside `excluded_by_color`, and for the same reason: the
+        # user asked for this, so it is a fact to state rather than data loss
+        # to warn about.
+        "excluded_by_date": excluded_by_date,
+        "since_days": since_days,
+        # Surfaced rather than applied silently: the client states the filter so
+        # a thinner tree reads as a deliberate choice, not missing data.
+        "min_games": applied_min_games,
+        **builder.report.to_dict(),
+    }
     # Stored only once the response is fully composed: the cache hands values
     # back by reference, so anything mutated after this point would corrupt
     # every later hit.
     openings_tree_cache.put(cache_key, tree)
     return tree
+
+
+class BaselineBand(BaseModel):
+    low: int
+    high: int | None
+    label: str
+
+
+class OpeningBaselineResponse(BaseModel):
+    """What players around this rating score from this position."""
+
+    games: int
+    # None when the sample is too thin to say anything. Distinct from 0, which
+    # would read as "they score nothing here".
+    expected_score: float | None
+    # None when the user has no imported rating, in which case the figures are
+    # over all ratings and the client must say so.
+    band: BaselineBand | None
+    source: str = "lichess"
+
+
+def _latest_rating(db: Session, username: str) -> int | None:
+    """The user's most recent rating, preferring the pools the baseline covers.
+
+    Rapid first, then blitz: the explorer query excludes bullet, so a bullet
+    rating would place the user in a band the comparison is not drawn from.
+    """
+    for time_control in ("rapid", "blitz"):
+        snapshot = db.execute(
+            select(RatingSnapshot)
+            .where(
+                RatingSnapshot.username == username,
+                RatingSnapshot.time_control == time_control,
+            )
+            .order_by(RatingSnapshot.recorded_at.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+        if snapshot is not None:
+            return snapshot.rating
+    return None
+
+
+@app.get(
+    "/openings/baseline",
+    response_model=OpeningBaselineResponse,
+    dependencies=[
+        Depends(
+            rate_limit("openings_baseline", default_limit=RATE_LIMIT_OPENINGS_BASELINE)
+        )
+    ],
+)
+async def get_opening_baseline(
+    username: Annotated[Username, Query(description="Whose rating sets the band")],
+    fen: Annotated[str, Query(max_length=120, description="Position to look up")],
+    color: Literal["white", "black"] = Query(
+        ..., description="Whose score to report — the side the player had"
+    ),
+    db: Session = Depends(get_db),
+    account: Account | None = Depends(require_account),
+):
+    """How players around this user's rating score from a position.
+
+    A line's own score says how the user did; it cannot say whether that was
+    good. This supplies the missing half.
+
+    Only ``white`` and ``black`` are accepted, deliberately. Under a "both"
+    filter the user's own figure already mixes games from either side of the
+    board, so there is no single expectation to compare it against and any
+    answer would be a fabrication.
+    """
+    assert_owns_username(account, username, db)
+
+    # Normalise to an EPD before it is used as a key or sent upstream: this
+    # validates the position, and it drops the move counters so two routes into
+    # the same position share one cache row and one lookup.
+    try:
+        epd = chess.Board(fen).epd()
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="Not a valid position.") from exc
+
+    band = band_for_rating(_latest_rating(db, username))
+    key = explorer_cache_key(epd, band)
+    repository = ExplorerRepository(db)
+
+    stats = repository.get_fresh(key)
+    if stats is None:
+        # Hand the pooled connection back before waiting on lichess. Everything
+        # above was a read, and SQLAlchemy holds a connection from the first
+        # query until the transaction ends — so without this each in-flight
+        # miss pins one for the length of an outbound call. The pool is 15
+        # deep and this route fires on every line a user selects, so a slow
+        # explorer would starve every other endpoint of connections.
+        db.rollback()
+        try:
+            stats = await fetch_explorer_stats(epd, band)
+        except ExplorerUnavailable as exc:
+            # A stale row beats no answer: these aggregates move at the speed of
+            # millions of games, so month-old numbers are still true enough to
+            # judge a line by, and the alternative is the baseline blinking out
+            # whenever lichess has a bad minute.
+            cached = repository.get(key)
+            if cached is None:
+                logger.info("openings baseline unavailable: %s", exc)
+                raise HTTPException(
+                    status_code=503, detail="Baseline unavailable right now."
+                ) from exc
+            stats = cached.stats
+        else:
+            repository.put(key, epd, stats)
+
+    return OpeningBaselineResponse(
+        games=stats.games,
+        expected_score=stats.expected_score(color),
+        band=(
+            BaselineBand(low=band.low, high=band.high, label=band.label)
+            if band
+            else None
+        ),
+    )
 
 
 @app.get("/engine/status", response_model=EngineStatusResponse)
@@ -1283,6 +1488,51 @@ async def create_daily_puzzle_session(
     return DailyPuzzlesResponse(puzzles=puzzles_dict, count=len(puzzles_dict))
 
 
+def _queue_reason(stats, in_focus: bool, focus_name: str | None, now: datetime) -> dict:
+    """Why this puzzle is in today's queue.
+
+    Reported per puzzle so the queue is inspectable rather than a black box:
+    the user can see that a puzzle is here because it came due, because they
+    have never seen it, or because it matches the pattern they chose to train.
+
+    Deliberately no numeric score. The spec asked for one, but the ordering is
+    already fully determined by facts that are *all* in this payload — the tier
+    (due / new), the due date, and whether the puzzle matched the focus. A score
+    would add a number that explains nothing the visible fields do not, and
+    invites comparing two puzzles on a figure that was never calibrated for it.
+    """
+    if stats is None or stats.next_due_at is None:
+        reason, explanation = "new", "You have not trained this position yet."
+    else:
+        due = stats.next_due_at
+        if due.tzinfo is None:
+            due = due.replace(tzinfo=timezone.utc)
+        days = max(0, (now - due).days)
+        reason = "due"
+        explanation = (
+            "Due for review today."
+            if days == 0
+            else f"Due for review {days} day{'' if days == 1 else 's'} ago."
+        )
+
+    # A focus never replaces the scheduling reason — it explains the *order*,
+    # not the presence. Saying "matches your focus" about a puzzle that is here
+    # because it came due would misrepresent why it was served.
+    if in_focus and focus_name:
+        explanation = (
+            f"{explanation} Matches the pattern you are training: {focus_name}."
+        )
+
+    payload = {"reason": reason, "explanation": explanation}
+    if in_focus and focus_name:
+        payload["pattern"] = focus_name
+    if stats is not None and stats.fail_count:
+        # Surfaced because a repeat failure is the strongest signal in the
+        # corpus, and a user re-seeing a puzzle deserves to know it is a repeat.
+        payload["previous_failures"] = stats.fail_count
+    return payload
+
+
 @app.get("/puzzles/due", response_model=DuePuzzlesResponse)
 async def get_due_puzzles_endpoint(
     username: Annotated[Username, Query(description="Username to get puzzles for")],
@@ -1296,6 +1546,25 @@ async def get_due_puzzles_endpoint(
     motif: str = Query(
         None, description="Filter puzzles by specific motif (e.g., 'Fork', 'Pin')"
     ),
+    focus_opening: str = Query(
+        None,
+        description=(
+            "Bias the order toward puzzles from this opening. Pass the full "
+            "line; add focus_opening_scope=family to widen to the family. Like "
+            "focus_cause this never narrows the session."
+        ),
+    ),
+    focus_opening_scope: str = Query(
+        "line", description="'line' (default) or 'family'"
+    ),
+    focus_cause: str = Query(
+        None,
+        description=(
+            "Bias the order toward puzzles diagnosed with this mistake cause. "
+            "Unlike `motif` this never narrows the session — it re-orders the "
+            "puzzles that are already trainable."
+        ),
+    ),
     db: Session = Depends(get_db),
     account: Account | None = Depends(require_account),
 ):
@@ -1303,6 +1572,12 @@ async def get_due_puzzles_endpoint(
     Get puzzles due for review, followed by new puzzles.
     Supports adaptive selection based on session type and target accuracy.
     Optionally filter by specific chess motif.
+
+    ``focus_cause`` is opt-in and changes nothing unless passed: a user who
+    never asks for a focused session gets the same queue as before. It is a
+    bias rather than a filter so that clicking "train this pattern" on a day
+    with nothing of that pattern due gives an ordinary session instead of an
+    error.
     """
     assert_owns_username(account, username, db)
     puzzle_repository = PuzzleRepository(db)
@@ -1341,9 +1616,46 @@ async def get_due_puzzles_endpoint(
     #    See get_trainable_puzzle_ids.
     puzzle_ids = get_trainable_puzzle_ids(db, username, puzzle_ids)
 
-    # 4. Get prioritized IDs and their stats using adaptive selection
+    # 4. Resolve the focus to puzzle ids, if one was asked for. Done *after*
+    #    the trainable narrowing above so the focus can only reorder what
+    #    survived it — a focus must never make a not-yet-due puzzle due.
+    focus_ids: set[str] = set()
+    focus_name: str | None = None
+
+    if focus_opening:
+        # Same bias machinery as focus_cause: it reorders the already-trainable
+        # set and can neither widen nor shorten the session.
+        focus_ids |= DiagnosisRepository(db).puzzle_ids_for_opening(
+            username, focus_opening, family=focus_opening_scope == "family"
+        )
+        focus_name = (
+            focus_opening.split(":", 1)[0].strip()
+            if focus_opening_scope == "family"
+            else focus_opening
+        )
+    if focus_cause:
+        from services.api.diagnosis.patterns import identify
+
+        # Resolved through the same cause_breakdown the focus card uses, so the
+        # two surfaces name the pattern identically. Resolving with phase=None
+        # here instead meant a user clicking "Train 3 puzzles now" under "Back
+        # Rank Neglect" saw every puzzle in the session attribute itself to
+        # "King Safety Blind Spot" — the same naming drift the static table
+        # exists to prevent, inside a single click.
+        _repo = DiagnosisRepository(db)
+        _stat = next(
+            (s for s in _repo.cause_breakdown(username) if s.cause == focus_cause),
+            None,
+        )
+        named = identify(focus_cause, _stat.dominant_phase if _stat else None)
+        focus_name = named.name if named else None
+        # `username` is already canonical — the Username type folds case at the
+        # request boundary — so no re-folding here.
+        focus_ids = DiagnosisRepository(db).puzzle_ids_for_cause(username, focus_cause)
+
+    # 5. Get prioritized IDs and their stats using adaptive selection
     due_ids, all_stats = get_adaptive_puzzles(
-        db, username, puzzle_ids, n, session_type, target_accuracy
+        db, username, puzzle_ids, n, session_type, target_accuracy, focus_ids
     )
 
     # 3. Load content and merge with stats
@@ -1386,6 +1698,9 @@ async def get_due_puzzles_endpoint(
                     "primary_motif": None,
                 }
             )
+        p_dict["queue_reason"] = _queue_reason(
+            stats, pid in focus_ids, focus_name, datetime.now(timezone.utc)
+        )
         # SCORED training path: never ship the solution up front.
         result_puzzles.append(_strip_solution(p_dict))
 
@@ -1636,6 +1951,24 @@ async def list_puzzles(
     motif: str = Query(
         None, description="Filter by primary_motif (comma-separated for OR)"
     ),
+    cause: str = Query(
+        None,
+        description="Filter by diagnosed mistake cause (comma-separated for OR). "
+        "This is what the Insights 'practise this' links target.",
+    ),
+    phase: str = Query(
+        None, description="Filter by game phase: opening, middlegame, endgame"
+    ),
+    opening: str = Query(
+        None, description="Filter by opening family, e.g. 'Sicilian Defense'"
+    ),
+    opening_line: str = Query(
+        None,
+        description=(
+            "Filter by the full opening line, e.g. 'Sicilian Defense: Najdorf "
+            "Variation'. Narrower than `opening`, which matches the whole family."
+        ),
+    ),
     difficulty: str = Query(None, description="Filter: easy, medium, hard"),
     sort: str = Query(
         "due_soonest",
@@ -1731,6 +2064,41 @@ async def list_puzzles(
     )
     available_motifs = [row[0] for row in db.execute(motifs_stmt).all()]
 
+    # Same contract as available_motifs: the filter surface should offer only
+    # values that would actually return something.
+    causes_stmt = (
+        select(
+            func.coalesce(
+                PuzzleDiagnosis.user_confirmed_cause, PuzzleDiagnosis.primary_cause
+            )
+        )
+        .where(
+            PuzzleDiagnosis.username == username_lower,
+            PuzzleDiagnosis.status == DiagnosisStatus.OK,
+        )
+        .distinct()
+    )
+    from services.api.diagnosis.causes import CAUSE_LABELS
+
+    # Carries its own label rather than a bare slug: the label table lives in
+    # causes.py, and shipping a second copy to the frontend would let the two
+    # drift the moment a cause is renamed.
+    openings_stmt = (
+        select(PuzzleDiagnosis.opening_family)
+        .where(
+            PuzzleDiagnosis.username == username_lower,
+            PuzzleDiagnosis.status == DiagnosisStatus.OK,
+            PuzzleDiagnosis.opening_family.isnot(None),
+        )
+        .distinct()
+    )
+    available_openings = sorted(row[0] for row in db.execute(openings_stmt).all())
+
+    available_causes = [
+        CauseOption(value=value, label=CAUSE_LABELS.get(value, value))
+        for value in sorted(row[0] for row in db.execute(causes_stmt).all() if row[0])
+    ]
+
     # --- 3. Build filtered query ---
     # Reuse status_case from corpus stats so status logic is defined once.
     computed_status = status_case.label("computed_status")
@@ -1761,6 +2129,45 @@ async def list_puzzles(
         motif_values = [m.strip().lower() for m in motif.split(",")]
         base_stmt = base_stmt.where(
             func.lower(PuzzleStats.primary_motif).in_(motif_values)
+        )
+
+    # Mistake-cause filter. Joins the diagnosis rather than the motif: a motif
+    # says what was on the board, a cause says why it was missed, and the
+    # Insights cards send users here by cause.
+    #
+    # The predicate is deliberately identical to the one behind the Insights
+    # counts (``DiagnosisRepository.cause_counts``): correction over computed
+    # cause, analysable rows only. A user who clicks "8 mistakes · practise
+    # this" must land on 8 puzzles, and that holds by construction rather than
+    # by the two queries happening to agree.
+    if cause:
+        cause_values = [c.strip().lower() for c in cause.split(",") if c.strip()]
+        diagnosis_cause = func.coalesce(
+            PuzzleDiagnosis.user_confirmed_cause, PuzzleDiagnosis.primary_cause
+        )
+        base_stmt = base_stmt.where(
+            PuzzleDiagnosis.status == DiagnosisStatus.OK,
+            func.lower(diagnosis_cause).in_(cause_values),
+        )
+
+    # Phase and opening: both live on the diagnosis, both analysable rows only,
+    # so they compose with the cause filter rather than fighting it.
+    if phase:
+        base_stmt = base_stmt.where(
+            PuzzleDiagnosis.status == DiagnosisStatus.OK,
+            func.lower(PuzzleDiagnosis.phase) == phase.strip().lower(),
+        )
+
+    if opening_line:
+        base_stmt = base_stmt.where(
+            PuzzleDiagnosis.status == DiagnosisStatus.OK,
+            func.lower(PuzzleDiagnosis.opening_name) == opening_line.strip().lower(),
+        )
+
+    if opening:
+        base_stmt = base_stmt.where(
+            PuzzleDiagnosis.status == DiagnosisStatus.OK,
+            func.lower(PuzzleDiagnosis.opening_family) == opening.strip().lower(),
         )
 
     # Difficulty filter
@@ -1854,6 +2261,8 @@ async def list_puzzles(
         limit=limit,
         offset=offset,
         available_motifs=available_motifs,
+        available_causes=available_causes,
+        available_openings=available_openings,
         stats=PuzzleCorpusStats(
             total=corpus_total,
             due=cr.cnt_due or 0,
@@ -2005,6 +2414,10 @@ class DiagnosisConfirmRequest(BaseModel):
 class PendingDiagnosisResponse(BaseModel):
     username: str
     pending: int
+    # Already diagnosed, but by the rules alone. Non-zero on a deployment that
+    # backfilled before ANTHROPIC_API_KEY was set: those rows are not pending
+    # (their data versions are current) and no ordinary run will revisit them.
+    unenriched: int = 0
 
 
 def _diagnosis_response(
@@ -2095,6 +2508,321 @@ async def get_puzzle_diagnosis(
     )
 
 
+class MistakeCause(BaseModel):
+    """One cause, with how often it explains this user's mistakes.
+
+    ``mistakes`` is a direct count and always trustworthy — every puzzle in the
+    corpus is a real blunder from a real game.
+
+    ``accuracy`` is a proportion over *server-verified* training attempts only,
+    and is None until the sample supports it. Self-reported results are
+    excluded: the codebase refuses to present them as verified skill, and a
+    pass rate is exactly the claim that would launder them.
+
+    ``insufficient_data`` says the cause has not been seen often enough to call
+    a tendency. The UI must not rank or recommend against it — below the
+    threshold, one bad afternoon looks identical to a habit.
+    """
+
+    cause: str
+    label: str
+    mistakes: int
+    dominant_phase: str | None = None
+    # The opening this cause concentrates in, when one actually dominates.
+    dominant_opening: str | None = None
+    verified_attempts: int = 0
+    # How many distinct puzzles those attempts covered. Exposed so the UI can
+    # say how broad the sample is, not just how large.
+    verified_puzzles: int = 0
+    accuracy: float | None = None
+    insufficient_data: bool = True
+    # "Cause unclear" is an honest bucket, not a weakness to train. Flagged so
+    # the UI can show it as coverage information without recommending practice.
+    is_unclassified: bool = False
+
+
+class MistakeCausesResponse(BaseModel):
+    username: str
+    causes: list[MistakeCause]
+    total_diagnosed: int
+    # Diagnoses still owed. Without it a nearly-empty list is indistinguishable
+    # from "you make no mistakes".
+    pending: int
+    min_for_ranking: int
+
+
+class MistakePattern(BaseModel):
+    """A named, described habit — the coaching layer over a raw cause.
+
+    Only causes that have come up often enough to be a tendency become
+    patterns. A cause below the threshold stays a count on the causes endpoint
+    and is deliberately absent here: naming something "Loose Piece Syndrome"
+    off two occurrences would be the overreach this whole feature avoids.
+
+    ``priority`` orders one person's patterns against each other. It is not a
+    probability and means nothing across users.
+    """
+
+    cause: str
+    name: str
+    description: str
+    mistakes: int
+    recent_mistakes: int
+    dominant_phase: str | None = None
+    accuracy: float | None = None
+    priority: float = 0.0
+
+
+class MistakePatternsResponse(BaseModel):
+    username: str
+    patterns: list[MistakePattern]
+    # Causes that exist but are not yet tendencies. Reported as a number so the
+    # UI can say "and 3 more not seen often enough yet" instead of implying the
+    # named list is everything.
+    below_threshold: int
+    pending: int
+
+
+@app.get("/users/{username}/mistake-patterns", response_model=MistakePatternsResponse)
+async def get_mistake_patterns(
+    username: Username,
+    db: Session = Depends(get_db),
+    account: Account | None = Depends(require_account),
+):
+    """This user's mistake habits, named and ordered by how much they matter.
+
+    Computed on demand from the diagnoses rather than from a stored clustering.
+    At this corpus size the grouping is a millisecond query, so persisting it
+    would buy a job, two tables and a staleness window for nothing measurable.
+    """
+    from services.api.diagnosis.patterns import identify, priority_score
+
+    assert_owns_username(account, username, db)
+
+    repo = DiagnosisRepository(db)
+    stats = repo.cause_breakdown(username)
+
+    patterns = []
+    below = 0
+    for stat in stats:
+        identity = identify(stat.cause, stat.dominant_phase)
+        # No identity means either "unclassified" or a cause with no written
+        # pattern yet. Neither should be invented on the fly.
+        if identity is None:
+            continue
+        if stat.insufficient_data:
+            below += 1
+            continue
+        patterns.append(
+            MistakePattern(
+                cause=stat.cause,
+                name=identity.name,
+                description=identity.description,
+                mistakes=stat.mistakes,
+                recent_mistakes=stat.recent_mistakes,
+                dominant_phase=stat.dominant_phase,
+                accuracy=stat.accuracy,
+                priority=priority_score(
+                    stat.mistakes, stat.accuracy, stat.recent_mistakes
+                ),
+            )
+        )
+
+    patterns.sort(key=lambda p: (-p.priority, p.cause))
+    return MistakePatternsResponse(
+        username=username,
+        patterns=patterns,
+        below_threshold=below,
+        pending=repo.pending_count(username),
+    )
+
+
+class TodaysFocus(BaseModel):
+    cause: str
+    name: str
+    description: str
+    mistakes: int
+    recent_mistakes: int
+    accuracy: float | None = None
+    priority: float = 0.0
+    # The numbers the choice rests on, so the user can disagree on evidence.
+    rationale: str
+    runner_up: str | None = None
+    # How many puzzles of this cause the user could train *right now*. Counted
+    # against the trainable set, not the corpus: "train 8 puzzles" when six of
+    # them are scheduled for next week would be a promise the session cannot
+    # keep, and training them early would corrupt their intervals anyway.
+    trainable_now: int = 0
+
+
+class TodaysFocusResponse(BaseModel):
+    """The one habit worth working on today, or an honest absence of one.
+
+    ``focus`` is None whenever no pattern has come up often enough to be called
+    a tendency. The card renders that as "not yet" rather than falling back to
+    whatever happens to be most frequent — a plan built on two occurrences is a
+    guess, and this product does not dress guesses as findings.
+    """
+
+    username: str
+    focus: TodaysFocus | None = None
+    below_threshold: int = 0
+    pending: int = 0
+
+
+@app.get("/users/{username}/todays-focus", response_model=TodaysFocusResponse)
+async def get_todays_focus(
+    username: Username,
+    db: Session = Depends(get_db),
+    account: Account | None = Depends(require_account),
+):
+    """What to train today, and why.
+
+    Reads the same cause breakdown the Insights cards use; it computes nothing
+    the other surfaces would disagree with.
+    """
+    from services.api.diagnosis.patterns import identify
+    from services.api.diagnosis.planner import plan_focus
+
+    assert_owns_username(account, username, db)
+
+    repo = DiagnosisRepository(db)
+    stats = repo.cause_breakdown(username)
+    chosen = plan_focus(stats)
+
+    trainable_now = 0
+    if chosen is not None:
+        cause_ids = repo.puzzle_ids_for_cause(username, chosen.cause)
+        if cause_ids:
+            trainable_now = len(
+                get_trainable_puzzle_ids(db, username, sorted(cause_ids))
+            )
+
+    # Counted exactly as the patterns endpoint counts it: a cause with no
+    # written pattern — "unclassified" above all — is not a habit awaiting more
+    # evidence, so it must not read as "nearly a pattern" here while the card
+    # beside it correctly ignores it.
+    below = sum(
+        1
+        for s in stats
+        if s.insufficient_data and identify(s.cause, s.dominant_phase) is not None
+    )
+
+    return TodaysFocusResponse(
+        username=username,
+        focus=(
+            TodaysFocus(**asdict(chosen), trainable_now=trainable_now)
+            if chosen
+            else None
+        ),
+        below_threshold=below,
+        pending=repo.pending_count(username),
+    )
+
+
+class OpeningPracticeResponse(BaseModel):
+    """What practice a given opening line can actually offer.
+
+    Reports both granularities and which one to use, rather than making the
+    client choose from counts it would have to interpret. ``scope`` is the
+    honest label: "line" when the exact line has enough puzzles to be worth
+    drilling, "family" when it does not, "none" when neither does.
+
+    The family is derived server-side from the same split the extraction uses.
+    Deriving it in the frontend instead is how the two drift the first time
+    that rule changes.
+    """
+
+    username: str
+    opening_name: str
+    opening_family: str
+    line_count: int
+    family_count: int
+    scope: str  # "line" | "family" | "none"
+
+
+# Below this a "line" is not worth drilling on its own — a two-puzzle session
+# that keeps repeating is worse practice than a broader one.
+MIN_PUZZLES_FOR_LINE_PRACTICE = 3
+
+
+@app.get("/users/{username}/opening-practice", response_model=OpeningPracticeResponse)
+async def get_opening_practice(
+    username: Username,
+    opening_name: str = Query(
+        ..., description="Full opening name from the explorer tree node"
+    ),
+    db: Session = Depends(get_db),
+    account: Account | None = Depends(require_account),
+):
+    """Whether an explorer line has puzzles to practise, and at what granularity."""
+    assert_owns_username(account, username, db)
+
+    line_count, family_count, family = DiagnosisRepository(db).opening_practice_counts(
+        username, opening_name
+    )
+
+    if line_count >= MIN_PUZZLES_FOR_LINE_PRACTICE:
+        scope = "line"
+    elif family_count > 0:
+        scope = "family"
+    else:
+        scope = "none"
+
+    return OpeningPracticeResponse(
+        username=username,
+        opening_name=opening_name,
+        opening_family=family,
+        line_count=line_count,
+        family_count=family_count,
+        scope=scope,
+    )
+
+
+@app.get("/users/{username}/mistake-causes", response_model=MistakeCausesResponse)
+async def get_mistake_causes(
+    username: Username,
+    db: Session = Depends(get_db),
+    account: Account | None = Depends(require_account),
+):
+    """Aggregate this user's diagnosed mistakes by cause.
+
+    Descriptive only. A cause below ``MIN_DIAGNOSES_FOR_CAUSE_RANK`` is
+    returned with ``insufficient_data`` set rather than withheld — the count is
+    real and worth showing; what it does not yet support is being called a
+    tendency.
+    """
+    from services.api.analytics_confidence import MIN_DIAGNOSES_FOR_CAUSE_RANK
+    from services.api.diagnosis.causes import CAUSE_LABELS, UNCLASSIFIED
+
+    assert_owns_username(account, username, db)
+
+    repo = DiagnosisRepository(db)
+    stats = repo.cause_breakdown(username)
+
+    return MistakeCausesResponse(
+        username=username,
+        causes=[
+            MistakeCause(
+                cause=s.cause,
+                label=CAUSE_LABELS.get(s.cause, s.cause),
+                mistakes=s.mistakes,
+                dominant_phase=s.dominant_phase,
+                dominant_opening=s.dominant_opening,
+                verified_attempts=s.verified_attempts,
+                verified_puzzles=s.verified_puzzles,
+                accuracy=s.accuracy,
+                insufficient_data=s.insufficient_data,
+                is_unclassified=s.cause == UNCLASSIFIED,
+            )
+            for s in stats
+        ],
+        total_diagnosed=sum(s.mistakes for s in stats),
+        pending=repo.pending_count(username),
+        min_for_ranking=MIN_DIAGNOSES_FOR_CAUSE_RANK,
+    )
+
+
 @app.get("/users/{username}/diagnosis/pending", response_model=PendingDiagnosisResponse)
 async def get_pending_diagnoses(
     username: Username,
@@ -2103,8 +2831,11 @@ async def get_pending_diagnoses(
 ):
     """How many puzzles still need diagnosing — drives the backfill CTA."""
     assert_owns_username(account, username, db)
+    repo = DiagnosisRepository(db)
     return PendingDiagnosisResponse(
-        username=username, pending=DiagnosisRepository(db).pending_count(username)
+        username=username,
+        pending=repo.pending_count(username),
+        unenriched=repo.unenriched_count(username),
     )
 
 
@@ -2121,6 +2852,15 @@ async def diagnose_puzzles_endpoint(
         le=DIAGNOSIS_BATCH_MAX,
         description="Maximum puzzles to analyse in this run",
     ),
+    scope: str = Query(
+        SCOPE_PENDING,
+        description=(
+            "'pending' analyses puzzles with no diagnosis yet. 'reenrich' "
+            "re-runs puzzles already diagnosed without the model — use it once "
+            "after adding ANTHROPIC_API_KEY to a deployment that backfilled "
+            "without one."
+        ),
+    ),
     db: Session = Depends(get_db),
     account: Account | None = Depends(require_account),
 ):
@@ -2130,15 +2870,27 @@ async def diagnose_puzzles_endpoint(
     that is what the (username, type) active-job index exists for. A duplicate
     request returns the in-flight job rather than erroring, mirroring
     /puzzles/generate.
+
+    ``scope=reenrich`` exists because version-based staleness cannot see a
+    configuration change: adding an API key moves no data version, so a corpus
+    diagnosed while the key was absent would stay rules-only forever. It is an
+    explicit operator action rather than a standing rule — see
+    ``DiagnosisRepository.unenriched_puzzle_ids`` for why a standing rule would
+    re-attempt a rejected puzzle every day.
     """
     assert_owns_username(account, username, db)
+    if scope not in (SCOPE_PENDING, SCOPE_REENRICH):
+        raise HTTPException(
+            status_code=422,
+            detail=f"scope must be '{SCOPE_PENDING}' or '{SCOPE_REENRICH}'",
+        )
     try:
         job = Job(
             username=username,
             type=JobType.DIAGNOSIS,
             status=JobStatus.QUEUED,
             message="Queued for diagnosis",
-            params={"limit": limit},
+            params={"limit": limit, "scope": scope},
         )
         db.add(job)
         db.commit()

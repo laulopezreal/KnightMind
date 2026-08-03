@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import Dashboard from './Dashboard';
 
 const mockNavigate = vi.fn();
@@ -19,6 +19,7 @@ vi.mock('../api/users', () => ({
   getTrickyPuzzles: vi.fn().mockRejectedValue(new Error('Not loaded')),
   getMotifPerformance: vi.fn().mockRejectedValue(new Error('Not loaded')),
   getUserStatus: vi.fn().mockRejectedValue(new Error('Not loaded')),
+  getTodaysFocus: vi.fn().mockRejectedValue(new Error('Not loaded')),
 }));
 
 vi.mock('../api/ratings', () => ({
@@ -63,11 +64,12 @@ describe('Dashboard', () => {
     mockUsername = 'testplayer';
   });
 
-  it('should redirect to home when no username', () => {
+  it('should explain itself in place when no username', () => {
     mockUsername = '';
     render(<Dashboard />);
 
-    expect(mockNavigate).toHaveBeenCalledWith('/');
+    expect(screen.getByText('Connect your Chess.com account')).toBeInTheDocument();
+    expect(mockNavigate).not.toHaveBeenCalled();
   });
 
   it('should render when username is set', () => {

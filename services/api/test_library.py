@@ -921,3 +921,487 @@ class TestGetPuzzleDetail:
 
         data = client.get("/puzzles/p-dx-detail?username=testuser").json()
         assert data["diagnosis_summary"] is None
+
+
+class TestCauseFilter:
+    """The destination of the Insights "practise this" links.
+
+    Those cards link to ``/library?cause=…``. Asserting the link's href in the
+    frontend proves nothing on its own — these tests cover the other half, that
+    the destination actually narrows the list.
+    """
+
+    def test_narrows_the_list_to_one_cause(self, client, db_session):
+        _seed_puzzles(db_session, count=3)
+        _create_diagnosis(db_session, "p-0", primary_cause="loose_piece_awareness")
+        _create_diagnosis(db_session, "p-1", primary_cause="king_safety_blindness")
+        _create_diagnosis(db_session, "p-2", primary_cause="loose_piece_awareness")
+        db_session.commit()
+
+        res = client.get("/puzzles/list?username=testuser&cause=loose_piece_awareness")
+        assert res.status_code == 200
+        body = res.json()
+        assert {p["id"] for p in body["puzzles"]} == {"p-0", "p-2"}
+        assert body["total"] == 2
+
+    def test_excludes_undiagnosed_puzzles(self, client, db_session):
+        # An undiagnosed puzzle has no cause, so it cannot match one. Without
+        # this the outer join would let every un-analysed puzzle through.
+        _seed_puzzles(db_session, count=2)
+        _create_diagnosis(db_session, "p-0", primary_cause="loose_piece_awareness")
+        db_session.commit()
+
+        body = client.get(
+            "/puzzles/list?username=testuser&cause=loose_piece_awareness"
+        ).json()
+        assert [p["id"] for p in body["puzzles"]] == ["p-0"]
+
+    def test_a_user_correction_beats_the_computed_cause(self, client, db_session):
+        # Same precedence the aggregates use: if the user says the diagnosis was
+        # wrong, filtering must follow their word, both ways.
+        _seed_puzzles(db_session, count=1)
+        _create_diagnosis(
+            db_session,
+            "p-0",
+            primary_cause="loose_piece_awareness",
+            user_confirmed_cause="king_safety_blindness",
+        )
+        db_session.commit()
+
+        confirmed = client.get(
+            "/puzzles/list?username=testuser&cause=king_safety_blindness"
+        ).json()
+        assert [p["id"] for p in confirmed["puzzles"]] == ["p-0"]
+
+        computed = client.get(
+            "/puzzles/list?username=testuser&cause=loose_piece_awareness"
+        ).json()
+        assert computed["puzzles"] == []
+
+    def test_accepts_several_causes(self, client, db_session):
+        _seed_puzzles(db_session, count=3)
+        _create_diagnosis(db_session, "p-0", primary_cause="loose_piece_awareness")
+        _create_diagnosis(db_session, "p-1", primary_cause="king_safety_blindness")
+        _create_diagnosis(db_session, "p-2", primary_cause="endgame_technique_gap")
+        db_session.commit()
+
+        body = client.get(
+            "/puzzles/list?username=testuser"
+            "&cause=loose_piece_awareness,king_safety_blindness"
+        ).json()
+        assert {p["id"] for p in body["puzzles"]} == {"p-0", "p-1"}
+
+    def test_combines_with_the_other_filters(self, client, db_session):
+        # A cause filter that ignored the status filter would quietly widen the
+        # result the moment a user arrived from Insights with both set.
+        _seed_puzzles(db_session, count=3)
+        for pid in ("p-0", "p-1", "p-2"):
+            _create_diagnosis(db_session, pid, primary_cause="loose_piece_awareness")
+        db_session.commit()
+
+        unfiltered = client.get(
+            "/puzzles/list?username=testuser&cause=loose_piece_awareness"
+        ).json()
+        combined = client.get(
+            "/puzzles/list?username=testuser"
+            "&cause=loose_piece_awareness&difficulty=hard"
+        ).json()
+        assert combined["total"] < unfiltered["total"]
+        assert all(p["difficulty"] == "hard" for p in combined["puzzles"])
+
+    def test_is_scoped_to_the_requesting_user(self, client, db_session):
+        # The diagnosis table is keyed (puzzle_id, username); a join that
+        # forgot the username would surface another player's classification.
+        _seed_puzzles(db_session, count=1, username="testuser")
+        _create_diagnosis(
+            db_session, "p-0", username="other", primary_cause="king_safety_blindness"
+        )
+        db_session.commit()
+
+        body = client.get(
+            "/puzzles/list?username=testuser&cause=king_safety_blindness"
+        ).json()
+        assert body["puzzles"] == []
+
+
+class TestAvailableCauses:
+    def test_offers_only_causes_that_would_return_something(self, client, db_session):
+        _seed_puzzles(db_session, count=2)
+        _create_diagnosis(db_session, "p-0", primary_cause="loose_piece_awareness")
+        db_session.commit()
+
+        body = client.get("/puzzles/list?username=testuser").json()
+        assert body["available_causes"] == [
+            {"value": "loose_piece_awareness", "label": "Loose piece awareness"}
+        ]
+
+    def test_carries_the_label_so_the_ui_never_shows_a_slug(self, client, db_session):
+        _seed_puzzles(db_session, count=1)
+        _create_diagnosis(db_session, "p-0", primary_cause="king_safety_blindness")
+        db_session.commit()
+
+        body = client.get("/puzzles/list?username=testuser").json()
+        assert body["available_causes"][0]["label"] != "king_safety_blindness"
+
+    def test_reports_the_confirmed_cause_not_the_computed_one(self, client, db_session):
+        _seed_puzzles(db_session, count=1)
+        _create_diagnosis(
+            db_session,
+            "p-0",
+            primary_cause="loose_piece_awareness",
+            user_confirmed_cause="king_safety_blindness",
+        )
+        db_session.commit()
+
+        body = client.get("/puzzles/list?username=testuser").json()
+        values = [c["value"] for c in body["available_causes"]]
+        assert values == ["king_safety_blindness"]
+
+    def test_offers_exactly_what_the_insights_counts_are_built_from(
+        self, client, db_session
+    ):
+        # The two surfaces must agree: what Insights counts under a cause is
+        # what the library filter returns for it. Comparing against the
+        # repository the Insights endpoint uses pins them to one predicate
+        # rather than to two queries that happen to match today.
+        from services.api.storage.diagnosis_repository import DiagnosisRepository
+
+        _seed_puzzles(db_session, count=3)
+        _create_diagnosis(db_session, "p-0", primary_cause="loose_piece_awareness")
+        _create_diagnosis(
+            db_session,
+            "p-1",
+            primary_cause="king_safety_blindness",
+            user_confirmed_cause="loose_piece_awareness",
+        )
+        _create_diagnosis(
+            db_session,
+            "p-2",
+            primary_cause=None,
+            status=DiagnosisStatus.UNAVAILABLE,
+            error="illegal move for fen",
+        )
+        db_session.commit()
+
+        counts = dict(DiagnosisRepository(db_session).cause_counts("testuser"))
+        body = client.get("/puzzles/list?username=testuser").json()
+
+        assert {c["value"] for c in body["available_causes"]} == set(counts)
+        for value, expected in counts.items():
+            listed = client.get(f"/puzzles/list?username=testuser&cause={value}").json()
+            assert listed["total"] == expected
+
+    def test_is_scoped_to_the_requesting_user(self, client, db_session):
+        _seed_puzzles(db_session, count=1, username="testuser")
+        _create_diagnosis(
+            db_session, "p-0", username="other", primary_cause="king_safety_blindness"
+        )
+        db_session.commit()
+
+        body = client.get("/puzzles/list?username=testuser").json()
+        assert body["available_causes"] == []
+
+
+class TestPhaseAndOpeningFilters:
+    """The remaining two filters the spec asked for.
+
+    Both live on the diagnosis rather than the puzzle, so both narrow to
+    analysable rows the same way the cause filter does, and all three compose.
+    """
+
+    def _diag(
+        self,
+        db,
+        pid,
+        *,
+        phase="middlegame",
+        opening=None,
+        cause="loose_piece_awareness",
+    ):
+        db.add(
+            PuzzleDiagnosis(
+                puzzle_id=pid,
+                username="testuser",
+                status=DiagnosisStatus.OK,
+                primary_motif="fork",
+                primary_cause=cause,
+                phase=phase,
+                opening_family=opening,
+                source="rules",
+                evidence_json=[],
+            )
+        )
+        db.flush()
+
+    def test_narrows_by_phase(self, client, db_session):
+        _seed_puzzles(db_session, count=3)
+        self._diag(db_session, "p-0", phase="opening")
+        self._diag(db_session, "p-1", phase="endgame")
+        self._diag(db_session, "p-2", phase="opening")
+        db_session.commit()
+
+        body = client.get("/puzzles/list?username=testuser&phase=opening").json()
+        assert {p["id"] for p in body["puzzles"]} == {"p-0", "p-2"}
+
+    def test_phase_matching_ignores_case(self, client, db_session):
+        _seed_puzzles(db_session, count=1)
+        self._diag(db_session, "p-0", phase="endgame")
+        db_session.commit()
+        body = client.get("/puzzles/list?username=testuser&phase=ENDGAME").json()
+        assert [p["id"] for p in body["puzzles"]] == ["p-0"]
+
+    def test_narrows_by_opening_family(self, client, db_session):
+        # The spec's "common in Sicilian / Italian structures" needs this.
+        _seed_puzzles(db_session, count=2)
+        self._diag(db_session, "p-0", opening="Sicilian Defense")
+        self._diag(db_session, "p-1", opening="Italian Game")
+        db_session.commit()
+
+        body = client.get(
+            "/puzzles/list?username=testuser&opening=Sicilian%20Defense"
+        ).json()
+        assert [p["id"] for p in body["puzzles"]] == ["p-0"]
+
+    def test_an_unclassified_game_is_excluded_rather_than_grouped(
+        self, client, db_session
+    ):
+        # A game that never left book unclassified must not be swept into some
+        # other family — an absence is not a match.
+        _seed_puzzles(db_session, count=2)
+        self._diag(db_session, "p-0", opening="Sicilian Defense")
+        self._diag(db_session, "p-1", opening=None)
+        db_session.commit()
+
+        body = client.get(
+            "/puzzles/list?username=testuser&opening=Sicilian%20Defense"
+        ).json()
+        assert [p["id"] for p in body["puzzles"]] == ["p-0"]
+        assert body["available_openings"] == ["Sicilian Defense"]
+
+    def test_the_three_diagnosis_filters_compose(self, client, db_session):
+        _seed_puzzles(db_session, count=3)
+        self._diag(db_session, "p-0", phase="opening", opening="Sicilian Defense")
+        self._diag(db_session, "p-1", phase="endgame", opening="Sicilian Defense")
+        self._diag(
+            db_session,
+            "p-2",
+            phase="opening",
+            opening="Sicilian Defense",
+            cause="king_safety_blindness",
+        )
+        db_session.commit()
+
+        body = client.get(
+            "/puzzles/list?username=testuser&opening=Sicilian%20Defense"
+            "&phase=opening&cause=loose_piece_awareness"
+        ).json()
+        assert [p["id"] for p in body["puzzles"]] == ["p-0"]
+
+    def test_available_openings_is_scoped_to_the_user(self, client, db_session):
+        _seed_puzzles(db_session, count=1, username="testuser")
+        db_session.add(
+            PuzzleDiagnosis(
+                puzzle_id="p-0",
+                username="other",
+                status=DiagnosisStatus.OK,
+                primary_cause="loose_piece_awareness",
+                opening_family="Sicilian Defense",
+                source="rules",
+                evidence_json=[],
+            )
+        )
+        db_session.commit()
+        body = client.get("/puzzles/list?username=testuser").json()
+        assert body["available_openings"] == []
+
+
+class TestOpeningPractice:
+    """What an explorer line can actually offer, and at what granularity.
+
+    The join key is the part of the name before the colon. That derivation
+    lives in exactly one place; these tests exist partly to keep it there.
+    """
+
+    def _diag(self, db, pid, name):
+        family = name.split(":", 1)[0].strip() if name else None
+        db.add(
+            PuzzleDiagnosis(
+                puzzle_id=pid,
+                username="testuser",
+                status=DiagnosisStatus.OK,
+                primary_cause="loose_piece_awareness",
+                opening_name=name,
+                opening_family=family,
+                source="rules",
+                evidence_json=[],
+            )
+        )
+        db.flush()
+
+    def test_offers_the_line_when_it_has_enough(self, client, db_session):
+        _seed_puzzles(db_session, count=4)
+        for i in range(3):
+            self._diag(db_session, f"p-{i}", "Sicilian Defense: Najdorf Variation")
+        self._diag(db_session, "p-3", "Sicilian Defense: Dragon Variation")
+        db_session.commit()
+
+        body = client.get(
+            "/users/testuser/opening-practice"
+            "?opening_name=Sicilian%20Defense:%20Najdorf%20Variation"
+        ).json()
+        assert body["scope"] == "line"
+        assert body["line_count"] == 3
+        assert body["family_count"] == 4
+        assert body["opening_family"] == "Sicilian Defense"
+
+    def test_falls_back_to_the_family_when_the_line_is_thin(self, client, db_session):
+        # Two puzzles is not practice — a session that keeps repeating the same
+        # position is worse than a broader one.
+        _seed_puzzles(db_session, count=4)
+        for i in range(2):
+            self._diag(db_session, f"p-{i}", "Sicilian Defense: Najdorf Variation")
+        for i in range(2, 4):
+            self._diag(db_session, f"p-{i}", "Sicilian Defense: Dragon Variation")
+        db_session.commit()
+
+        body = client.get(
+            "/users/testuser/opening-practice"
+            "?opening_name=Sicilian%20Defense:%20Najdorf%20Variation"
+        ).json()
+        assert body["scope"] == "family"
+        assert body["line_count"] == 2
+        assert body["family_count"] == 4
+
+    def test_reports_none_when_the_opening_is_unplayed(self, client, db_session):
+        # A link that leads to an empty list is worse than no link, so the
+        # caller is told there is nothing rather than left to discover it.
+        _seed_puzzles(db_session, count=2)
+        self._diag(db_session, "p-0", "French Defense: Advance Variation")
+        db_session.commit()
+
+        body = client.get(
+            "/users/testuser/opening-practice"
+            "?opening_name=Sicilian%20Defense:%20Najdorf%20Variation"
+        ).json()
+        assert body["scope"] == "none"
+        assert body["line_count"] == 0
+        assert body["family_count"] == 0
+
+    def test_derives_the_family_server_side(self, client, db_session):
+        # The frontend must never re-implement the split. If it did, this is
+        # the contract that would have let the two drift.
+        _seed_puzzles(db_session, count=1)
+        db_session.commit()
+        body = client.get(
+            "/users/testuser/opening-practice"
+            "?opening_name=Queen%27s%20Gambit%20Declined:%20Exchange%20Variation"
+        ).json()
+        assert body["opening_family"] == "Queen's Gambit Declined"
+
+    def test_a_family_only_name_is_its_own_family(self, client, db_session):
+        _seed_puzzles(db_session, count=1)
+        self._diag(db_session, "p-0", "Bird Opening")
+        db_session.commit()
+        body = client.get(
+            "/users/testuser/opening-practice?opening_name=Bird%20Opening"
+        ).json()
+        assert body["opening_family"] == "Bird Opening"
+        assert body["line_count"] == 1
+
+    def test_is_scoped_to_the_requesting_user(self, client, db_session):
+        _seed_puzzles(db_session, count=1, username="testuser")
+        db_session.add(
+            PuzzleDiagnosis(
+                puzzle_id="p-0",
+                username="other",
+                status=DiagnosisStatus.OK,
+                primary_cause="loose_piece_awareness",
+                opening_name="Sicilian Defense: Najdorf Variation",
+                opening_family="Sicilian Defense",
+                source="rules",
+                evidence_json=[],
+            )
+        )
+        db_session.commit()
+        body = client.get(
+            "/users/testuser/opening-practice"
+            "?opening_name=Sicilian%20Defense:%20Najdorf%20Variation"
+        ).json()
+        assert body["scope"] == "none"
+
+    def test_the_promised_counts_match_what_the_filters_return(
+        self, client, db_session
+    ):
+        # The number in "Practise this line (N)" and the number of puzzles the
+        # filter actually yields are computed by different queries. Comparing
+        # them against each other, rather than against a literal, is what stops
+        # the two drifting — a count that overstates is the same class of defect
+        # as a link to an empty list.
+        _seed_puzzles(db_session, count=5)
+        for i in range(3):
+            self._diag(db_session, f"p-{i}", "Sicilian Defense: Najdorf Variation")
+        self._diag(db_session, "p-3", "Sicilian Defense: Dragon Variation")
+        self._diag(db_session, "p-4", "French Defense: Advance Variation")
+        db_session.commit()
+
+        practice = client.get(
+            "/users/testuser/opening-practice"
+            "?opening_name=Sicilian%20Defense:%20Najdorf%20Variation"
+        ).json()
+        by_line = client.get(
+            "/puzzles/list?username=testuser"
+            "&opening_line=Sicilian%20Defense:%20Najdorf%20Variation"
+        ).json()
+        by_family = client.get(
+            "/puzzles/list?username=testuser&opening=Sicilian%20Defense"
+        ).json()
+
+        assert practice["line_count"] == by_line["total"]
+        assert practice["family_count"] == by_family["total"]
+
+
+class TestOpeningLineFilter:
+    def _diag(self, db, pid, name):
+        db.add(
+            PuzzleDiagnosis(
+                puzzle_id=pid,
+                username="testuser",
+                status=DiagnosisStatus.OK,
+                primary_cause="loose_piece_awareness",
+                opening_name=name,
+                opening_family=name.split(":", 1)[0].strip(),
+                source="rules",
+                evidence_json=[],
+            )
+        )
+        db.flush()
+
+    def test_narrows_to_one_line_within_a_family(self, client, db_session):
+        _seed_puzzles(db_session, count=3)
+        self._diag(db_session, "p-0", "Sicilian Defense: Najdorf Variation")
+        self._diag(db_session, "p-1", "Sicilian Defense: Dragon Variation")
+        self._diag(db_session, "p-2", "Sicilian Defense: Najdorf Variation")
+        db_session.commit()
+
+        body = client.get(
+            "/puzzles/list?username=testuser"
+            "&opening_line=Sicilian%20Defense:%20Najdorf%20Variation"
+        ).json()
+        assert {p["id"] for p in body["puzzles"]} == {"p-0", "p-2"}
+
+    def test_is_narrower_than_the_family_filter(self, client, db_session):
+        _seed_puzzles(db_session, count=3)
+        self._diag(db_session, "p-0", "Sicilian Defense: Najdorf Variation")
+        self._diag(db_session, "p-1", "Sicilian Defense: Dragon Variation")
+        self._diag(db_session, "p-2", "Sicilian Defense: Dragon Variation")
+        db_session.commit()
+
+        line = client.get(
+            "/puzzles/list?username=testuser"
+            "&opening_line=Sicilian%20Defense:%20Najdorf%20Variation"
+        ).json()
+        family = client.get(
+            "/puzzles/list?username=testuser&opening=Sicilian%20Defense"
+        ).json()
+        assert line["total"] == 1
+        assert family["total"] == 3

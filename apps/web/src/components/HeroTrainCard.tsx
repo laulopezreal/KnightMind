@@ -137,7 +137,7 @@ export function HeroTrainCard({
             <button
               type="button"
               onClick={secondaryAction.onClick}
-              className="mt-3 text-sm font-sans text-primary/70 underline decoration-primary/30 underline-offset-4 km-interactive km-focus-visible transition-colors"
+              className="mt-3 text-sm font-sans font-normal text-primary/70 underline decoration-primary/30 underline-offset-4 km-interactive km-focus-visible transition-colors"
             >
               {secondaryAction.label}
             </button>

@@ -248,3 +248,257 @@ def test_get_adaptive_puzzles_accuracy_goal_sorting(db_session):
     )
 
     assert ordered_ids == ["p1", "p2"]
+
+
+class TestFocusBias:
+    """A training focus re-orders the trainable set. It must never widen it.
+
+    This is the load-bearing guarantee of the pattern planner: clicking "train
+    this pattern" may change *which puzzle comes first*, and nothing else. It
+    cannot make a not-yet-due puzzle due, cannot pull in a puzzle the caller
+    did not offer, and cannot change a session nobody asked to focus.
+    """
+
+    def _stats(self, db, pid, *, due_days_ago=None, due_in_days=None):
+        from datetime import timedelta
+
+        from services.api.models import PuzzleStats
+
+        now = datetime.now(timezone.utc)
+        if due_days_ago is not None:
+            due = now - timedelta(days=due_days_ago)
+        elif due_in_days is not None:
+            due = now + timedelta(days=due_in_days)
+        else:
+            due = None
+        db.add(
+            PuzzleStats(
+                puzzle_id=pid,
+                username="u",
+                attempts=1,
+                pass_count=1,
+                ease_factor=2.0,
+                interval_days=1,
+                next_due_at=due.replace(tzinfo=None) if due else None,
+            )
+        )
+
+    def test_cannot_promote_a_not_yet_due_puzzle_above_a_due_one(self, db_session):
+        # The whole D4 guarantee in one assertion. If the focus sat before the
+        # due/new/future tier in the sort key, "future" would come first here.
+        self._stats(db_session, "due", due_days_ago=1)
+        self._stats(db_session, "future", due_in_days=30)
+        db_session.commit()
+
+        ordered, _ = get_adaptive_puzzles(
+            db_session, "u", ["due", "future"], n=2, focus_puzzle_ids={"future"}
+        )
+        assert ordered == ["due", "future"]
+
+    def test_cannot_add_a_puzzle_the_caller_did_not_offer(self, db_session):
+        # The focus is a membership test over the candidates, not a query. A
+        # focus id absent from the candidate list stays absent — that is what
+        # keeps the trainable narrowing upstream authoritative.
+        self._stats(db_session, "a", due_days_ago=1)
+        db_session.commit()
+
+        ordered, _ = get_adaptive_puzzles(
+            db_session, "u", ["a"], n=5, focus_puzzle_ids={"a", "not-offered"}
+        )
+        assert ordered == ["a"]
+
+    def test_reorders_within_a_tier(self, db_session):
+        # Both due, so serving the focus one first re-anchors no interval.
+        self._stats(db_session, "older", due_days_ago=10)
+        self._stats(db_session, "newer", due_days_ago=1)
+        db_session.commit()
+
+        unfocused, _ = get_adaptive_puzzles(db_session, "u", ["older", "newer"], n=2)
+        assert unfocused == ["older", "newer"]
+
+        focused, _ = get_adaptive_puzzles(
+            db_session, "u", ["older", "newer"], n=2, focus_puzzle_ids={"newer"}
+        )
+        assert focused == ["newer", "older"]
+
+    def test_changes_nothing_when_no_focus_is_asked_for(self, db_session):
+        # Every user who never requests a focused session must get exactly the
+        # queue they got before this parameter existed.
+        self._stats(db_session, "a", due_days_ago=5)
+        self._stats(db_session, "b", due_days_ago=2)
+        self._stats(db_session, "c", due_in_days=3)
+        db_session.commit()
+
+        ids = ["c", "a", "b"]
+        assert (
+            get_adaptive_puzzles(db_session, "u", ids, n=5)[0]
+            == get_adaptive_puzzles(db_session, "u", ids, n=5, focus_puzzle_ids=set())[
+                0
+            ]
+        )
+        assert (
+            get_adaptive_puzzles(db_session, "u", ids, n=5)[0]
+            == get_adaptive_puzzles(db_session, "u", ids, n=5, focus_puzzle_ids=None)[0]
+        )
+
+    def test_a_focus_with_nothing_trainable_yields_an_ordinary_session(
+        self, db_session
+    ):
+        # Degrading to a normal session is the reason this is a bias and not a
+        # filter: a user should never be told "no puzzles" for asking to work
+        # on a pattern that happens to have nothing due today.
+        self._stats(db_session, "a", due_days_ago=1)
+        self._stats(db_session, "b", due_days_ago=2)
+        db_session.commit()
+
+        focused, _ = get_adaptive_puzzles(
+            db_session, "u", ["a", "b"], n=5, focus_puzzle_ids={"nothing-due-today"}
+        )
+        unfocused, _ = get_adaptive_puzzles(db_session, "u", ["a", "b"], n=5)
+        assert focused == unfocused
+        assert focused != []
+
+    def test_still_respects_the_session_size(self, db_session):
+        # A focus must not be a way to smuggle extra puzzles into a session.
+        for i in range(6):
+            self._stats(db_session, f"p{i}", due_days_ago=i + 1)
+        db_session.commit()
+
+        ordered, _ = get_adaptive_puzzles(
+            db_session,
+            "u",
+            [f"p{i}" for i in range(6)],
+            n=3,
+            focus_puzzle_ids={f"p{i}" for i in range(6)},
+        )
+        assert len(ordered) == 3
+
+
+def test_a_never_reviewed_puzzle_counts_as_due(db_session):
+    """A NULL next_due_at is "New", and New is trainable.
+
+    Stats rows are created eagerly on save, so a user who has generated puzzles
+    but reviewed none has a table full of NULL due dates. Excluding them makes
+    the badge say "0 due" while a session happily serves them — the count and
+    the queue must not disagree about what is trainable.
+
+    This was lost once already: it lives on main and was dropped when dev's
+    version of this file won a merge, so it is pinned here rather than left to
+    the next reconciliation.
+    """
+    from services.api.models import PuzzleStats
+    from services.api.storage.spaced_repetition import get_due_puzzle_count
+
+    db_session.add(
+        PuzzleStats(
+            puzzle_id="never-reviewed",
+            username="u",
+            attempts=0,
+            pass_count=0,
+            ease_factor=2.0,
+            next_due_at=None,
+        )
+    )
+    db_session.commit()
+
+    assert get_due_puzzle_count(db_session, "u") == 1
+
+
+class TestVarietyCap:
+    """One motif must not monopolise a session.
+
+    Five forks in a row is a worse session than four forks and a pin, even when
+    the fifth fork is the next most overdue — the point of a mixed session is
+    that you cannot pattern-match your way through it.
+    """
+
+    def _stats(self, db, pid, motif, days_overdue):
+        from datetime import timedelta
+
+        from services.api.models import PuzzleStats
+
+        db.add(
+            PuzzleStats(
+                puzzle_id=pid,
+                username="u",
+                primary_motif=motif,
+                attempts=1,
+                pass_count=1,
+                ease_factor=2.0,
+                interval_days=1,
+                next_due_at=(
+                    datetime.now(timezone.utc) - timedelta(days=days_overdue)
+                ).replace(tzinfo=None),
+            )
+        )
+
+    def test_caps_one_motif_below_the_whole_session(self, db_session):
+        # Six forks and one pin, the pin least overdue. Without the cap the
+        # session is six forks; with it the pin earns a place.
+        for i in range(6):
+            self._stats(db_session, f"fork{i}", "Fork", 30 - i)
+        self._stats(db_session, "pin0", "Pin", 1)
+        db_session.commit()
+
+        ids = [f"fork{i}" for i in range(6)] + ["pin0"]
+        ordered, _ = get_adaptive_puzzles(db_session, "u", ids, n=5)
+        assert "pin0" in ordered
+        assert sum(1 for p in ordered if p.startswith("fork")) <= 4
+
+    def test_never_shortens_a_session(self, db_session):
+        # The cap reorders; it must never make a session smaller than the
+        # corpus could fill. All one motif here, so it cannot add variety.
+        for i in range(6):
+            self._stats(db_session, f"fork{i}", "Fork", 30 - i)
+        db_session.commit()
+
+        ids = [f"fork{i}" for i in range(6)]
+        ordered, _ = get_adaptive_puzzles(db_session, "u", ids, n=5)
+        assert len(ordered) == 5
+
+    def test_never_changes_the_set(self, db_session):
+        for i in range(4):
+            self._stats(db_session, f"fork{i}", "Fork", 30 - i)
+        db_session.commit()
+
+        ids = [f"fork{i}" for i in range(4)]
+        ordered, _ = get_adaptive_puzzles(db_session, "u", ids, n=10)
+        assert sorted(ordered) == sorted(ids)
+
+    def test_leaves_a_focused_session_concentrated(self, db_session):
+        # A focus is an explicit request for concentration; capping it would
+        # fight the user's own choice.
+        for i in range(6):
+            self._stats(db_session, f"fork{i}", "Fork", 30 - i)
+        self._stats(db_session, "pin0", "Pin", 1)
+        db_session.commit()
+
+        ids = [f"fork{i}" for i in range(6)] + ["pin0"]
+        ordered, _ = get_adaptive_puzzles(
+            db_session, "u", ids, n=5, focus_puzzle_ids={f"fork{i}" for i in range(6)}
+        )
+        assert all(p.startswith("fork") for p in ordered)
+
+    def test_puzzles_without_a_motif_are_exempt(self, db_session):
+        # "Unknown" is not a motif; capping it would penalise exactly the
+        # puzzles the user has seen least.
+        for i in range(6):
+            self._stats(db_session, f"none{i}", None, 30 - i)
+        db_session.commit()
+
+        ids = [f"none{i}" for i in range(6)]
+        ordered, _ = get_adaptive_puzzles(db_session, "u", ids, n=5)
+        assert len(ordered) == 5
+
+    def test_keeps_the_most_overdue_first_within_the_cap(self, db_session):
+        # Variety reorders across motifs; it must not scramble the scheduling
+        # priority inside one.
+        for i in range(3):
+            self._stats(db_session, f"fork{i}", "Fork", 30 - i)
+        self._stats(db_session, "pin0", "Pin", 1)
+        db_session.commit()
+
+        ids = ["pin0"] + [f"fork{i}" for i in range(3)]
+        ordered, _ = get_adaptive_puzzles(db_session, "u", ids, n=4)
+        forks = [p for p in ordered if p.startswith("fork")]
+        assert forks == ["fork0", "fork1", "fork2"]

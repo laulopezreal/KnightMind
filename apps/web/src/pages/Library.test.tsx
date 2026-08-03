@@ -4,14 +4,20 @@ import Library from './Library';
 
 let mockUsername = 'testplayer';
 
+const mockNavigate = vi.fn();
+const mockSetEditorOpen = vi.fn();
+
 vi.mock('react-router-dom', () => ({
     Link: ({ children, to, ...props }: { children: React.ReactNode; to: string; [key: string]: unknown }) => (
         <a href={to} {...props}>{children}</a>
     ),
+    // Read lazily so the const above is initialised by the time it is called —
+    // this factory runs when Library is imported, before the file's consts.
+    useNavigate: () => mockNavigate,
 }));
 
 vi.mock('../context/ChessUsernameContext', () => ({
-    useChessUsername: () => ({ username: mockUsername, setEditorOpen: vi.fn() }),
+    useChessUsername: () => ({ username: mockUsername, setEditorOpen: mockSetEditorOpen }),
 }));
 
 const mockGetLibraryPuzzles = vi.fn();
@@ -28,6 +34,8 @@ const EMPTY_RESPONSE = {
     limit: 50,
     offset: 0,
     available_motifs: [],
+    available_causes: [],
+    available_openings: [],
     stats: { total: 0, due: 0, new: 0, learning: 0, mastered: 0 },
 };
 
@@ -98,11 +106,15 @@ describe('Library', () => {
 
     // --- No username state ---
 
-    it('should show set username prompt when no username', async () => {
+    it('should show a connect-account prompt when no username', async () => {
         mockUsername = '';
         render(<Library />);
-        expect(screen.getByText(/Set your username/i)).toBeInTheDocument();
-        expect(screen.getByRole('button', { name: /Set Username/i })).toBeInTheDocument();
+        expect(screen.getByText('Connect your Chess.com account')).toBeInTheDocument();
+        // The old prompt's button called setEditorOpen, but that editor lives
+        // in UsernameDisplay, which Layout only mounts once a username exists —
+        // so it could never open anything in the one state that rendered it.
+        expect(screen.queryByText('Set Username')).not.toBeInTheDocument();
+        expect(mockSetEditorOpen).not.toHaveBeenCalled();
     });
 
     it('should not fetch puzzles when no username', () => {
@@ -441,5 +453,270 @@ describe('Library', () => {
             const prevButton = screen.getByText('Previous');
             expect(prevButton).toBeDisabled();
         });
+    });
+});
+
+describe('Library cause filter', () => {
+    const CAUSES = [
+        { value: 'loose_piece_awareness', label: 'Loose piece awareness' },
+        { value: 'king_safety_blindness', label: 'King safety blindness' },
+    ];
+
+    beforeEach(() => {
+        vi.clearAllMocks();
+        mockGetLibraryPuzzles.mockResolvedValue({
+            ...EMPTY_RESPONSE,
+            available_causes: CAUSES,
+        });
+    });
+
+    afterEach(() => {
+        window.history.replaceState({}, '', '/library');
+    });
+
+    it('applies ?cause= from the URL on first load', async () => {
+        // This is the whole point of the Insights "practise this" links: they
+        // arrive with the parameter already set and expect a narrowed list.
+        window.history.replaceState({}, '', '/library?cause=loose_piece_awareness');
+        render(<Library />);
+
+        await waitFor(() => {
+            expect(mockGetLibraryPuzzles).toHaveBeenCalledWith(
+                expect.objectContaining({ cause: 'loose_piece_awareness' })
+            );
+        });
+    });
+
+    it('sends no cause when the URL carries none', async () => {
+        render(<Library />);
+        await waitFor(() => expect(mockGetLibraryPuzzles).toHaveBeenCalled());
+        expect(mockGetLibraryPuzzles).toHaveBeenCalledWith(
+            expect.objectContaining({ cause: undefined })
+        );
+    });
+
+    it('shows the arriving cause as the selected filter', async () => {
+        // Otherwise the list is narrowed with no visible reason and the user
+        // cannot tell why most of their puzzles are missing.
+        window.history.replaceState({}, '', '/library?cause=king_safety_blindness');
+        render(<Library />);
+
+        const select = await screen.findByLabelText('Filter by mistake cause');
+        expect(select).toHaveValue('king_safety_blindness');
+    });
+
+    it('labels the options rather than showing raw slugs', async () => {
+        render(<Library />);
+        expect(await screen.findByRole('option', { name: 'Loose piece awareness' }))
+            .toBeInTheDocument();
+        expect(
+            screen.queryByRole('option', { name: 'loose_piece_awareness' })
+        ).not.toBeInTheDocument();
+    });
+
+    it('lets the user clear the filter they arrived with', async () => {
+        window.history.replaceState({}, '', '/library?cause=loose_piece_awareness');
+        render(<Library />);
+
+        const select = await screen.findByLabelText('Filter by mistake cause');
+        fireEvent.change(select, { target: { value: '' } });
+
+        await waitFor(() => {
+            expect(mockGetLibraryPuzzles).toHaveBeenLastCalledWith(
+                expect.objectContaining({ cause: undefined })
+            );
+        });
+    });
+
+    it('hides the control when nothing has been diagnosed', async () => {
+        mockGetLibraryPuzzles.mockResolvedValue(EMPTY_RESPONSE);
+        render(<Library />);
+        await waitFor(() => expect(mockGetLibraryPuzzles).toHaveBeenCalled());
+        expect(
+            screen.queryByLabelText('Filter by mistake cause')
+        ).not.toBeInTheDocument();
+    });
+});
+
+describe('Library phase and opening filters', () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+        mockGetLibraryPuzzles.mockResolvedValue({
+            ...EMPTY_RESPONSE,
+            available_openings: ['Sicilian Defense', 'Italian Game'],
+        });
+    });
+
+    afterEach(() => {
+        window.history.replaceState({}, '', '/library');
+    });
+
+    it('applies ?phase= from the URL', async () => {
+        window.history.replaceState({}, '', '/library?phase=endgame');
+        render(<Library />);
+        await waitFor(() => {
+            expect(mockGetLibraryPuzzles).toHaveBeenCalledWith(
+                expect.objectContaining({ phase: 'endgame' })
+            );
+        });
+    });
+
+    it('applies ?opening= from the URL', async () => {
+        window.history.replaceState({}, '', '/library?opening=Sicilian%20Defense');
+        render(<Library />);
+        await waitFor(() => {
+            expect(mockGetLibraryPuzzles).toHaveBeenCalledWith(
+                expect.objectContaining({ opening: 'Sicilian Defense' })
+            );
+        });
+    });
+
+    it('offers the phases as a fixed list', async () => {
+        // Phase is always populated on a diagnosis, so unlike openings there is
+        // no "only offer what exists" question — all three always apply.
+        render(<Library />);
+        const select = await screen.findByLabelText('Filter by game phase');
+        expect(select).toBeInTheDocument();
+        expect(screen.getByRole('option', { name: 'Middlegame' })).toBeInTheDocument();
+    });
+
+    it('offers only openings the corpus actually contains', async () => {
+        render(<Library />);
+        expect(await screen.findByRole('option', { name: 'Sicilian Defense' }))
+            .toBeInTheDocument();
+    });
+
+    it('hides the opening control when nothing has been classified', async () => {
+        mockGetLibraryPuzzles.mockResolvedValue(EMPTY_RESPONSE);
+        render(<Library />);
+        await waitFor(() => expect(mockGetLibraryPuzzles).toHaveBeenCalled());
+        expect(screen.queryByLabelText('Filter by opening')).not.toBeInTheDocument();
+    });
+
+    it('sends neither filter when the URL carries none', async () => {
+        render(<Library />);
+        await waitFor(() => expect(mockGetLibraryPuzzles).toHaveBeenCalled());
+        expect(mockGetLibraryPuzzles).toHaveBeenCalledWith(
+            expect.objectContaining({ phase: undefined, opening: undefined })
+        );
+    });
+});
+
+describe('Library opening-line filter (the Openings → Train destination)', () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+        // Fresh object per call so a re-fetch genuinely re-renders.
+        mockGetLibraryPuzzles.mockImplementation(() =>
+            Promise.resolve({ ...EMPTY_RESPONSE, available_openings: [] })
+        );
+    });
+
+    afterEach(() => {
+        window.history.replaceState({}, '', '/library');
+    });
+
+    it('applies ?opening_line= from the URL', async () => {
+        // The other half of the explorer link. Asserting the href alone in the
+        // link's own tests proves nothing about the destination honouring it.
+        window.history.replaceState(
+            {}, '', '/library?opening_line=Sicilian%20Defense%3A%20Najdorf%20Variation'
+        );
+        render(<Library />);
+        await waitFor(() => {
+            expect(mockGetLibraryPuzzles).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    opening_line: 'Sicilian Defense: Najdorf Variation',
+                })
+            );
+        });
+    });
+
+    it('shows the arriving line as a removable chip', async () => {
+        window.history.replaceState(
+            {}, '', '/library?opening_line=Sicilian%20Defense%3A%20Najdorf%20Variation'
+        );
+        render(<Library />);
+        expect(
+            await screen.findByText('Sicilian Defense: Najdorf Variation')
+        ).toBeInTheDocument();
+    });
+
+    it('lets the user clear a line they arrived with', async () => {
+        window.history.replaceState(
+            {}, '', '/library?opening_line=Sicilian%20Defense%3A%20Najdorf%20Variation'
+        );
+        render(<Library />);
+
+        const clear = await screen.findByLabelText(/clear the .* filter/i);
+        fireEvent.click(clear);
+
+        await waitFor(() => {
+            expect(mockGetLibraryPuzzles).toHaveBeenLastCalledWith(
+                expect.objectContaining({ opening_line: undefined })
+            );
+        });
+    });
+
+    it('sends no line filter when the URL carries none', async () => {
+        render(<Library />);
+        await waitFor(() => expect(mockGetLibraryPuzzles).toHaveBeenCalled());
+        expect(mockGetLibraryPuzzles).toHaveBeenCalledWith(
+            expect.objectContaining({ opening_line: undefined })
+        );
+    });
+});
+
+describe('Library live regions', () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+    });
+
+    it('announces an initial load from exactly one region', async () => {
+        // Both the result-count indicator and the full-page loader carry
+        // role="status" aria-live="polite". Rendering both on a first load made
+        // two regions read the same sentence at once.
+        let resolve!: (v: unknown) => void;
+        mockGetLibraryPuzzles.mockImplementation(
+            () => new Promise((r) => { resolve = r; })
+        );
+        render(<Library />);
+
+        await waitFor(() => {
+            expect(screen.getAllByRole('status').length).toBe(1);
+        });
+        resolve({ ...EMPTY_RESPONSE });
+    });
+
+    it('announces nothing extra in the error state', async () => {
+        // The compact loader used to render on `isLoading` alone, so it could
+        // sit beside the error card — a second polite region during a failure.
+        mockGetLibraryPuzzles.mockImplementation(() => Promise.reject(new Error('nope')));
+        render(<Library />);
+        await screen.findByText(/nope/i);
+        expect(screen.queryByText(/loading library puzzles/i)).not.toBeInTheDocument();
+        expect(screen.queryByText(/refreshing library puzzles/i)).not.toBeInTheDocument();
+    });
+
+    it('uses a distinct message when refreshing an already-loaded list', async () => {
+        // The two states are different events and should not read alike.
+        mockGetLibraryPuzzles.mockImplementation(() =>
+            Promise.resolve({ ...EMPTY_RESPONSE, puzzles: [...MOCK_PUZZLES], total: 2 })
+        );
+        render(<Library />);
+        await screen.findByText(/2 puzzles/);
+
+        let resolve!: (v: unknown) => void;
+        mockGetLibraryPuzzles.mockImplementation(
+            () => new Promise((r) => { resolve = r; })
+        );
+        fireEvent.change(screen.getByLabelText('Filter by game phase'), {
+            target: { value: 'endgame' },
+        });
+
+        await waitFor(() => {
+            expect(screen.getByText(/refreshing library puzzles/i)).toBeInTheDocument();
+        });
+        expect(screen.getAllByRole('status').length).toBe(1);
+        resolve({ ...EMPTY_RESPONSE });
     });
 });

@@ -50,6 +50,7 @@ UNCLASSIFIED = "unclassified"
 
 CAUSE_LABELS: dict[str, str] = {
     "loose_piece_awareness": "Loose piece awareness",
+    "alignment_blindness": "Queen/rook alignment blindness",
     "forcing_move_blindness": "Forcing move blindness",
     "quiet_move_blindness": "Quiet move blindness",
     "recapture_assumption": "Recapture assumption",
@@ -72,15 +73,27 @@ MODULATOR_CAUSES = frozenset({"time_pressure_collapse"})
 # Taxonomy entries from the plan that are deliberately NOT implemented yet,
 # because the evidence layer cannot support them honestly:
 #
-#   alignment_blindness          needs piece-geometry facts (majors sharing a
-#                                rank/file/diagonal with the king)
 #   pawn_structure_misunderstanding
-#                                needs pawn-structure evaluation (chains,
-#                                backward/isolated pawns, colour complexes)
 #
-# Shipping them as weak guesses would put unfalsifiable labels in front of the
+# The blocking problem is not detection. Isolated, doubled and backward pawns
+# are a short function over the FEN. It is *attribution*: a puzzle here is by
+# construction a large eval swing on one move, which is overwhelmingly a
+# tactical event. A tactic missed in a position that happens to contain an
+# isolated pawn was not missed *because of* the isolated pawn, and no fact in
+# the packet distinguishes the two.
+#
+# alignment_blindness was implementable precisely because it has such a test —
+# "the solution exploits the line" — and fires on nothing without it. Structure
+# has no comparable single-move exploitation signal, because structural errors
+# play out over many moves rather than in the one this puzzle captures.
+#
+# What would unblock it: puzzles generated from slow positional drift (an eval
+# decaying across a phase) rather than single-move swings. That is a different
+# generator, not a different rule.
+#
+# Shipping it as a weak guess would put an unfalsifiable label in front of the
 # user, which is the exact failure this whole design exists to avoid.
-DEFERRED_CAUSES = frozenset({"alignment_blindness", "pawn_structure_misunderstanding"})
+DEFERRED_CAUSES = frozenset({"pawn_structure_misunderstanding"})
 
 # A candidate below this adds noise rather than insight, so it is dropped
 # rather than listed.
@@ -125,6 +138,37 @@ class CauseAssessment:
 # ---------------------------------------------------------------------------
 # Rules
 # ---------------------------------------------------------------------------
+
+
+def _alignment_blindness(packet: EvidencePacket) -> CauseCandidate | None:
+    """Two enemy majors on one line, and the solution used it.
+
+    The missed-tactic form: the user was to move and had a skewer or pin
+    available against two of the opponent's king/queen/rooks standing on a
+    shared rank, file or diagonal, and did not play it.
+
+    Alignment on its own is not a mistake — pieces share lines constantly, and
+    firing on that would be the unfalsifiable label this taxonomy refuses. What
+    makes it a cause is alignment the solution *exploits*. It is a distinct
+    blind spot from "a piece was undefended": here the targets may be perfectly
+    defended and still lost, because they cannot both leave the line at once.
+
+    Ranked below the loose-piece rules on purpose: when a piece is both loose
+    and aligned, the undefended-piece story is the simpler explanation and the
+    one the user can act on faster.
+    """
+    alignment = packet.alignment
+    if not alignment.exploited_by_best or alignment.exploited_pair is None:
+        return None
+
+    # A pair with a blocker between them is the classic pin/skewer; a direct
+    # battery (no blocker) is a weaker signal, since the front piece may simply
+    # be defended. Both are reported, the blocked one more strongly.
+    # Both below loose_piece_awareness (0.8/0.9) on purpose: when a piece is
+    # both hanging and aligned, "it was undefended" is the simpler true story
+    # and the one the user can act on faster.
+    strength = 0.75 if alignment.exploited_pair.blockers else 0.6
+    return CauseCandidate("alignment_blindness", strength, ("alignment.exploited",))
 
 
 def _loose_piece_awareness(packet: EvidencePacket) -> CauseCandidate | None:
@@ -317,6 +361,7 @@ Rule = Callable[[EvidencePacket], "CauseCandidate | None"]
 
 RULES: tuple[Rule, ...] = (
     _loose_piece_awareness,
+    _alignment_blindness,
     _forcing_move_blindness,
     _quiet_move_blindness,
     _recapture_assumption,

@@ -187,8 +187,18 @@ export default function LibraryPuzzle() {
     };
 
     if (isLoading) {
+        // The real title isn't known until the fetch lands, so use the same
+        // 'Puzzle' fallback the loaded view uses. The h1 has to be here at all:
+        // returning a bare status block left the page with no level-one heading,
+        // so heading navigation gave no clue which page was loading.
         return (
             <div className="space-y-12 animate-teedin">
+                <section>
+                    <Link to="/library" className="text-primary/70 hover:text-primary mb-4 inline-block font-sans text-sm tracking-widest uppercase transition-colors">
+                        ← Back to Library
+                    </Link>
+                    <h1 className="text-3xl md:text-4xl font-serif text-primary">Puzzle</h1>
+                </section>
                 <div className="text-center text-primary/70 py-12" role="status" aria-live="polite">
                     <span className="animate-pulse font-sans">Loading puzzle...</span>
                 </div>
@@ -207,6 +217,7 @@ export default function LibraryPuzzle() {
                     <Link to="/library" className="text-primary/70 hover:text-primary mb-4 inline-block font-sans text-sm tracking-widest uppercase transition-colors">
                         ← Back to Library
                     </Link>
+                    <h1 className="text-3xl md:text-4xl font-serif text-primary mb-4">Puzzle</h1>
                     {notFound ? (
                         <div className="bg-red-500/10 border border-red-500/20 rounded-sm p-6 text-center" role="alert">
                             <p className="text-negative font-sans">{error || 'Puzzle not found'}</p>
@@ -243,7 +254,7 @@ export default function LibraryPuzzle() {
                 <h1 className="text-3xl md:text-4xl font-serif text-primary">
                     {puzzle.title || 'Puzzle'}
                 </h1>
-                <p className="mt-2 text-sm font-sans text-primary/60">
+                <p className="mt-2 text-sm font-sans text-primary/70">
                     Exploration mode — the solution is shown on request and results here
                     are not counted as verified training. For a scored session, use{' '}
                     <Link to="/puzzles" className="km-inline-link km-focus-visible text-primary">
@@ -402,7 +413,7 @@ export default function LibraryPuzzle() {
                                     type="button"
                                     onClick={handleCheckAnswer}
                                     disabled={!userMove}
-                                    className={`px-6 py-4 bg-primary text-bg-primary rounded-sm font-serif text-lg transition-all shadow-lg shadow-primary/5 km-focus-visible disabled:opacity-50 ${!userMove ? 'km-interactive-disabled' : 'km-interactive'}`}
+                                    className={`px-6 py-4 bg-primary text-bg-primary rounded-sm font-serif text-lg transition-all shadow-lg shadow-primary/5 km-focus-visible ${!userMove ? 'km-interactive-disabled' : 'km-interactive'}`}
                                 >
                                     Check Move
                                 </button>

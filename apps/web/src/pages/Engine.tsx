@@ -310,7 +310,7 @@ export default function Engine() {
               disabled={historyIndex <= 0}
               aria-label="Go back a position"
               title="Go back"
-              className="km-interactive km-focus-visible border border-primary/20 px-4 py-2 text-primary/70 font-sans text-xs uppercase tracking-widest transition-colors rounded-sm disabled:opacity-40"
+              className="km-interactive km-focus-visible border border-primary/20 px-4 py-2 text-primary/70 font-sans font-normal text-xs uppercase tracking-widest transition-colors rounded-sm"
             >
               ←
             </button>
@@ -320,14 +320,14 @@ export default function Engine() {
               disabled={historyIndex >= fenHistory.length - 1}
               aria-label="Go forward a position"
               title="Go forward"
-              className="km-interactive km-focus-visible border border-primary/20 px-4 py-2 text-primary/70 font-sans text-xs uppercase tracking-widest transition-colors rounded-sm disabled:opacity-40"
+              className="km-interactive km-focus-visible border border-primary/20 px-4 py-2 text-primary/70 font-sans font-normal text-xs uppercase tracking-widest transition-colors rounded-sm"
             >
               →
             </button>
             <button
               type="button"
               onClick={handleReset}
-              className="km-interactive km-focus-visible px-6 py-2 text-primary/70 font-sans text-xs uppercase tracking-widest transition-colors rounded-sm"
+              className="km-interactive km-focus-visible px-6 py-2 text-primary/70 font-sans font-normal text-xs uppercase tracking-widest transition-colors rounded-sm"
             >
               Reset Position
             </button>
@@ -372,7 +372,7 @@ export default function Engine() {
                     ) : (
                       <span className="text-primary/70 italic text-sm">Hidden</span>
                     )}
-                    <button type="button" onClick={() => setShowBestMove(!showBestMove)} className="km-interactive km-focus-visible text-primary text-xs uppercase tracking-widest border border-primary/20 px-3 py-1 rounded-sm transition-colors">
+                    <button type="button" onClick={() => setShowBestMove(!showBestMove)} className="km-interactive km-focus-visible text-primary text-xs font-sans font-normal uppercase tracking-widest border border-primary/20 px-3 py-1 rounded-sm transition-colors">
                       {showBestMove ? 'Hide' : 'Show'}
                     </button>
                   </div>
@@ -381,7 +381,7 @@ export default function Engine() {
                   <button
                     type="button"
                     onClick={handleClue}
-                    className="km-interactive km-focus-visible border border-primary/20 px-3 py-1 text-[10px] font-serif uppercase tracking-widest text-primary transition-colors disabled:opacity-50"
+                    className="km-interactive km-focus-visible border border-primary/20 px-3 py-1 text-[10px] font-sans font-normal uppercase tracking-widest text-primary transition-colors"
                   >
                     {clue.clueStage === 0 ? 'Clue' : clue.clueStage === 1 ? 'Reveal squares' : 'Hide clues and reset'}
                   </button>
@@ -410,7 +410,7 @@ export default function Engine() {
                 aria-describedby={fenError ? 'fen-error' : undefined}
                 className="flex-1 bg-transparent border-none outline-none text-primary font-mono text-sm placeholder-primary/30"
               />
-              <button type="button" onClick={handleFenSubmit} className="km-interactive km-focus-visible text-xs font-sans uppercase tracking-widest text-primary transition-colors">
+              <button type="button" onClick={handleFenSubmit} className="km-interactive km-focus-visible text-xs font-sans font-normal uppercase tracking-widest text-primary transition-colors">
                 Load
               </button>
             </div>
@@ -435,7 +435,7 @@ export default function Engine() {
               ) : (
                 <div className="space-y-3">
                   <div className="space-y-1">
-                    <label htmlFor="save-title" className="block text-[10px] font-sans uppercase tracking-widest text-primary/60">Title</label>
+                    <label htmlFor="save-title" className="block text-[10px] font-sans uppercase tracking-widest text-primary/70">Title</label>
                     <input
                       id="save-title"
                       type="text"
@@ -447,7 +447,7 @@ export default function Engine() {
                   </div>
 
                   <div className="space-y-1">
-                    <label htmlFor="save-motif" className="block text-[10px] font-sans uppercase tracking-widest text-primary/60">Motif</label>
+                    <label htmlFor="save-motif" className="block text-[10px] font-sans uppercase tracking-widest text-primary/70">Motif</label>
                     <select
                       id="save-motif"
                       value={saveMotif}
@@ -461,8 +461,8 @@ export default function Engine() {
                   </div>
 
                   <div className="space-y-1">
-                    <label htmlFor="save-solution" className="block text-[10px] font-sans uppercase tracking-widest text-primary/60">Solution line</label>
-                    <p id="save-solution-help" className="text-primary/50 text-xs font-sans">
+                    <label htmlFor="save-solution" className="block text-[10px] font-sans uppercase tracking-widest text-primary/70">Solution line</label>
+                    <p id="save-solution-help" className="text-primary/70 text-xs font-sans">
                       UCI PV, include opponent replies, e.g. e2e4 e7e5 g1f3
                     </p>
                     <input
@@ -477,7 +477,7 @@ export default function Engine() {
                   </div>
 
                   <div className="space-y-1">
-                    <label htmlFor="save-source" className="block text-[10px] font-sans uppercase tracking-widest text-primary/60">Source (optional)</label>
+                    <label htmlFor="save-source" className="block text-[10px] font-sans uppercase tracking-widest text-primary/70">Source (optional)</label>
                     <input
                       id="save-source"
                       type="text"
@@ -490,15 +490,23 @@ export default function Engine() {
 
                   {saveError && <p role="alert" className="text-negative text-xs font-sans">{saveError}</p>}
 
+                  {/* Named an action with nowhere to perform it — the username
+                      editor is not mounted while the username is empty, so the
+                      only way in is Home's onboarding. Say so, and link there. */}
                   {!username && (
-                    <p className="text-primary/60 text-xs font-sans">Set your Chess.com username to save puzzles.</p>
+                    <p className="text-primary/70 text-xs font-sans">
+                      {/* Underlined: inline in a sentence, colour alone leaves
+                          it under the 3:1 contrast with the surrounding text. */}
+                      <Link to="/" className="km-interactive km-focus-visible km-inline-link text-primary underline decoration-primary/30 underline-offset-4">Connect your Chess.com account</Link>
+                      {' '}to save puzzles.
+                    </p>
                   )}
 
                   <button
                     type="button"
                     onClick={handleSavePuzzle}
                     disabled={saving || !username || !saveTitle.trim() || !saveSolution.trim()}
-                    className="km-interactive km-focus-visible border border-primary/20 px-4 py-2 text-xs font-sans uppercase tracking-widest text-primary transition-colors rounded-sm disabled:opacity-40"
+                    className="km-interactive km-focus-visible border border-primary/20 px-4 py-2 text-xs font-sans font-normal uppercase tracking-widest text-primary transition-colors rounded-sm"
                   >
                     {saving ? 'Saving…' : 'Save puzzle'}
                   </button>

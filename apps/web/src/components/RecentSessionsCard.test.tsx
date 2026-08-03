@@ -61,6 +61,18 @@ describe('RecentSessionsCard', () => {
     expect(screen.getByText('🔥5')).toBeInTheDocument();
   });
 
+  it('names each row in full, without ARIA on the abbreviation spans', () => {
+    // axe flagged aria-prohibited-attr on these spans: ARIA forbids aria-label
+    // on a generic element and AT support for it is unreliable, so "4 passed"
+    // was never dependable. The row's own accessible name carries the sentence.
+    render(<RecentSessionsCard sessions={mockSessions} />);
+
+    const [firstRow] = screen.getAllByRole('listitem');
+    expect(firstRow).toHaveAccessibleName(/8 passed, 2 failed, 80% accuracy/);
+    expect(firstRow).toHaveAccessibleName(/best streak 5/);
+    expect(firstRow.querySelectorAll('span[aria-label]')).toHaveLength(0);
+  });
+
   it('should have list role', () => {
     render(<RecentSessionsCard sessions={mockSessions} />);
 

@@ -1,4 +1,4 @@
-import { request } from './core';
+import { request, ApiError } from './core';
 
 export interface HighlightGame {
     opponent_rating: number | null;
@@ -100,7 +100,48 @@ export const getRatingHistory = (
     return request<SnapshotHistoryItem[]>(`/ratings/history?${params.toString()}`);
 };
 
-export const getRatingExplain = (
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+    return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * A 200 does not guarantee the body matches `ExplainResponse`. Rating Insights
+ * and the dashboard card walk `rating`, `stats`, `window`, `drivers` and
+ * `highlights` unconditionally — `data.rating.net_change`,
+ * `data.highlights.worst_surprises.length` and friends — so a body missing any
+ * of them throws mid-render, which is how a page took the whole shell down.
+ * Failing here routes it to the error state both callers already render
+ * (Rating Insights shows this message; the dashboard drops the card, because
+ * its fetch is one leg of a Promise.allSettled).
+ *
+ * Only the containers the UI dereferences without a guard are checked. Scalars
+ * are deliberately not: `confidence` degrades to "low" in ConfidenceBadge and
+ * the numeric fields are read defensively, so demanding them would reject
+ * payloads the UI can display honestly — the opposite of the goal.
+ */
+function assertExplainResponse(value: unknown): ExplainResponse {
+    const candidate = value as Partial<ExplainResponse> | null;
+    const malformed =
+        !isPlainObject(candidate) ||
+        !isPlainObject(candidate.rating) ||
+        !isPlainObject(candidate.stats) ||
+        !isPlainObject(candidate.window) ||
+        !isPlainObject(candidate.highlights) ||
+        !Array.isArray(candidate.highlights?.best_surprises) ||
+        !Array.isArray(candidate.highlights?.worst_surprises) ||
+        !Array.isArray(candidate.drivers);
+
+    if (malformed) {
+        throw new ApiError(
+            'Rating insights returned an unexpected response. Please try again.',
+            502,
+            `Malformed /ratings/explain payload: ${JSON.stringify(value)?.slice(0, 200)}`,
+        );
+    }
+    return candidate as ExplainResponse;
+}
+
+export const getRatingExplain = async (
     username: string,
     timeControl: string = 'rapid',
     sinceSessionId?: string,
@@ -119,5 +160,7 @@ export const getRatingExplain = (
         params.append('since', since);
     }
 
-    return request<ExplainResponse>(`/ratings/explain?${params.toString()}`);
+    return assertExplainResponse(
+        await request<ExplainResponse>(`/ratings/explain?${params.toString()}`),
+    );
 };

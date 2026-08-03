@@ -445,3 +445,44 @@ describe('RatingInsights fetch concurrency & error isolation', () => {
         await waitFor(() => expect(screen.getByText(/No Blitz games yet/i)).toBeInTheDocument());
     });
 });
+
+describe('RatingInsights live regions', () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+        setOnline(true);
+        mockGetRatingHistory.mockResolvedValue([]);
+        mockCreateSnapshot.mockResolvedValue({});
+    });
+
+    it('announces the initial load from exactly one region', async () => {
+        // The sessions probe and the main skeleton both carry role="status"
+        // aria-live="polite", and both fire on `sessionsLoading` — so they read
+        // "Loading sessions..." and "Analyzing games..." over each other.
+        let resolveSessions!: (v: unknown) => void;
+        mockGetRecentSessions.mockImplementation(
+            () => new Promise((r) => { resolveSessions = r; })
+        );
+        mockGetRatingExplain.mockImplementation(() => new Promise(() => {}));
+
+        render(<RatingInsights />);
+
+        await waitFor(() => {
+            expect(screen.getAllByRole('status').length).toBeGreaterThan(0);
+        });
+        expect(screen.getAllByRole('status').length).toBe(1);
+        expect(screen.queryByText(/loading sessions/i)).not.toBeInTheDocument();
+        resolveSessions([]);
+    });
+
+    it('still shows the sessions indicator once the skeleton is gone', async () => {
+        // The suppression must be scoped to the skeleton phase, not permanent —
+        // a later sessions refetch should still announce.
+        mockGetRecentSessions.mockResolvedValue([]);
+        mockGetRatingExplain.mockResolvedValue(EXPLAIN_WITH_CHART);
+
+        render(<RatingInsights />);
+        await waitFor(() =>
+            expect(screen.queryByText(/analyzing games/i)).not.toBeInTheDocument()
+        );
+    });
+});

@@ -65,6 +65,10 @@ logger = logging.getLogger(__name__)
 # responsive to cancellation; a backfill of a large corpus is expected to take
 # several runs, which is fine because every run leaves the corpus strictly
 # better diagnosed than it found it.
+# Job scopes. See run_diagnosis for what each selects.
+SCOPE_PENDING = "pending"
+SCOPE_REENRICH = "reenrich"
+
 DIAGNOSIS_BATCH_DEFAULT = 200
 DIAGNOSIS_BATCH_MAX = 5000
 
@@ -86,7 +90,21 @@ def run_diagnosis(ctx) -> dict:
     """Job handler for :attr:`JobType.DIAGNOSIS`.
 
     Args:
-        ctx: The worker's ``JobContext``. ``params`` accepts ``limit``.
+        ctx: The worker's ``JobContext``. ``params`` accepts ``limit`` and
+            ``scope``.
+
+    ``scope`` selects the work:
+
+    * ``"pending"`` (default) — puzzles with no current diagnosis. The ordinary
+      backfill.
+    * ``"reenrich"`` — puzzles already diagnosed without the model. Version
+      staleness cannot see these (adding an API key moves no data version), so
+      this exists for the one operational event that strands a whole corpus:
+      the key arriving after the backfill ran.
+
+    Both paths run the same per-puzzle work; only the selection differs. An
+    unknown scope falls back to ``"pending"`` rather than failing the job —
+    a typo in a manual trigger should do the safe ordinary thing.
 
     Returns:
         A result dict persisted to ``Job.result_json``.
@@ -94,6 +112,7 @@ def run_diagnosis(ctx) -> dict:
     limit = _clamp(
         ctx.params.get("limit", DIAGNOSIS_BATCH_DEFAULT), 1, DIAGNOSIS_BATCH_MAX
     )
+    scope = ctx.params.get("scope") or SCOPE_PENDING
     username = ctx.username
 
     diagnosed = unchanged = unavailable = 0
@@ -120,7 +139,11 @@ def run_diagnosis(ctx) -> dict:
             }
         repo = DiagnosisRepository(db)
         audit = AIAuditRepository(db)
-        pending = repo.pending_puzzle_ids(username, limit)
+        pending = (
+            repo.unenriched_puzzle_ids(username, limit)
+            if scope == SCOPE_REENRICH
+            else repo.pending_puzzle_ids(username, limit)
+        )
         total = len(pending)
         if not total:
             return _result(username, db, repo, 0, 0, 0, False, 0)
@@ -170,7 +193,12 @@ def run_diagnosis(ctx) -> dict:
 
 
 def _diagnosis_tables_ready(db: Session) -> bool:
-    """Return whether the diagnosis migrations are present for this database."""
+    """Return whether the diagnosis migrations are present for this database.
+
+    A worker started against an un-migrated database would otherwise fail every
+    job with an opaque ProgrammingError; this turns that into one clear log line
+    and a recorded skip.
+    """
 
     inspector = inspect(db.get_bind())
     return inspector.has_table("puzzle_diagnoses") and inspector.has_table(
@@ -267,6 +295,9 @@ def _diagnose_one(
             primary_strength=strength,
             insufficient_evidence=assessment.insufficient_evidence,
             phase=packet.position.phase,
+            opening_family=packet.game.opening_family,
+            opening_name=packet.game.opening_name,
+            opening_eco=packet.game.opening_eco,
             evidence=tuple(
                 {"id": item.id, "label": item.label, "value": item.value}
                 for item in to_evidence_items(packet)

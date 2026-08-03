@@ -1,17 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, act, waitFor } from '@testing-library/react';
+import { screen, act, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import Openings from './Openings';
+import { renderAt } from '../test/router';
 import type { OpeningNode } from '../api';
 
 // The Opening Explorer used to be a dead end: no outbound link anywhere in the
 // page, and a hover-only tooltip as the sole place to read a line's figures.
 
-vi.mock('react-router-dom', () => ({
+vi.mock('react-router-dom', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('react-router-dom')>()),
   useNavigate: () => vi.fn(),
-  Link: ({ children, to }: { children: React.ReactNode; to: string }) => (
-    <a href={to}>{children}</a>
-  ),
 }));
 vi.mock('../context/ChessUsernameContext', () => ({
   useChessUsername: () => ({ username: 'alice' }),
@@ -43,8 +42,9 @@ function node(move_san: string, over: Partial<OpeningNode> = {}): OpeningNode {
 }
 
 const ANALYSIS = {
-  games_stored: 40, games_seen: 40, games_analyzed: 40, excluded_by_color: 0,
+  games_stored: 40, games_seen: 40, games_analyzed: 40, excluded_by_color: 0, excluded_by_date: 0, since_days: null,
   games_skipped: 0, skipped_unreadable: 0, skipped_not_player: 0, skipped_unfinished: 0,
+  min_games: 1,
 };
 
 // The tree must actually contain the line the tests select. The graph only ever
@@ -70,14 +70,14 @@ beforeEach(() => {
 });
 
 async function selectLine(path: OpeningNode[]) {
-  render(<Openings />);
+  renderAt(<Openings />);
   await screen.findByTestId('opening-graph');
   await act(async () => { emitSelect!(path); });
 }
 
 describe('Openings selection panel', () => {
   it('is absent until a node is activated', async () => {
-    render(<Openings />);
+    renderAt(<Openings />);
     await screen.findByTestId('opening-graph');
 
     expect(screen.queryByLabelText('Selected line')).not.toBeInTheDocument();
@@ -151,40 +151,56 @@ describe('Openings selection panel', () => {
 
 describe('Openings depth control', () => {
   it('requests the default depth on load', async () => {
-    render(<Openings />);
+    renderAt(<Openings />);
     await screen.findByTestId('opening-graph');
 
-    expect(mockGetOpenings).toHaveBeenCalledWith('alice', 'both', 12);
+    expect(mockGetOpenings).toHaveBeenCalledWith('alice', 'both', 12, null);
   });
 
   it('refetches deeper when asked', async () => {
     // Depth was hardcoded at 12 ply with no control, so the explorer refused to
     // follow games past six moves however deep they actually went.
-    render(<Openings />);
+    renderAt(<Openings />);
     await screen.findByTestId('opening-graph');
 
     await userEvent.selectOptions(screen.getByLabelText('Tree depth in moves'), '24');
 
     await waitFor(() =>
-      expect(mockGetOpenings).toHaveBeenLastCalledWith('alice', 'both', 24)
+      expect(mockGetOpenings).toHaveBeenLastCalledWith('alice', 'both', 24, null)
     );
+  });
+
+  it('reports the floor the server applied, not the one it asked for', async () => {
+    // 96% of a 40-ply tree is lines played once; pruning them is the difference
+    // between 3.8 MB and 71 KB. The server owns that floor and can raise it, so
+    // the banner has to read the response or it may contradict the tree shown.
+    mockGetOpenings.mockResolvedValue({
+      ...TREE,
+      analysis: { ...ANALYSIS, min_games: 3 },
+    });
+    localStorage.setItem('knightmind:openings:max_ply', JSON.stringify(40));
+    renderAt(<Openings />);
+    await screen.findByTestId('opening-graph');
+
+    expect(mockGetOpenings).toHaveBeenCalledWith('alice', 'both', 40, null);
+    expect(await screen.findByText(/played at least 3 times/i)).toBeInTheDocument();
   });
 
   it('remembers the chosen depth', async () => {
     localStorage.setItem('knightmind:openings:max_ply', JSON.stringify(16));
-    render(<Openings />);
+    renderAt(<Openings />);
     await screen.findByTestId('opening-graph');
 
-    expect(mockGetOpenings).toHaveBeenCalledWith('alice', 'both', 16);
+    expect(mockGetOpenings).toHaveBeenCalledWith('alice', 'both', 16, null);
   });
 
   it('repairs invalid persisted depth before the first fetch', async () => {
     localStorage.setItem('knightmind:openings:max_ply', JSON.stringify(999));
 
-    render(<Openings />);
+    renderAt(<Openings />);
 
     await screen.findByTestId('opening-graph');
-    expect(mockGetOpenings.mock.calls[0]).toEqual(['alice', 'both', 12]);
+    expect(mockGetOpenings.mock.calls[0]).toEqual(['alice', 'both', 12, null]);
     expect(screen.getByLabelText('Tree depth in moves')).toHaveValue('12');
     expect(localStorage.getItem('knightmind:openings:max_ply')).toBe(JSON.stringify(12));
   });
@@ -199,17 +215,27 @@ describe('Openings score baseline', () => {
     const panel = screen.getByLabelText('Selected line');
     expect(panel).toHaveTextContent('35.7%');
     expect(panel).toHaveTextContent('vs your 55%');
-    expect(panel).toHaveTextContent('−19.3');
+    expect(panel).toHaveTextContent('-19.3');
   });
 
-  it('marks a line that beats the average with a plus', async () => {
-    await selectLine([node('Start'), node('e4', { win_rate: 70 })]);
+  // The figures come from the loaded tree, never from the selection: the panel
+  // cannot show a number the graph beneath it does not have.
+  async function selectLineScoring(win_rate: number) {
+    mockGetOpenings.mockResolvedValue({
+      ...TREE,
+      children: [node('e4', { win_rate })],
+    });
+    await selectLine([node('Start'), node('e4')]);
+  }
 
-    expect(screen.getByLabelText('Selected line')).toHaveTextContent('+15');
+  it('marks a line that beats the average with a plus', async () => {
+    await selectLineScoring(70);
+
+    expect(screen.getByLabelText('Selected line')).toHaveTextContent('+15.0');
   });
 
   it('says "level with" rather than a signed zero', async () => {
-    await selectLine([node('Start'), node('e4', { win_rate: 55 })]);
+    await selectLineScoring(55);
 
     expect(screen.getByLabelText('Selected line')).toHaveTextContent('level with');
   });
@@ -251,7 +277,7 @@ describe('Openings opening names', () => {
 
 describe('Openings selection across a data change', () => {
   it('drops a line that the new colour filter does not contain', async () => {
-    render(<Openings />);
+    renderAt(<Openings />);
     await screen.findByTestId('opening-graph');
     await act(async () => { emitSelect!(SICILIAN); });
     expect(screen.getByText('1. e4 c5 2. Nf3')).toBeInTheDocument();
@@ -272,7 +298,7 @@ describe('Openings selection across a data change', () => {
   });
 
   it('refreshes the figures of a line that survives the refetch', async () => {
-    render(<Openings />);
+    renderAt(<Openings />);
     await screen.findByTestId('opening-graph');
     await act(async () => { emitSelect!([node('Start'), node('e4')]); });
     expect(screen.getByLabelText('Selected line')).toHaveTextContent('21');
@@ -293,7 +319,7 @@ describe('Openings selection across a data change', () => {
 
 describe('Openings failed refresh', () => {
   it('keeps the tree on screen when a refresh fails', async () => {
-    render(<Openings />);
+    renderAt(<Openings />);
     await screen.findByTestId('opening-graph');
 
     mockGetOpenings.mockRejectedValueOnce(new Error('Network request failed'));
@@ -306,7 +332,7 @@ describe('Openings failed refresh', () => {
   });
 
   it('frames a failed refresh politely rather than as a blocking alert', async () => {
-    render(<Openings />);
+    renderAt(<Openings />);
     await screen.findByTestId('opening-graph');
 
     mockGetOpenings.mockRejectedValueOnce(new Error('Network request failed'));
@@ -319,7 +345,7 @@ describe('Openings failed refresh', () => {
 
   it('still shows a blocking error when there is no tree to fall back on', async () => {
     mockGetOpenings.mockRejectedValue(new Error('Network request failed'));
-    render(<Openings />);
+    renderAt(<Openings />);
 
     await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument());
     expect(screen.queryByTestId('opening-graph')).not.toBeInTheDocument();
@@ -329,7 +355,7 @@ describe('Openings failed refresh', () => {
 describe('Openings refresh', () => {
   it('keeps the graph on screen while refreshing', async () => {
     let resolveRefresh!: (value: unknown) => void;
-    render(<Openings />);
+    renderAt(<Openings />);
     await screen.findByTestId('opening-graph');
 
     mockGetOpenings.mockImplementationOnce(
@@ -347,7 +373,7 @@ describe('Openings refresh', () => {
   });
 
   it('keeps the stats footer consistent with the graph while refreshing', async () => {
-    render(<Openings />);
+    renderAt(<Openings />);
     await screen.findByTestId('opening-graph');
 
     mockGetOpenings.mockImplementationOnce(() => new Promise(() => {}));

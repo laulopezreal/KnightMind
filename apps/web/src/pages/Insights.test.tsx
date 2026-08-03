@@ -17,11 +17,17 @@ vi.mock('../context/ChessUsernameContext', () => ({
 const mockGetMotifPerformance = vi.fn();
 const mockGetMotifTrends = vi.fn();
 const mockGetTrickyPuzzles = vi.fn();
+const mockGetMistakeCauses = vi.fn();
+const mockGetTodaysFocus = vi.fn();
+const mockGetMistakePatterns = vi.fn();
 
 vi.mock('../api/users', () => ({
   getMotifPerformance: (...args: unknown[]) => mockGetMotifPerformance(...args),
   getMotifTrends: (...args: unknown[]) => mockGetMotifTrends(...args),
   getTrickyPuzzles: (...args: unknown[]) => mockGetTrickyPuzzles(...args),
+  getMistakeCauses: (...args: unknown[]) => mockGetMistakeCauses(...args),
+    getMistakePatterns: (...a: unknown[]) => mockGetMistakePatterns(...a),
+  getTodaysFocus: (...args: unknown[]) => mockGetTodaysFocus(...args),
 }));
 
 vi.mock('../components/TacticalRadar', () => ({
@@ -47,13 +53,23 @@ describe('Insights', () => {
     mockGetMotifPerformance.mockRejectedValue(new Error('Not loaded'));
     mockGetMotifTrends.mockRejectedValue(new Error('Not loaded'));
     mockGetTrickyPuzzles.mockResolvedValue({ puzzles: [], total_count: 0 });
+    mockGetMistakeCauses.mockResolvedValue({
+      username: 'testuser',
+      causes: [],
+      total_diagnosed: 0,
+      pending: 0,
+      min_for_ranking: 4,
+    });
+    mockGetMistakePatterns.mockResolvedValue({ username: 'testuser', patterns: [], below_threshold: 0, pending: 0 });
+    mockGetTodaysFocus.mockResolvedValue({ username: 'testuser', focus: null, below_threshold: 0, pending: 0 });
   });
 
-  it('should redirect to home when no username', () => {
+  it('should explain itself in place when no username', () => {
     mockUsername = '';
     render(<Insights />);
 
-    expect(mockNavigate).toHaveBeenCalledWith('/');
+    expect(screen.getByText('Connect your Chess.com account')).toBeInTheDocument();
+    expect(mockNavigate).not.toHaveBeenCalled();
   });
 
   it('should show loading spinner initially', () => {
@@ -94,6 +110,21 @@ describe('Insights', () => {
     });
 
     expect(screen.getByText('Start Puzzles')).toBeInTheDocument();
+  });
+
+  it('should expose the empty-state title as a heading under the page heading', async () => {
+    mockGetMotifPerformance.mockResolvedValue({ motifs: [] });
+    mockGetMotifTrends.mockResolvedValue({ motif_trends: [], window_days: 30 });
+
+    render(<Insights />);
+
+    // With no data at all the sibling cards that carry their own <h2> are not
+    // rendered, so this is the page's only second-level heading — if it is not
+    // in the heading map, heading navigation stops at the <h1>.
+    expect(
+      await screen.findByRole('heading', { level: 2, name: 'No puzzle data yet' }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1, name: 'Insights' })).toBeInTheDocument();
   });
 
   it('should render TacticalRadar when motif data exists', async () => {

@@ -65,7 +65,7 @@ export default function Login() {
         <div className="max-w-[420px] mx-auto space-y-8 animate-teedin">
             <header className="space-y-2">
                 <h1 className="text-4xl font-serif font-medium text-primary">Sign in</h1>
-                <p className="font-sans text-primary/60">
+                <p className="font-sans text-primary/70">
                     Access your KnightMind training account.
                 </p>
             </header>
@@ -74,7 +74,7 @@ export default function Login() {
                 <div className="space-y-2">
                     <label
                         htmlFor="login-email"
-                        className="block text-xs font-sans uppercase tracking-widest text-primary/60"
+                        className="block text-xs font-sans uppercase tracking-widest text-primary/70"
                     >
                         Email
                     </label>
@@ -87,14 +87,14 @@ export default function Login() {
                         value={email}
                         onChange={(e) => setEmail(e.target.value)}
                         disabled={submitting}
-                        className="w-full bg-transparent border-b border-primary/20 py-2 text-primary placeholder-primary/30 focus:outline-none focus:border-primary/60 transition-colors font-serif text-xl disabled:opacity-50"
+                        className="w-full bg-transparent border-b border-primary/20 py-2 text-primary placeholder-primary/30 focus:outline-none focus:border-primary/60 transition-colors font-serif text-xl"
                     />
                 </div>
 
                 <div className="space-y-2">
                     <label
                         htmlFor="login-password"
-                        className="block text-xs font-sans uppercase tracking-widest text-primary/60"
+                        className="block text-xs font-sans uppercase tracking-widest text-primary/70"
                     >
                         Password
                     </label>
@@ -106,7 +106,7 @@ export default function Login() {
                         value={password}
                         onChange={(e) => setPassword(e.target.value)}
                         disabled={submitting}
-                        className="w-full bg-transparent border-b border-primary/20 py-2 text-primary placeholder-primary/30 focus:outline-none focus:border-primary/60 transition-colors font-serif text-xl disabled:opacity-50"
+                        className="w-full bg-transparent border-b border-primary/20 py-2 text-primary placeholder-primary/30 focus:outline-none focus:border-primary/60 transition-colors font-serif text-xl"
                     />
                 </div>
 
@@ -119,7 +119,7 @@ export default function Login() {
                 <button
                     type="submit"
                     disabled={submitting}
-                    className="w-full px-6 py-3 bg-primary text-bg-primary hover:opacity-90 rounded-sm font-serif transition-colors disabled:opacity-50 km-focus-visible"
+                    className="w-full px-6 py-3 bg-primary text-bg-primary hover:opacity-90 rounded-sm font-serif transition-colors km-focus-visible"
                 >
                     {submitting ? 'Signing in…' : 'Sign in'}
                 </button>

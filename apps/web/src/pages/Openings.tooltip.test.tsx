@@ -1,14 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, act } from '@testing-library/react';
+import { screen, waitFor, act } from '@testing-library/react';
 import Openings from './Openings';
+import { renderAt } from '../test/router';
 import type { NodeAnchor } from '../components/OpeningGraph';
 
 // The tooltip was anchored blindly to the hovered node, putting up to 180px of
 // it off-screen for any node in the lower right — reachable just by panning.
 
-vi.mock('react-router-dom', () => ({
+vi.mock('react-router-dom', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('react-router-dom')>()),
   useNavigate: () => vi.fn(),
-  Link: ({ children, to, ...rest }: { children: React.ReactNode; to: string; [key: string]: unknown }) => <a href={to} {...rest}>{children}</a>,
 }));
 vi.mock('../context/ChessUsernameContext', () => ({
   useChessUsername: () => ({ username: 'alice' }),
@@ -39,8 +40,9 @@ const TREE = {
     { move_san: 'e4', ply: 1, games_count: 40, wins: 20, draws: 4, losses: 16, win_rate: 55 },
   ],
   analysis: {
-    games_stored: 40, games_seen: 40, games_analyzed: 40, excluded_by_color: 0,
+    games_stored: 40, games_seen: 40, games_analyzed: 40, excluded_by_color: 0, excluded_by_date: 0, since_days: null,
     games_skipped: 0, skipped_unreadable: 0, skipped_not_player: 0, skipped_unfinished: 0,
+  min_games: 1,
   },
 };
 
@@ -62,7 +64,7 @@ beforeEach(() => {
 });
 
 async function hoverAt(anchor: NodeAnchor) {
-  render(<Openings />);
+  renderAt(<Openings />);
   await screen.findByTestId('opening-graph');
   // The real callback fires from a native d3 listener, outside React's event
   // system, so the resulting state update needs wrapping here.
@@ -101,7 +103,10 @@ describe('Openings tooltip placement', () => {
   it('flips to the left of the node rather than overflowing right', async () => {
     const el = await hoverAt({ x: 1200, y: 400 });
 
-    expect(position(el).left).toBeLessThan(1200);
+    // The exact flipped coordinate, not merely "on screen": the downstream
+    // clamp alone satisfies a loose bound, so a clamp-only implementation
+    // passed this test while covering the node the user is pointing at.
+    expect(position(el).left).toBe(1200 - TOOLTIP_W - 24);
   });
 
   it('stays on screen for a node above the top edge', async () => {

@@ -1,6 +1,5 @@
 import { useLocation } from 'react-router-dom';
-
-const ISSUES_URL = 'https://github.com/laulopezreal/KnightMind/issues';
+import { ISSUES_URL } from '../utils/links';
 
 export function ReportProblem() {
     const { pathname } = useLocation();

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { importChessComGames, getImportStatus, validateChessComUser, getUserStatus, ApiError } from '../api';
 import type { UserStatus } from '../api';
@@ -19,6 +19,22 @@ type ImportStatus = {
 
 
 type OnboardingPhase = 'idle' | 'importing' | 'generating' | 'complete';
+
+/**
+ * Hero heading, rendered in every state — loading, error, loaded — so the page
+ * always has a level-one heading (same reasoning as DashboardShell). The
+ * subtitle is a slot because its copy varies by state; the h1 never does.
+ */
+function HomeHero({ children }: { children: ReactNode }) {
+  return (
+    <section className="space-y-6">
+      <h1 className="text-6xl md:text-8xl font-serif text-primary tracking-tight">
+        KnightMind
+      </h1>
+      {children}
+    </section>
+  );
+}
 
 export default function Home() {
   const { username, setUsername } = useChessUsername();
@@ -258,18 +274,21 @@ export default function Home() {
   // ── Loading State ──────────────────────────────
   if (pageLoading && username) {
     return (
-      <DataStateSkeleton label="Loading your chess data..." className="space-y-12 animate-teedin">
-        <section className="space-y-6">
-          <div className="h-16 w-64 bg-primary/10 rounded-sm animate-pulse" />
-          <div className="h-6 w-96 max-w-full bg-primary/5 rounded-sm animate-pulse" />
-        </section>
-        <div className="h-14 w-56 bg-primary/10 rounded-sm animate-pulse" />
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          {[1, 2, 3].map(i => (
-            <div key={i} className="h-36 bg-primary/5 border border-primary/10 rounded-sm animate-pulse" />
-          ))}
-        </div>
-      </DataStateSkeleton>
+      <div className="space-y-12 animate-teedin">
+        <HomeHero>
+          {/* Subtitle copy depends on the data still in flight, so only it is
+              skeletoned — the h1 above is real and keeps the page identifiable. */}
+          <div className="h-6 w-96 max-w-full bg-primary/5 rounded-sm animate-pulse" aria-hidden="true" />
+        </HomeHero>
+        <DataStateSkeleton label="Loading your chess data..." className="space-y-12">
+          <div className="h-14 w-56 bg-primary/10 rounded-sm animate-pulse" />
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            {[1, 2, 3].map(i => (
+              <div key={i} className="h-36 bg-primary/5 border border-primary/10 rounded-sm animate-pulse" />
+            ))}
+          </div>
+        </DataStateSkeleton>
+      </div>
     );
   }
 
@@ -277,14 +296,11 @@ export default function Home() {
   if (pageError && !userStatus) {
     return (
       <div className="space-y-12 animate-teedin">
-        <section className="space-y-6">
-          <h1 className="text-6xl md:text-8xl font-serif text-primary tracking-tight">
-            KnightMind
-          </h1>
+        <HomeHero>
           <p className="text-xl font-light text-primary/70 max-w-2xl leading-relaxed">
             Your personal chess intelligence platform.
           </p>
-        </section>
+        </HomeHero>
         <div className="max-w-lg">
           <DataStateError
             message={pageError}
@@ -301,10 +317,7 @@ export default function Home() {
   return (
     <div className="space-y-16 animate-teedin">
       {/* ── Hero Section ── */}
-      <section className="space-y-6">
-        <h1 className="text-6xl md:text-8xl font-serif text-primary tracking-tight">
-          KnightMind
-        </h1>
+      <HomeHero>
         {/* Door copy only: Home is the data door (connect, import, sync), so it
             never counts due puzzles — that live training state is the
             Dashboard's job, and duplicating it here made two welcome pages. */}
@@ -316,7 +329,7 @@ export default function Home() {
               : `Connected as ${username}. Import your games to generate personalized puzzles.`
           }
         </p>
-      </section>
+      </HomeHero>
 
       {/* ── Primary CTA Section ── */}
       <section aria-label="Primary action" className="bg-primary/5 border border-primary/10 rounded-sm p-6 md:p-8 max-w-2xl">
@@ -360,7 +373,7 @@ export default function Home() {
                     type="button"
                     onClick={handleConnectSave}
                     disabled={connectValidating}
-                    className={`min-h-11 px-4 py-2 bg-primary text-bg-primary font-medium rounded-sm transition-opacity km-focus-visible ${connectValidating ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'}`}
+                    className={`min-h-11 px-4 py-2 bg-primary text-bg-primary font-medium rounded-sm transition-opacity km-focus-visible ${connectValidating ? 'km-interactive-disabled' : 'km-interactive'}`}
                   >
                     {connectValidating ? '...' : 'Save'}
                   </button>
@@ -371,7 +384,7 @@ export default function Home() {
                 <button
                   type="button"
                   onClick={() => setShowConnect(false)}
-                  className="text-sm font-sans text-primary/70 km-interactive km-focus-visible"
+                  className="text-sm font-sans font-normal text-primary/70 km-interactive km-focus-visible"
                 >
                   Cancel
                 </button>
@@ -391,7 +404,7 @@ export default function Home() {
                 onClick={handleImport}
                 disabled={loading}
                 className={`px-8 py-4 bg-primary text-bg-primary rounded-sm text-lg font-serif transition-colors km-focus-visible ${
-                  loading ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'
+                  loading ? 'km-interactive-disabled' : 'km-interactive'
                 }`}
               >
                 {loading ? 'Syncing...' : hasData ? 'Sync New Games' : 'Import Games'}

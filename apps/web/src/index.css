@@ -141,6 +141,21 @@
   --color-status-mastered-border: color-mix(in srgb, var(--color-status-mastered) 28%, transparent);
   --color-positive-border: color-mix(in srgb, var(--color-positive) 28%, transparent);
   --color-negative-border: color-mix(in srgb, var(--color-negative) 28%, transparent);
+
+  /* Disabled-control palette (see `.km-interactive-disabled` below). Alphas are
+     deliberately identical in both themes — the day side is the binding
+     constraint and night clears it with room. They are still declared twice,
+     because a custom property resolves `var()` where it is *declared*: left in
+     `:root` alone, `var(--text-primary)` would freeze to the day ink and every
+     disabled control would stay brown in night mode.
+     65% ink is the floor that holds 4.5:1 on the worst surface stack a disabled
+     control sits on (body + two bg-primary/5 panels + its own wash): 4.73 day.
+     60% would measure 4.50 there — no margin at all. */
+  --km-disabled-fg: color-mix(in srgb, var(--text-primary) 65%, transparent);
+  --km-disabled-bg: color-mix(in srgb, var(--text-primary) 8%, transparent);
+  /* Dashed, so ~40% reads about as heavy as the solid border-primary/20 edges
+     elsewhere — half the line is gaps. */
+  --km-disabled-border: color-mix(in srgb, var(--text-primary) 40%, transparent);
 }
 
 body.night {
@@ -180,6 +195,11 @@ body.night {
   --color-status-mastered-border: color-mix(in srgb, var(--color-status-mastered) 20%, transparent);
   --color-positive-border: color-mix(in srgb, var(--color-positive) 20%, transparent);
   --color-negative-border: color-mix(in srgb, var(--color-negative) 20%, transparent);
+
+  /* Re-declared so they resolve against the night ink — see the :root note. */
+  --km-disabled-fg: color-mix(in srgb, var(--text-primary) 65%, transparent);
+  --km-disabled-bg: color-mix(in srgb, var(--text-primary) 8%, transparent);
+  --km-disabled-border: color-mix(in srgb, var(--text-primary) 40%, transparent);
 }
 
 body {
@@ -232,21 +252,43 @@ body {
   }
 }
 
-h1,
-h2,
-h3,
-h4,
-h5,
-h6 {
-  font-family: var(--font-serif);
-  font-weight: 500;
-}
+/* Headings are display type by default. This lives in `@layer base` on purpose:
+   Tailwind v4 emits utilities into `@layer utilities`, and unlayered CSS beats
+   layered CSS regardless of specificity — so while this rule sat outside a
+   layer it silently defeated `font-sans`/`font-normal` on every heading in the
+   app, and `<h2 class="font-sans">` rendered Cormorant 500. Inside `base` the
+   normal layer order applies and a utility can override it, which is what makes
+   the small uppercase section labels legible as the sans they are marked up as.
 
+   Keep this rule layered. Moving it back out re-breaks every font utility on
+   every heading, and the class list gives no hint that it happened. */
+@layer base {
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    font-family: var(--font-serif);
+    font-weight: 500;
+  }
 
-button {
-  font-family: var(--font-serif);
-  font-weight: 500;
-  letter-spacing: 0.05em;
+  /* Buttons carry the same display type, and were caught by the same trap for
+     the same reason — unlayered, they defeated every font utility on every
+     `<button>` in the app. This rule declares three properties, so it shadowed
+     three families of utility, not one: `font-sans` (family), `font-light`/
+     `font-normal` (weight), and `tracking-*` (letter-spacing). Measured before
+     the move: Engine's control buttons asked for `font-sans tracking-widest`
+     and rendered Cormorant Garamond at 0.6px — the 0.05em below — while the
+     `<label>` beside them, carrying an identical class list, rendered Inter at
+     1.2px. Only the buttons fell out of the micro-label system.
+
+     Keep this layered, for the same reason as the headings above. */
+  button {
+    font-family: var(--font-serif);
+    font-weight: 500;
+    letter-spacing: 0.05em;
+  }
 }
 
 nav,
@@ -256,6 +298,22 @@ nav,
 
 .brand-text {
   font-family: var(--font-serif);
+}
+
+/* A heading that should read as body text, not as display type.
+
+   Some headings exist for structure (so screen-reader users can navigate by
+   heading) while deliberately looking like the surrounding copy — data-state
+   titles, small uppercase section labels. Tailwind's `font-sans` cannot do this
+   on its own: it lives in `@layer utilities`, whereas the `h1..h6` rule above is
+   unlayered, and unlayered CSS beats layered CSS regardless of specificity. So
+   `<h2 class="font-sans">` silently renders in Cormorant at weight 500.
+
+   This rule sits in the same (unlayered) origin as `h1..h6`, where a class
+   simply outranks an element selector — no `!important` needed. */
+.km-heading-sans {
+  font-family: var(--font-sans);
+  font-weight: 400;
 }
 
 /* Rating-trend line colors. SVG presentation attributes cannot consume var(),
@@ -271,12 +329,16 @@ nav,
 .km-interactive {
   cursor: pointer;
 }
-.km-interactive:hover,
-.km-toggle-option:hover:not(.km-interactive-disabled) {
+/* The `:not()` guards belong here rather than in a later "undo" rule: several
+   controls carry `km-interactive` unconditionally and are disabled only some of
+   the time, and `body.night .km-interactive:hover` (0,3,1) outranks anything the
+   disabled block below can say without escalating. Exclude at the source. */
+.km-interactive:hover:not(:disabled, [aria-disabled='true'], .km-interactive-disabled),
+.km-toggle-option:hover:not(:disabled, [aria-disabled='true'], .km-interactive-disabled) {
   background-color: color-mix(in srgb, var(--color-chess-brown-700) 8%, transparent);
 }
-body.night .km-interactive:hover,
-body.night .km-toggle-option:hover:not(.km-interactive-disabled) {
+body.night .km-interactive:hover:not(:disabled, [aria-disabled='true'], .km-interactive-disabled),
+body.night .km-toggle-option:hover:not(:disabled, [aria-disabled='true'], .km-interactive-disabled) {
   background-color: color-mix(in srgb, var(--color-chess-cream-200) 12%, transparent);
 }
 .km-interactive:focus-visible,
@@ -285,12 +347,107 @@ body.night .km-toggle-option:hover:not(.km-interactive-disabled) {
   outline: 2px solid var(--border-primary);
   outline-offset: 2px;
 }
-.km-interactive-disabled {
+/* Disabled controls — expressed in colour, never in element `opacity`.
+
+   `opacity` composites the whole painted element with its backdrop *after*
+   paint, which costs two things at once:
+
+   1. It is invisible to tooling. The element's own `color` never changes, so
+      axe reports the undimmed value and the ratio that actually ships is never
+      measured. (A canvas readback has the same blind spot — `fillStyle` knows
+      nothing about CSS `opacity`, so a manual measurement has to apply it by
+      hand.) Alpha colours composite at paint time instead, so what the tooling
+      reads is what renders.
+   2. It multiplies with any alpha already in the class list. `text-primary/70`
+      under `opacity: .4` is ink at 28%, and that stacking is invisible in the
+      class list — each utility looks reasonable on its own.
+
+   Measured on canvas across every disabled control in the app (both themes,
+   against the production bundle), label vs the surface it sits on:
+
+                     before                  after
+     day     1.87 - 3.63   (11/11 < 4.5)   4.73 - 5.25   (0/11)
+     night   2.38 - 5.12   ( 3/11 < 4.5)   5.50 - 7.03   (0/11)
+
+   WCAG exempts disabled controls, so none of that was a violation — but the
+   label is the only thing that says *why* a control is unavailable, and at
+   1.87:1 it cannot be read. Note day was roughly twice as bad as night, so a
+   spot-check in one theme badly understates this.
+
+   Disabled is signalled four ways, only one of which is colour: the solid fill
+   drops to an inert wash, the elevation goes, the edge turns dashed, and the
+   cursor is `not-allowed`. That matters here because the palette cannot afford
+   a big luminance drop — holding 4.5:1 on cream pins the label near 65% ink,
+   which is barely quieter than the 70% enabled secondary text already uses.
+
+   Two structural notes:
+
+   - Keep this rule UNLAYERED. It has to beat `bg-primary`/`text-bg-primary` on
+     the primary-action buttons, and Tailwind emits those into `@layer
+     utilities`; unlayered CSS beats layered CSS regardless of specificity. Same
+     mechanism as the `h1..h6` note above, opposite intent — there the override
+     was the bug, here it is the feature. Moving this into a layer silently
+     restores full-strength ink on every disabled CTA.
+   - It keys off `:disabled`/`aria-disabled`, not only the class, so a control
+     cannot be disabled-in-behaviour but full-strength-in-paint. Every call site
+     that carries `km-interactive-disabled` today also sets the real attribute;
+     the class stays for controls that are not natively disableable.
+   - The `aria-disabled` arm is scoped to native control ELEMENTS, and
+     deliberately not to interactive roles. Bare `[aria-disabled='true']`
+     matches anything, and react-chessboard spreads both `role="button"` and
+     `aria-disabled` onto the `<div>` wrapping every piece (see the querySelector
+     in AccessibleChessboard). Today that renders `undefined`, so React omits it
+     — but `allowDragging={false}` for a solved or review-only board is a natural
+     thing to reach for, and it would put a wash, a dashed outline and a
+     not-allowed cursor on all 32 pieces. A `[role='button']` arm would NOT have
+     prevented that; only the element list does. Custom controls that genuinely
+     need the treatment carry `km-interactive-disabled`, which is what the
+     previous note says the class is for. */
+.km-interactive-disabled,
+:is(a, button, input, select, textarea)[aria-disabled='true'],
+button:disabled,
+input:disabled,
+select:disabled,
+textarea:disabled {
   cursor: not-allowed;
-  opacity: 0.5;
+  background-color: var(--km-disabled-bg);
+  color: var(--km-disabled-fg);
+  /* One edge, and it is the dashed one. Recolouring the border instead would
+     leave the outline-bearing controls with two concentric rings 1px apart —
+     the outline buttons already carry `border-primary/20`, the primary CTAs
+     carry none — so the border is retired and the outline is what every
+     disabled control shows, bordered or not. Transparent (not `none`) keeps
+     the box the same size. */
+  border-color: transparent;
+  outline: 1px dashed var(--km-disabled-border);
+  /* Drawn inside the border box, so the dashes never overlap a neighbouring
+     control and nothing reflows. A real `border-width` would grow an
+     auto-width button by 2px the moment it went disabled. */
+  outline-offset: -1px;
+  box-shadow: none;
+  /* Makes "disabled controls never use element opacity" an invariant the
+     stylesheet enforces, instead of one every call site has to remember. Being
+     unlayered, this beats any `opacity-*` utility — including the `hover:
+     opacity-90` that several primary buttons carry unconditionally, which would
+     otherwise re-introduce post-paint compositing the moment the pointer landed
+     on a disabled button. */
+  opacity: 1;
 }
-.km-interactive-disabled:hover {
+/* A segmented control says "selected" with a filled surface, so a disabled
+   option must not gain one — a wash would read as selection, which is the
+   opposite of unavailable. It keeps the muted label, the dashed edge and the
+   cursor; the ratings "Since Session" toggle is the case this exists for. */
+.km-toggle-option:disabled,
+.km-toggle-option.km-interactive-disabled,
+.km-toggle-option[aria-disabled='true'] {
   background-color: transparent;
+}
+/* Focus stays visible on `aria-disabled` controls, which remain focusable
+   (unlike `:disabled` ones). Scoped the same way as the rule above. */
+.km-interactive-disabled:focus-visible,
+:is(a, button, input, select, textarea)[aria-disabled='true']:focus-visible {
+  outline: 2px solid var(--border-primary);
+  outline-offset: 2px;
 }
 .km-toggle-option {
   cursor: pointer;

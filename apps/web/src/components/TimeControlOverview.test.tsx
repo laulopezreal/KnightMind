@@ -62,4 +62,53 @@ describe('TimeControlOverview', () => {
     // rapid (3 pts) + blitz (2 pts) draw sparklines; bullet (0) does not.
     expect(container.querySelectorAll('svg polyline')).toHaveLength(2);
   });
+
+  describe('accessible name', () => {
+    it('separates the control, its rating and its movement', async () => {
+      // Without an explicit label the name is built by concatenating the child
+      // text nodes, which ran them together as "Bullet+661486".
+      render(<TimeControlOverview username="alice" active="rapid" onSelect={vi.fn()} />);
+
+      const rapid = await screen.findByRole('button', { name: /^Rapid: 1524/ });
+      expect(rapid).toBeInTheDocument();
+      expect(rapid.getAttribute('aria-label')).toMatch(/Rapid: 1524, \+24 across your last 3 snapshots/);
+    });
+
+    it('does not run the rating into the delta', async () => {
+      render(<TimeControlOverview username="alice" active="rapid" onSelect={vi.fn()} />);
+      const blitz = await screen.findByRole('button', { name: /^Blitz:/ });
+      // "1468-12" would be the concatenated form.
+      expect(blitz.getAttribute('aria-label')).not.toMatch(/1468-12/);
+      expect(blitz.getAttribute('aria-label')).toMatch(/1468, -12/);
+    });
+
+    it('says a control has no games when the fetch succeeded and was empty', async () => {
+      render(<TimeControlOverview username="alice" active="rapid" onSelect={vi.fn()} />);
+      // Matches the visible "No games yet" word for word, so voice control can
+      // target what is on screen.
+      expect(await screen.findByRole('button', { name: /Bullet: no games yet/i })).toBeInTheDocument();
+    });
+
+    it('distinguishes a failed request from a control never played', async () => {
+      // history === null means the request for that control rejected; [] means
+      // it succeeded with nothing in it. Collapsing them told a screen-reader
+      // user their data does not exist when it merely failed to load.
+      mockGetRatingHistory.mockImplementation((_u: string, tc: string) =>
+        tc === 'blitz' ? Promise.reject(new Error('boom')) : Promise.resolve([])
+      );
+      render(<TimeControlOverview username="alice" active="rapid" onSelect={vi.fn()} />);
+
+      expect(await screen.findByRole('button', { name: /Blitz: unavailable/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Rapid: no games yet/i })).toBeInTheDocument();
+    });
+
+    it('omits the movement clause when there is no movement', async () => {
+      mockGetRatingHistory.mockImplementation((_u: string, tc: string) =>
+        tc === 'rapid' ? Promise.resolve(hist([1500, 1500])) : Promise.resolve([])
+      );
+      render(<TimeControlOverview username="alice" active="rapid" onSelect={vi.fn()} />);
+      const rapid = await screen.findByRole('button', { name: /^Rapid: 1500$/ });
+      expect(rapid).toBeInTheDocument();
+    });
+  });
 });

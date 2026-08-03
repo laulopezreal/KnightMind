@@ -549,7 +549,9 @@ class TestDiagnosisEndpoint:
     def test_pending_count_endpoint(self, client, db_session):
         _puzzle(db_session)
         body = client.get(f"/users/{USER}/diagnosis/pending").json()
-        assert body == {"username": USER, "pending": 1}
+        # Exact equality on purpose: this payload is small and a silently added
+        # field is worth failing on.
+        assert body == {"username": USER, "pending": 1, "unenriched": 0}
 
 
 class TestDiagnoseEnqueue:
@@ -1075,3 +1077,665 @@ class TestUserColourComesFromThePosition:
         assert facts.user_result is None
         assert facts.time_control.is_known is False
         assert facts.rated is False
+
+
+class TestMistakeCausesAggregate:
+    """The Insights read. Its whole job is to be honest about how much it
+    knows — a cause seen twice must not read like a diagnosed habit."""
+
+    def _diagnosed(self, db, puzzle_id, cause, phase="middlegame", ply=41):
+        _puzzle(db, puzzle_id=puzzle_id, ply=ply)
+        DiagnosisRepository(db).upsert(
+            DiagnosisWrite(
+                puzzle_id=puzzle_id, username=USER, primary_cause=cause, phase=phase
+            )
+        )
+        db.commit()
+
+    def _verified_review(self, db, puzzle_id, result, n=1):
+        from services.api.models import PuzzleReview
+
+        for _ in range(n):
+            db.add(
+                PuzzleReview(
+                    puzzle_id=puzzle_id,
+                    username=USER,
+                    result=result,
+                    verified=True,
+                    source="server_verified",
+                )
+            )
+        db.commit()
+
+    def test_counts_and_ranks_causes_by_frequency(self, client, db_session):
+        for i in range(3):
+            self._diagnosed(
+                db_session, f"a{i}", "loose_piece_awareness", ply=41 + i * 2
+            )
+        self._diagnosed(db_session, "b0", "king_safety_blindness", ply=61)
+
+        body = client.get(f"/users/{USER}/mistake-causes").json()
+        assert [c["cause"] for c in body["causes"]] == [
+            "loose_piece_awareness",
+            "king_safety_blindness",
+        ]
+        assert body["causes"][0]["mistakes"] == 3
+        assert body["total_diagnosed"] == 4
+
+    def test_a_thin_cause_is_returned_but_flagged_not_hidden(self, client, db_session):
+        """The count is real and worth showing; what it does not support is
+        being called a tendency."""
+        self._diagnosed(db_session, "a0", "loose_piece_awareness")
+
+        body = client.get(f"/users/{USER}/mistake-causes").json()
+        cause = body["causes"][0]
+        assert cause["mistakes"] == 1
+        assert cause["insufficient_data"] is True
+        assert body["min_for_ranking"] >= 2
+
+    def test_a_cause_at_the_threshold_is_no_longer_insufficient(
+        self, client, db_session, monkeypatch
+    ):
+        from services.api.analytics_confidence import MIN_DIAGNOSES_FOR_CAUSE_RANK
+
+        for i in range(MIN_DIAGNOSES_FOR_CAUSE_RANK):
+            self._diagnosed(
+                db_session, f"a{i}", "loose_piece_awareness", ply=41 + i * 2
+            )
+
+        body = client.get(f"/users/{USER}/mistake-causes").json()
+        assert body["causes"][0]["insufficient_data"] is False
+
+    def test_accuracy_counts_only_server_verified_attempts(self, client, db_session):
+        """A pass rate built on self-reported results would launder exactly
+        what PuzzleReview.verified exists to separate."""
+        from services.api.models import PuzzleResult, PuzzleReview
+
+        self._diagnosed(db_session, "a0", "loose_piece_awareness")
+        self._diagnosed(db_session, "a1", "loose_piece_awareness", ply=43)
+        self._verified_review(db_session, "a0", PuzzleResult.PASS, n=3)
+        self._verified_review(db_session, "a1", PuzzleResult.FAIL, n=2)
+        # Self-reported results must not move the number.
+        for _ in range(20):
+            db_session.add(
+                PuzzleReview(
+                    puzzle_id="a0",
+                    username=USER,
+                    result=PuzzleResult.PASS,
+                    verified=False,
+                    source="client_reported",
+                )
+            )
+        db_session.commit()
+
+        cause = client.get(f"/users/{USER}/mistake-causes").json()["causes"][0]
+        assert cause["verified_attempts"] == 5
+        assert cause["accuracy"] == 0.6
+
+    def test_accuracy_needs_more_than_one_puzzle_however_many_attempts(
+        self, client, db_session
+    ):
+        """Regression: six attempts at one puzzle cleared the attempt floor and
+        reported as the cause's pass rate. Repeated attempts on a single
+        position measure recall of that position, not competence at the cause —
+        they are not independent observations."""
+        from services.api.models import PuzzleResult
+
+        self._diagnosed(db_session, "a0", "loose_piece_awareness")
+        self._diagnosed(db_session, "a1", "loose_piece_awareness", ply=43)
+        self._verified_review(db_session, "a0", PuzzleResult.PASS, n=6)
+
+        cause = client.get(f"/users/{USER}/mistake-causes").json()["causes"][0]
+        assert cause["verified_attempts"] == 6
+        assert cause["verified_puzzles"] == 1
+        assert cause["accuracy"] is None
+
+    def test_accuracy_appears_once_a_second_puzzle_is_attempted(
+        self, client, db_session
+    ):
+        from services.api.models import PuzzleResult
+
+        self._diagnosed(db_session, "a0", "loose_piece_awareness")
+        self._diagnosed(db_session, "a1", "loose_piece_awareness", ply=43)
+        self._verified_review(db_session, "a0", PuzzleResult.PASS, n=4)
+        self._verified_review(db_session, "a1", PuzzleResult.FAIL, n=2)
+
+        cause = client.get(f"/users/{USER}/mistake-causes").json()["causes"][0]
+        assert cause["verified_puzzles"] == 2
+        assert cause["accuracy"] == pytest.approx(4 / 6)
+
+    def test_accuracy_is_none_below_the_sample_floor(self, client, db_session):
+        from services.api.models import PuzzleResult
+
+        self._diagnosed(db_session, "a0", "loose_piece_awareness")
+        self._verified_review(db_session, "a0", PuzzleResult.PASS, n=2)
+
+        cause = client.get(f"/users/{USER}/mistake-causes").json()["causes"][0]
+        assert cause["verified_attempts"] == 2
+        assert cause["accuracy"] is None
+
+    def test_a_split_phase_names_no_dominant_phase(self, client, db_session):
+        """A 1-1 split must not pick a phase by dictionary order."""
+        self._diagnosed(db_session, "a0", "loose_piece_awareness", phase="opening")
+        self._diagnosed(
+            db_session, "a1", "loose_piece_awareness", phase="endgame", ply=43
+        )
+
+        cause = client.get(f"/users/{USER}/mistake-causes").json()["causes"][0]
+        assert cause["dominant_phase"] is None
+
+    def test_a_plurality_is_not_enough_to_name_a_phase(self, client, db_session):
+        """Regression: a plurality flipped the pattern's *name* on one puzzle.
+        At 2-1-1 nothing is "mostly" anything, and claiming otherwise makes a
+        user's named weakness change week to week for no visible reason."""
+        self._diagnosed(db_session, "a0", "loose_piece_awareness", phase="middlegame")
+        self._diagnosed(
+            db_session, "a1", "loose_piece_awareness", phase="middlegame", ply=43
+        )
+        self._diagnosed(
+            db_session, "a2", "loose_piece_awareness", phase="opening", ply=45
+        )
+        self._diagnosed(
+            db_session, "a3", "loose_piece_awareness", phase="endgame", ply=47
+        )
+
+        cause = client.get(f"/users/{USER}/mistake-causes").json()["causes"][0]
+        assert cause["dominant_phase"] is None
+
+    def test_exactly_half_is_not_a_majority(self, client, db_session):
+        self._diagnosed(db_session, "a0", "loose_piece_awareness", phase="middlegame")
+        self._diagnosed(
+            db_session, "a1", "loose_piece_awareness", phase="middlegame", ply=43
+        )
+        self._diagnosed(
+            db_session, "a2", "loose_piece_awareness", phase="opening", ply=45
+        )
+        self._diagnosed(
+            db_session, "a3", "loose_piece_awareness", phase="endgame", ply=47
+        )
+        self._diagnosed(
+            db_session, "a4", "loose_piece_awareness", phase="opening", ply=49
+        )
+
+        cause = client.get(f"/users/{USER}/mistake-causes").json()["causes"][0]
+        assert cause["dominant_phase"] is None
+
+    def test_a_clear_majority_names_the_phase(self, client, db_session):
+        for i in range(3):
+            self._diagnosed(
+                db_session,
+                f"a{i}",
+                "loose_piece_awareness",
+                phase="middlegame",
+                ply=41 + i * 2,
+            )
+        self._diagnosed(
+            db_session, "a9", "loose_piece_awareness", phase="opening", ply=61
+        )
+
+        cause = client.get(f"/users/{USER}/mistake-causes").json()["causes"][0]
+        assert cause["dominant_phase"] == "middlegame"
+
+    def test_unclassified_is_reported_but_flagged(self, client, db_session):
+        """Hiding it would overstate how much of the corpus is understood."""
+        from services.api.diagnosis.causes import UNCLASSIFIED
+
+        self._diagnosed(db_session, "a0", UNCLASSIFIED)
+
+        cause = client.get(f"/users/{USER}/mistake-causes").json()["causes"][0]
+        assert cause["cause"] == UNCLASSIFIED
+        assert cause["is_unclassified"] is True
+
+    def test_a_users_own_correction_is_what_gets_counted(self, client, db_session):
+        self._diagnosed(db_session, "a0", "loose_piece_awareness")
+        DiagnosisRepository(db_session).confirm_cause(
+            USER, "a0", "king_safety_blindness"
+        )
+        db_session.commit()
+
+        body = client.get(f"/users/{USER}/mistake-causes").json()
+        assert [c["cause"] for c in body["causes"]] == ["king_safety_blindness"]
+
+    def test_unanalysable_puzzles_contribute_no_cause(self, client, db_session):
+        from services.api.models import DiagnosisStatus
+
+        _puzzle(db_session, puzzle_id="broken")
+        DiagnosisRepository(db_session).upsert(
+            DiagnosisWrite(
+                puzzle_id="broken",
+                username=USER,
+                status=DiagnosisStatus.UNAVAILABLE,
+                error="illegal move",
+            )
+        )
+        db_session.commit()
+
+        body = client.get(f"/users/{USER}/mistake-causes").json()
+        assert body["causes"] == []
+        assert body["total_diagnosed"] == 0
+
+    def test_pending_work_is_reported_alongside(self, client, db_session):
+        """Without it, a nearly-empty list is indistinguishable from "you make
+        no mistakes"."""
+        self._diagnosed(db_session, "a0", "loose_piece_awareness")
+        _puzzle(db_session, puzzle_id="undiagnosed", ply=61)
+
+        body = client.get(f"/users/{USER}/mistake-causes").json()
+        assert body["total_diagnosed"] == 1
+        assert body["pending"] == 1
+
+    def test_an_empty_corpus_is_an_empty_list_not_an_error(self, client, db_session):
+        body = client.get(f"/users/{USER}/mistake-causes").json()
+        assert body == {
+            "username": USER,
+            "causes": [],
+            "total_diagnosed": 0,
+            "pending": 0,
+            "min_for_ranking": body["min_for_ranking"],
+        }
+
+    def test_another_users_diagnoses_are_not_counted(self, client, db_session):
+        self._diagnosed(db_session, "mine", "loose_piece_awareness")
+        _puzzle(db_session, puzzle_id="theirs", username="other", game_id="g9")
+        DiagnosisRepository(db_session).upsert(
+            DiagnosisWrite(
+                puzzle_id="theirs",
+                username="other",
+                primary_cause="king_safety_blindness",
+            )
+        )
+        db_session.commit()
+
+        body = client.get(f"/users/{USER}/mistake-causes").json()
+        assert [c["cause"] for c in body["causes"]] == ["loose_piece_awareness"]
+
+
+class TestMistakePatternsEndpoint:
+    """Named habits. Only causes that have actually recurred become patterns —
+    naming something "Loose Piece Syndrome" off two occurrences is the overreach
+    the whole feature avoids."""
+
+    def _diagnosed(self, db, puzzle_id, cause, phase="middlegame", ply=41):
+        _puzzle(db, puzzle_id=puzzle_id, ply=ply)
+        DiagnosisRepository(db).upsert(
+            DiagnosisWrite(
+                puzzle_id=puzzle_id, username=USER, primary_cause=cause, phase=phase
+            )
+        )
+        db.commit()
+
+    def _many(self, db, cause, n, phase="middlegame"):
+        for i in range(n):
+            self._diagnosed(db, f"{cause[:4]}{i}", cause, phase=phase, ply=41 + i * 2)
+
+    def test_a_recurring_cause_becomes_a_named_pattern(self, client, db_session):
+        self._many(db_session, "loose_piece_awareness", 5)
+
+        body = client.get(f"/users/{USER}/mistake-patterns").json()
+        pattern = body["patterns"][0]
+        assert pattern["name"] == "Loose Piece Syndrome"
+        assert "undefended" in pattern["description"]
+        assert pattern["mistakes"] == 5
+
+    def test_a_thin_cause_is_counted_but_never_named(self, client, db_session):
+        self._many(db_session, "loose_piece_awareness", 2)
+
+        body = client.get(f"/users/{USER}/mistake-patterns").json()
+        assert body["patterns"] == []
+        assert body["below_threshold"] == 1
+
+    def test_unclassified_never_becomes_a_pattern(self, client, db_session):
+        from services.api.diagnosis.causes import UNCLASSIFIED
+
+        self._many(db_session, UNCLASSIFIED, 10)
+
+        body = client.get(f"/users/{USER}/mistake-patterns").json()
+        assert body["patterns"] == []
+        # Not counted as below-threshold either: it is not a habit awaiting
+        # more evidence, it is the absence of a diagnosis.
+        assert body["below_threshold"] == 0
+
+    def test_the_phase_specific_name_is_used_when_a_phase_dominates(
+        self, client, db_session
+    ):
+        self._many(db_session, "king_safety_blindness", 5, phase="endgame")
+
+        body = client.get(f"/users/{USER}/mistake-patterns").json()
+        assert body["patterns"][0]["name"] == "Back Rank Neglect"
+
+    def test_patterns_are_ordered_by_priority(self, client, db_session):
+        self._many(db_session, "loose_piece_awareness", 4)
+        for i in range(9):
+            self._diagnosed(
+                db_session, f"fmb{i}", "forcing_move_blindness", ply=81 + i * 2
+            )
+
+        body = client.get(f"/users/{USER}/mistake-patterns").json()
+        names = [p["cause"] for p in body["patterns"]]
+        assert names[0] == "forcing_move_blindness"
+        assert body["patterns"][0]["priority"] > body["patterns"][1]["priority"]
+
+    def test_pending_work_is_reported(self, client, db_session):
+        self._many(db_session, "loose_piece_awareness", 4)
+        _puzzle(db_session, puzzle_id="undiagnosed", ply=99)
+
+        body = client.get(f"/users/{USER}/mistake-patterns").json()
+        assert body["pending"] == 1
+
+    def test_an_empty_corpus_is_an_empty_list(self, client, db_session):
+        body = client.get(f"/users/{USER}/mistake-patterns").json()
+        assert body["patterns"] == []
+        assert body["below_threshold"] == 0
+
+    def test_another_users_patterns_are_not_returned(self, client, db_session):
+        _puzzle(db_session, puzzle_id="theirs", username="other", game_id="g9")
+        DiagnosisRepository(db_session).upsert(
+            DiagnosisWrite(
+                puzzle_id="theirs",
+                username="other",
+                primary_cause="loose_piece_awareness",
+            )
+        )
+        db_session.commit()
+
+        body = client.get(f"/users/{USER}/mistake-patterns").json()
+        assert body["patterns"] == []
+
+
+class TestTodaysFocusEndpoint:
+    """The recommendation surface. Its main job is knowing when to say nothing."""
+
+    def _diagnosed(self, db, puzzle_id, cause, phase="middlegame", ply=41):
+        _puzzle(db, puzzle_id=puzzle_id, ply=ply)
+        DiagnosisRepository(db).upsert(
+            DiagnosisWrite(
+                puzzle_id=puzzle_id, username=USER, primary_cause=cause, phase=phase
+            )
+        )
+        db.commit()
+
+    def _many(self, db, cause, n, phase="middlegame", ply_base=41):
+        # ply_base separates causes: puzzles are unique on
+        # (username, source_game_id, ply), so two causes seeded from the same
+        # base would collide rather than coexist.
+        for i in range(n):
+            self._diagnosed(
+                db, f"{cause[:4]}{i}", cause, phase=phase, ply=ply_base + i * 2
+            )
+
+    def test_recommends_the_dominant_pattern(self, client, db_session):
+        self._many(db_session, "loose_piece_awareness", 6)
+
+        body = client.get(f"/users/{USER}/todays-focus").json()
+        assert body["focus"]["cause"] == "loose_piece_awareness"
+        assert body["focus"]["name"] == "Loose Piece Syndrome"
+        assert "6 diagnosed mistakes" in body["focus"]["rationale"]
+
+    def test_recommends_nothing_before_a_pattern_is_established(
+        self, client, db_session
+    ):
+        self._many(db_session, "loose_piece_awareness", 2)
+
+        body = client.get(f"/users/{USER}/todays-focus").json()
+        assert body["focus"] is None
+        # The count is still reported: "not yet" is a different message from
+        # "nothing found", and the card needs to tell them apart.
+        assert body["below_threshold"] == 1
+
+    def test_recommends_nothing_for_an_untouched_account(self, client, db_session):
+        body = client.get(f"/users/{USER}/todays-focus").json()
+        assert body["focus"] is None
+        assert body["below_threshold"] == 0
+
+    def test_agrees_with_the_patterns_endpoint(self, client, db_session):
+        # Two surfaces, one answer. A focus that disagreed with the ranked list
+        # shown right next to it would read as a bug in whichever the user
+        # trusted less.
+        self._many(db_session, "loose_piece_awareness", 4)
+        self._many(db_session, "king_safety_blindness", 9, ply_base=101)
+
+        patterns = client.get(f"/users/{USER}/mistake-patterns").json()["patterns"]
+        focus = client.get(f"/users/{USER}/todays-focus").json()["focus"]
+        assert focus["cause"] == patterns[0]["cause"]
+        assert focus["priority"] == patterns[0]["priority"]
+        assert focus["runner_up"] == patterns[1]["name"]
+
+    def test_is_scoped_to_the_requesting_user(self, client, db_session):
+        _puzzle(db_session, puzzle_id="theirs", ply=41)
+        DiagnosisRepository(db_session).upsert(
+            DiagnosisWrite(
+                puzzle_id="theirs",
+                username="other",
+                primary_cause="king_safety_blindness",
+            )
+        )
+        db_session.commit()
+
+        body = client.get(f"/users/{USER}/todays-focus").json()
+        assert body["focus"] is None
+
+    def test_counts_below_threshold_the_way_the_patterns_card_does(
+        self, client, db_session
+    ):
+        # An unclassified cause is not a habit awaiting more evidence, so it
+        # must not make this card say "nothing has recurred often enough yet"
+        # — that reads as progress toward a pattern that will never form.
+        from services.api.diagnosis.causes import UNCLASSIFIED
+
+        self._many(db_session, UNCLASSIFIED, 2)
+
+        focus = client.get(f"/users/{USER}/todays-focus").json()
+        patterns = client.get(f"/users/{USER}/mistake-patterns").json()
+        assert focus["below_threshold"] == patterns["below_threshold"] == 0
+
+    def test_still_counts_a_thin_but_nameable_cause(self, client, db_session):
+        # The other side of the same rule: a real cause below the threshold is
+        # genuinely on its way to becoming a pattern.
+        self._many(db_session, "loose_piece_awareness", 2)
+
+        focus = client.get(f"/users/{USER}/todays-focus").json()
+        patterns = client.get(f"/users/{USER}/mistake-patterns").json()
+        assert focus["below_threshold"] == patterns["below_threshold"] == 1
+
+
+class TestReenrichScope:
+    """The "a key just arrived" sweep.
+
+    Version-based staleness deliberately cannot see a configuration change:
+    setting ANTHROPIC_API_KEY moves no data version, so a corpus diagnosed
+    while the key was absent stays rules-only and no ordinary run revisits it.
+    These tests pin the escape hatch — and pin that it stays an escape hatch
+    rather than becoming a standing rule that re-attempts failures forever.
+    """
+
+    def _diagnosed(self, db, puzzle_id, *, model_version=None, ply=41, status=None):
+        _puzzle(db, puzzle_id=puzzle_id, ply=ply)
+        DiagnosisRepository(db).upsert(
+            DiagnosisWrite(
+                puzzle_id=puzzle_id,
+                username=USER,
+                primary_cause="loose_piece_awareness",
+                status=status or DiagnosisStatus.OK,
+                model_version=model_version,
+            )
+        )
+        db.commit()
+
+    def test_a_rules_only_diagnosis_is_not_pending(self, client, db_session):
+        # The whole reason this feature is needed. If this ever starts
+        # returning the puzzle, the sweep is redundant and should be deleted.
+        self._diagnosed(db_session, "p1")
+        repo = DiagnosisRepository(db_session)
+        assert repo.pending_puzzle_ids(USER) == []
+        assert repo.unenriched_puzzle_ids(USER) == ["p1"]
+
+    def test_an_ai_enriched_diagnosis_is_left_alone(self, client, db_session):
+        self._diagnosed(db_session, "p1", model_version="claude-opus-5")
+        assert DiagnosisRepository(db_session).unenriched_puzzle_ids(USER) == []
+
+    def test_an_unanalysable_puzzle_is_not_swept(self, client, db_session):
+        # Nothing for the model to explain, so re-running only spends budget.
+        self._diagnosed(db_session, "p1", status=DiagnosisStatus.UNAVAILABLE)
+        assert DiagnosisRepository(db_session).unenriched_puzzle_ids(USER) == []
+
+    def test_is_scoped_to_the_requesting_user(self, client, db_session):
+        _puzzle(db_session, puzzle_id="theirs", ply=41)
+        DiagnosisRepository(db_session).upsert(
+            DiagnosisWrite(
+                puzzle_id="theirs",
+                username="other",
+                primary_cause="loose_piece_awareness",
+            )
+        )
+        db_session.commit()
+        assert DiagnosisRepository(db_session).unenriched_puzzle_ids(USER) == []
+
+    def test_the_count_is_reported_beside_pending(self, client, db_session):
+        # An operator needs to see the backlog before triggering the sweep, and
+        # "pending: 0" alone would say everything is done.
+        self._diagnosed(db_session, "p1")
+        body = client.get(f"/users/{USER}/diagnosis/pending").json()
+        assert body["pending"] == 0
+        assert body["unenriched"] == 1
+
+    def test_the_scope_reaches_the_job(self, client, db_session):
+        response = client.post(f"/users/{USER}/diagnose?scope=reenrich")
+        assert response.status_code == 200
+        job = db_session.get(Job, response.json()["job_id"])
+        assert job.params["scope"] == "reenrich"
+
+    def test_the_default_scope_is_the_ordinary_backfill(self, client, db_session):
+        response = client.post(f"/users/{USER}/diagnose")
+        job = db_session.get(Job, response.json()["job_id"])
+        assert job.params["scope"] == "pending"
+
+    def test_an_unknown_scope_is_rejected(self, client, db_session):
+        # Silently falling back would let a typo look like a completed sweep.
+        assert client.post(f"/users/{USER}/diagnose?scope=nonsense").status_code == 422
+
+    def test_orders_the_same_way_the_backfill_does(self, client, db_session):
+        # A run cut short by the daily cap must spend it on the same puzzles
+        # either way: most-failed first.
+        self._diagnosed(db_session, "seldom", ply=41)
+        self._diagnosed(db_session, "often", ply=43)
+        stats = db_session.get(PuzzleStats, "often")
+        stats.attempts, stats.fail_count = 4, 4
+        db_session.commit()
+        assert DiagnosisRepository(db_session).unenriched_puzzle_ids(USER)[0] == "often"
+
+
+class TestDominantOpening:
+    """ "Common in Sicilian structures" — the spec's Insights line.
+
+    Reported only when one opening actually dominates. The same strict-majority
+    rule the phase uses: a plurality would let 4 of 10 games rename the cause
+    "your Sicilian problem" while six other openings disagree.
+    """
+
+    def _diagnosed(self, db, pid, opening, ply=41):
+        _puzzle(db, puzzle_id=pid, ply=ply)
+        DiagnosisRepository(db).upsert(
+            DiagnosisWrite(
+                puzzle_id=pid,
+                username=USER,
+                primary_cause="loose_piece_awareness",
+                phase="middlegame",
+                opening_family=opening,
+            )
+        )
+        db.commit()
+
+    def test_names_the_opening_when_one_dominates(self, client, db_session):
+        for i in range(3):
+            self._diagnosed(db_session, f"s{i}", "Sicilian Defense", ply=41 + i * 2)
+
+        stats = DiagnosisRepository(db_session).cause_breakdown(USER)
+        assert stats[0].dominant_opening == "Sicilian Defense"
+
+    def test_reports_nothing_when_openings_are_split(self, client, db_session):
+        self._diagnosed(db_session, "a", "Sicilian Defense", ply=41)
+        self._diagnosed(db_session, "b", "Italian Game", ply=43)
+        self._diagnosed(db_session, "c", "French Defense", ply=45)
+
+        stats = DiagnosisRepository(db_session).cause_breakdown(USER)
+        assert stats[0].dominant_opening is None
+
+    def test_a_plurality_is_not_enough(self, client, db_session):
+        # 2 of 5 is the most common and still not "your Sicilian problem".
+        self._diagnosed(db_session, "a", "Sicilian Defense", ply=41)
+        self._diagnosed(db_session, "b", "Sicilian Defense", ply=43)
+        self._diagnosed(db_session, "c", "Italian Game", ply=45)
+        self._diagnosed(db_session, "d", "French Defense", ply=47)
+        self._diagnosed(db_session, "e", "Caro-Kann Defense", ply=49)
+
+        stats = DiagnosisRepository(db_session).cause_breakdown(USER)
+        assert stats[0].dominant_opening is None
+
+    def test_unclassified_games_do_not_count_toward_a_majority(
+        self, client, db_session
+    ):
+        # Two classified Sicilians out of four games is not a majority of the
+        # games; counting only what was classified would invent one.
+        self._diagnosed(db_session, "a", "Sicilian Defense", ply=41)
+        self._diagnosed(db_session, "b", "Sicilian Defense", ply=43)
+        self._diagnosed(db_session, "c", None, ply=45)
+        self._diagnosed(db_session, "d", None, ply=47)
+
+        stats = DiagnosisRepository(db_session).cause_breakdown(USER)
+        assert stats[0].dominant_opening is None
+
+    def test_is_absent_when_nothing_was_classified(self, client, db_session):
+        self._diagnosed(db_session, "a", None, ply=41)
+        stats = DiagnosisRepository(db_session).cause_breakdown(USER)
+        assert stats[0].dominant_opening is None
+
+
+class TestTrainableNowCount:
+    """ "Train N puzzles now" must be a promise the session can keep."""
+
+    def _diagnosed(self, db, pid, ply, due_days=None):
+        from services.api.models import PuzzleStats
+
+        _puzzle(db, puzzle_id=pid, ply=ply)
+        DiagnosisRepository(db).upsert(
+            DiagnosisWrite(
+                puzzle_id=pid, username=USER, primary_cause="loose_piece_awareness"
+            )
+        )
+        if due_days is not None:
+            stats = db.get(PuzzleStats, pid)
+            if stats is not None:
+                stats.next_due_at = datetime.now(timezone.utc).replace(
+                    tzinfo=None
+                ) + timedelta(days=due_days)
+        db.commit()
+
+    def test_counts_only_what_is_trainable_today(self, client, db_session):
+        # Four mistakes of the cause, two scheduled for next week. Offering to
+        # train four would promise puzzles the session refuses to serve — and
+        # serving them early would re-anchor their intervals.
+        for i in range(4):
+            self._diagnosed(
+                db_session, f"p{i}", 41 + i * 2, due_days=30 if i >= 2 else -1
+            )
+
+        body = client.get(f"/users/{USER}/todays-focus").json()
+        assert body["focus"]["mistakes"] == 4
+        assert body["focus"]["trainable_now"] == 2
+
+    def test_reports_zero_rather_than_omitting_when_nothing_is_due(
+        self, client, db_session
+    ):
+        for i in range(4):
+            self._diagnosed(db_session, f"p{i}", 41 + i * 2, due_days=30)
+
+        body = client.get(f"/users/{USER}/todays-focus").json()
+        assert body["focus"] is not None
+        assert body["focus"]["trainable_now"] == 0
+
+    def test_never_exceeds_the_mistake_count(self, client, db_session):
+        for i in range(4):
+            self._diagnosed(db_session, f"p{i}", 41 + i * 2)
+
+        body = client.get(f"/users/{USER}/todays-focus").json()
+        assert body["focus"]["trainable_now"] <= body["focus"]["mistakes"]

@@ -28,6 +28,9 @@ from dataclasses import dataclass
 import chess
 import chess.pgn
 
+from services.api.openings.eco import classify as eco_classify
+from services.api.openings.eco import max_book_ply
+
 # Chess.com time-control strings: "600" (10m), "600+5" (10m + 5s), "1/86400"
 # (correspondence, one move per N seconds). Anything else is treated as unknown
 # rather than guessed at.
@@ -141,6 +144,20 @@ class GameContext:
     fen_before_move: str | None
     plies_in_game: int
 
+    # Opening family the game reached before the mistake, e.g. "Sicilian
+    # Defense". Coarser than the full ECO name on purpose: "Sicilian Defense:
+    # Najdorf Variation, English Attack" is a line, not a family, and grouping
+    # a user's mistakes by line would split every cluster into ones.
+    #
+    # None means the position left book before it was ever classified, which is
+    # ordinary for irregular openings. It never means "we did not look".
+    opening_family: str | None = None
+    # The full line the family was derived from, e.g. "Sicilian Defense:
+    # Najdorf Variation". Kept beside the family so a line-level filter and a
+    # family-level one can never disagree about which opening was played.
+    opening_name: str | None = None
+    opening_eco: str | None = None
+
 
 EMPTY_GAME_CONTEXT = GameContext(
     previous_move_uci=None,
@@ -185,9 +202,13 @@ def extract_game_context(
         return EMPTY_GAME_CONTEXT
 
     user_color = chess.WHITE if user_is_white else chess.BLACK
+    # Only positions at or before the mistake describe how the game got there.
+    book_ply = min(ply, max_book_ply())
     increment = time_control.increment_seconds if time_control else 0
 
     board = game.board()
+    opening_name: str | None = None
+    opening_eco: str | None = None
     previous_move_uci: str | None = None
     previous_move_was_capture = False
     previous_capture_square: int | None = None
@@ -219,6 +240,15 @@ def extract_game_context(
         if index < ply and board.turn == user_color and board.is_castling(move):
             user_castled = True
 
+        # Longest-prefix classification, taken from the deepest position that
+        # matches rather than the first. First-match would label every 1.e4
+        # game "King's Pawn Game" and lose the family that actually mattered.
+        # Bounded by max_book_ply so this stops walking the table mid-game.
+        if index <= book_ply:
+            hit = eco_classify(board.epd())
+            if hit is not None:
+                opening_eco, opening_name = hit
+
         clock = _node_clock(node)
         if clock is not None:
             if index == ply:
@@ -241,6 +271,8 @@ def extract_game_context(
         spent = clock_before - clock_after + increment
         move_time = spent if spent >= 0 else None
 
+    family = opening_name.split(":", 1)[0].strip() if opening_name else None
+
     return GameContext(
         previous_move_uci=previous_move_uci,
         previous_move_was_capture=previous_move_was_capture,
@@ -251,6 +283,9 @@ def extract_game_context(
         move_time_seconds=move_time,
         fen_before_move=fen_before_move,
         plies_in_game=plies,
+        opening_family=family,
+        opening_name=opening_name,
+        opening_eco=opening_eco,
     )
 
 

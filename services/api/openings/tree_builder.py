@@ -12,7 +12,7 @@ from typing import Literal
 
 import chess.pgn
 
-from .eco import classify
+from .eco import classify, max_book_ply
 
 
 @dataclass
@@ -89,25 +89,29 @@ class OpeningNode:
     ply: int  # Half-move number (1 = white's first move, 2 = black's first move, etc.)
     stats: OpeningStats = field(default_factory=OpeningStats)
     children: dict[str, "OpeningNode"] = field(default_factory=dict)
+    # Position after this move, for ECO lookup. Recorded during the walk, where
+    # a board already exists; None only for the synthetic root.
+    epd: str | None = None
 
     def to_dict(
         self,
-        path: tuple[str, ...] = (),
         inherited: tuple[str, str] | None = None,
+        min_games: int = 1,
     ) -> dict:
         """
         Convert to dictionary for JSON serialization.
 
         Args:
-            path: SAN moves leading to this node's parent. Combined with this
-                node's move it forms the ECO lookup key.
             inherited: the nearest named ancestor's (code, name). ECO naming is
                 longest-prefix, so a node with no entry of its own belongs to
                 the most specific opening above it — twenty plies into the
                 Najdorf you are still in the Najdorf.
+            min_games: drop children played fewer than this many times. At depth
+                the overwhelming majority of nodes are one-off tails — 96% of a
+                measured 40-ply tree — which are noise rather than repertoire,
+                and which inflate the response by orders of magnitude.
         """
-        here = path + (self.move_san,)
-        named = classify(here) or inherited
+        named = classify(self.epd) or inherited
 
         result = {
             "move_san": self.move_san,
@@ -120,10 +124,11 @@ class OpeningNode:
             "eco": named[0] if named else None,
             "opening_name": named[1] if named else None,
         }
-        if self.children:
-            result["children"] = [
-                child.to_dict(here, named) for child in self.children.values()
-            ]
+        kept = [
+            child for child in self.children.values() if child.stats.games >= min_games
+        ]
+        if kept:
+            result["children"] = [child.to_dict(named, min_games) for child in kept]
         return result
 
 
@@ -250,6 +255,7 @@ class OpeningTreeBuilder:
         # board keeps it linear. SAN is computed on the position *before* the
         # move (identical to the previous ``node.board().san(move)``).
         board = game.board()
+        book_depth = max_book_ply()
 
         while node.variations and ply < self.max_ply:
             next_node = node.variation(0)  # Main line
@@ -262,7 +268,15 @@ class OpeningTreeBuilder:
             # Get or create child node
             if move_san not in current_tree_node.children:
                 current_tree_node.children[move_san] = OpeningNode(
-                    move_san=move_san, ply=ply
+                    move_san=move_san,
+                    ply=ply,
+                    # ECO is keyed by position, and the board is already here.
+                    # A node's move path is fixed, so its EPD never changes —
+                    # recording it once on creation is enough. Past the deepest
+                    # book line it can never match, and epd() is by far the most
+                    # expensive call in this walk (~45% of it), so skip it there
+                    # and let those nodes inherit as they would anyway.
+                    epd=board.epd() if ply <= book_depth else None,
                 )
 
             child_node = current_tree_node.children[move_san]
@@ -271,28 +285,29 @@ class OpeningTreeBuilder:
             current_tree_node = child_node
             node = next_node
 
-    def build_tree(self) -> dict:
+    def build_tree(self, min_games: int = 1) -> dict:
         """
         Build and return the opening tree as a dictionary.
+
+        Args:
+            min_games: omit lines played fewer than this many times. A line you
+                played once is not part of a repertoire, and at depth those
+                one-off tails are the overwhelming majority of the tree.
 
         Returns:
             Dictionary representation of the opening tree suitable for JSON serialization
         """
-        # Return the tree starting from root's children (skip the dummy root node)
-        return {
-            "move_san": "Start",
-            "ply": 0,
-            "games_count": self.root.stats.games,
-            "wins": self.root.stats.wins,
-            "draws": self.root.stats.draws,
-            "losses": self.root.stats.losses,
-            "win_rate": round(self.root.stats.win_rate, 1),
-            # The starting position belongs to no opening; children begin the
-            # move path, so they are classified from an empty prefix.
-            "eco": None,
-            "opening_name": None,
-            "children": [child.to_dict() for child in self.root.children.values()],
-        }
+        # Routed through to_dict rather than hand-built: a second writer means
+        # every new node field has to be added twice (as `eco`/`opening_name`
+        # just were) and the pruning predicate written twice. The root's `epd`
+        # is None, so `classify` already returns the "belongs to no opening"
+        # answer without a special case.
+        tree = self.root.to_dict(min_games=min_games)
+        tree["move_san"] = "Start"
+        # The root always reports a children array, even when empty — clients
+        # branch on its contents rather than its presence.
+        tree.setdefault("children", [])
+        return tree
 
 
 def build_opening_tree(
@@ -300,6 +315,7 @@ def build_opening_tree(
     player_username: str,
     color_filter: Literal["white", "black", "both"] = "both",
     max_ply: int = 12,
+    min_games: int = 1,
 ) -> dict:
     """
     Convenience function to build an opening tree from PGN texts.
@@ -318,4 +334,4 @@ def build_opening_tree(
     for pgn in pgn_texts:
         builder.add_game(pgn, player_username, color_filter)
 
-    return builder.build_tree()
+    return builder.build_tree(min_games)
