@@ -673,7 +673,7 @@ const RatingChart = ({ chartData, trend, source }: { chartData: { label: string;
         aria-label={`Rating over time, ${chartData.length} points from ${chartData[0].rating} to ${chartData[chartData.length - 1].rating}`}
     >
         <div className="flex items-baseline justify-between gap-3 mb-4">
-            <h2 className="text-sm font-sans uppercase tracking-widest text-primary/70">Rating Over Time</h2>
+            <h2 className="text-sm font-sans font-normal uppercase tracking-widest text-primary/70">Rating Over Time</h2>
             <span className="text-[10px] font-sans text-primary/70">
                 {source === 'games'
                     ? 'From your games in this window'

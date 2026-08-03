@@ -98,7 +98,7 @@ function Shell({ children }: { children: React.ReactNode }) {
         >
             <h2
                 id="todays-focus-heading"
-                className="font-sans text-xs uppercase tracking-widest text-primary/70 mb-3"
+                className="font-sans font-normal text-xs uppercase tracking-widest text-primary/70 mb-3"
             >
                 Today’s focus
             </h2>

@@ -59,7 +59,7 @@ export function TopMistakeCausesCard({ data }: TopMistakeCausesCardProps) {
 
                 {thin.length > 0 && (
                     <div>
-                        <h3 className="font-sans text-xs uppercase tracking-widest text-primary/70 mb-2">
+                        <h3 className="font-sans font-normal text-xs uppercase tracking-widest text-primary/70 mb-2">
                             Seen too few times to call a pattern
                         </h3>
                         <div className="flex flex-wrap gap-2">
