@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Routes, Route, Link } from 'react-router-dom';
@@ -43,6 +43,10 @@ describe('RouteErrorBoundary', () => {
     shouldPageThrow = true;
   });
 
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it('renders the page when nothing throws', () => {
     shouldPageThrow = false;
     render(<Harness />);
@@ -60,12 +64,33 @@ describe('RouteErrorBoundary', () => {
     expect(screen.getByRole('link', { name: 'Insights' })).toBeInTheDocument();
   });
 
-  it('surfaces the underlying error message', () => {
+  it('holds the raw error message behind a closed dev-only disclosure', () => {
+    // #317 painted `error.message` as body copy. It reads as noise to a user
+    // ("Cannot read properties of undefined") and describes the app's internals
+    // to whoever is on the screen, which stops being acceptable once
+    // KNIGHTMIND_REQUIRE_AUTH admits other people. The friendly copy leads; the
+    // engine string is opt-in, and only in a dev build.
+    vi.stubEnv('DEV', true);
+    render(<Harness />);
+
+    const details = screen
+      .getByText("Cannot read properties of undefined (reading 'color')")
+      .closest('details');
+    expect(details).not.toBeNull();
+    expect(details).not.toHaveAttribute('open');
+  });
+
+  it('does not paint the raw error message in a production build', () => {
+    vi.stubEnv('DEV', false);
     render(<Harness />);
 
     expect(
-      screen.getByText("Cannot read properties of undefined (reading 'color')"),
-    ).toBeInTheDocument();
+      screen.queryByText("Cannot read properties of undefined (reading 'color')"),
+    ).not.toBeInTheDocument();
+    // Still says what happened, still offers a way out, and the message is
+    // still carried by the report link and the console.
+    expect(screen.getByRole('alert')).toHaveTextContent('This page didn’t load');
+    expect(screen.getByRole('button', { name: /try loading this page again/i })).toBeInTheDocument();
   });
 
   // Without the pathname reset key the boundary stays caught, so the user
