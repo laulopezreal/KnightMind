@@ -82,10 +82,24 @@ describe('TimeControlOverview', () => {
       expect(blitz.getAttribute('aria-label')).toMatch(/1468, -12/);
     });
 
-    it('says so plainly when a control has no rating yet', async () => {
+    it('says a control has no games when the fetch succeeded and was empty', async () => {
       render(<TimeControlOverview username="alice" active="rapid" onSelect={vi.fn()} />);
-      const bullet = await screen.findByRole('button', { name: /Bullet: no rating recorded yet/ });
-      expect(bullet).toBeInTheDocument();
+      // Matches the visible "No games yet" word for word, so voice control can
+      // target what is on screen.
+      expect(await screen.findByRole('button', { name: /Bullet: no games yet/i })).toBeInTheDocument();
+    });
+
+    it('distinguishes a failed request from a control never played', async () => {
+      // history === null means the request for that control rejected; [] means
+      // it succeeded with nothing in it. Collapsing them told a screen-reader
+      // user their data does not exist when it merely failed to load.
+      mockGetRatingHistory.mockImplementation((_u: string, tc: string) =>
+        tc === 'blitz' ? Promise.reject(new Error('boom')) : Promise.resolve([])
+      );
+      render(<TimeControlOverview username="alice" active="rapid" onSelect={vi.fn()} />);
+
+      expect(await screen.findByRole('button', { name: /Blitz: unavailable/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Rapid: no games yet/i })).toBeInTheDocument();
     });
 
     it('omits the movement clause when there is no movement', async () => {

@@ -687,6 +687,16 @@ describe('Library live regions', () => {
         resolve({ ...EMPTY_RESPONSE });
     });
 
+    it('announces nothing extra in the error state', async () => {
+        // The compact loader used to render on `isLoading` alone, so it could
+        // sit beside the error card — a second polite region during a failure.
+        mockGetLibraryPuzzles.mockImplementation(() => Promise.reject(new Error('nope')));
+        render(<Library />);
+        await screen.findByText(/nope/i);
+        expect(screen.queryByText(/loading library puzzles/i)).not.toBeInTheDocument();
+        expect(screen.queryByText(/refreshing library puzzles/i)).not.toBeInTheDocument();
+    });
+
     it('uses a distinct message when refreshing an already-loaded list', async () => {
         // The two states are different events and should not read alike.
         mockGetLibraryPuzzles.mockImplementation(() =>
