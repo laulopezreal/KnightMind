@@ -39,7 +39,7 @@ export function MistakeDiagnosisCard({
     if (loading) {
         return (
             <Shell>
-                <p className="font-sans text-sm text-primary/60" role="status" aria-live="polite">
+                <p className="font-sans text-sm text-primary/70" role="status" aria-live="polite">
                     Loading diagnosis…
                 </p>
             </Shell>
@@ -51,7 +51,7 @@ export function MistakeDiagnosisCard({
     if (diagnosis.state === 'pending') {
         return (
             <Shell>
-                <p className="font-sans text-sm text-primary/60">
+                <p className="font-sans text-sm text-primary/70">
                     This mistake hasn’t been analysed yet.
                 </p>
             </Shell>
@@ -61,7 +61,7 @@ export function MistakeDiagnosisCard({
     if (diagnosis.state === 'unavailable') {
         return (
             <Shell>
-                <p className="font-sans text-sm text-primary/60">
+                <p className="font-sans text-sm text-primary/70">
                     This position can’t be analysed.
                 </p>
             </Shell>
@@ -71,7 +71,7 @@ export function MistakeDiagnosisCard({
     if (diagnosis.state === 'unclear') {
         return (
             <Shell>
-                <p className="font-sans text-sm text-primary/60">
+                <p className="font-sans text-sm text-primary/70">
                     No clear cause stands out for this one. The tactic is recorded, but the
                     evidence doesn’t point to a single habit worth training.
                 </p>
@@ -87,7 +87,7 @@ export function MistakeDiagnosisCard({
                 <div>
                     <p className="font-serif text-2xl text-primary">{primary_cause_label}</p>
                     {diagnosis.user_confirmed_cause && (
-                        <p className="font-sans text-xs text-primary/60 mt-1">Your label</p>
+                        <p className="font-sans text-xs text-primary/70 mt-1">Your label</p>
                     )}
                 </div>
 
@@ -99,7 +99,7 @@ export function MistakeDiagnosisCard({
 
                 {diagnosis.training_recommendation && (
                     <div className="border-l-2 border-primary/30 pl-4">
-                        <h3 className="font-sans text-xs uppercase tracking-widest text-primary/60 mb-1">
+                        <h3 className="font-sans text-xs uppercase tracking-widest text-primary/70 mb-1">
                             Next time
                         </h3>
                         <p className="font-sans text-sm text-primary/80">
@@ -123,13 +123,13 @@ export function MistakeDiagnosisCard({
 
                 {evidence.length > 0 && (
                     <div>
-                        <h3 className="font-sans text-xs uppercase tracking-widest text-primary/60 mb-2">
+                        <h3 className="font-sans text-xs uppercase tracking-widest text-primary/70 mb-2">
                             {diagnosis.explanation ? 'Evidence' : 'Why'}
                         </h3>
                         <dl className="space-y-1">
                             {evidence.map((item) => (
                                 <div key={item.id} className="flex gap-2 text-sm">
-                                    <dt className="font-sans text-primary/60 shrink-0">
+                                    <dt className="font-sans text-primary/70 shrink-0">
                                         {item.label}:
                                     </dt>
                                     <dd className="font-mono text-primary/80 break-words">
@@ -142,13 +142,13 @@ export function MistakeDiagnosisCard({
                 )}
 
                 {diagnosis.evidence_withheld && (
-                    <p className="font-sans text-sm text-primary/60">
+                    <p className="font-sans text-sm text-primary/70">
                         Solve this puzzle to see the evidence behind the diagnosis.
                     </p>
                 )}
 
                 {phase && (
-                    <p className="font-sans text-xs text-primary/50 capitalize">{phase}</p>
+                    <p className="font-sans text-xs text-primary/70 capitalize">{phase}</p>
                 )}
             </div>
         </Shell>
@@ -163,7 +163,7 @@ function Shell({ children }: { children: React.ReactNode }) {
         >
             <h2
                 id="mistake-diagnosis-heading"
-                className="font-sans text-xs uppercase tracking-widest text-primary/60 mb-3"
+                className="font-sans text-xs uppercase tracking-widest text-primary/70 mb-3"
             >
                 Mistake diagnosis
             </h2>

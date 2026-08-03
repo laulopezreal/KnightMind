@@ -435,7 +435,7 @@ export default function Engine() {
               ) : (
                 <div className="space-y-3">
                   <div className="space-y-1">
-                    <label htmlFor="save-title" className="block text-[10px] font-sans uppercase tracking-widest text-primary/60">Title</label>
+                    <label htmlFor="save-title" className="block text-[10px] font-sans uppercase tracking-widest text-primary/70">Title</label>
                     <input
                       id="save-title"
                       type="text"
@@ -447,7 +447,7 @@ export default function Engine() {
                   </div>
 
                   <div className="space-y-1">
-                    <label htmlFor="save-motif" className="block text-[10px] font-sans uppercase tracking-widest text-primary/60">Motif</label>
+                    <label htmlFor="save-motif" className="block text-[10px] font-sans uppercase tracking-widest text-primary/70">Motif</label>
                     <select
                       id="save-motif"
                       value={saveMotif}
@@ -461,8 +461,8 @@ export default function Engine() {
                   </div>
 
                   <div className="space-y-1">
-                    <label htmlFor="save-solution" className="block text-[10px] font-sans uppercase tracking-widest text-primary/60">Solution line</label>
-                    <p id="save-solution-help" className="text-primary/50 text-xs font-sans">
+                    <label htmlFor="save-solution" className="block text-[10px] font-sans uppercase tracking-widest text-primary/70">Solution line</label>
+                    <p id="save-solution-help" className="text-primary/70 text-xs font-sans">
                       UCI PV, include opponent replies, e.g. e2e4 e7e5 g1f3
                     </p>
                     <input
@@ -477,7 +477,7 @@ export default function Engine() {
                   </div>
 
                   <div className="space-y-1">
-                    <label htmlFor="save-source" className="block text-[10px] font-sans uppercase tracking-widest text-primary/60">Source (optional)</label>
+                    <label htmlFor="save-source" className="block text-[10px] font-sans uppercase tracking-widest text-primary/70">Source (optional)</label>
                     <input
                       id="save-source"
                       type="text"
@@ -491,7 +491,7 @@ export default function Engine() {
                   {saveError && <p role="alert" className="text-negative text-xs font-sans">{saveError}</p>}
 
                   {!username && (
-                    <p className="text-primary/60 text-xs font-sans">Set your Chess.com username to save puzzles.</p>
+                    <p className="text-primary/70 text-xs font-sans">Set your Chess.com username to save puzzles.</p>
                   )}
 
                   <button

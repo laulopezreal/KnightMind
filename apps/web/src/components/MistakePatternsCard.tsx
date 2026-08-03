@@ -43,7 +43,7 @@ export function MistakePatternsCard({ data }: MistakePatternsCardProps) {
                     ))}
                 </ol>
             ) : (
-                <p className="font-sans text-sm text-primary/60">
+                <p className="font-sans text-sm text-primary/70">
                     {pending > 0
                         ? 'Still analysing your mistakes — patterns appear once one recurs.'
                         : 'No habit has recurred often enough to name yet.'}
@@ -51,7 +51,7 @@ export function MistakePatternsCard({ data }: MistakePatternsCardProps) {
             )}
 
             {below_threshold > 0 && (
-                <p className="font-sans text-xs text-primary/50 mt-4">
+                <p className="font-sans text-xs text-primary/70 mt-4">
                     {below_threshold} other cause{below_threshold === 1 ? '' : 's'} seen
                     too few times to call a pattern.
                 </p>
@@ -67,7 +67,7 @@ function PatternRow({ pattern }: { pattern: MistakePattern }) {
             <p className="font-sans text-sm text-primary/80 mt-1 leading-relaxed">
                 {pattern.description}
             </p>
-            <div className="flex items-center gap-3 mt-2 flex-wrap font-sans text-xs text-primary/60">
+            <div className="flex items-center gap-3 mt-2 flex-wrap font-sans text-xs text-primary/70">
                 <span>
                     {pattern.mistakes} time{pattern.mistakes === 1 ? '' : 's'}
                 </span>

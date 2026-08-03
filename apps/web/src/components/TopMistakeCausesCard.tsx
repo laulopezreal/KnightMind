@@ -28,7 +28,7 @@ export function TopMistakeCausesCard({ data }: TopMistakeCausesCardProps) {
     if (causes.length === 0) {
         return (
             <Shell pending={pending}>
-                <p className="font-sans text-sm text-primary/60">
+                <p className="font-sans text-sm text-primary/70">
                     {pending > 0
                         ? 'Your mistakes haven’t been analysed yet.'
                         : 'No diagnosed mistakes yet. Import some games to get started.'}
@@ -51,7 +51,7 @@ export function TopMistakeCausesCard({ data }: TopMistakeCausesCardProps) {
                         ))}
                     </ol>
                 ) : (
-                    <p className="font-sans text-sm text-primary/60">
+                    <p className="font-sans text-sm text-primary/70">
                         No cause has come up {min_for_ranking} times yet, so nothing here is
                         a pattern worth training. Keep playing — this fills in on its own.
                     </p>
@@ -59,7 +59,7 @@ export function TopMistakeCausesCard({ data }: TopMistakeCausesCardProps) {
 
                 {thin.length > 0 && (
                     <div>
-                        <h3 className="font-sans text-xs uppercase tracking-widest text-primary/60 mb-2">
+                        <h3 className="font-sans text-xs uppercase tracking-widest text-primary/70 mb-2">
                             Seen too few times to call a pattern
                         </h3>
                         <div className="flex flex-wrap gap-2">
@@ -76,7 +76,7 @@ export function TopMistakeCausesCard({ data }: TopMistakeCausesCardProps) {
                 )}
 
                 {unclear && (
-                    <p className="font-sans text-xs text-primary/50">
+                    <p className="font-sans text-xs text-primary/70">
                         {unclear.mistakes} mistake{unclear.mistakes === 1 ? '' : 's'} with no
                         clear cause.
                     </p>
@@ -100,7 +100,7 @@ function CauseRow({ cause, total }: { cause: MistakeCause; total: number }) {
 
             <div className="flex items-center gap-3 mt-1 flex-wrap">
                 {cause.dominant_phase && (
-                    <span className="font-sans text-xs text-primary/60 capitalize">
+                    <span className="font-sans text-xs text-primary/70 capitalize">
                         mostly {cause.dominant_phase}
                     </span>
                 )}
@@ -108,11 +108,11 @@ function CauseRow({ cause, total }: { cause: MistakeCause; total: number }) {
                     // Only rendered when one opening holds a real majority of
                     // this cause's mistakes — see _dominant. "Common in X" off a
                     // plurality would be a claim the data doesn't carry.
-                    <span className="font-sans text-xs text-primary/60">
+                    <span className="font-sans text-xs text-primary/70">
                         common in {cause.dominant_opening}
                     </span>
                 )}
-                <span className="font-sans text-xs text-primary/60">
+                <span className="font-sans text-xs text-primary/70">
                     {accuracyLabel(cause)}
                 </span>
             </div>
@@ -162,7 +162,7 @@ function Shell({ children, pending }: { children: React.ReactNode; pending: numb
                 {pending > 0 && (
                     // Surfaced so a short list never reads as "you make no
                     // mistakes" when it actually means "not analysed yet".
-                    <span className="font-sans text-xs text-primary/60">
+                    <span className="font-sans text-xs text-primary/70">
                         {pending} still to analyse
                     </span>
                 )}
