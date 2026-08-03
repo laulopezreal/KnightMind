@@ -372,7 +372,7 @@ export default function Engine() {
                     ) : (
                       <span className="text-primary/70 italic text-sm">Hidden</span>
                     )}
-                    <button type="button" onClick={() => setShowBestMove(!showBestMove)} className="km-interactive km-focus-visible text-primary text-xs uppercase tracking-widest border border-primary/20 px-3 py-1 rounded-sm transition-colors">
+                    <button type="button" onClick={() => setShowBestMove(!showBestMove)} className="km-interactive km-focus-visible text-primary text-xs font-sans font-normal uppercase tracking-widest border border-primary/20 px-3 py-1 rounded-sm transition-colors">
                       {showBestMove ? 'Hide' : 'Show'}
                     </button>
                   </div>
@@ -381,7 +381,7 @@ export default function Engine() {
                   <button
                     type="button"
                     onClick={handleClue}
-                    className="km-interactive km-focus-visible border border-primary/20 px-3 py-1 text-[10px] font-serif uppercase tracking-widest text-primary transition-colors disabled:opacity-50"
+                    className="km-interactive km-focus-visible border border-primary/20 px-3 py-1 text-[10px] font-sans font-normal uppercase tracking-widest text-primary transition-colors disabled:opacity-50"
                   >
                     {clue.clueStage === 0 ? 'Clue' : clue.clueStage === 1 ? 'Reveal squares' : 'Hide clues and reset'}
                   </button>
