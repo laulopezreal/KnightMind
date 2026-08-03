@@ -355,7 +355,7 @@ export default function RatingInsights() {
                                 onClick={() => setWindowSource('session')}
                                 disabled={hasSessions === false}
                                 aria-pressed={windowSource === 'session'}
-                                className={`km-toggle-option km-focus-visible px-3 py-2 text-sm font-sans transition-all rounded-sm ${windowSource === 'session' ? 'km-toggle-selected bg-primary text-bg-primary shadow-sm' : 'text-primary/70'} ${hasSessions === false ? 'km-interactive-disabled' : ''}`}
+                                className={`km-toggle-option km-focus-visible px-3 py-2 text-sm font-sans font-normal transition-all rounded-sm ${windowSource === 'session' ? 'km-toggle-selected bg-primary text-bg-primary shadow-sm' : 'text-primary/70'} ${hasSessions === false ? 'km-interactive-disabled' : ''}`}
                             >
                                 Since Session
                             </button>
@@ -363,7 +363,7 @@ export default function RatingInsights() {
                                 type="button"
                                 onClick={() => setWindowSource('fallback_7d')}
                                 aria-pressed={windowSource === 'fallback_7d'}
-                                className={`km-toggle-option km-focus-visible px-3 py-2 text-sm font-sans transition-all rounded-sm ${windowSource === 'fallback_7d' ? 'km-toggle-selected bg-primary text-bg-primary shadow-sm' : 'text-primary/70'}`}
+                                className={`km-toggle-option km-focus-visible px-3 py-2 text-sm font-sans font-normal transition-all rounded-sm ${windowSource === 'fallback_7d' ? 'km-toggle-selected bg-primary text-bg-primary shadow-sm' : 'text-primary/70'}`}
                             >
                                 Last 7 Days
                             </button>

@@ -310,7 +310,7 @@ export default function Engine() {
               disabled={historyIndex <= 0}
               aria-label="Go back a position"
               title="Go back"
-              className="km-interactive km-focus-visible border border-primary/20 px-4 py-2 text-primary/70 font-sans text-xs uppercase tracking-widest transition-colors rounded-sm disabled:opacity-40"
+              className="km-interactive km-focus-visible border border-primary/20 px-4 py-2 text-primary/70 font-sans font-normal text-xs uppercase tracking-widest transition-colors rounded-sm disabled:opacity-40"
             >
               ←
             </button>
@@ -320,14 +320,14 @@ export default function Engine() {
               disabled={historyIndex >= fenHistory.length - 1}
               aria-label="Go forward a position"
               title="Go forward"
-              className="km-interactive km-focus-visible border border-primary/20 px-4 py-2 text-primary/70 font-sans text-xs uppercase tracking-widest transition-colors rounded-sm disabled:opacity-40"
+              className="km-interactive km-focus-visible border border-primary/20 px-4 py-2 text-primary/70 font-sans font-normal text-xs uppercase tracking-widest transition-colors rounded-sm disabled:opacity-40"
             >
               →
             </button>
             <button
               type="button"
               onClick={handleReset}
-              className="km-interactive km-focus-visible px-6 py-2 text-primary/70 font-sans text-xs uppercase tracking-widest transition-colors rounded-sm"
+              className="km-interactive km-focus-visible px-6 py-2 text-primary/70 font-sans font-normal text-xs uppercase tracking-widest transition-colors rounded-sm"
             >
               Reset Position
             </button>
@@ -410,7 +410,7 @@ export default function Engine() {
                 aria-describedby={fenError ? 'fen-error' : undefined}
                 className="flex-1 bg-transparent border-none outline-none text-primary font-mono text-sm placeholder-primary/30"
               />
-              <button type="button" onClick={handleFenSubmit} className="km-interactive km-focus-visible text-xs font-sans uppercase tracking-widest text-primary transition-colors">
+              <button type="button" onClick={handleFenSubmit} className="km-interactive km-focus-visible text-xs font-sans font-normal uppercase tracking-widest text-primary transition-colors">
                 Load
               </button>
             </div>
@@ -506,7 +506,7 @@ export default function Engine() {
                     type="button"
                     onClick={handleSavePuzzle}
                     disabled={saving || !username || !saveTitle.trim() || !saveSolution.trim()}
-                    className="km-interactive km-focus-visible border border-primary/20 px-4 py-2 text-xs font-sans uppercase tracking-widest text-primary transition-colors rounded-sm disabled:opacity-40"
+                    className="km-interactive km-focus-visible border border-primary/20 px-4 py-2 text-xs font-sans font-normal uppercase tracking-widest text-primary transition-colors rounded-sm disabled:opacity-40"
                   >
                     {saving ? 'Saving…' : 'Save puzzle'}
                   </button>

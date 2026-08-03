@@ -57,7 +57,12 @@ const SubNavItem = ({
         aria-label={tooltip ? `${label} — ${tooltip}` : undefined}
         // whitespace-nowrap: "Accuracy Goal" wrapped to two lines in the narrow
         // sub-nav column, leaving the badge floating beside a ragged label.
-        className={`flex items-center gap-1 whitespace-nowrap min-h-11 text-sm transition-all duration-300 km-focus-visible rounded-sm px-2 -mx-1 text-left outline-none ${
+        // `font-sans` is stated here rather than inherited from the parent
+        // `<nav>`: the base `button` rule matches this element directly, and a
+        // matching declaration always beats an inherited one whatever the layer.
+        // Without it these sub-items render Cormorant beside their sibling
+        // NavItem links, which are `<a>` and so do inherit the nav's Inter.
+        className={`flex items-center gap-1 whitespace-nowrap min-h-11 text-sm font-sans transition-all duration-300 km-focus-visible rounded-sm px-2 -mx-1 text-left outline-none ${
             isActive
                 ? 'opacity-100 font-medium km-interactive'
                 : 'opacity-70 font-light km-interactive hover:opacity-90'
