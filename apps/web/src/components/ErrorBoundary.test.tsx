@@ -124,6 +124,48 @@ describe('ErrorBoundary', () => {
     expect(screen.getByText('Child content')).toBeInTheDocument();
   });
 
+  // A caught boundary renders its fallback until something resets it — React
+  // never retries by itself. `resetKey` is how a page-scoped boundary learns
+  // the user has navigated away from the page that threw.
+  it('should clear a caught error when resetKey changes', () => {
+    const { rerender } = render(
+      <ErrorBoundary resetKey="/dashboard">
+        <ThrowingComponent />
+      </ErrorBoundary>
+    );
+
+    expect(screen.getByText('Something went wrong')).toBeInTheDocument();
+
+    shouldComponentThrow = false;
+    rerender(
+      <ErrorBoundary resetKey="/insights">
+        <ThrowingComponent />
+      </ErrorBoundary>
+    );
+
+    expect(screen.getByText('Child content')).toBeInTheDocument();
+  });
+
+  it('should keep showing the fallback while resetKey is unchanged', () => {
+    const { rerender } = render(
+      <ErrorBoundary resetKey="/dashboard">
+        <ThrowingComponent />
+      </ErrorBoundary>
+    );
+
+    // Re-render on the same key with a child that would now succeed: staying on
+    // the page that threw must not silently re-run the render that failed.
+    shouldComponentThrow = false;
+    rerender(
+      <ErrorBoundary resetKey="/dashboard">
+        <ThrowingComponent />
+      </ErrorBoundary>
+    );
+
+    expect(screen.getByText('Something went wrong')).toBeInTheDocument();
+    expect(screen.queryByText('Child content')).not.toBeInTheDocument();
+  });
+
   it('should show generic message when error has no message', () => {
     function ThrowGeneric(): React.ReactNode {
       throw new Error();
