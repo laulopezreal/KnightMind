@@ -36,7 +36,7 @@ const motifRankStyle = (rank: string) =>
     MOTIF_RANK_STYLE[rank as keyof typeof MOTIF_RANK_STYLE] ?? MOTIF_RANK_STYLE.needs_work;
 
 export default function Puzzles() {
-    const { username, setEditorOpen } = useChessUsername();
+    const { username } = useChessUsername();
     const { sessionType, targetAccuracy, setTargetAccuracy, targetTimeMinutes, setTargetTimeMinutes } = usePuzzleMode();
     const navigate = useNavigate();
     const [userMove, setUserMove] = useState('');
@@ -218,7 +218,7 @@ export default function Puzzles() {
     const { selectedModeLabel, screenReaderModeLabel } = getModeLabels(sessionType);
     const modeAvailabilityLabel = sessionType === 'standard' ? 'Active' : 'Beta';
     const startSessionDisabledReason = !username
-        ? 'Set your username first to start training.'
+        ? 'Connect your Chess.com account first to start training.'
         // A session is running (the Start button is hidden), so there is nothing
         // "loading or generating" to wait on — don't show a start reason at all.
         : activeSessionId
@@ -235,7 +235,7 @@ export default function Puzzles() {
                             ? 'Only Standard mode can start sessions for now. Switch mode in the sidebar.'
                             : null;
     const generateDisabledReason = !username
-        ? 'Set your username first to generate puzzles.'
+        ? 'Connect your Chess.com account first to generate puzzles.'
         : isGenerating
             ? 'Puzzle generation is already in progress.'
             : activeSessionId
@@ -745,16 +745,21 @@ export default function Puzzles() {
                 <div className="flex flex-col md:flex-row gap-6 items-end">
                     <div className="flex-1 relative min-w-[300px]">
                         {!username ? (
-                            <div className="h-full flex items-center">
-                                <span className="text-primary/70 font-sans mr-2">Set your Chess.com username to continue.</span>
-                                <button
-                                    type="button"
-                                    onClick={() => setEditorOpen(true)}
-                                    className="km-interactive km-focus-visible km-inline-link text-primary"
+                            // Links to Home: the username editor lives in
+                            // UsernameDisplay, which Layout only mounts once a
+                            // username exists, so there is nothing to open in
+                            // this state. Underlined because inline in a
+                            // sentence the link is 2.51:1 against the text
+                            // around it, under the 3:1 colour alone needs.
+                            <p className="py-2 text-primary/70 font-sans">
+                                <Link
+                                    to="/"
+                                    className="km-interactive km-focus-visible km-inline-link text-primary underline decoration-primary/30 underline-offset-4"
                                 >
-                                    Set Username
-                                </button>
-                            </div>
+                                    Connect your Chess.com account
+                                </Link>
+                                {' '}to start training.
+                            </p>
                         ) : (
                             <div className="text-xl font-serif text-primary py-2 border-b border-primary/20">
                                 {username}
@@ -783,7 +788,12 @@ export default function Puzzles() {
                     </div>
                 </div>
 
-                {(startSessionDisabledReason || generateDisabledReason) && (
+                {/* Suppressed without an account: both reasons are the connect
+                    message, which the panel beside the buttons already states —
+                    and states with a working link. Two near-identical sentences
+                    stacked read as a rendering bug. The reasons still reach the
+                    buttons' own title tooltips. */}
+                {username && (startSessionDisabledReason || generateDisabledReason) && (
                     <p className="text-sm text-primary/70 font-sans" role="status" aria-live="polite">
                         {startSessionDisabledReason ?? generateDisabledReason}
                     </p>
@@ -924,8 +934,8 @@ export default function Puzzles() {
                         "Ready to train — click Start Session", which was a dead
                         instruction (every control above is disabled without a
                         username). The fix is not a second card: the panel above
-                        already states the problem AND offers "Set Username", so
-                        anything here is a duplicate of the control beside it. */}
+                        already states the problem AND links to Home to fix it,
+                        so anything here is a duplicate of the control beside it. */}
                     {statusLoadFailed && (
                         <div className="bg-negative-soft border border-negative-soft rounded-sm p-6 text-center space-y-4" role="alert" aria-live="assertive">
                             <h3 className="font-serif text-xl text-primary">Couldn&apos;t load your training data</h3>
@@ -964,15 +974,12 @@ export default function Puzzles() {
                                         Generate New
                                     </button>
                                 )}
-                                {!username && (
-                                    <button
-                                        type="button"
-                                        onClick={() => setEditorOpen(true)}
-                                        className="px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-colors km-interactive km-focus-visible"
-                                    >
-                                        Set Username
-                                    </button>
-                                )}
+                                {/* No connect control here. The panel above is
+                                    rendered whenever there is no username and
+                                    already offers one — a second link to the
+                                    same place, worded differently, reads as two
+                                    different actions. Same reasoning as the
+                                    absent no-username card below. */}
                             </div>
                         </div>
                     )}

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import Puzzles from './Puzzles';
+import { generatePuzzles } from '../api';
 import { setupMockLocalStorage } from '../test/helpers';
 
 const mockNavigate = vi.fn();
@@ -119,9 +120,92 @@ describe('Puzzles', () => {
 
     render(<Puzzles />);
 
-    await waitFor(() => {
-      expect(screen.getByText(/Set your Chess.com username/i)).toBeInTheDocument();
+    // The sentence spans a link plus a trailing text node, so match on the
+    // paragraph's own text rather than a single text node.
+    const prompt = await screen.findByRole('link', { name: /Connect your Chess.com account/i });
+    expect(prompt.closest('p')).toHaveTextContent('Connect your Chess.com account to start training.');
+  });
+
+  it('offers a working route to connect an account, not a dead button', async () => {
+    mockUsername = '';
+
+    render(<Puzzles />);
+
+    // Was a "Set Username" button calling setEditorOpen. That editor lives in
+    // UsernameDisplay, which Layout only mounts once a username exists — so it
+    // did nothing in the one state that rendered it. Home's onboarding is the
+    // only way in, so this must be a real navigation.
+    const link = await screen.findByRole('link', { name: /Connect your Chess.com account/i });
+    expect(link).toHaveAttribute('href', '/');
+    expect(screen.queryByRole('button', { name: /Set Username/i })).not.toBeInTheDocument();
+  });
+
+  it('marks the inline connect link with more than colour', async () => {
+    mockUsername = '';
+
+    render(<Puzzles />);
+
+    // Inline in a sentence the link is 2.51:1 against the surrounding text,
+    // under the 3:1 that colour-alone distinction requires — so it carries a
+    // persistent underline, not just a darker shade.
+    const link = await screen.findByRole('link', { name: /Connect your Chess.com account/i });
+    expect(link.className).toMatch(/\bunderline\b/);
+  });
+
+  it('does not stack a second connect control on the error card', async () => {
+    // Reachable only by a narrow path: generate with an account, hit an error,
+    // then clear the account. The error card used to add its own "Connect
+    // account" button here — a second link to the same place, worded
+    // differently, beside the panel that already offers one.
+    mockUsername = 'testplayer';
+    mockGetUserStatus.mockResolvedValue({
+      games_count: 50,
+      puzzles_count: 20,
+      due_count: 5,
+      has_new_games: true,
     });
+    vi.mocked(generatePuzzles).mockRejectedValue(new Error('generation blew up'));
+
+    const { rerender } = render(<Puzzles />);
+
+    const generate = await screen.findByRole('button', { name: /Generate New/i });
+    await waitFor(() => expect(generate).toBeEnabled());
+    generate.click();
+
+    // JobStatusCard is stubbed to null in this suite, so the error text itself
+    // never renders — the card's own Retry button is the observable signal.
+    await screen.findByRole('button', { name: 'Retry' });
+
+    // Now the account goes away underneath the error state.
+    mockUsername = '';
+    rerender(<Puzzles />);
+
+    // Exactly one route to Home, and it is the controls panel's inline link —
+    // singular query on purpose, so a second one reappearing fails here.
+    const connect = await screen.findByRole('link', { name: /Connect your Chess.com account/i });
+    expect(connect).toHaveAttribute('href', '/');
+    expect(screen.getAllByRole('link').filter(l => l.getAttribute('href') === '/')).toHaveLength(1);
+    expect(screen.queryByRole('link', { name: 'Connect account' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Set Username/i })).not.toBeInTheDocument();
+  });
+
+  it('states the connect message once, not twice', async () => {
+    mockUsername = '';
+
+    render(<Puzzles />);
+
+    await screen.findByRole('link', { name: /Connect your Chess.com account/i });
+
+    // The disabled-control explanation is the same message as the panel beside
+    // the buttons, so without an account it is suppressed — two near-identical
+    // sentences stacked read as a rendering bug. It still reaches the buttons'
+    // title tooltips, which is where a per-button reason belongs.
+    expect(screen.getAllByText(/to start training/i)).toHaveLength(1);
+    expect(screen.queryByText(/Set your username first/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Start Session' })).toHaveAttribute(
+      'title',
+      'Connect your Chess.com account first to start training.'
+    );
   });
 
   it('should render page heading', async () => {
