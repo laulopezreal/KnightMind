@@ -76,6 +76,29 @@ describe('Insights data states', () => {
         expect(screen.queryByText('Network request failed')).not.toBeInTheDocument();
     });
 
+    // The header now comes from a single InsightsShell wrapping every branch.
+    // These pin that: re-inlining a header into one branch (and dropping it from
+    // another) is exactly how this page grew a duplicate in the first place.
+    it('keeps the page h1 while loading', () => {
+        mockGetMotifPerformance.mockReturnValue(new Promise(() => {}));
+        mockGetMotifTrends.mockReturnValue(new Promise(() => {}));
+
+        render(<Insights />);
+
+        expect(screen.getByRole('heading', { level: 1, name: 'Insights' })).toBeInTheDocument();
+    });
+
+    it('keeps the page h1 in the error state', async () => {
+        setOnline(true);
+        mockGetMotifPerformance.mockRejectedValue(new Error('Boom 500'));
+        mockGetMotifTrends.mockRejectedValue(new Error('Boom 500'));
+
+        render(<Insights />);
+
+        await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Boom 500'));
+        expect(screen.getByRole('heading', { level: 1, name: 'Insights' })).toBeInTheDocument();
+    });
+
     it('ignores a stale error from a superseded username', async () => {
         setOnline(true);
         let rejectAlice!: (reason?: unknown) => void;

@@ -692,8 +692,27 @@ export default function Puzzles() {
         }
     };
 
+    // formatMotifName, not the raw query param: the Dashboard link that sends
+    // users here already says "Back rank mate", so printing "back_rank_mate"
+    // made the two screens disagree mid-flow. Hoisted to a const so the visible
+    // heading and its sr-only counterpart below can never drift apart.
+    const pageTitle = motifFilter ? `${formatMotifName(motifFilter)} Puzzles` : 'Daily Puzzles';
+
     return (
         <div className="flex flex-col gap-12 animate-teedin pb-20 md:pb-0">
+            {/* In-session below `lg` the header block collapses to give the board
+                room — and it took the page's only <h1> with it, leaving mobile
+                users mid-session on a page with no level-one heading (axe:
+                page-has-heading-one; the outline started at the sr-only h2).
+                This copy carries the heading at those widths and `lg:hidden`
+                yields to the visible one above `lg`, so exactly one h1 is ever
+                exposed. `sr-only` is absolutely positioned, so it adds no
+                `gap-12` row. Caveat for tests: both are in the DOM at once
+                in-session, and jsdom applies no breakpoints — query headings by
+                text, not a bare getByRole('heading', { level: 1 }). */}
+            {activeSessionId && currentPuzzle && (
+                <h1 className="sr-only lg:hidden">{pageTitle}</h1>
+            )}
             <section className={activeSessionId && currentPuzzle ? 'hidden lg:block' : ''}>
                 <Link to="/dashboard" className="text-primary/70 hover:text-primary mb-4 inline-block font-sans text-sm tracking-widest uppercase transition-colors">
                     ← Back to Dashboard
@@ -701,11 +720,7 @@ export default function Puzzles() {
                 <div className="flex justify-between items-end">
                     <div>
                         <h1 className="text-4xl md:text-5xl font-serif text-primary mb-2">
-                            {/* formatMotifName, not the raw query param: the
-                                Dashboard link that sends users here already says
-                                "Back rank mate", so printing "back_rank_mate"
-                                made the two screens disagree mid-flow. */}
-                            {motifFilter ? `${formatMotifName(motifFilter)} Puzzles` : 'Daily Puzzles'}
+                            {pageTitle}
                         </h1>
                         <div className={`${activeSessionId && currentPuzzle ? 'hidden lg:flex' : 'flex'} items-center gap-2 mb-3`}>
                             <span className="text-xs font-sans uppercase tracking-wider px-2 py-1 rounded-sm border border-primary/20 bg-primary/5 text-primary/80">

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { getMistakeCauses, getMistakePatterns, getTodaysFocus, getMotifPerformance, getMotifTrends, getTrickyPuzzles, type MistakeCausesResponse, type MistakePatternsResponse, type TodaysFocusResponse, type MotifPerformanceResponse, type TrendsResponse, type TrickyPuzzlesResponse } from '../api/users';
 import { useChessUsername } from '../context/ChessUsernameContext';
@@ -13,6 +13,22 @@ import { DataStateEmpty, DataStateError, DataStateLoading, DataStateOffline } fr
 import { ConnectAccountEmpty } from '../components/ConnectAccountEmpty';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
 import { useLatestRequest } from '../hooks/useLatestRequest';
+
+/**
+ * Page shell. The header (h1 + subtitle) renders in EVERY state — connect
+ * account, loading, offline, error, empty, loaded — so the document always has
+ * a level-one heading. Defined once here rather than repeated per branch, the
+ * same way DashboardShell does it: this page grew a second copy of the header
+ * as soon as it grew a second top-level return.
+ */
+function InsightsShell({ children }: { children: ReactNode }) {
+    return (
+        <div className="container mx-auto p-6 max-w-7xl space-y-8">
+            <PageHeader title="Insights" subtitle="Deep analysis of your puzzle performance" />
+            {children}
+        </div>
+    );
+}
 
 export default function Insights() {
     const { username } = useChessUsername();
@@ -111,17 +127,14 @@ export default function Insights() {
     // the bounce announced nothing, so the sidebar link read as broken.
     if (!username) {
         return (
-            <div className="container mx-auto p-6 max-w-7xl space-y-8">
-                <PageHeader title="Insights" subtitle="Deep analysis of your puzzle performance" />
+            <InsightsShell>
                 <ConnectAccountEmpty description="Insights read the tactical patterns out of your own games and puzzle history. Connect your Chess.com account to start building them." />
-            </div>
+            </InsightsShell>
         );
     }
 
     return (
-        <div className="container mx-auto p-6 max-w-7xl space-y-8">
-            <PageHeader title="Insights" subtitle="Deep analysis of your puzzle performance" />
-
+        <InsightsShell>
             {loading ? (
                 <DataStateLoading label="Loading insights..." />
             ) : error ? (
@@ -209,6 +222,6 @@ export default function Insights() {
                     </section>
                 </>
             )}
-        </div>
+        </InsightsShell>
     );
 }

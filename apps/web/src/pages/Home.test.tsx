@@ -55,11 +55,14 @@ describe('Home', () => {
     (api.getUserStatus as ReturnType<typeof vi.fn>).mockResolvedValue(null);
   });
 
-  it('should render the page title', async () => {
+  it('should render the page title as the level-one heading', async () => {
     render(<Home />);
 
+    // Role + level, not bare text: the loaded state's h1 comes from the shared
+    // HomeHero, and this is what pins it as a real heading. The loading and
+    // error states are covered in Home.states.test.tsx.
     await waitFor(() => {
-      expect(screen.getByText('KnightMind')).toBeInTheDocument();
+      expect(screen.getByRole('heading', { level: 1, name: 'KnightMind' })).toBeInTheDocument();
     });
   });
 

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
     getDashboardSummary,
@@ -37,6 +37,23 @@ const TIME_CONTROL_KEY = 'knightmind:ratings:time_control';
 function readTimeControl(): TimeControl {
     const stored = localStorage.getItem(TIME_CONTROL_KEY);
     return stored === 'blitz' || stored === 'bullet' ? stored : 'rapid';
+}
+
+/**
+ * Page shell. The header (h1 + subtitle) renders in EVERY state — loading,
+ * offline, error, loaded — so the document always has a level-one heading.
+ * Early-returning a bare state component dropped the h1 with the rest of the
+ * page: a screen-reader user navigating by headings landed somewhere with no
+ * identity ("something went wrong" — on which page?), and axe flagged
+ * `page-has-heading-one`. Same structure as Insights.
+ */
+function DashboardShell({ children }: { children: ReactNode }) {
+    return (
+        <div className="container mx-auto p-6 max-w-7xl space-y-8 animate-teedin">
+            <PageHeader title="Dashboard" subtitle="Your chess training overview" />
+            {children}
+        </div>
+    );
 }
 
 /** Reliable weakest motif to lead with, or null when all-strong / no reliable data. */
@@ -158,10 +175,9 @@ export default function Dashboard() {
     // `loading` never clears and this state would otherwise skeleton forever.
     if (!username) {
         return (
-            <div className="container mx-auto p-6 max-w-7xl space-y-8 animate-teedin">
-                <PageHeader title="Dashboard" subtitle="Your chess training overview" />
+            <DashboardShell>
                 <ConnectAccountEmpty description="What's due, your streak, and how recent sessions went are all read from your own games. Connect your Chess.com account to fill this in." />
-            </div>
+            </DashboardShell>
         );
     }
 
@@ -170,44 +186,42 @@ export default function Dashboard() {
         // grid) so the page doesn't collapse to a spinner and reflow. Uses the
         // shared DataStateSkeleton for the role="status" + sr-only announcement +
         // aria-hidden visual wrapper (same pattern as Home and the other pages).
+        // No header placeholder block: the shell renders the real header above.
         return (
-            <DataStateSkeleton
-                label="Loading dashboard…"
-                className="container mx-auto p-6 max-w-7xl space-y-8 animate-pulse"
-            >
-                {/* Page header */}
-                <div className="space-y-2">
-                    <div className="h-9 w-56 bg-primary/10 rounded-sm" />
-                    <div className="h-4 w-72 max-w-full bg-primary/5 rounded-sm" />
-                </div>
+            <DashboardShell>
+                <DataStateSkeleton label="Loading dashboard…" className="space-y-8 animate-pulse">
+                    {/* Hero */}
+                    <div className="h-40 bg-primary/10 rounded-sm" />
 
-                {/* Hero */}
-                <div className="h-40 bg-primary/10 rounded-sm" />
+                    {/* Recently tricky */}
+                    <div className="h-28 bg-primary/5 border border-primary/10 rounded-sm" />
 
-                {/* Recently tricky */}
-                <div className="h-28 bg-primary/5 border border-primary/10 rounded-sm" />
-
-                {/* Momentum (2 cols) + Streak (1 col) */}
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                    <div className="md:col-span-2 h-52 bg-primary/5 border border-primary/10 rounded-sm" />
-                    <div className="md:col-span-1 h-52 bg-primary/5 border border-primary/10 rounded-sm" />
-                </div>
-            </DataStateSkeleton>
+                    {/* Momentum (2 cols) + Streak (1 col) */}
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                        <div className="md:col-span-2 h-52 bg-primary/5 border border-primary/10 rounded-sm" />
+                        <div className="md:col-span-1 h-52 bg-primary/5 border border-primary/10 rounded-sm" />
+                    </div>
+                </DataStateSkeleton>
+            </DashboardShell>
         );
     }
 
     if (error || !dashboardData) {
         // A failed load while the browser is offline is a connectivity problem,
         // not a server error — say so instead of a bare error message.
-        return !online ? (
-            <DataStateOffline onRetry={loadDashboardData} />
-        ) : (
-            <DataStateError
-                message={error || 'Failed to load dashboard data'}
-                onRetry={loadDashboardData}
-                retryLabel="Retry"
-                ariaLabel="Retry loading dashboard"
-            />
+        return (
+            <DashboardShell>
+                {!online ? (
+                    <DataStateOffline onRetry={loadDashboardData} />
+                ) : (
+                    <DataStateError
+                        message={error || 'Failed to load dashboard data'}
+                        onRetry={loadDashboardData}
+                        retryLabel="Retry"
+                        ariaLabel="Retry loading dashboard"
+                    />
+                )}
+            </DashboardShell>
         );
     }
 
@@ -236,9 +250,7 @@ export default function Dashboard() {
     const showStrip = stripLoading || hasRatingTile || hasMotifTile;
 
     return (
-        <div className="container mx-auto p-6 max-w-7xl space-y-8 animate-teedin">
-            <PageHeader title="Dashboard" subtitle="Your chess training overview" />
-
+        <DashboardShell>
             {/* New games waiting to be imported into training. */}
             {userStatus?.has_new_games && (
                 <div className="flex items-center justify-between gap-3 bg-primary/5 border border-primary/10 rounded-sm px-4 py-3">
@@ -319,6 +331,6 @@ export default function Dashboard() {
                     defaultExpanded={false}
                 />
             )}
-        </div>
+        </DashboardShell>
     );
 }
