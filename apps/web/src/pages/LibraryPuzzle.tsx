@@ -413,7 +413,7 @@ export default function LibraryPuzzle() {
                                     type="button"
                                     onClick={handleCheckAnswer}
                                     disabled={!userMove}
-                                    className={`px-6 py-4 bg-primary text-bg-primary rounded-sm font-serif text-lg transition-all shadow-lg shadow-primary/5 km-focus-visible disabled:opacity-50 ${!userMove ? 'km-interactive-disabled' : 'km-interactive'}`}
+                                    className={`px-6 py-4 bg-primary text-bg-primary rounded-sm font-serif text-lg transition-all shadow-lg shadow-primary/5 km-focus-visible ${!userMove ? 'km-interactive-disabled' : 'km-interactive'}`}
                                 >
                                     Check Move
                                 </button>

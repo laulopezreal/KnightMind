@@ -174,7 +174,7 @@ export default function Ops() {
                                     }
                                 }}
                                 disabled={!canSetUser}
-                                className="px-4 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-colors disabled:opacity-50 km-focus-visible"
+                                className="px-4 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-colors km-focus-visible"
                             >
                                 Set Active
                             </button>

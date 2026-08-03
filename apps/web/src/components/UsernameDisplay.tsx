@@ -145,7 +145,7 @@ export default function UsernameDisplay() {
                             type="button"
                             onClick={handleSave}
                             disabled={isValidating}
-                            className={`px-4 py-2 bg-primary text-bg-primary font-medium rounded-sm transition-opacity km-focus-visible ${isValidating ? 'km-interactive-disabled disabled:opacity-50' : 'hover:opacity-90 cursor-pointer'}`}
+                            className={`px-4 py-2 bg-primary text-bg-primary font-medium rounded-sm transition-opacity km-focus-visible ${isValidating ? 'km-interactive-disabled' : 'hover:opacity-90 cursor-pointer'}`}
                         >
                             {isValidating ? '...' : 'Save'}
                         </button>

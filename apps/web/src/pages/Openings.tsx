@@ -746,7 +746,7 @@ export default function Openings() {
             disabled={loading}
             className={[
               'px-6 py-2 rounded-sm font-serif transition-all km-focus-visible',
-              loading ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive',
+              loading ? 'km-interactive-disabled' : 'km-interactive',
               treeData
                 ? 'border border-primary/20 text-primary hover:bg-primary hover:text-bg-primary'
                 : 'bg-primary text-bg-primary',
