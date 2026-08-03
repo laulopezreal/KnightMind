@@ -5,6 +5,12 @@ interface Props {
   children: ReactNode;
   fallback?: ReactNode | ((props: { error: Error | null; reset: () => void }) => ReactNode);
   onError?: (error: Error, errorInfo: ErrorInfo) => void;
+  /**
+   * Clears a caught error when this value changes — e.g. the current pathname,
+   * so navigating away from a page that threw shows the new page rather than
+   * the old page's fallback. Unset means the boundary only resets on demand.
+   */
+  resetKey?: string | number;
 }
 
 interface State {
@@ -38,6 +44,16 @@ export class ErrorBoundary extends Component<Props, State> {
     // Call optional error handler (for error tracking services)
     if (this.props.onError) {
       this.props.onError(error, errorInfo);
+    }
+  }
+
+  componentDidUpdate(prevProps: Props): void {
+    // React never retries a boundary on its own: once caught, the fallback
+    // renders until something changes the state back. A page-scoped boundary
+    // therefore has to be told when the user has moved on, or the fallback
+    // outlives the page that threw and every page clicked next looks broken.
+    if (this.state.hasError && prevProps.resetKey !== this.props.resetKey) {
+      this.setState({ hasError: false, error: null });
     }
   }
 

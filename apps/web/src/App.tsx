@@ -8,6 +8,7 @@ import { ThemeProvider } from './context/ThemeContext';
 import { AuthProvider } from './context/AuthContext';
 import { RequireAuth } from './components/RequireAuth';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { RouteErrorBoundary } from './components/RouteErrorBoundary';
 
 // Route-based code splitting: each page is loaded on demand so heavy
 // dependencies (d3, recharts, chess.js, react-chessboard) stay out of the
@@ -65,27 +66,33 @@ function App() {
             <BrowserRouter>
               <AuthProvider>
                 <Layout>
-                  <Suspense fallback={<DataStateLoading label="Loading page…" />}>
-                    <Routes>
-                      {/* Always reachable, never gated. */}
-                      <Route path="/login" element={<Login />} />
-                      {/* Everything else is optionally gated by VITE_REQUIRE_AUTH
-                          (default off — RequireAuth is a passthrough then). */}
-                      <Route element={<RequireAuth />}>
-                        <Route path="/" element={<Home />} />
-                        <Route path="/dashboard" element={<Dashboard />} />
-                        <Route path="/openings" element={<Openings />} />
-                        <Route path="/engine" element={<Engine />} />
-                        <Route path="/library" element={<Library />} />
-                        <Route path="/library/:puzzleId" element={<LibraryPuzzle />} />
-                        <Route path="/puzzles" element={<Puzzles />} />
-                        <Route path="/insights" element={<Insights />} />
-                        <Route path="/rating-insights" element={<RatingInsights />} />
-                        <Route path="/ops" element={OPS_ENABLED && Ops ? <Ops /> : <Navigate to="/" replace />} />
-                        <Route path="/how-it-works" element={<HowItWorks />} />
-                      </Route>
-                    </Routes>
-                  </Suspense>
+                  {/* Page-scoped: a throw in one page leaves the sidebar and
+                      header usable, so the user can navigate out of it. The
+                      outer ErrorBoundary remains the net for the chrome and
+                      providers themselves. */}
+                  <RouteErrorBoundary>
+                    <Suspense fallback={<DataStateLoading label="Loading page…" />}>
+                      <Routes>
+                        {/* Always reachable, never gated. */}
+                        <Route path="/login" element={<Login />} />
+                        {/* Everything else is optionally gated by VITE_REQUIRE_AUTH
+                            (default off — RequireAuth is a passthrough then). */}
+                        <Route element={<RequireAuth />}>
+                          <Route path="/" element={<Home />} />
+                          <Route path="/dashboard" element={<Dashboard />} />
+                          <Route path="/openings" element={<Openings />} />
+                          <Route path="/engine" element={<Engine />} />
+                          <Route path="/library" element={<Library />} />
+                          <Route path="/library/:puzzleId" element={<LibraryPuzzle />} />
+                          <Route path="/puzzles" element={<Puzzles />} />
+                          <Route path="/insights" element={<Insights />} />
+                          <Route path="/rating-insights" element={<RatingInsights />} />
+                          <Route path="/ops" element={OPS_ENABLED && Ops ? <Ops /> : <Navigate to="/" replace />} />
+                          <Route path="/how-it-works" element={<HowItWorks />} />
+                        </Route>
+                      </Routes>
+                    </Suspense>
+                  </RouteErrorBoundary>
                 </Layout>
               </AuthProvider>
             </BrowserRouter>
