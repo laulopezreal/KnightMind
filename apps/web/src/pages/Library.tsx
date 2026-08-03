@@ -488,7 +488,7 @@ export default function Library() {
                         type="button"
                         onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}
                         disabled={offset === 0}
-                        className="px-4 py-2 border border-primary/20 rounded-sm text-primary km-interactive km-focus-visible disabled:opacity-30 disabled:cursor-default"
+                        className="px-4 py-2 border border-primary/20 rounded-sm text-primary km-interactive km-focus-visible"
                     >
                         Previous
                     </button>
@@ -499,7 +499,7 @@ export default function Library() {
                         type="button"
                         onClick={() => setOffset(offset + PAGE_SIZE)}
                         disabled={currentPage >= totalPages}
-                        className="px-4 py-2 border border-primary/20 rounded-sm text-primary km-interactive km-focus-visible disabled:opacity-30 disabled:cursor-default"
+                        className="px-4 py-2 border border-primary/20 rounded-sm text-primary km-interactive km-focus-visible"
                     >
                         Next
                     </button>

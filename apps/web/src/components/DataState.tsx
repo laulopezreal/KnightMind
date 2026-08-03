@@ -149,7 +149,7 @@ export function DataStatePartial({
             type="button"
             onClick={onRetry}
             disabled={retryPending}
-            className={`px-4 py-1.5 border border-primary/20 text-primary rounded-sm font-serif text-sm transition-all km-focus-visible ${retryPending ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'}`}
+            className={`px-4 py-1.5 border border-primary/20 text-primary rounded-sm font-serif text-sm transition-all km-focus-visible ${retryPending ? 'km-interactive-disabled' : 'km-interactive'}`}
           >
             {retryPending ? `${retryLabel}…` : retryLabel}
           </button>
@@ -198,7 +198,7 @@ export function DataStateStale({
             type="button"
             onClick={onRefresh}
             disabled={refreshPending}
-            className={`px-4 py-1.5 border border-primary/20 text-primary rounded-sm font-serif text-sm transition-all km-focus-visible ${refreshPending ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'}`}
+            className={`px-4 py-1.5 border border-primary/20 text-primary rounded-sm font-serif text-sm transition-all km-focus-visible ${refreshPending ? 'km-interactive-disabled' : 'km-interactive'}`}
           >
             {refreshPending ? `${refreshLabel}…` : refreshLabel}
           </button>

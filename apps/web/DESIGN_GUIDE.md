@@ -14,17 +14,33 @@ All UI changes must follow this guide to maintain the "Chess Intelligence" aesth
 
 **Primary Action** (Generate, Save, Submit)
 ```tsx
-<button className="px-6 py-2 bg-primary text-bg-primary hover:opacity-90 rounded-sm font-serif transition-colors disabled:opacity-50">
+<button className="px-6 py-2 bg-primary text-bg-primary hover:opacity-90 rounded-sm font-serif transition-colors">
   Action
 </button>
 ```
 
 **Secondary Action** (Cancel, Load, Outline)
 ```tsx
-<button className="px-6 py-2 border border-primary/20 text-primary hover:bg-primary hover:text-bg-primary hover:border-transparent rounded-sm font-serif transition-all disabled:opacity-50">
+<button className="px-6 py-2 border border-primary/20 text-primary hover:bg-primary hover:text-bg-primary hover:border-transparent rounded-sm font-serif transition-all">
   Secondary
 </button>
 ```
+
+**Disabled** — add no classes. Set the real `disabled` attribute and `index.css`
+styles it: inert wash, muted-ink label, dashed hairline, `not-allowed` cursor.
+
+```tsx
+<button disabled={busy} title={busy ? 'Why it is unavailable' : undefined}>…</button>
+```
+
+Do **not** reach for `disabled:opacity-50` (or any `opacity-*`) to express the
+state. Element opacity composites after paint, so axe measures the *undimmed*
+colour and the real ratio never gets checked — and it multiplies with any alpha
+already in the class list, which is how a button whose class list read
+`text-primary/70` shipped a 1.87:1 label. The stylesheet now forces `opacity: 1`
+on disabled controls, so such a utility is dead code that makes the class list
+lie, and a test fails the build if one reappears. `km-interactive-disabled`
+remains for the rare control that cannot take the `disabled` attribute.
 
 ### Cards & Containers
 
@@ -55,8 +71,25 @@ All UI changes must follow this guide to maintain the "Chess Intelligence" aesth
 
 Secondary text is dimmed with an **alpha colour** (`text-primary/70`), never with
 `opacity-*`. Element opacity composites after paint, so contrast tooling measures
-the underlying colour and the real ratio goes unchecked. (`disabled:opacity-*` on
-inactive controls is fine — WCAG exempts them.)
+the underlying colour and the real ratio goes unchecked.
+
+**Disabled controls are not an exception.** They used to be — WCAG exempts them,
+so `disabled:opacity-*` was allowed here. The exemption is about conformance, not
+about legibility: the label on a disabled control is the only thing explaining
+why it is unavailable. Measured on canvas across every disabled control in the
+app, label against the surface it sits on:
+
+| theme | before | after |
+| --- | --- | --- |
+| day | 1.87–3.63 (**11/11** under 4.5) | 4.73–5.25 |
+| night | 2.38–5.12 (3/11 under 4.5) | 5.50–7.03 |
+
+The worst were Engine's control buttons, where `disabled:opacity-40` *multiplies*
+with the `text-primary/70` already in the class list and leaves ink at an
+effective 28%. Note day was about twice as bad as night — check both.
+
+Disabled is now styled by colour in `index.css`. See the Buttons section: the
+correct class list for a disabled control is no extra classes at all.
 
 `/70` is the **floor for text under 18px**, and the reason is the surfaces, not the
 token. Cards tint themselves with `bg-primary/5`, and each tint layer pulls the

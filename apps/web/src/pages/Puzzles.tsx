@@ -792,7 +792,7 @@ export default function Puzzles() {
                                 onClick={handleStartSession}
                                 disabled={controlsDisabled || !userStatus || userStatus.puzzles_count === 0 || userStatus.due_count === 0 || sessionType !== 'standard'}
                                 title={startSessionDisabledReason ?? 'Start a new training session'}
-                                className={`px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-opacity km-focus-visible ${(controlsDisabled || !userStatus || userStatus.puzzles_count === 0 || userStatus.due_count === 0 || sessionType !== 'standard') ? 'km-interactive-disabled disabled:opacity-50' : 'hover:opacity-90 cursor-pointer'}`}>
+                                className={`px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-opacity km-focus-visible ${(controlsDisabled || !userStatus || userStatus.puzzles_count === 0 || userStatus.due_count === 0 || sessionType !== 'standard') ? 'km-interactive-disabled' : 'hover:opacity-90 cursor-pointer'}`}>
                                 Start Session
                             </button>
                         )}
@@ -801,7 +801,7 @@ export default function Puzzles() {
                             onClick={handleGeneratePuzzles}
                             disabled={generateNewDisabled}
                             title={generateDisabledReason ?? 'Generate puzzles from new games'}
-                            className={`px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-colors km-focus-visible ${generateNewDisabled ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'}`}>
+                            className={`px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-colors km-focus-visible ${generateNewDisabled ? 'km-interactive-disabled' : 'km-interactive'}`}>
                             {generateButtonLabel}
                         </button>
                     </div>
@@ -913,7 +913,7 @@ export default function Puzzles() {
                                         type="button"
                                         onClick={handleGeneratePuzzles}
                                         disabled={controlsDisabled}
-                                        className={`px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-colors km-focus-visible ${controlsDisabled ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'}`}
+                                        className={`px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-colors km-focus-visible ${controlsDisabled ? 'km-interactive-disabled' : 'km-interactive'}`}
                                     >
                                         Generate Puzzles
                                     </button>
@@ -931,7 +931,7 @@ export default function Puzzles() {
                                             type="button"
                                             onClick={handleGeneratePuzzles}
                                             disabled={controlsDisabled}
-                                            className={`px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-colors km-focus-visible ${controlsDisabled ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'}`}
+                                            className={`px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-colors km-focus-visible ${controlsDisabled ? 'km-interactive-disabled' : 'km-interactive'}`}
                                         >
                                             Generate from New Games
                                         </button>
@@ -965,7 +965,7 @@ export default function Puzzles() {
                                 type="button"
                                 onClick={handleRefreshInsights}
                                 disabled={isRefreshingInsights}
-                                className={`px-6 py-2 border border-primary/20 text-primary rounded-sm font-serif transition-all km-focus-visible ${isRefreshingInsights ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'}`}
+                                className={`px-6 py-2 border border-primary/20 text-primary rounded-sm font-serif transition-all km-focus-visible ${isRefreshingInsights ? 'km-interactive-disabled' : 'km-interactive'}`}
                             >
                                 {isRefreshingInsights ? 'Retrying...' : 'Retry'}
                             </button>
@@ -979,7 +979,7 @@ export default function Puzzles() {
                                     type="button"
                                     onClick={handleStartSession}
                                     disabled={!canRetryLoad}
-                                    className={`px-6 py-2 border border-primary/20 text-primary rounded-sm font-serif transition-all km-focus-visible ${!canRetryLoad ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'}`}
+                                    className={`px-6 py-2 border border-primary/20 text-primary rounded-sm font-serif transition-all km-focus-visible ${!canRetryLoad ? 'km-interactive-disabled' : 'km-interactive'}`}
                                 >
                                     Retry
                                 </button>
@@ -988,7 +988,7 @@ export default function Puzzles() {
                                         type="button"
                                         onClick={handleGeneratePuzzles}
                                         disabled={!canRetryLoad}
-                                        className={`px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-colors km-focus-visible ${!canRetryLoad ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'}`}
+                                        className={`px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-colors km-focus-visible ${!canRetryLoad ? 'km-interactive-disabled' : 'km-interactive'}`}
                                     >
                                         Generate New
                                     </button>
@@ -1027,7 +1027,7 @@ export default function Puzzles() {
                                 type="button"
                                 onClick={handleRefreshInsights}
                                 disabled={isRefreshingInsights}
-                                className={`px-6 py-2 border border-primary/20 text-primary rounded-sm font-serif transition-all km-focus-visible ${isRefreshingInsights ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'}`}
+                                className={`px-6 py-2 border border-primary/20 text-primary rounded-sm font-serif transition-all km-focus-visible ${isRefreshingInsights ? 'km-interactive-disabled' : 'km-interactive'}`}
                             >
                                 {isRefreshingInsights ? 'Refreshing...' : 'Refresh Insights'}
                             </button>
@@ -1449,7 +1449,7 @@ export default function Puzzles() {
                                         onClick={handleCheckAnswer}
                                         disabled={!userMove}
                                         aria-label={puzzleActionA11yCopy.checkMoveLabel}
-                                        className={`px-2 py-3 md:px-6 md:py-4 bg-primary text-bg-primary rounded-sm font-serif text-sm md:text-lg transition-all shadow-lg shadow-primary/5 km-focus-visible disabled:opacity-50 ${!userMove ? 'km-interactive-disabled' : 'km-interactive'}`}>
+                                        className={`px-2 py-3 md:px-6 md:py-4 bg-primary text-bg-primary rounded-sm font-serif text-sm md:text-lg transition-all shadow-lg shadow-primary/5 km-focus-visible ${!userMove ? 'km-interactive-disabled' : 'km-interactive'}`}>
                                         Check Move
                                     </button>
                                     <button
@@ -1457,7 +1457,7 @@ export default function Puzzles() {
                                         onClick={handleHint}
                                         disabled={!currentPuzzle || clue.isExhausted}
                                         aria-label={puzzleActionA11yCopy.hintLabel}
-                                        className="px-2 py-3 md:px-6 md:py-4 border border-primary/20 text-primary rounded-sm font-serif text-sm md:text-lg transition-all km-interactive km-focus-visible disabled:opacity-50 disabled:cursor-default">
+                                        className="px-2 py-3 md:px-6 md:py-4 border border-primary/20 text-primary rounded-sm font-serif text-sm md:text-lg transition-all km-interactive km-focus-visible">
                                         {/* Short enough to stay on one line in the
                                             three-up action grid; the full "Hint 1 of 3:
                                             …" phrasing lives in the aria-label. */}

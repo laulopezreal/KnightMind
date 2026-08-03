@@ -373,7 +373,7 @@ export default function Home() {
                     type="button"
                     onClick={handleConnectSave}
                     disabled={connectValidating}
-                    className={`min-h-11 px-4 py-2 bg-primary text-bg-primary font-medium rounded-sm transition-opacity km-focus-visible ${connectValidating ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'}`}
+                    className={`min-h-11 px-4 py-2 bg-primary text-bg-primary font-medium rounded-sm transition-opacity km-focus-visible ${connectValidating ? 'km-interactive-disabled' : 'km-interactive'}`}
                   >
                     {connectValidating ? '...' : 'Save'}
                   </button>
@@ -404,7 +404,7 @@ export default function Home() {
                 onClick={handleImport}
                 disabled={loading}
                 className={`px-8 py-4 bg-primary text-bg-primary rounded-sm text-lg font-serif transition-colors km-focus-visible ${
-                  loading ? 'km-interactive-disabled disabled:opacity-50' : 'km-interactive'
+                  loading ? 'km-interactive-disabled' : 'km-interactive'
                 }`}
               >
                 {loading ? 'Syncing...' : hasData ? 'Sync New Games' : 'Import Games'}

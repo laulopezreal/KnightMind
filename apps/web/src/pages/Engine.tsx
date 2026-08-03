@@ -310,7 +310,7 @@ export default function Engine() {
               disabled={historyIndex <= 0}
               aria-label="Go back a position"
               title="Go back"
-              className="km-interactive km-focus-visible border border-primary/20 px-4 py-2 text-primary/70 font-sans font-normal text-xs uppercase tracking-widest transition-colors rounded-sm disabled:opacity-40"
+              className="km-interactive km-focus-visible border border-primary/20 px-4 py-2 text-primary/70 font-sans font-normal text-xs uppercase tracking-widest transition-colors rounded-sm"
             >
               ←
             </button>
@@ -320,7 +320,7 @@ export default function Engine() {
               disabled={historyIndex >= fenHistory.length - 1}
               aria-label="Go forward a position"
               title="Go forward"
-              className="km-interactive km-focus-visible border border-primary/20 px-4 py-2 text-primary/70 font-sans font-normal text-xs uppercase tracking-widest transition-colors rounded-sm disabled:opacity-40"
+              className="km-interactive km-focus-visible border border-primary/20 px-4 py-2 text-primary/70 font-sans font-normal text-xs uppercase tracking-widest transition-colors rounded-sm"
             >
               →
             </button>
@@ -381,7 +381,7 @@ export default function Engine() {
                   <button
                     type="button"
                     onClick={handleClue}
-                    className="km-interactive km-focus-visible border border-primary/20 px-3 py-1 text-[10px] font-sans font-normal uppercase tracking-widest text-primary transition-colors disabled:opacity-50"
+                    className="km-interactive km-focus-visible border border-primary/20 px-3 py-1 text-[10px] font-sans font-normal uppercase tracking-widest text-primary transition-colors"
                   >
                     {clue.clueStage === 0 ? 'Clue' : clue.clueStage === 1 ? 'Reveal squares' : 'Hide clues and reset'}
                   </button>
@@ -506,7 +506,7 @@ export default function Engine() {
                     type="button"
                     onClick={handleSavePuzzle}
                     disabled={saving || !username || !saveTitle.trim() || !saveSolution.trim()}
-                    className="km-interactive km-focus-visible border border-primary/20 px-4 py-2 text-xs font-sans font-normal uppercase tracking-widest text-primary transition-colors rounded-sm disabled:opacity-40"
+                    className="km-interactive km-focus-visible border border-primary/20 px-4 py-2 text-xs font-sans font-normal uppercase tracking-widest text-primary transition-colors rounded-sm"
                   >
                     {saving ? 'Saving…' : 'Save puzzle'}
                   </button>

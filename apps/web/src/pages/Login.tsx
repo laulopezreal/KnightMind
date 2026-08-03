@@ -87,7 +87,7 @@ export default function Login() {
                         value={email}
                         onChange={(e) => setEmail(e.target.value)}
                         disabled={submitting}
-                        className="w-full bg-transparent border-b border-primary/20 py-2 text-primary placeholder-primary/30 focus:outline-none focus:border-primary/60 transition-colors font-serif text-xl disabled:opacity-50"
+                        className="w-full bg-transparent border-b border-primary/20 py-2 text-primary placeholder-primary/30 focus:outline-none focus:border-primary/60 transition-colors font-serif text-xl"
                     />
                 </div>
 
@@ -106,7 +106,7 @@ export default function Login() {
                         value={password}
                         onChange={(e) => setPassword(e.target.value)}
                         disabled={submitting}
-                        className="w-full bg-transparent border-b border-primary/20 py-2 text-primary placeholder-primary/30 focus:outline-none focus:border-primary/60 transition-colors font-serif text-xl disabled:opacity-50"
+                        className="w-full bg-transparent border-b border-primary/20 py-2 text-primary placeholder-primary/30 focus:outline-none focus:border-primary/60 transition-colors font-serif text-xl"
                     />
                 </div>
 
@@ -119,7 +119,7 @@ export default function Login() {
                 <button
                     type="submit"
                     disabled={submitting}
-                    className="w-full px-6 py-3 bg-primary text-bg-primary hover:opacity-90 rounded-sm font-serif transition-colors disabled:opacity-50 km-focus-visible"
+                    className="w-full px-6 py-3 bg-primary text-bg-primary hover:opacity-90 rounded-sm font-serif transition-colors km-focus-visible"
                 >
                     {submitting ? 'Signing in…' : 'Sign in'}
                 </button>
