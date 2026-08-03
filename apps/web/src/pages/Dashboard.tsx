@@ -175,10 +175,9 @@ export default function Dashboard() {
     // `loading` never clears and this state would otherwise skeleton forever.
     if (!username) {
         return (
-            <div className="container mx-auto p-6 max-w-7xl space-y-8 animate-teedin">
-                <PageHeader title="Dashboard" subtitle="Your chess training overview" />
+            <DashboardShell>
                 <ConnectAccountEmpty description="What's due, your streak, and how recent sessions went are all read from your own games. Connect your Chess.com account to fill this in." />
-            </div>
+            </DashboardShell>
         );
     }
 
