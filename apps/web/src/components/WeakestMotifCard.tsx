@@ -14,15 +14,48 @@ const RANK_LABEL: Record<MotifPerformance['rank'], string> = {
 };
 
 /**
- * `rank` is typed as a closed union but arrives from the server, so a tier the
- * frontend doesn't know about is possible at runtime. The cast widens the key
- * type only at the point of read — the map keeps its exhaustive declaration, so
- * adding a tier to the union still fails the build until a label exists — while
- * making the fallback live rather than dead code. Showing the raw tier name
- * beats rendering the string "undefined" at the user.
+ * Longest unrecognised tier we echo. Real tier keys are short; a long one is
+ * unbroken snake_case, which has no wrap opportunity and pushes the whole page
+ * into horizontal scroll on mobile.
  */
-function rankLabel(rank: MotifPerformance['rank']): string {
-  return (RANK_LABEL as Record<string, string | undefined>)[rank] ?? rank;
+const MAX_RAW_RANK = 24;
+
+/**
+ * Label for a rank tier, or null when there is no tier worth showing.
+ *
+ * `rank` is declared as a closed union but arrives unvalidated from the server,
+ * so this treats it as `unknown` — which is what it actually is. Three rules,
+ * each learned from a payload that broke the naive version:
+ *
+ * 1. Membership is tested with `Object.hasOwn`, not a nullish check on the
+ *    lookup. `RANK_LABEL` inherits from Object.prototype, so a rank of
+ *    "constructor" or "toString" returns an inherited *function* — not nullish,
+ *    so `??` never fires and the tile renders "function Object() { … }".
+ * 2. Anything unrecognised is echoed only if it is a usable non-empty string.
+ *    Falling back to the raw value itself (`RANK_LABEL[rank] ?? rank`) is
+ *    circular: when the field is missing the fallback returns `undefined` too,
+ *    reproducing the exact "13% · undefined" this is meant to prevent.
+ * 3. The echo is humanised and length-capped so an unknown tier reads like the
+ *    motif name beside it instead of raw snake_case, and cannot break layout.
+ */
+function rankLabel(rank: MotifPerformance['rank']): string | null {
+  const raw: unknown = rank;
+  if (typeof raw === 'string' && Object.hasOwn(RANK_LABEL, raw)) {
+    return RANK_LABEL[raw as MotifPerformance['rank']];
+  }
+  if (typeof raw !== 'string' || !raw.trim()) return null;
+  const pretty = formatMotifName(raw.trim());
+  return pretty.length > MAX_RAW_RANK ? `${pretty.slice(0, MAX_RAW_RANK - 1)}…` : pretty;
+}
+
+/**
+ * "39% · Needs work", or just "39%" when the server sent no usable tier — a
+ * dangling "39% · " separator reads as a rendering failure.
+ */
+function subLine(weakest: MotifPerformance): string {
+  const label = rankLabel(weakest.rank);
+  const pct = `${Math.round(weakest.accuracy * 100)}%`;
+  return label ? `${pct} · ${label}` : pct;
 }
 
 /**
@@ -75,7 +108,7 @@ export function WeakestMotifCard({ motifs }: WeakestMotifCardProps) {
     <StatCard
       label="Weakest motif"
       value={formatMotifName(weakest.name)}
-      sub={`${Math.round(weakest.accuracy * 100)}% · ${rankLabel(weakest.rank)}`}
+      sub={subLine(weakest)}
       footer={
         <div className="flex items-center gap-4">
           <Link

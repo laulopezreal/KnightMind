@@ -26,17 +26,70 @@ describe('WeakestMotifCard', () => {
     expect(screen.queryByText('Skewer')).not.toBeInTheDocument();
   });
 
-  it('falls back to the raw tier when the server sends an unknown rank', () => {
-    // The cast is the test: `rank` is a closed union in the frontend's types but
-    // an unvalidated server field at runtime, so a new backend tier reaches this
-    // component as a value no label exists for. It must degrade to the raw tier
-    // name, never to the literal string "undefined".
+  // `rank` is a closed union in the frontend's types but an unvalidated server
+  // field at runtime, so every cast below stands in for a payload the type
+  // system cannot rule out. All were reproduced against the running app.
+  const asRank = (v: unknown) => v as MotifPerformance['rank'];
+
+  it('falls back to the tier name when the server sends an unknown rank', () => {
     render(<WeakestMotifCard motifs={[
-      motif({ name: 'back_rank', accuracy: 0.13, rank: 'critical' as MotifPerformance['rank'] }),
+      motif({ name: 'back_rank', accuracy: 0.13, rank: asRank('critical') }),
     ]} />);
 
-    expect(screen.getByText('13% · critical')).toBeInTheDocument();
+    expect(screen.getByText('13% · Critical')).toBeInTheDocument();
     expect(screen.queryByText(/undefined/)).not.toBeInTheDocument();
+  });
+
+  it('humanises an unknown snake_case tier so it matches the motif name beside it', () => {
+    render(<WeakestMotifCard motifs={[
+      motif({ name: 'back_rank', accuracy: 0.13, rank: asRank('severely_needs_work') }),
+    ]} />);
+    expect(screen.getByText('13% · Severely Needs Work')).toBeInTheDocument();
+  });
+
+  it.each([
+    ['missing', undefined],
+    ['null', null],
+    ['empty string', ''],
+    ['whitespace', '   '],
+    ['a number', 0],
+  ])('drops the separator instead of rendering a %s rank', (_label, value) => {
+    // The naive `RANK_LABEL[rank] ?? rank` is circular here: the fallback
+    // returns the same nullish value, so the tile rendered "13% · undefined".
+    render(<WeakestMotifCard motifs={[
+      motif({ name: 'back_rank', accuracy: 0.13, rank: asRank(value) }),
+    ]} />);
+
+    expect(screen.getByText('13%')).toBeInTheDocument();
+    expect(screen.queryByText(/undefined|null|·/)).not.toBeInTheDocument();
+  });
+
+  it.each(['constructor', 'toString', 'valueOf'])(
+    'does not leak the prototype member %s as a label',
+    (proto) => {
+      // A bare lookup finds these on Object.prototype and returns a *function*,
+      // which is not nullish — so `??` never fires and the tile rendered
+      // "13% · function Object() { [native code] }".
+      render(<WeakestMotifCard motifs={[
+        motif({ name: 'back_rank', accuracy: 0.13, rank: asRank(proto) }),
+      ]} />);
+
+      expect(screen.queryByText(/native code|function/)).not.toBeInTheDocument();
+      expect(screen.getByText(`13% · ${proto[0].toUpperCase()}${proto.slice(1)}`)).toBeInTheDocument();
+    },
+  );
+
+  it('caps an over-long unknown tier so it cannot force horizontal page scroll', () => {
+    render(<WeakestMotifCard motifs={[
+      motif({
+        name: 'back_rank', accuracy: 0.13,
+        rank: asRank('extremely_critical_needs_immediate_and_sustained_remedial_attention'),
+      }),
+    ]} />);
+
+    const sub = screen.getByText(/^13% · /);
+    expect(sub.textContent!.length).toBeLessThanOrEqual('13% · '.length + 24);
+    expect(sub.textContent).toMatch(/…$/);
   });
 
   it('deep-links "Train this" to the raw motif key', () => {
