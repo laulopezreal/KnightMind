@@ -756,9 +756,13 @@ export default function Puzzles() {
                             // two-line orphan.
                             <p className="h-full flex items-center text-primary/70 font-sans">
                                 <span>
+                                    {/* Underlined, not colour-coded: inline in a
+                                        sentence, the link is only 2.51:1 against
+                                        the surrounding text, under the 3:1 that
+                                        colour-alone distinction requires. */}
                                     <Link
                                         to="/"
-                                        className="km-interactive km-focus-visible km-inline-link text-primary"
+                                        className="km-interactive km-focus-visible km-inline-link text-primary underline decoration-primary/30 underline-offset-4"
                                     >
                                         Connect your Chess.com account
                                     </Link>

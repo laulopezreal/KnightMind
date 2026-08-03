@@ -495,7 +495,9 @@ export default function Engine() {
                       only way in is Home's onboarding. Say so, and link there. */}
                   {!username && (
                     <p className="text-primary/70 text-xs font-sans">
-                      <Link to="/" className="km-interactive km-focus-visible km-inline-link text-primary">Connect your Chess.com account</Link>
+                      {/* Underlined: inline in a sentence, colour alone leaves
+                          it under the 3:1 contrast with the surrounding text. */}
+                      <Link to="/" className="km-interactive km-focus-visible km-inline-link text-primary underline decoration-primary/30 underline-offset-4">Connect your Chess.com account</Link>
                       {' '}to save puzzles.
                     </p>
                   )}

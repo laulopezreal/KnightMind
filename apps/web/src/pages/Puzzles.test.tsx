@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import Puzzles from './Puzzles';
+import { generatePuzzles } from '../api';
 import { setupMockLocalStorage } from '../test/helpers';
 
 const mockNavigate = vi.fn();
@@ -136,6 +137,51 @@ describe('Puzzles', () => {
     // only way in, so this must be a real navigation.
     const link = await screen.findByRole('link', { name: /Connect your Chess.com account/i });
     expect(link).toHaveAttribute('href', '/');
+    expect(screen.queryByRole('button', { name: /Set Username/i })).not.toBeInTheDocument();
+  });
+
+  it('marks the inline connect link with more than colour', async () => {
+    mockUsername = '';
+
+    render(<Puzzles />);
+
+    // Inline in a sentence the link is 2.51:1 against the surrounding text,
+    // under the 3:1 that colour-alone distinction requires — so it carries a
+    // persistent underline, not just a darker shade.
+    const link = await screen.findByRole('link', { name: /Connect your Chess.com account/i });
+    expect(link.className).toMatch(/\bunderline\b/);
+  });
+
+  it('offers a working connect route on the error card too', async () => {
+    // The error card's connect control is only reachable by a narrow path:
+    // generate with an account, hit an error, then clear the account. Narrow
+    // is not unreachable, and it carried the same dead button — so drive the
+    // real path rather than leave the second fix untested.
+    mockUsername = 'testplayer';
+    mockGetUserStatus.mockResolvedValue({
+      games_count: 50,
+      puzzles_count: 20,
+      due_count: 5,
+      has_new_games: true,
+    });
+    vi.mocked(generatePuzzles).mockRejectedValue(new Error('generation blew up'));
+
+    const { rerender } = render(<Puzzles />);
+
+    const generate = await screen.findByRole('button', { name: /Generate New/i });
+    await waitFor(() => expect(generate).toBeEnabled());
+    generate.click();
+
+    // JobStatusCard is stubbed to null in this suite, so the error text itself
+    // never renders — the card's own Retry button is the observable signal.
+    await screen.findByRole('button', { name: 'Retry' });
+
+    // Now the account goes away underneath the error state.
+    mockUsername = '';
+    rerender(<Puzzles />);
+
+    const links = await screen.findAllByRole('link', { name: 'Connect account' });
+    expect(links[0]).toHaveAttribute('href', '/');
     expect(screen.queryByRole('button', { name: /Set Username/i })).not.toBeInTheDocument();
   });
 
