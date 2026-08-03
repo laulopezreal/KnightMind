@@ -249,6 +249,17 @@ export default function Dashboard() {
     const hasMotifTile = (motifPerf?.motifs.length ?? 0) > 0;
     const bothTiles = hasRatingTile && hasMotifTile;
     const showStrip = stripLoading || hasRatingTile || hasMotifTile;
+    // Same rule as the strip above, which already hides itself with no data:
+    // a tile that can only say "0%" teaches a new user nothing and reads as a
+    // score they have somehow already earned.
+    //
+    // Gated on "has never trained", NOT on "the number is zero". A player who
+    // trained last week and broke their streak genuinely has a 0-day streak,
+    // and hiding that would delete real information.
+    const hasMomentumTile = (dashboardData?.recent_form?.last_20_results?.length ?? 0) > 0;
+    const hasStreakTile =
+        (dashboardData?.training_streak_days ?? 0) > 0 ||
+        dashboardData?.last_session_at != null;
 
     return (
         <DashboardShell>
@@ -334,21 +345,27 @@ export default function Dashboard() {
             )}
 
             {/* SECTION 3 & 4: Two-column grid */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                <div className="md:col-span-2">
-                    <CardErrorBoundary label="Momentum">
-                        <MomentumCard recentForm={dashboardData.recent_form} />
-                    </CardErrorBoundary>
+            {(hasMomentumTile || hasStreakTile) && (
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                    {hasMomentumTile && (
+                        <div className={hasStreakTile ? 'md:col-span-2' : 'md:col-span-3'}>
+                            <CardErrorBoundary label="Momentum">
+                                <MomentumCard recentForm={dashboardData.recent_form} />
+                            </CardErrorBoundary>
+                        </div>
+                    )}
+                    {hasStreakTile && (
+                        <div className={hasMomentumTile ? 'md:col-span-1' : 'md:col-span-3'}>
+                            <CardErrorBoundary label="Consistency">
+                                <StreakCard
+                                    streakDays={dashboardData.training_streak_days}
+                                    lastSessionAt={dashboardData.last_session_at}
+                                />
+                            </CardErrorBoundary>
+                        </div>
+                    )}
                 </div>
-                <div className="md:col-span-1">
-                    <CardErrorBoundary label="Consistency">
-                        <StreakCard
-                            streakDays={dashboardData.training_streak_days}
-                            lastSessionAt={dashboardData.last_session_at}
-                        />
-                    </CardErrorBoundary>
-                </div>
-            </div>
+            )}
 
             {/* SECTION 5: Recent Sessions (collapsible) */}
             {recentSessions.length > 0 && (
