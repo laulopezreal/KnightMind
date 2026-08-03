@@ -27,6 +27,7 @@ import { RatingDeltaCard } from '../components/RatingDeltaCard';
 import { PageHeader } from '../components/PageHeader';
 import { DataStateError, DataStateOffline, DataStateSkeleton } from '../components/DataState';
 import { ConnectAccountEmpty } from '../components/ConnectAccountEmpty';
+import { CardErrorBoundary } from '../components/CardErrorBoundary';
 import { trainEntryDestination } from '../utils/trainEntry';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
 import { useLatestRequest } from '../hooks/useLatestRequest';
@@ -266,21 +267,29 @@ export default function Dashboard() {
                 </div>
             )}
 
+            {/* Each tile below is wrapped in its own CardErrorBoundary. The page
+                already drops a tile whose *data* failed (the allSettled loader
+                above); this makes a tile whose *render* throws behave the same
+                way, instead of costing the whole page. RouteErrorBoundary stays
+                the net for anything outside a tile. */}
+
             {/* SECTION 1: Hero Train Card */}
-            <HeroTrainCard
-                dueCount={dashboardData.schedule.due_now}
-                dueIn4h={dashboardData.schedule.due_in_4h}
-                nextReviewAt={dashboardData.schedule.next_review_at}
-                needsWarmup={dashboardData.needs_warmup}
-                daysSinceLastSession={dashboardData.days_since_last_session}
-                totalSessions={dashboardData.total_sessions}
-                onStartSession={() => navigate(trainEntryDestination({
-                    totalSessions: dashboardData.total_sessions,
-                    dueCount: dashboardData.schedule.due_now,
-                    needsWarmup: dashboardData.needs_warmup,
-                }))}
-                secondaryAction={heroSecondary}
-            />
+            <CardErrorBoundary label="Training">
+                <HeroTrainCard
+                    dueCount={dashboardData.schedule.due_now}
+                    dueIn4h={dashboardData.schedule.due_in_4h}
+                    nextReviewAt={dashboardData.schedule.next_review_at}
+                    needsWarmup={dashboardData.needs_warmup}
+                    daysSinceLastSession={dashboardData.days_since_last_session}
+                    totalSessions={dashboardData.total_sessions}
+                    onStartSession={() => navigate(trainEntryDestination({
+                        totalSessions: dashboardData.total_sessions,
+                        dueCount: dashboardData.schedule.due_now,
+                        needsWarmup: dashboardData.needs_warmup,
+                    }))}
+                    secondaryAction={heroSecondary}
+                />
+            </CardErrorBoundary>
 
             {/* IMPROVEMENT STRIP: outcome (rating Δ) + diagnosis (weakest motif) —
                 the loop's "is it working?" and "what next?". Loads independently of
@@ -294,8 +303,16 @@ export default function Dashboard() {
                         </>
                     ) : (
                         <>
-                            {hasRatingTile && ratingData && <RatingDeltaCard data={ratingData} timeControlLabel={TC_LABEL[timeControl]} />}
-                            {hasMotifTile && motifPerf && <WeakestMotifCard motifs={motifPerf.motifs} />}
+                            {hasRatingTile && ratingData && (
+                                <CardErrorBoundary label="Rating change">
+                                    <RatingDeltaCard data={ratingData} timeControlLabel={TC_LABEL[timeControl]} />
+                                </CardErrorBoundary>
+                            )}
+                            {hasMotifTile && motifPerf && (
+                                <CardErrorBoundary label="Weakest motif">
+                                    <WeakestMotifCard motifs={motifPerf.motifs} />
+                                </CardErrorBoundary>
+                            )}
                         </>
                     )}
                 </div>
@@ -303,33 +320,45 @@ export default function Dashboard() {
 
             {/* Today's focus — the daily card the spec asks for. Above Recently
                 Tricky because it says what to do, not what happened. */}
-            {todaysFocus && <TodaysFocusCard data={todaysFocus} />}
+            {todaysFocus && (
+                <CardErrorBoundary label="Today's focus">
+                    <TodaysFocusCard data={todaysFocus} />
+                </CardErrorBoundary>
+            )}
 
             {/* SECTION 2: Recently Tricky */}
             {trickyPuzzles && trickyPuzzles.puzzles.length > 0 && (
-                <RecentlyTrickyCard puzzles={trickyPuzzles.puzzles} totalCount={trickyPuzzles.total_count} />
+                <CardErrorBoundary label="Recently tricky">
+                    <RecentlyTrickyCard puzzles={trickyPuzzles.puzzles} totalCount={trickyPuzzles.total_count} />
+                </CardErrorBoundary>
             )}
 
             {/* SECTION 3 & 4: Two-column grid */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 <div className="md:col-span-2">
-                    <MomentumCard recentForm={dashboardData.recent_form} />
+                    <CardErrorBoundary label="Momentum">
+                        <MomentumCard recentForm={dashboardData.recent_form} />
+                    </CardErrorBoundary>
                 </div>
                 <div className="md:col-span-1">
-                    <StreakCard
-                        streakDays={dashboardData.training_streak_days}
-                        lastSessionAt={dashboardData.last_session_at}
-                    />
+                    <CardErrorBoundary label="Consistency">
+                        <StreakCard
+                            streakDays={dashboardData.training_streak_days}
+                            lastSessionAt={dashboardData.last_session_at}
+                        />
+                    </CardErrorBoundary>
                 </div>
             </div>
 
             {/* SECTION 5: Recent Sessions (collapsible) */}
             {recentSessions.length > 0 && (
-                <RecentSessionsCard
-                    sessions={recentSessions}
-                    collapsible={true}
-                    defaultExpanded={false}
-                />
+                <CardErrorBoundary label="Recent sessions">
+                    <RecentSessionsCard
+                        sessions={recentSessions}
+                        collapsible={true}
+                        defaultExpanded={false}
+                    />
+                </CardErrorBoundary>
             )}
         </DashboardShell>
     );
