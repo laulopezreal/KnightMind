@@ -66,11 +66,12 @@ describe('Openings', () => {
     expect(screen.getByText('Opening Explorer')).toBeInTheDocument();
   });
 
-  it('should redirect when no username', () => {
+  it('should explain itself in place when no username', () => {
     mockUsername = '';
     renderAt(<Openings />);
 
-    expect(mockNavigate).toHaveBeenCalledWith('/');
+    expect(screen.getByText('Connect your Chess.com account')).toBeInTheDocument();
+    expect(mockNavigate).not.toHaveBeenCalled();
   });
 
   it('should show color filter options', () => {

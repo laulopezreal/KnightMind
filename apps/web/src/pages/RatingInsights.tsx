@@ -11,6 +11,7 @@ import { ConfidenceBadge } from '../components/ConfidenceBadge';
 import { TimeControlOverview } from '../components/TimeControlOverview';
 import { TC_LABEL, formatSigned } from '../utils/ratings';
 import { DataStateError, DataStateLoading, DataStateOffline, DataStateSkeleton } from '../components/DataState';
+import { ConnectAccountEmpty } from '../components/ConnectAccountEmpty';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
 import { useLatestRequest } from '../hooks/useLatestRequest';
 
@@ -25,7 +26,7 @@ const HIGH_CONFIDENCE_THRESHOLD = 20;
 
 export default function RatingInsights() {
     const navigate = useNavigate();
-    const { username, setEditorOpen } = useChessUsername();
+    const { username } = useChessUsername();
     const [data, setData] = useState<ExplainResponse | null>(null);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -269,16 +270,18 @@ export default function RatingInsights() {
         ? 'up'
         : 'down';
 
+    // No account connected. Was a bespoke block whose "Set Username" button
+    // called setEditorOpen — but that editor lives in UsernameDisplay, which
+    // Layout only mounts once a username exists, so the button did nothing in
+    // the one state that rendered it. Home's onboarding is the way in.
     if (!username) {
         return (
-            <div className="h-full flex flex-col justify-center items-center space-y-4">
-                <p className="text-primary/70 font-sans text-lg">Please set a username to see rating insights.</p>
-                <button
-                    onClick={() => setEditorOpen(true)}
-                    className="text-primary underline hover:text-primary/80 font-medium font-serif text-xl"
-                >
-                    Set Username
-                </button>
+            <div className="space-y-8 animate-teedin">
+                <PageHeader
+                    title="Rating Insights"
+                    subtitle="Connect your Chess.com account to track your rating."
+                />
+                <ConnectAccountEmpty description="Rating insights follow your Chess.com rating over time and explain what moved it. Connect your account to start recording it." />
             </div>
         );
     }

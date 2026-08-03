@@ -25,6 +25,7 @@ import {
   DataStatePartial,
   DataStateStale,
 } from '../components/DataState';
+import { ConnectAccountEmpty } from '../components/ConnectAccountEmpty';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
 import { useLatestRequest } from '../hooks/useLatestRequest';
 
@@ -240,11 +241,6 @@ export default function Openings() {
     el.style.visibility = 'visible';
   }, [tooltip]);
 
-  // Redirect if no username (username is set during onboarding)
-  useEffect(() => {
-    if (!username) navigate('/');
-  }, [username, navigate]);
-
   // Derived, not stored. The moves in the URL are the durable identity of a
   // line; the nodes are not, so re-walking them against whatever tree is
   // currently loaded is both how a link is restored *and* how a selection is
@@ -388,8 +384,8 @@ export default function Openings() {
   })();
 
   const fetchOpenings = useCallback(async (user: string, color: ColorFilter, plies: number, sinceDays: Period) => {
-    // The route guard above redirects when there is no username, so there is
-    // nothing actionable to say here.
+    // The page renders a connect-account state when there is no username, so
+    // there is nothing actionable to say here.
     if (!user.trim()) return;
 
     // Guard against stale-response races: a username/color change begins a newer
@@ -679,6 +675,21 @@ export default function Openings() {
       </div>
     </section>
   );
+
+  // No account connected. Explain in place instead of redirecting to Home —
+  // the bounce announced nothing, so the sidebar link read as broken. The
+  // computed `subtitle` above assumes a load is in flight, so state its own.
+  if (!username) {
+    return (
+      <div className="space-y-8 animate-teedin">
+        <PageHeader
+          title="Opening Explorer"
+          subtitle="Connect your Chess.com account to chart your repertoire."
+        />
+        <ConnectAccountEmpty description="The opening graph is built from the games you have actually played. Connect your Chess.com account and import them to see your repertoire." />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-8 animate-teedin">

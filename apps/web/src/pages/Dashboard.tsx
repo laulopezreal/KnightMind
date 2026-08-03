@@ -26,6 +26,7 @@ import { WeakestMotifCard } from '../components/WeakestMotifCard';
 import { RatingDeltaCard } from '../components/RatingDeltaCard';
 import { PageHeader } from '../components/PageHeader';
 import { DataStateError, DataStateOffline, DataStateSkeleton } from '../components/DataState';
+import { ConnectAccountEmpty } from '../components/ConnectAccountEmpty';
 import { trainEntryDestination } from '../utils/trainEntry';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
 import { useLatestRequest } from '../hooks/useLatestRequest';
@@ -68,13 +69,6 @@ export default function Dashboard() {
 
     const online = useOnlineStatus();
     const request = useLatestRequest();
-
-    // Redirect if no username
-    useEffect(() => {
-        if (!username) {
-            navigate('/');
-        }
-    }, [username, navigate]);
 
     // Load all dashboard data - extracted for reusability
     const loadDashboardData = useCallback(async () => {
@@ -157,6 +151,19 @@ export default function Dashboard() {
 
         return () => { cancelled = true; };
     }, [username, timeControl]);
+
+    // No account connected. Explain in place instead of redirecting to Home:
+    // the bounce announced nothing, so the sidebar link read as broken. Must
+    // precede the loading branch — the fetch bails on an empty username, so
+    // `loading` never clears and this state would otherwise skeleton forever.
+    if (!username) {
+        return (
+            <div className="container mx-auto p-6 max-w-7xl space-y-8 animate-teedin">
+                <PageHeader title="Dashboard" subtitle="Your chess training overview" />
+                <ConnectAccountEmpty description="What's due, your streak, and how recent sessions went are all read from your own games. Connect your Chess.com account to fill this in." />
+            </div>
+        );
+    }
 
     if (loading) {
         // Skeleton mirrors the loaded layout (hero, tricky list, momentum/streak
