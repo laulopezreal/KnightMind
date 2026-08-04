@@ -51,7 +51,11 @@ the host's working Tailscale egress. `knightmind-api` is pointed at it via
 `HTTPS_PROXY` (`docker-compose.override.yml`). Because it is CONNECT-only it just
 tunnels TCP and never terminates TLS, so the Anthropic API key and all chess data
 stay end to end encrypted to the origin. It binds to the internal bridge gateway
-`172.18.0.1:8899` (not a public interface) and only allows CONNECT to port 443.
+`172.18.0.1:8899` (not a public interface), restricts CONNECT to port 443, and
+allowlists the destination to the app's egress deps (`chess.com`,
+`anthropic.com`, `lichess.ovh` and their subdomains) so a co-tenant container on
+this multi-tenant box cannot use it as a general relay. It also idles out
+forgotten tunnels so a co-tenant cannot pin threads by holding connections open.
 
 ### Why a proxy and not a routing change
 
@@ -81,7 +85,7 @@ subnet, update both the env and the proxy's `PROXY_LISTEN_HOST` together.
 # from the container: both should be reachable (200 / 401), not reset
 docker exec knightmind-api-1 sh -c 'curl -sS -o /dev/null -w "%{http_code}\n" https://api.chess.com/pub/player/erik'
 docker exec knightmind-api-1 sh -c 'curl -sS -o /dev/null -w "%{http_code}\n" https://api.anthropic.com/v1/models'
-docker logs knightmind-egress-proxy   # "egress CONNECT proxy listening on 172.18.0.1:8899"
+docker logs knightmind-egress-proxy   # "egress CONNECT proxy on 172.18.0.1:8899 (allow ...)"
 ```
 
 ## Rollback
