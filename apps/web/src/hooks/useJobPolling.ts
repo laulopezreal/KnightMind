@@ -6,10 +6,13 @@ interface JobPollingOptions {
     enabled?: boolean;
     maxRetries?: number;
     /**
-     * Max time WITHOUT forward progress before the job is treated as stalled and
-     * onError fires. The deadline resets every time the job advances (a change in
-     * status, progress, message, or updated_at), so a steadily progressing job
-     * never errors no matter how long the total run takes.
+     * Max time a RUNNING job may go WITHOUT forward progress before it is treated
+     * as stalled and onError fires. The deadline resets every time the job
+     * advances (a change in status, progress, message, updated_at, or the per-ply
+     * heartbeat_at lease), so a steadily progressing job never errors no matter
+     * how long the total run takes. A `queued` job is never stalled: it has no
+     * progress signal while it waits behind the worker, so the countdown only
+     * begins once the job is RUNNING.
      */
     stallTimeoutMs?: number;
     onSuccess?: (job: JobStatusResponse) => void;
@@ -57,10 +60,10 @@ export function useJobPolling(jobId: string | null, options: JobPollingOptions =
         let retryCount = 0;
         let lastProgressSignature: string | null = null;
 
-        // Progress-stall detector: fire onError only if the job has made no
-        // forward progress within stallTimeoutMs. armStallTimer() (re)starts the
-        // countdown; it is reset every time the job advances, so a job that keeps
-        // moving never errors regardless of how long it runs.
+        // Progress-stall detector: fire onError only if a RUNNING job has made
+        // no forward progress within stallTimeoutMs. armStallTimer() (re)starts
+        // the countdown; it is reset every time the job advances, so a job that
+        // keeps moving never errors regardless of how long it runs.
         const armStallTimer = () => {
             clearTimeout(stallTimerId);
             stallTimerId = setTimeout(() => {
@@ -75,9 +78,11 @@ export function useJobPolling(jobId: string | null, options: JobPollingOptions =
             }, stallTimeoutMs);
         };
 
-        // Arm immediately so a job that never advances (stuck queued, no first
-        // progress write) still errors once the stall window elapses.
-        armStallTimer();
+        // NB: the stall timer is NOT armed here. A job sitting in `queued` (e.g.
+        // waiting behind another user's multi-minute job) has no progress signal
+        // by design, so arming on creation would falsely fail a perfectly healthy
+        // queued job. The countdown starts only once the job is RUNNING (below),
+        // which also resets the baseline at the queued->running transition.
 
         const poll = async () => {
             try {
@@ -97,19 +102,37 @@ export function useJobPolling(jobId: string | null, options: JobPollingOptions =
                         callbacksRef.current.onError?.(err);
                     }
                 } else {
-                    // Running/Queued - continue polling. Reset the stall deadline
-                    // whenever the job advances: any change in status, progress,
-                    // message, or updated_at (when the backend sends it) counts as
-                    // forward progress.
+                    // Running/Queued - continue polling.
+                    //
+                    // Forward-progress signature: any change counts as the job
+                    // advancing. `heartbeat_at` is the key addition - the backend
+                    // bumps it on a per-ply heartbeat DURING a single long game
+                    // (while `updated_at` is pinned across those heartbeats), so a
+                    // game that outlasts the stall window no longer false-fails.
                     const signature = [
                         status.status,
                         status.progress ?? '',
                         status.message ?? '',
-                        status.updated_at ?? ''
+                        status.updated_at ?? '',
+                        status.heartbeat_at ?? ''
                     ].join('|');
-                    if (signature !== lastProgressSignature) {
-                        lastProgressSignature = signature;
-                        armStallTimer();
+                    const advanced = signature !== lastProgressSignature;
+                    lastProgressSignature = signature;
+
+                    if (status.status === 'running') {
+                        // Only a RUNNING job can stall. Arm on the first RUNNING
+                        // poll (baseline starts fresh at the queued->running
+                        // transition) and re-arm on every subsequent advance; a
+                        // truly frozen RUNNING job never re-arms and errors once
+                        // the window elapses.
+                        if (advanced) {
+                            armStallTimer();
+                        }
+                    } else {
+                        // status === 'queued': waiting behind the worker, not
+                        // stuck. Never stall a queued job, and cancel any pending
+                        // countdown (e.g. crash recovery flips running -> queued).
+                        clearTimeout(stallTimerId);
                     }
 
                     currentBackoff = pollInterval; // Reset backoff

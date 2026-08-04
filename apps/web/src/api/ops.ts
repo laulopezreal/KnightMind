@@ -35,8 +35,17 @@ export interface JobStatusResponse {
     status: 'queued' | 'running' | 'succeeded' | 'failed' | 'canceled';
     message?: string;
     progress?: number;
-    /** Server-side last-update timestamp; treated as forward progress when present. */
+    /**
+     * Status-write timestamp: advances on per-game progress writes and status
+     * transitions. Treated as forward progress by the polling stall detector.
+     */
     updated_at?: string;
+    /**
+     * Liveness lease bumped by the worker's per-ply heartbeat DURING a single
+     * long game. This is what lets a game that outlasts the stall window keep
+     * the job alive client-side (updated_at is pinned across those heartbeats).
+     */
+    heartbeat_at?: string;
     result?: unknown;
     error?: string;
 }

@@ -547,6 +547,14 @@ class JobStatusResponse(BaseModel):
     status: str
     message: str | None = None
     progress: int = 0
+    # Status-write timestamp: moves on per-game progress writes and status
+    # transitions. Surfaced so a polling client can treat it as forward progress.
+    updated_at: datetime | None = None
+    # Liveness lease bumped by the worker's per-ply heartbeat DURING a single
+    # long game (updated_at is deliberately pinned across those heartbeats, so it
+    # alone cannot signal in-game liveness). A client's stall detector keys on
+    # this so a single game that outlasts the stall window is not falsely failed.
+    heartbeat_at: datetime | None = None
     result: dict | None = None
     error: str | None = None
 
@@ -1384,6 +1392,8 @@ async def get_job_status(
         status=job.status,
         message=job.message,
         progress=job.progress_current,
+        updated_at=job.updated_at,
+        heartbeat_at=job.heartbeat_at,
         result=job.result_json,
         error=job.error_message,
     )
