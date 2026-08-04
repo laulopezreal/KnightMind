@@ -96,6 +96,17 @@ pip install -e ".[dev]"
 This is the same install CI runs (`.github/workflows/ci-backend.yaml`). The `[dev]`
 extra adds pytest, ruff, and black.
 
+On Debian/Ubuntu, `python -m venv` fails with `ensurepip is not available` unless the
+venv package is installed:
+
+```bash
+sudo apt install python3-venv   # or python3.12-venv, matching your Python
+```
+
+> **Note:** the repo contains a `uv.lock`, but it has drifted from `pyproject.toml` and
+> nothing builds from it — CI and the Dockerfile both install with pip. Use the pip flow
+> above until the lockfile is either refreshed or removed.
+
 ### Frontend (apps/web)
 
 ```bash

@@ -73,3 +73,5 @@ Frontend URL: `http://localhost:5173`
   is not enabled. Set one of them.
 - **`pip install -r requirements.txt` fails**: that file does not exist. Install from the
   repo root with `pip install -e ".[dev]"`.
+- **`python -m venv` fails with `ensurepip is not available`** (Debian/Ubuntu): install
+  the venv package first — `sudo apt install python3-venv`.
