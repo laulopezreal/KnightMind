@@ -135,12 +135,19 @@ stale numbers after an engine or scoring change.
 ### Training and spaced repetition
 
 1. `GET /puzzles/due` returns puzzles ordered by schedule — due first, then new.
-2. **Solutions are not sent to the client** with the training payload.
-3. `POST /puzzles/{id}/review` re-checks the submitted move server-side; the client's
-   claim of pass/fail is never trusted.
-4. `puzzle_stats` holds the schedule (interval, ease factor, next due), and
+2. `POST /puzzles/{id}/review` re-checks the submitted move server-side; the client's
+   claim of pass/fail is never trusted. `/check` and `/reveal` are likewise authoritative.
+3. `puzzle_stats` holds the schedule (interval, ease factor, next due), and
    `puzzle_reviews` is an append-only audit of every attempt. `training_sessions` groups
    attempts into sessions.
+
+Whether the solution fields are withheld from browse and training payloads is a separate
+rollout flag, `KNIGHTMIND_STRIP_PUZZLE_SOLUTIONS`, which **currently defaults to OFF**.
+With it off, `/puzzles/due` and `/daily-puzzle-sessions` still include the solution, and
+`/puzzles/list` and `/puzzles/{id}` return it regardless of `?reveal` — the pre-audit
+behaviour, kept so the API could deploy before the grading frontend went live. Turning it
+on strips those payloads and gates the browse routes behind `?reveal=true`. Server-side
+verification is unaffected either way.
 
 The scheduling algorithm is documented in the main [README](../README.md#spaced-repetition-logic).
 
@@ -181,8 +188,12 @@ The worker runs **in the API process**, not as a separate service.
 - Statuses: `queued`, `running`, `succeeded`, `failed`, `canceled`.
 - **Run exactly one API instance** (`WEB_CONCURRENCY=1`). Multiple workers would
   double-process the queue.
-- On restart, jobs stuck in `running` are reset to `queued`, so a crash mid-job does not
-  strand it.
+- **Crash recovery is a liveness lease, not a wall-clock timeout.** A running job bumps
+  `heartbeat_at` as it makes progress; `cleanup_stuck_jobs` resets to `queued` only those
+  jobs whose heartbeat has gone stale (15 minutes). A genuinely long-running job keeps its
+  lease fresh and is left alone, while a crashed worker stops heartbeating and its job is
+  recovered. `heartbeat_at` is deliberately decoupled from `updated_at` so status writes
+  do not look like liveness.
 - Set `KNIGHTMIND_WORKER_DISABLED=true` to run the API without the worker (the backend
   test suite does this).
 
