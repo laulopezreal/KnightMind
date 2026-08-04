@@ -2,37 +2,58 @@
 
 ## Overview
 
-KnightMind is a personal chess intelligence platform that helps players analyze their games, track progress, and gain insights using AI-powered analysis.
+KnightMind is a personal chess intelligence platform. It imports a player's Chess.com
+game history, uses Stockfish to find the positions where they went wrong, turns those
+into personalised puzzles, and schedules the puzzles for spaced-repetition review —
+with dashboards tracking whether any of it is working.
+
+The whole backend is a single FastAPI process. There is no separate engine service and
+no message broker: Stockfish is a local binary invoked in-process, and background work
+runs on an in-process worker backed by a `jobs` table.
 
 ## System Components
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                        Frontend                              │
-│                   (React + Vite + TS)                       │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐         │
-│  │    Home     │  │  Openings   │  │   (future)  │         │
-│  │   Import    │  │    Tree     │  │  Analysis   │         │
-│  └─────────────┘  └─────────────┘  └─────────────┘         │
-└────────────────────────┬────────────────────────────────────┘
-                         │ HTTP/REST
-                         ▼
-┌─────────────────────────────────────────────────────────────┐
-│                      API Service                             │
-│                       (FastAPI)                              │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐         │
-│  │   Import    │  │  Openings   │  │   (future)  │         │
-│  │  Endpoint   │  │  Endpoint   │  │   Engine    │         │
-│  └─────────────┘  └─────────────┘  └─────────────┘         │
-└────────────────────────┬────────────────────────────────────┘
-                         │
-          ┌──────────────┼──────────────┐
-          ▼              ▼              ▼
-┌──────────────┐  ┌────────────┐  ┌────────────┐
-│    Ingest    │  │  Database  │  │ (future)   │
-│   Service    │  │ (Postgres) │  │ Stockfish  │
-│ (Chess.com)  │  │            │  │  Service   │
-└──────────────┘  └────────────┘  └────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                       Frontend (apps/web)                        │
+│              React 19 + Vite + TypeScript + Tailwind             │
+│   Home · Dashboard · Puzzles · Library · Openings · Engine       │
+│   Insights · Rating Insights · How It Works · Ops (gated)        │
+└────────────────────────────┬─────────────────────────────────────┘
+                             │ HTTPS / REST (shared /api base)
+                             ▼
+┌──────────────────────────────────────────────────────────────────┐
+│                    API service (services/api)                    │
+│                            FastAPI                               │
+│                                                                  │
+│   main.py — HTTP surface, request/response models                │
+│                                                                  │
+│   engine/     Stockfish wrapper + version-aware eval cache       │
+│   puzzles/    blunder detection, puzzle identity, generation     │
+│   diagnosis/  why the mistake happened (rules + evidence)        │
+│   ai/         Anthropic client, prompts, structured-output schema│
+│   openings/   ECO lookup, tree builder, explorer + cache         │
+│   storage/    repositories over the SQLAlchemy models            │
+│   analysis/   scheduler evaluation                               │
+│   jobs/       session cleanup                                    │
+│   worker.py   in-process job runner (JOB_HANDLERS registry)      │
+│   identity.py / ratelimit.py / auth.py — access + abuse control  │
+└──────┬──────────────────────┬──────────────────┬─────────────────┘
+       │                      │                  │
+       ▼                      ▼                  ▼
+┌──────────────┐      ┌───────────────┐   ┌──────────────┐
+│    Ingest    │      │   Postgres    │   │  Stockfish   │
+│ (services/   │      │ (SQLite for   │   │ local binary │
+│  ingest)     │      │  local dev)   │   │ STOCKFISH_   │
+│  Chess.com   │      │   Alembic     │   │ PATH         │
+└──────────────┘      └───────────────┘   └──────────────┘
+                              │
+                              ▼
+                      ┌───────────────┐
+                      │  Anthropic    │
+                      │  (optional —  │
+                      │  prose only)  │
+                      └───────────────┘
 ```
 
 ## Directory Structure
@@ -40,32 +61,176 @@ KnightMind is a personal chess intelligence platform that helps players analyze 
 ```
 KnightMind/
 ├── apps/
-│   └── web/              # React frontend
+│   └── web/              # React frontend (colocated *.test.tsx)
 ├── services/
 │   ├── api/              # FastAPI backend
-│   └── ingest/           # Game import service
-├── docs/                 # Documentation
-└── AGENTS.md             # AI agent instructions
+│   │   ├── main.py       # HTTP surface
+│   │   ├── models.py     # SQLAlchemy models
+│   │   ├── alembic/      # migrations
+│   │   ├── ai/           # Anthropic client, prompts, schema
+│   │   ├── analysis/     # scheduler evaluation
+│   │   ├── benchmarks/   # puzzle-generation benchmarks (mock engine)
+│   │   ├── diagnosis/    # causes, patterns, evidence, planner
+│   │   ├── engine/       # Stockfish wrapper
+│   │   ├── jobs/         # session cleanup
+│   │   ├── openings/     # ECO, tree builder, explorer, cache
+│   │   ├── puzzles/      # generator, identity
+│   │   └── storage/      # repositories
+│   └── ingest/           # Chess.com game import
+├── deploy/               # Caddy, egress proxy, systemd units
+├── scripts/              # migration + ops scripts
+└── docs/                 # this directory
 ```
+
+Backend tests live next to the code they cover (`services/api/test_*.py` and
+`<subpackage>/test_*.py`), not in a separate tree.
+
+## Frontend routes
+
+| Route | Page |
+|-------|------|
+| `/login` | Login (the only route outside `RequireAuth`) |
+| `/` | Home — connect account, sync, entry point |
+| `/dashboard` | Momentum, streaks, focus, motif trends |
+| `/puzzles` | Training session |
+| `/library`, `/library/:puzzleId` | Browse and replay past puzzles |
+| `/openings` | Opening tree explorer (D3) |
+| `/engine` | Interactive position analysis |
+| `/insights` | Mistake patterns and causes |
+| `/rating-insights` | Rating history and change explanations |
+| `/how-it-works` | Product explainer |
+| `/ops` | Admin utilities — gated behind `OPS_ENABLED`, otherwise redirects |
 
 ## Data Flow
 
-### Game Import
-1. User enters Chess.com username in web UI
-2. Frontend calls `POST /api/import/chesscom?username=...`
-3. API triggers ingest service to fetch games
-4. Games are parsed and stored in the configured database (Postgres recommended)
-5. Response returns count of imported games
+### Game import
 
-### Opening Analysis
-1. User navigates to Openings page
-2. Frontend calls `GET /api/openings`
-3. API queries game data and builds opening tree
-4. D3.js renders interactive tree visualization
+1. User sets a Chess.com username and hits **Sync**.
+2. Frontend calls `POST /import/chesscom?username=...`.
+3. `services/ingest/chesscom.py` reads the player's archive index from the public
+   Chess.com API and fetches the per-month archives (`.../games/YYYY/MM`). Archives are
+   append-only, so an incremental sync can start from the month of the last import
+   instead of refetching everything.
+4. Games are parsed and upserted into `games`, keyed by a SHA256 of the game URL, so
+   re-syncing is idempotent — an unchanged history reports "No new games found".
+5. `import_summaries` records the last import per user for the UI's sync status.
+
+### Puzzle generation
+
+1. `POST /puzzles/generate` enqueues a `puzzle_generation` row in `jobs` and returns
+   immediately.
+2. The in-process worker picks it up and replays each game, scanning with Stockfish at
+   `STOCKFISH_DEPTH` for moves whose evaluation swing clears `SWING_THRESHOLD`.
+3. Candidates are **re-analysed at a deeper confirm depth** before being accepted: the
+   swing must still hold, the solution must stay stable, and the best move must beat the
+   next non-equivalent move by `PUZZLE_UNIQUENESS_MARGIN` — so toss-up positions are
+   rejected rather than shipped as puzzles.
+4. Survivors are written to `puzzles`, unique on `(username, source_game_id, ply)`.
+5. The frontend polls `GET /jobs/{job_id}` for progress.
+
+Engine evaluations are cached in `fen_eval_cache`. Cache keys fold in the scheme, the
+eval-conversion, and the engine version, so entries self-invalidate rather than serving
+stale numbers after an engine or scoring change.
+
+### Training and spaced repetition
+
+1. `GET /puzzles/due` returns puzzles ordered by schedule — due first, then new.
+2. **Solutions are not sent to the client** with the training payload.
+3. `POST /puzzles/{id}/review` re-checks the submitted move server-side; the client's
+   claim of pass/fail is never trusted.
+4. `puzzle_stats` holds the schedule (interval, ease factor, next due), and
+   `puzzle_reviews` is an append-only audit of every attempt. `training_sessions` groups
+   attempts into sessions.
+
+The scheduling algorithm is documented in the main [README](../README.md#spaced-repetition-logic).
+
+### Mistake diagnosis
+
+1. Diagnosis runs as its own job type (`diagnosis`) on the same worker.
+2. `diagnosis/` derives the cause from rules and position evidence — patterns, PGN
+   context, and a training planner.
+3. `ai/` optionally adds a written explanation via Anthropic using a structured-output
+   schema. This is **prose only**: the rules-based cause, patterns, and training focus
+   all work without it.
+4. Results land in `puzzle_diagnoses`; prompts and responses go to `diagnosis_audit_log`
+   for incident review and are swept by the session-cleanup loop.
+
+AI enrichment is gated by `KNIGHTMIND_AI_DIAGNOSIS` (a full kill switch) and bounded by
+per-user and global daily caps counted from the audit log. With no `ANTHROPIC_API_KEY`
+the API starts normally and falls back to rules — the key is read at call time, never at
+startup.
+
+### Opening analysis
+
+1. Frontend calls `GET /openings?username=...&color=...`, optionally windowed to a
+   recent period.
+2. The API builds a tree from stored games, labelled via the bundled ECO table
+   (`openings/eco.tsv`).
+3. Results are memoised in `opening_explorer_cache`.
+4. D3 renders the interactive tree; a line you are losing can be sent straight to
+   practice.
+
+## Background worker
+
+The worker runs **in the API process**, not as a separate service.
+
+- Job types are an enum shared by the model, API, and worker (`JobType`:
+  `puzzle_generation`, `diagnosis`). Every type must have a handler in
+  `worker.JOB_HANDLERS`; a job with no handler is failed explicitly rather than
+  silently running the wrong work.
+- Statuses: `queued`, `running`, `succeeded`, `failed`, `canceled`.
+- **Run exactly one API instance** (`WEB_CONCURRENCY=1`). Multiple workers would
+  double-process the queue.
+- On restart, jobs stuck in `running` are reset to `queued`, so a crash mid-job does not
+  strand it.
+- Set `KNIGHTMIND_WORKER_DISABLED=true` to run the API without the worker (the backend
+  test suite does this).
+
+Puzzle generation over ~30 games legitimately takes minutes, so the frontend's
+`useJobPolling` judges a job stuck by **lack of progress** rather than elapsed time: the
+stall deadline resets whenever status, progress, message, or `updated_at` advances. A
+steadily advancing job is never reported as timed out.
+
+## Persistence
+
+Postgres in production; SQLite is a local-dev opt-in (`KNIGHTMIND_DEV_SQLITE=1`). The
+API fails fast at startup when `DATABASE_URL` is unset rather than silently writing to an
+ephemeral file. Schema changes go through Alembic (`alembic upgrade head`).
+
+Main tables: `accounts`, `account_chess_usernames`, `games`, `import_summaries`,
+`puzzles`, `puzzle_stats`, `puzzle_reviews`, `puzzle_diagnoses`, `diagnosis_audit_log`,
+`training_sessions`, `rating_snapshots`, `jobs`, `fen_eval_cache`,
+`opening_explorer_cache`.
+
+Column-level detail is in the [README](../README.md#data-schema).
+
+## Access control
+
+- **Auth** is gated by `KNIGHTMIND_REQUIRE_AUTH`, default **off** — the API is
+  single-user and the frontend sends no token. When enabled, expensive routes require a
+  bearer token and enforce per-user ownership of the target username
+  (`services/api/identity.py`).
+- **Rate limiting** applies regardless of auth. Per-principal limits and request-size
+  caps guard `/engine/eval`, `/puzzles/generate`, `/import/chesscom`, and
+  `/ratings/snapshot` (`services/api/ratelimit.py`).
+- **CORS** origins come from `KNIGHTMIND_CORS_ORIGINS`. Unset means no cross-origin
+  browser requests are allowed.
+
+## Deployment
+
+- **API + Postgres + Stockfish** run on one VPS (claw-home) under Docker Compose. The
+  API image bundles the Stockfish binary at `/usr/games/stockfish`.
+- **Frontend** is a static build on Cloudflare Pages serving `https://guessme.world`,
+  calling the API at `https://api.guessme.world` through a Caddy ingress.
+- Push to `main` triggers `.github/workflows/deploy.yaml`, which reaches the host over
+  Tailscale.
+
+`OPERATIONS.md` is the operational source of truth and takes precedence over this
+document for anything runtime-related.
 
 ## Future Enhancements
 
-- **Stockfish Integration**: Deep position analysis
-- **Neo4j Graph DB**: Store opening repertoire as a graph
-- **Pattern Recognition**: Identify recurring mistakes
-- **Progress Tracking**: ELO trends and improvement metrics
+- **Neo4j graph DB**: store the opening repertoire as a graph for relationship queries
+  the relational tree cannot answer cheaply.
+- **Multi-user rollout**: auth exists behind a flag; turning it on by default needs
+  account provisioning and role-based access for the Ops surface.
