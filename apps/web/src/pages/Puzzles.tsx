@@ -1007,6 +1007,9 @@ export default function Puzzles() {
                             status={job.status}
                             message={job.message}
                             progress={job.progress}
+                            hint={job.status === 'queued' || job.status === 'running'
+                                ? 'Analyzing your recent games with Stockfish; this usually takes 2-3 minutes.'
+                                : undefined}
                             error={job.status === 'failed' ? (job.error || job.message) : undefined}
                             onCancel={handleCancelJob}
                         />

@@ -4,11 +4,13 @@ interface JobStatusCardProps {
     status: JobStatusResponse['status'] | null;
     progress?: number;
     message?: string;
+    /** Faint expectation-setting line shown under the bar while processing (e.g. "~2-3 min"). */
+    hint?: string;
     error?: string;
     onCancel?: () => void;
 }
 
-export function JobStatusCard({ status, progress = 0, message, error, onCancel }: JobStatusCardProps) {
+export function JobStatusCard({ status, progress = 0, message, hint, error, onCancel }: JobStatusCardProps) {
     if (!status) return null;
 
     const isProcessing = status === 'queued' || status === 'running';
@@ -48,6 +50,9 @@ export function JobStatusCard({ status, progress = 0, message, error, onCancel }
                             style={{ width: `${Math.max(5, progress)}%` }} // Minimum 5% visibility
                         />
                     </div>
+                    {hint && (
+                        <p className="font-sans text-xs text-primary/50">{hint}</p>
+                    )}
                     {onCancel && (
                         <button
                             type="button"

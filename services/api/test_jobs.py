@@ -97,6 +97,49 @@ def test_get_job_status(client, db_session):
     assert data["progress"] == 50
 
 
+def test_get_job_status_exposes_liveness_timestamps(client, db_session):
+    """updated_at and heartbeat_at must be in the response so a polling client's
+    stall detector can treat them as forward progress. heartbeat_at is the
+    signal that keeps a single long game alive (updated_at is pinned across the
+    per-ply heartbeat), so both must round-trip as stable ISO strings."""
+    hb = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+    upd = datetime(2026, 1, 2, 3, 0, 0, tzinfo=timezone.utc)
+    job = Job(
+        username="livenesschecker",
+        status=JobStatus.RUNNING,
+        progress_current=12,
+        heartbeat_at=hb,
+        updated_at=upd,
+    )
+    db_session.add(job)
+    db_session.commit()
+
+    data = client.get(f"/jobs/{job.id}").json()
+    assert "updated_at" in data
+    assert "heartbeat_at" in data
+    # Stable, parseable strings whose values reflect the persisted timestamps.
+    assert data["heartbeat_at"] is not None
+    assert data["updated_at"] is not None
+    assert (
+        datetime.fromisoformat(data["heartbeat_at"]).replace(tzinfo=timezone.utc) == hb
+    )
+    assert (
+        datetime.fromisoformat(data["updated_at"]).replace(tzinfo=timezone.utc) == upd
+    )
+
+
+def test_get_job_status_null_heartbeat_serializes_as_none(client, db_session):
+    """A pre-heartbeat job (heartbeat_at NULL) must serialize heartbeat_at as
+    null, not omit-and-crash, so the client signature simply falls back to the
+    other progress fields."""
+    job = Job(username="nohbchecker", status=JobStatus.QUEUED, progress_current=0)
+    db_session.add(job)
+    db_session.commit()
+
+    data = client.get(f"/jobs/{job.id}").json()
+    assert data["heartbeat_at"] is None
+
+
 def test_cancel_job_success(client, db_session):
     job = Job(username="cancelme", status=JobStatus.QUEUED)
     db_session.add(job)
