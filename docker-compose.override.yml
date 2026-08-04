@@ -1,0 +1,47 @@
+# ============================================================================
+# Egress fix override (Cloudflare resets our direct Hetzner IP)
+# ============================================================================
+# knightmind-api's container egress leaves via the DIRECT Hetzner IP (the
+# `iif km-bridge lookup main` policy rule pins bridge traffic to the main
+# table). Cloudflare's edge RESETS that IP, so api.chess.com (game import) and
+# api.anthropic.com (AI diagnosis) are unreachable from the container, while
+# both work from the host (which egresses via the Tailscale exit node).
+#
+# Fix: a tiny CONNECT proxy in the HOST network namespace inherits the host's
+# working egress; knightmind-api sends its HTTPS calls through it via
+# HTTPS_PROXY. CONNECT tunneling means the proxy never sees TLS plaintext, so
+# the Anthropic key stays end-to-end encrypted.
+#
+# This override auto-loads: the systemd unit and Makefile both invoke
+# `docker compose` with no `-f`, so it survives restarts and reboots.
+# Rollback: delete this file, then `make docker-up`.
+#
+# NOTE: HTTPS_PROXY points at the km-bridge gateway (172.18.0.1). That is the
+# gateway of the compose default network as currently created; if the network
+# is ever destroyed and recreated on a different subnet, update both this IP and
+# the proxy's PROXY_LISTEN_HOST together. `docker compose up -d` (make
+# docker-up) does NOT recreate the network, so it is stable in normal operation.
+# ============================================================================
+
+services:
+  egress-proxy:
+    image: python:3.13-slim
+    container_name: knightmind-egress-proxy
+    restart: unless-stopped
+    # Host netns: the proxy's own outbound uses the host's Tailscale egress,
+    # which Cloudflare accepts. It binds to 172.18.0.1:8899 (internal bridge
+    # gateway), reachable from the api container but not from the public iface.
+    network_mode: host
+    command: ["python", "/opt/egress/connect_proxy.py"]
+    volumes:
+      - ./deploy/egress-proxy/connect_proxy.py:/opt/egress/connect_proxy.py:ro
+
+  api:
+    # Merged onto the base api service: only adds proxy env. HTTPS-only so the
+    # postgres driver (raw TCP, ignores these) and any http call are untouched;
+    # NO_PROXY additionally exempts internal hosts as belt-and-suspenders.
+    environment:
+      HTTPS_PROXY: "http://172.18.0.1:8899"
+      https_proxy: "http://172.18.0.1:8899"
+      NO_PROXY: "localhost,127.0.0.1,::1,db,172.18.0.0/16"
+      no_proxy: "localhost,127.0.0.1,::1,db,172.18.0.0/16"
