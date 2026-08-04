@@ -9,33 +9,48 @@ This guide helps first-time users get KnightMind running and complete the first 
 
 ## Prerequisites
 
-- Node.js 18+
+- Node.js 22+ (CI builds against 22.x and 24.x)
 - Python 3.11+
 - Stockfish installed and available in PATH (or set via `STOCKFISH_PATH`)
 
-## 1) Start backend
+All commands below run from the repo root.
+
+## 1) Install dependencies
+
+Python dependencies live in the root `pyproject.toml` and install as a single editable
+package — there is no `services/api/requirements.txt`.
 
 ```bash
-cd services/api
-python -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-uvicorn main:app --reload --port 8000
+python -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+
+cd apps/web && npm install && cd -
+```
+
+## 2) Start backend
+
+The API needs a database and fails fast at startup without one. For a local run with no
+Postgres, opt into the SQLite dev fallback:
+
+```bash
+export KNIGHTMIND_DEV_SQLITE=1   # or set DATABASE_URL to a Postgres connection string
+make back
 ```
 
 Backend URL: `http://localhost:8000`
 
-## 2) Start frontend
+## 3) Start frontend
 
 ```bash
-cd apps/web
-npm install
-npm run dev
+make front
 ```
 
 Frontend URL: `http://localhost:5173`
 
-## 3) First-use workflow
+(`make dev` starts both at once.)
+
+## 4) First-use workflow
 
 1. Open the web app.
 2. Set your Chess.com username.
@@ -43,7 +58,7 @@ Frontend URL: `http://localhost:5173`
 4. Let puzzle generation finish.
 5. Go to **Puzzles** and run a session.
 
-## 4) Expected success checks
+## 5) Expected success checks
 
 - Dashboard shows non-zero game count.
 - Puzzle count increases after generation.
@@ -54,3 +69,7 @@ Frontend URL: `http://localhost:5173`
 - **No engine analysis results**: verify `stockfish --version` works and `STOCKFISH_PATH` is valid.
 - **Frontend cannot call backend**: ensure API is on port `8000` and frontend runs on `5173`.
 - **No games imported**: verify Chess.com username spelling and account visibility.
+- **API exits immediately on startup**: `DATABASE_URL` is unset and `KNIGHTMIND_DEV_SQLITE`
+  is not enabled. Set one of them.
+- **`pip install -r requirements.txt` fails**: that file does not exist. Install from the
+  repo root with `pip install -e ".[dev]"`.

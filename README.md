@@ -72,29 +72,35 @@ KnightMind/
 
 ## Prerequisites
 
-- Node.js 18+
+- Node.js 22+ (CI builds against 22.x and 24.x)
 - Python 3.11+
-- npm or yarn
+- npm
 - Stockfish (for puzzle generation)
 
 ## Setup
 
 All commands in this section assume you are in the project root (the KnightMind directory).
 
+### Backend
+
+Python dependencies are declared in the root `pyproject.toml` and installed as one
+editable package covering `services/api`, `services/ingest`, and `scripts` — there is no
+per-service `requirements.txt`. Create the virtualenv at the repo root:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+pip install -e ".[dev]"
+```
+
+This is the same install CI runs (`.github/workflows/ci-backend.yaml`). The `[dev]`
+extra adds pytest, ruff, and black.
+
 ### Frontend (apps/web)
 
 ```bash
 cd apps/web
 npm install
-```
-
-### Backend (services/api)
-
-```bash
-cd services/api
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-pip install -r requirements.txt
 ```
 
 ### Stockfish Engine
@@ -131,13 +137,13 @@ export STOCKFISH_MOVETIME_MS=200           # Or use movetime instead of depth
 ### Start the API server
 
 ```bash
-cd services/api
-source venv/bin/activate
-uvicorn main:app --reload --port 8000
+source .venv/bin/activate
+make back        # or: cd services/api && python -m uvicorn main:app --reload --port 8000
 ```
 
 The API requires a database: set `DATABASE_URL` (e.g. in `services/api/.env`), or for a
 quick local start without Postgres set `KNIGHTMIND_DEV_SQLITE=1` to use a local SQLite file.
+Startup fails fast if neither is set.
 
 API will be available at http://localhost:8000
 
@@ -153,9 +159,10 @@ export KNIGHTMIND_CORS_ORIGINS="http://localhost:5173,https://staging.example.co
 ### Start the web app
 
 ```bash
-cd apps/web
-npm run dev
+make front       # or: cd apps/web && npm run dev
 ```
+
+`make dev` starts the API and the web app together.
 
 Web app will be available at http://localhost:5173
 
@@ -184,20 +191,32 @@ The **Ops** page (`/ops` in the web app) surfaces admin-oriented endpoints to ke
 
 ## Testing
 
-### Frontend
+The `Makefile` is the canonical entry point; every target runs from the repo root.
 
 ```bash
-cd apps/web
-npm run lint      # Lint code
-npm run build     # Type check and build
+make test         # Backend (pytest) + frontend (vitest)
+make lint         # ruff + black + eslint
+make preflight    # Everything CI checks, before you push
 ```
 
 ### Backend
 
 ```bash
-cd services/api
-source venv/bin/activate
-pytest            # Run tests
+source .venv/bin/activate
+make test-back    # python -m pytest
+make lint-back    # python -m ruff check . && python -m black --check .
+```
+
+Pytest collects from `services/api` and `services/ingest` (see `[tool.pytest.ini_options]`
+in `pyproject.toml`). The root `conftest.py` sets `KNIGHTMIND_DEV_SQLITE=1` so the suite
+runs without a Postgres instance.
+
+### Frontend
+
+```bash
+make test-front   # vitest --run
+make lint-front   # eslint
+make build-front  # tsc -b && vite build (type check + build)
 ```
 
 ## Data Schema
