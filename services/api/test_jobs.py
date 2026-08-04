@@ -120,12 +120,12 @@ def test_get_job_status_exposes_liveness_timestamps(client, db_session):
     # Stable, parseable strings whose values reflect the persisted timestamps.
     assert data["heartbeat_at"] is not None
     assert data["updated_at"] is not None
-    assert datetime.fromisoformat(data["heartbeat_at"]).replace(
-        tzinfo=timezone.utc
-    ) == hb
-    assert datetime.fromisoformat(data["updated_at"]).replace(
-        tzinfo=timezone.utc
-    ) == upd
+    assert (
+        datetime.fromisoformat(data["heartbeat_at"]).replace(tzinfo=timezone.utc) == hb
+    )
+    assert (
+        datetime.fromisoformat(data["updated_at"]).replace(tzinfo=timezone.utc) == upd
+    )
 
 
 def test_get_job_status_null_heartbeat_serializes_as_none(client, db_session):
