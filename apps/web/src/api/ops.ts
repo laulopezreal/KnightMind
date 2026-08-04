@@ -35,6 +35,8 @@ export interface JobStatusResponse {
     status: 'queued' | 'running' | 'succeeded' | 'failed' | 'canceled';
     message?: string;
     progress?: number;
+    /** Server-side last-update timestamp; treated as forward progress when present. */
+    updated_at?: string;
     result?: unknown;
     error?: string;
 }

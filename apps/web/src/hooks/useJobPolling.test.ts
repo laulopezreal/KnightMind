@@ -252,7 +252,7 @@ describe('useJobPolling', () => {
     expect(mockGetJobStatus).toHaveBeenCalledTimes(1);
   });
 
-  describe('wall-clock timeout', () => {
+  describe('progress-stall detector', () => {
     beforeEach(() => {
       vi.useFakeTimers();
     });
@@ -261,13 +261,14 @@ describe('useJobPolling', () => {
       vi.useRealTimers();
     });
 
-    it('should stop polling and call onError when job stays running past timeoutMs', async () => {
+    it('should stop polling and call onError when a job makes no progress for stallTimeoutMs', async () => {
       const onError = vi.fn();
-      mockGetJobStatus.mockResolvedValue({ status: 'running', message: 'In progress' });
+      // Same status/progress/message on every poll: the job is genuinely stuck.
+      mockGetJobStatus.mockResolvedValue({ status: 'running', message: 'In progress', progress: 10 });
 
       const { result } = renderHook(() => useJobPolling('job-123', {
         pollInterval: 1000,
-        timeoutMs: 5000,
+        stallTimeoutMs: 5000,
         onError,
       }));
 
@@ -278,7 +279,7 @@ describe('useJobPolling', () => {
       expect(onError).toHaveBeenCalledTimes(1);
       expect(onError).toHaveBeenCalledWith(
         expect.objectContaining({
-          message: expect.stringContaining('timed out after 5 seconds'),
+          message: expect.stringContaining('has not made progress for 5 seconds'),
         })
       );
       expect(onError).toHaveBeenCalledWith(
@@ -286,20 +287,99 @@ describe('useJobPolling', () => {
           message: expect.stringContaining('may still be running on the server'),
         })
       );
+      // The message must not read like the job itself failed after a fixed time.
+      expect(onError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.not.stringContaining('timed out after'),
+        })
+      );
 
       // Job state is cleared so consumers stop showing a "generating" spinner
       expect(result.current.job).toBeNull();
       expect(result.current.isPolling).toBe(false);
 
-      // Polling has stopped: no further requests after the timeout fired
-      const callsAtTimeout = mockGetJobStatus.mock.calls.length;
+      // Polling has stopped: no further requests after the stall error fired
+      const callsAtStall = mockGetJobStatus.mock.calls.length;
       await act(async () => {
         await vi.advanceTimersByTimeAsync(10000);
       });
-      expect(mockGetJobStatus).toHaveBeenCalledTimes(callsAtTimeout);
+      expect(mockGetJobStatus).toHaveBeenCalledTimes(callsAtStall);
     });
 
-    it('should not fire timeout error when job succeeds before the cap', async () => {
+    it('should never error a job that keeps advancing, even well past the old 120s cap', async () => {
+      const onError = vi.fn();
+      // Each poll advances progress + message ("Analyzing game N of 30"), which is
+      // exactly what the backend does during a multi-minute Stockfish run.
+      let game = 0;
+      mockGetJobStatus.mockImplementation(() => {
+        game += 1;
+        return Promise.resolve({
+          status: 'running',
+          progress: game,
+          message: `Analyzing game ${game} of 30`,
+        });
+      });
+
+      const { result } = renderHook(() => useJobPolling('job-123', {
+        pollInterval: 1000,
+        stallTimeoutMs: 90_000,
+        onError,
+      }));
+
+      // Advance far beyond the old 120s wall-clock deadline in chunks.
+      for (let i = 0; i < 15; i++) {
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(10_000);
+        });
+      }
+
+      // 150s elapsed with steady progress: no error, still polling and advancing.
+      expect(onError).not.toHaveBeenCalled();
+      expect(result.current.job?.status).toBe('running');
+      expect(mockGetJobStatus.mock.calls.length).toBeGreaterThan(120);
+    });
+
+    it('should reset the stall deadline whenever progress advances', async () => {
+      const onError = vi.fn();
+      // Progress advances until t~=8s, then freezes. The stall window is 5s, so a
+      // naive fixed timer would fire around 5s; the reset-on-progress detector
+      // must not fire until 5s AFTER the last advance.
+      let elapsed = 0;
+      mockGetJobStatus.mockImplementation(() => {
+        elapsed += 1;
+        const frozen = elapsed > 8;
+        return Promise.resolve({
+          status: 'running',
+          progress: frozen ? 8 : elapsed,
+          message: frozen ? 'Analyzing game 8 of 30' : `Analyzing game ${elapsed} of 30`,
+        });
+      });
+
+      renderHook(() => useJobPolling('job-123', {
+        pollInterval: 1000,
+        stallTimeoutMs: 5000,
+        onError,
+      }));
+
+      // At 10s the job has only just frozen (last advance ~8s): still within window.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      expect(onError).not.toHaveBeenCalled();
+
+      // 5s after the last advance the stall fires.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(4000);
+      });
+      expect(onError).toHaveBeenCalledTimes(1);
+      expect(onError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.stringContaining('has not made progress'),
+        })
+      );
+    });
+
+    it('should not fire a stall error when the job succeeds first', async () => {
       const onError = vi.fn();
       const onSuccess = vi.fn();
       mockGetJobStatus
@@ -308,7 +388,7 @@ describe('useJobPolling', () => {
 
       renderHook(() => useJobPolling('job-123', {
         pollInterval: 1000,
-        timeoutMs: 5000,
+        stallTimeoutMs: 5000,
         onError,
         onSuccess,
       }));
@@ -318,7 +398,7 @@ describe('useJobPolling', () => {
       });
       expect(onSuccess).toHaveBeenCalledTimes(1);
 
-      // Advance well past the cap: the timeout timer was cleared on completion
+      // Advance well past the stall window: the timer was cleared on completion
       await act(async () => {
         await vi.advanceTimersByTimeAsync(20000);
       });
@@ -326,13 +406,13 @@ describe('useJobPolling', () => {
       expect(onSuccess).toHaveBeenCalledTimes(1);
     });
 
-    it('should not fire timeout error after unmount', async () => {
+    it('should not fire a stall error after unmount', async () => {
       const onError = vi.fn();
       mockGetJobStatus.mockResolvedValue({ status: 'running', message: 'In progress' });
 
       const { unmount } = renderHook(() => useJobPolling('job-123', {
         pollInterval: 1000,
-        timeoutMs: 5000,
+        stallTimeoutMs: 5000,
         onError,
       }));
 
@@ -349,15 +429,16 @@ describe('useJobPolling', () => {
       expect(mockGetJobStatus).toHaveBeenCalledTimes(callsAtUnmount);
     });
 
-    it('should use a default timeout of 120 seconds', async () => {
+    it('should use a default stall window of 90 seconds', async () => {
       const onError = vi.fn();
-      mockGetJobStatus.mockResolvedValue({ status: 'running', message: 'In progress' });
+      // Constant response: no forward progress at all.
+      mockGetJobStatus.mockResolvedValue({ status: 'running', message: 'In progress', progress: 5 });
 
       renderHook(() => useJobPolling('job-123', { pollInterval: 1000, onError }));
 
-      // Just before the default cap: still polling, no error
+      // Just before the default stall window: still polling, no error
       await act(async () => {
-        await vi.advanceTimersByTimeAsync(119_000);
+        await vi.advanceTimersByTimeAsync(89_000);
       });
       expect(onError).not.toHaveBeenCalled();
 
@@ -366,7 +447,7 @@ describe('useJobPolling', () => {
       });
       expect(onError).toHaveBeenCalledWith(
         expect.objectContaining({
-          message: expect.stringContaining('timed out after 120 seconds'),
+          message: expect.stringContaining('has not made progress for 90 seconds'),
         })
       );
     });

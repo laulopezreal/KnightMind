@@ -70,4 +70,16 @@ describe('JobStatusCard', () => {
 
     expect(screen.queryByText('Cancel')).not.toBeInTheDocument();
   });
+
+  it('should show the hint while processing', () => {
+    render(<JobStatusCard status="running" hint="this usually takes 2-3 minutes" />);
+
+    expect(screen.getByText('this usually takes 2-3 minutes')).toBeInTheDocument();
+  });
+
+  it('should not show the hint when not processing', () => {
+    render(<JobStatusCard status="succeeded" hint="this usually takes 2-3 minutes" />);
+
+    expect(screen.queryByText('this usually takes 2-3 minutes')).not.toBeInTheDocument();
+  });
 });
