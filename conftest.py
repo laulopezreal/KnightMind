@@ -1,4 +1,5 @@
 import os
+import re
 
 import pytest
 
@@ -21,15 +22,20 @@ def _resolve_test_database_url() -> str:
     # The fixtures DROP and TRUNCATE every table. Pointed at a development or
     # production database that destroys real data, and this URL comes from an
     # environment variable that is easy to have left set from something else.
-    # Requiring "test" in the database name is a cheap, unmissable guard against
-    # the one mistake here that cannot be undone.
+    # Requiring the name to say so is a cheap guard against the one mistake here
+    # that cannot be undone.
+    #
+    # Matched as a whole word, not a substring: `"test" in name` also accepts
+    # `latest`, `contest`, `attestation` -- and `knightmind_latest` is an
+    # entirely plausible name for a database someone would be upset to lose.
+    # A guard against irreversible loss should not be the loose kind.
     database = url.rsplit("/", 1)[-1].split("?", 1)[0]
-    if "test" not in database.lower():
+    if not re.search(r"(^|[_-])tests?([_-]|$)", database.lower()):
         raise RuntimeError(
             f"Refusing to run: {TEST_DB_URL_ENV} names a database {database!r}, "
-            "and the fixtures drop and truncate every table in it. Rename the "
-            "scratch database to contain 'test' (e.g. 'knightmind_test') to "
-            "confirm it is disposable."
+            "and the fixtures drop and truncate every table in it. Name the "
+            "scratch database so 'test' appears as a whole word (e.g. "
+            "'knightmind_test') to confirm it is disposable."
         )
     return url
 
@@ -40,6 +46,18 @@ TEST_DATABASE_URL = _resolve_test_database_url()
 os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 
 POSTGRES_URL_ENV = "KNIGHTMIND_TEST_POSTGRES_URL"
+
+# The @pytest.mark.postgres tests predate the suite itself running on Postgres,
+# and had their own env var because back then a Postgres was optional. It no
+# longer is, so leaving them gated on a *second* variable meant eight tests
+# silently skipping next to a perfectly good database -- the same silently-lost
+# coverage that let four of them go unrun in CI for months (#346).
+#
+# They manage their own schema and connections (create_all is idempotent and
+# they only delete rows, never drop tables), so pointing them at the same
+# database is safe. The variable is still honoured when set explicitly, for
+# anyone who wants them somewhere separate.
+os.environ.setdefault(POSTGRES_URL_ENV, TEST_DATABASE_URL)
 
 
 def pytest_collection_modifyitems(config, items):
