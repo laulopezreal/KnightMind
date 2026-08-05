@@ -342,8 +342,8 @@ def get_adaptive_puzzles(
     # *preferred* — but that is a preference, not a bound on the session. The
     # rest are deferred, not dropped, and ``varied[:n]`` reaches straight into
     # them whenever a tier holds fewer distinct games than the session has slots
-    # — which the live due tier does, so a default session necessarily repeats a
-    # game. ``_vary_session``'s own docstring says it: the caps cannot invent
+    # — which the live due tier did when this was written (3 distinct games
+    # against a default n=5), so a default session necessarily repeats a game. ``_vary_session``'s own docstring says it: the caps cannot invent
     # variety that is not there.
     #
     # No ordering invariant is stated here, because three attempts to state one
@@ -351,14 +351,17 @@ def get_adaptive_puzzles(
     # is two", then "within the first n of a tier, distinct games come first".
     # The last fails because the two caps COMPOSE. With only the game cap active
     # every deferred puzzle is by definition a repeat, so distinct-first does
-    # hold. Turn the motif cap on and a distinct-GAME puzzle can be deferred for
+    # hold — asserted by
+    # TestGameDiversity::test_the_cap_cannot_invent_variety_that_is_not_there. Turn the motif cap on and a distinct-GAME puzzle can be deferred for
     # motif reasons and land behind a game repeat inside the first ``n``:
     # games A, B, A, C all sharing one motif, n=3, serves A twice and never C.
     # Pinned by ``test_the_two_caps_compose_and_neither_orders_alone``.
     #
-    # Note TestGameDiversity sets motif="blunder" precisely to neutralise the
-    # motif cap, so it asserts the game cap in isolation — it does not, and
-    # cannot, assert anything about the composition.
+    # Three of TestGameDiversity's five tests set motif="blunder" to neutralise
+    # the motif cap; the other two take the helper default "Fork", where at
+    # _GAME_CAP=1 the motif cap never binds. So the class does not assert the
+    # composition at the current constants — not that it could not: raise
+    # _GAME_CAP to 3 and one of them becomes composition-sensitive.
     #
     # The lesson these three attempts share: a measured count rots (the due tier
     # went 9 -> 12 in a day) and an ordering rule stated over one cap is falsified

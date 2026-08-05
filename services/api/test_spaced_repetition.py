@@ -917,15 +917,28 @@ def test_counters_do_not_carry_across_tiers(db_session):
 def test_the_two_caps_compose_and_neither_orders_alone(db_session):
     """A distinct game can be deferred by the MOTIF cap and land behind a repeat.
 
-    Every other variety test sets motif="blunder", which `_NON_MOTIFS` exempts,
-    so they exercise the game cap in isolation. That is deliberate there, but it
-    leaves the composition untested — and the composition is what falsified
+    Each existing class isolates ONE cap, from opposite directions:
+
+    - TestGameDiversity's three multi-game tests set motif="blunder", which
+      _NON_MOTIFS exempts, so they isolate the game cap.
+    - TestVarietyCap goes the other way: its _stats helper creates PuzzleStats
+      but no Puzzle rows, so _source_games returns {} and `game` is None for
+      every id — the game cap is exempt for all six of its tests, and what they
+      exercise is the motif cap.
+
+    So neither class has both caps binding at once, which is what falsified
     three successive attempts to write an ordering invariant into the call site.
 
     Games A, B, A, C, all sharing one real motif. With n=3 the motif cap
-    (int(3 * 2/3) = 2) defers the fourth puzzle, which is the only one from
-    game C. The third slot therefore goes to the game-A repeat, and a distinct
-    game that was available is never served.
+    (int(3 * 2/3) = 2) is reached after p1 and p2, so p4 — the only puzzle from
+    game C — is deferred and never promoted. p3 lands in slot 3 from the head of
+    the deferred tail, and a distinct game that was available is never served.
+
+    Note the expected order here is also the INPUT order, so a mutation that
+    made the whole variety pass a no-op would not fail this test. That one is
+    caught by the five tests listed in test_counters_do_not_carry_across_tiers.
+    What this test uniquely pins is the motif-cap boundary at n=3 and the order
+    of the deferred tail.
     """
     from services.api.models import Puzzle, PuzzleStats
 
