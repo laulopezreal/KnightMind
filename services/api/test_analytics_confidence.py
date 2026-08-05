@@ -23,7 +23,13 @@ from sqlalchemy.orm import sessionmaker
 from services.api import analytics_confidence
 from services.api.db import get_db
 from services.api.main import app
-from services.api.models import Game, PuzzleReview, PuzzleStats, RatingSnapshot
+from services.api.models import (
+    Game,
+    Puzzle,
+    PuzzleReview,
+    PuzzleStats,
+    RatingSnapshot,
+)
 
 _ENV_NAMES = (
     "ANALYTICS_MIN_REVIEWS_FORM_TREND",
@@ -95,9 +101,56 @@ def client_with_db(db_session, monkeypatch):
     app.dependency_overrides.clear()
 
 
+_PZ_PLY = iter(range(1, 100_000))
+
+
+def _ensure_puzzle(db, puzzle_id, username):
+    """Create the puzzle (and its parent game) a review or stats row points at.
+
+    puzzle_reviews.puzzle_id and puzzle_stats.puzzle_id are real foreign keys,
+    as is puzzles(source_game_id, username). See conftest for why these can no
+    longer be skipped.
+    """
+    if db.get(Puzzle, puzzle_id) is not None:
+        return
+    game_id = f"g-{puzzle_id}"
+    if db.get(Game, (game_id, username)) is None:
+        db.add(
+            Game(
+                game_id=game_id,
+                url="",
+                username=username,
+                white_username=username,
+                black_username="",
+                white_result="",
+                black_result="",
+                time_control="",
+                end_time=0,
+            )
+        )
+        db.flush()
+    db.add(
+        Puzzle(
+            id=puzzle_id,
+            username=username,
+            source_game_id=game_id,
+            ply=next(_PZ_PLY),
+            fen="6k1/pp3ppp/8/3q4/8/8/PP3PPP/3Q2K1 w - - 0 1",
+            side_to_move="white",
+            played_move_uci="d1d2",
+            best_move_uci="d1d5",
+            eval_before=0.5,
+            eval_after=-3.0,
+            swing=3.0,
+        )
+    )
+    db.flush()
+
+
 def _seed_reviews(db_session, username, results, base=None):
     base = base or (datetime.now(timezone.utc) - timedelta(hours=5))
     for i, r in enumerate(results):
+        _ensure_puzzle(db_session, f"{username}-pz-{i}", username)
         db_session.add(
             PuzzleReview(
                 id=f"{username}-rev-{i}",
@@ -142,6 +195,7 @@ def _seed_motif_two_days(db_session, username, motif, day1_results, day2_results
     for day, results in ((day1, day1_results), (day2, day2_results)):
         for r in results:
             pid = f"{motif}-{idx}"
+            _ensure_puzzle(db_session, pid, username)
             db_session.add(
                 PuzzleStats(
                     puzzle_id=pid,
@@ -205,6 +259,7 @@ def test_motif_trend_boundary(client_with_db, db_session, total, expected_insuff
 def test_motif_rank_boundary(
     client_with_db, db_session, attempts, expected_insufficient
 ):
+    _ensure_puzzle(db_session, "rank-p1", "rankuser")
     db_session.add(
         PuzzleStats(
             puzzle_id="rank-p1",

@@ -28,6 +28,7 @@ from services.api.storage.diagnosis_repository import (  # noqa: E402
     DiagnosisRepository,
     DiagnosisWrite,
 )
+from services.api.storage.game_repository import MANUAL_GAME_ID  # noqa: E402
 
 USER = "diaguser"
 
@@ -377,12 +378,22 @@ class TestJob:
         assert row.insufficient_evidence
         assert "illegal" in row.error
 
-    def test_a_missing_game_degrades_rather_than_failing(self, db_session, monkeypatch):
-        """A manual puzzle has no source game; the FEN still carries the
-        position, so a diagnosis is still possible without PGN context."""
-        _puzzle(db_session)
-        db_session.query(Game).delete()
-        db_session.commit()
+    def test_a_manual_puzzle_without_pgn_degrades_rather_than_failing(
+        self, db_session, monkeypatch
+    ):
+        """A manual puzzle's placeholder game carries no PGN; the FEN still
+        holds the position, so a diagnosis is still possible without PGN
+        context.
+
+        This used to DELETE the games row to simulate "no source game". That
+        state is unreachable: puzzles(source_game_id, username) is a composite
+        FK, so the delete is rejected outright once foreign keys are enforced --
+        it only appeared to work because SQLite ignored them. The scenario the
+        test is actually about is the one production creates, MANUAL_GAME_ID
+        with an empty pgn_blob, which is what it now builds.
+        """
+        _game(db_session, MANUAL_GAME_ID, USER, pgn="")
+        _puzzle(db_session, game_id=MANUAL_GAME_ID)
         monkeypatch.setattr(
             "services.api.diagnosis.job.SessionLocal", lambda: _NoClose(db_session)
         )

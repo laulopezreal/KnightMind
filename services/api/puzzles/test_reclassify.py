@@ -12,7 +12,7 @@ as a fork and a back-rank mate, then assert:
 from datetime import datetime
 
 from scripts.reclassify_motifs import reclassify_motifs
-from services.api.models import Puzzle, PuzzleStats
+from services.api.models import Game, Puzzle, PuzzleStats
 
 # Positions whose current-classifier motif is NOT "blunder".
 FORK_FEN = "3q3k/8/8/4N3/8/8/8/6K1 w - - 0 1"
@@ -24,6 +24,26 @@ BACK_RANK_BEST = "e1e8"  # Re8# -> "back_rank"
 # A genuinely quiet solution the classifier legitimately leaves as "blunder".
 QUIET_FEN = "8/8/8/8/8/5k2/8/6K1 w - - 0 1"
 QUIET_BEST = "g1f1"
+
+
+def _ensure_game(db, game_id, username):
+    """The games row a puzzle's composite FK points at."""
+    if db.get(Game, (game_id, username)) is not None:
+        return
+    db.add(
+        Game(
+            game_id=game_id,
+            url="",
+            username=username,
+            white_username=username,
+            black_username="",
+            white_result="",
+            black_result="",
+            time_control="",
+            end_time=0,
+        )
+    )
+    db.flush()
 
 
 def _seed_puzzle(
@@ -38,6 +58,9 @@ def _seed_puzzle(
     title=None,
 ):
     """Insert a Puzzle and optionally seed its PuzzleStats identity row."""
+    # puzzles(source_game_id, username) is a real FK. See conftest for why the
+    # parent row cannot be skipped any more.
+    _ensure_game(db, f"game-{puzzle_id}", username)
     db.add(
         Puzzle(
             id=puzzle_id,

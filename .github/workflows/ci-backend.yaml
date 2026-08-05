@@ -119,3 +119,22 @@ jobs:
       working-directory: ./services/api
       run: |
         uv run pytest -m postgres -v
+
+    # The whole behavioural suite against the database production actually
+    # runs. Everything above this point still proves things about SQLite, which
+    # differs from Postgres in ways that reach the query layer: aggregate
+    # typing, partial indexes, naive-vs-aware datetime comparison, integer
+    # division -- and, until this landed, foreign keys, which SQLite ignores
+    # unless asked. That last one alone was hiding 38 tests built on rows the
+    # production schema forbids.
+    #
+    # Runs last on purpose: the fixture builds its schema from
+    # Base.metadata.create_all, so it drops and recreates what the migration
+    # steps above put there. Migration correctness is `alembic check`'s job,
+    # not this step's.
+    - name: Run the full suite against Postgres
+      working-directory: ./services/api
+      env:
+        KNIGHTMIND_TEST_DATABASE_URL: postgresql+psycopg://knightmind:knightmind@localhost:5432/knightmind
+      run: |
+        uv run pytest

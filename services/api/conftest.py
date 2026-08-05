@@ -24,7 +24,7 @@ import os
 from unittest.mock import AsyncMock
 
 import pytest
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -85,6 +85,20 @@ def db_engine(db_url, _postgres_engine):
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
     )
+
+    # SQLite ignores foreign keys unless asked, per connection, every time.
+    # Left off, fixtures can insert a puzzle with no parent game or a review
+    # with no parent puzzle -- states the production schema forbids and
+    # Postgres rejects outright. Tests built on them look like coverage while
+    # asserting against rows that cannot exist. Turning it on here is what
+    # keeps the fast default run honest, instead of deferring the whole class
+    # of defect to whoever next runs the suite against Postgres.
+    @event.listens_for(engine, "connect")
+    def _enforce_sqlite_foreign_keys(dbapi_connection, _connection_record):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+
     Base.metadata.create_all(bind=engine)
     try:
         yield engine
