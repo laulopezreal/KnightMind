@@ -15,6 +15,7 @@ from services.api.diagnosis.evidence import EXTRACTION_VERSION  # noqa: E402
 from services.api.diagnosis.job import run_diagnosis  # noqa: E402
 from services.api.main import app, get_db  # noqa: E402
 from services.api.models import (  # noqa: E402
+    DiagnosisAuditLog,
     DiagnosisStatus,
     Game,
     Job,
@@ -142,6 +143,125 @@ def _puzzle(
 # ---------------------------------------------------------------------------
 # Repository
 # ---------------------------------------------------------------------------
+
+
+# Spellings of USER that all fold to "diaguser" under canonical_username but
+# NOT under a bare .lower(). See services.api.usernames.
+NONCANONICAL_SPELLINGS = [
+    " DiagUser ",
+    "ＤＩＡＧＵＳＥＲ",
+    "DIAGUSER\xa0",
+    " Ｄiaguser\xa0",
+]
+
+
+class TestUsernameFold:
+    """The diagnosis repository used to do no username folding at all.
+
+    It trusted its caller, which held for HTTP traffic (the ``Username``
+    annotation folds at the request boundary) and was unverifiable for
+    everything else — jobs, scripts, and any future request model that forgets
+    the annotation. These pin the fold at the repository itself, so the
+    guarantee is local and greppable instead of an enumeration of entry points
+    that has to be redone on every new caller.
+    """
+
+    @pytest.mark.parametrize("handle", NONCANONICAL_SPELLINGS)
+    def test_reads_find_canonically_stored_rows(self, db_session, handle):
+        _puzzle(db_session)
+        repo = DiagnosisRepository(db_session)
+        assert repo.pending_puzzle_ids(handle) == ["p1"]
+        assert repo.pending_count(handle) == 1
+
+        repo.upsert(DiagnosisWrite(puzzle_id="p1", username=USER, primary_cause="c"))
+        db_session.commit()
+
+        assert repo.get(handle, "p1") is not None
+        assert repo.puzzle_ids_for_cause(handle, "c") == {"p1"}
+        assert repo.cause_counts(handle) == [("c", 1)]
+        assert repo.pending_puzzle_ids(handle) == []
+
+    @pytest.mark.parametrize("handle", NONCANONICAL_SPELLINGS)
+    def test_first_upsert_under_an_ugly_handle_lands_canonically(
+        self, db_session, handle
+    ):
+        """The INSERT branch, which the in-place test cannot reach.
+
+        ``test_upsert_updates_in_place_instead_of_forking`` seeds a canonical
+        row first, so ``upsert``'s ``get`` probe always finds it and only the
+        UPDATE branch runs. And because ``get`` folds independently, the probe
+        resolves canonically however ``upsert`` folded — so mutating the fold
+        in ``upsert`` killed no test at all.
+
+        Seeding nothing forces the INSERT, which writes ``write.username``
+        directly and is the branch that can actually fork.
+        """
+        _puzzle(db_session)
+        repo = DiagnosisRepository(db_session)
+
+        repo.upsert(DiagnosisWrite(puzzle_id="p1", username=handle, primary_cause="a"))
+        db_session.commit()
+
+        rows = db_session.query(PuzzleDiagnosis).all()
+        assert len(rows) == 1
+        assert rows[0].username == USER, (
+            f"{handle!r} inserted a diagnosis under {rows[0].username!r}; every "
+            "canonical read, and the next upsert, will miss it"
+        )
+
+    @pytest.mark.parametrize("handle", NONCANONICAL_SPELLINGS)
+    def test_ai_audit_folds_so_the_daily_cap_cannot_be_bypassed(
+        self, db_session, handle
+    ):
+        """The audit log is the ledger the AI spend caps are counted from.
+
+        ``ai_audit_repository``'s own docstring says both sides fold so a user
+        cannot get a second daily allowance under a different spelling. Nothing
+        asserted it: mutating either fold killed no test.
+        """
+        from services.api.storage.ai_audit_repository import (
+            AIAuditRepository,
+            AuditWrite,
+        )
+
+        repo = AIAuditRepository(db_session)
+        repo.record(AuditWrite(username=handle, status="accepted", puzzle_id="p1"))
+        db_session.commit()
+
+        row = db_session.query(DiagnosisAuditLog).one()
+        assert row.username == USER, (
+            f"{handle!r} recorded spend under {row.username!r}; that row is "
+            "invisible to the per-user cap"
+        )
+        # And the counter must see it under either spelling, or the cap is
+        # bypassable by varying case or padding.
+        assert repo.budget_last_24h(USER).user_used == 1
+        assert repo.budget_last_24h(handle).user_used == 1
+
+    @pytest.mark.parametrize("handle", NONCANONICAL_SPELLINGS)
+    def test_upsert_updates_in_place_instead_of_forking(self, db_session, handle):
+        """The write path must fold too, or the upsert stops being an upsert.
+
+        ``upsert`` probes with ``get`` and then inserts. If either side folds
+        differently the probe misses its own previous row and INSERTs again —
+        so a nightly diagnosis job would accumulate a duplicate diagnosis per
+        run rather than updating one. (SQLite is happy to hold both; the
+        composite PK is (puzzle_id, username), and the two usernames differ.)
+        """
+        _puzzle(db_session)
+        repo = DiagnosisRepository(db_session)
+
+        repo.upsert(DiagnosisWrite(puzzle_id="p1", username=USER, primary_cause="a"))
+        db_session.commit()
+        _, changed = repo.upsert(
+            DiagnosisWrite(puzzle_id="p1", username=handle, primary_cause="a")
+        )
+        db_session.commit()
+
+        assert not changed, f"{handle!r} did not resolve to the existing row"
+        rows = db_session.query(PuzzleDiagnosis).filter_by(puzzle_id="p1").all()
+        assert len(rows) == 1, f"{handle!r} forked a second diagnosis row"
+        assert rows[0].username == USER
 
 
 class TestRepository:

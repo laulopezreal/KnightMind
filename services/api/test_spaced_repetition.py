@@ -1,5 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from services.api.models import PuzzleStats
 from services.api.storage.spaced_repetition import (
     _utcnow_naive,
@@ -400,9 +402,14 @@ def test_mixed_case_username_finds_lowercase_stats(db_session):
 
     get_adaptive_puzzles folds the username before querying PuzzleStats.
     Live/API traffic is unaffected (Username canonicalises at the boundary);
-    direct/internal callers with mixed-case are intentionally repaired.
+    direct/internal callers with mixed-case are repaired.
     Candidates are listed new-first so a broken fold yields equal priorities
     and stable-sort keeps the wrong order — making both asserts fail.
+
+    NB this covers CASE ONLY. It passes against a plain ``.lower()``, which is a
+    different fold from ``canonical_username`` and silently wrong on whitespace
+    and compatibility forms. ``test_noncanonical_username_reaches_canonical_rows``
+    below is the one that pins the actual fold; keep both.
     """
     now = datetime.now(timezone.utc)
 
@@ -431,6 +438,140 @@ def test_mixed_case_username_finds_lowercase_stats(db_session):
         "due-mc" in all_stats
     ), "fold failed: mixed-case caller missed lowercase stats"
     assert ordered[0] == "due-mc", "due puzzle must rank before never-seen"
+
+
+# One handle, spelled every way a non-canonical caller might spell it. Each
+# folds to "alice" under canonical_username but NOT under a bare .lower():
+#   " Alice "  -> .lower() = " alice "   (leading/trailing space survives)
+#   "Ａｌｉｃｅ" -> .lower() = "ａｌｉｃｅ" (fullwidth survives; NFKC folds it)
+#   "ALICE\xa0" -> .lower() = "alice\xa0" (NBSP is not stripped by .strip()
+#                                          until NFKC turns it into a space)
+# The last one is the sharpest: it needs NFKC *before* strip, which is exactly
+# the ordering canonical_username documents and a hand-rolled fold gets wrong.
+# The last entry combines all three defects at once, which is the case the task
+# actually cares about: mixed case AND surrounding whitespace AND a fullwidth
+# character in one handle.
+NONCANONICAL_SPELLINGS = [
+    " Alice ",
+    "Ａｌｉｃｅ",
+    "ALICE\xa0",
+    " Ａlice\xa0",
+]
+
+
+@pytest.mark.parametrize("handle", NONCANONICAL_SPELLINGS)
+def test_noncanonical_username_reaches_canonical_rows(db_session, handle):
+    """A non-canonical handle must reach the SAME rows as its canonical form.
+
+    Covers mixed case AND surrounding whitespace AND a fullwidth (NFKC
+    compatibility) form in one parametrised sweep, because the three fail
+    independently: a fold that lowercases but does not strip passes the
+    case-only test and still returns nothing for " Alice ".
+
+    Asserts the scheduling TIER, not a row count. The named failure mode is not
+    "fewer rows" — it is that ``spaced_repetition`` reads missing stats as
+    "never seen", so a due puzzle is served as new and ``update_puzzle_stats``
+    then re-anchors its interval off the wrong date. Checking that "due-nc"
+    still sorts ahead of a never-seen puzzle is the property that matters; a
+    count would pass on a fold that returned the right number of wrong rows.
+    """
+    now = datetime.now(timezone.utc)
+
+    # puzzle_stats.puzzle_id is a real FK, so both puzzles must exist before
+    # any stats row can name one. Created under the CANONICAL handle, which is
+    # the whole premise: the caller's ugly spelling has to reach these rows.
+    ensure_puzzle(db_session, "due-nc", "alice")
+    ensure_puzzle(db_session, "new-nc", "alice")
+
+    # Stored canonically, as every live writer stores it.
+    db_session.add(
+        PuzzleStats(
+            puzzle_id="due-nc",
+            username="alice",
+            attempts=1,
+            pass_count=1,
+            ease_factor=2.0,
+            interval_days=1,
+            next_due_at=(now - timedelta(days=1)).replace(tzinfo=None),
+        )
+    )
+    db_session.commit()
+
+    # "new-nc" has no stats row, and is listed FIRST so a broken fold leaves
+    # both puzzles in the never-seen tier with equal keys — stable sort then
+    # preserves this (wrong) order and the tier assert fails.
+    ordered, all_stats = get_adaptive_puzzles(
+        db_session, handle, ["new-nc", "due-nc"], n=2
+    )
+
+    assert "due-nc" in all_stats, (
+        f"fold failed for {handle!r}: canonical stats not found. "
+        "A .lower()-only fold produces a key that matches no row."
+    )
+    assert ordered[0] == "due-nc", (
+        f"fold failed for {handle!r}: an overdue puzzle was demoted below a "
+        "never-seen one, i.e. a due puzzle would be served as new."
+    )
+
+
+@pytest.mark.parametrize("handle", NONCANONICAL_SPELLINGS)
+def test_noncanonical_username_write_and_read_agree(db_session, handle):
+    """The write path and the read path must fold identically.
+
+    This is the regression for the asymmetry #345 introduced: it folded the
+    ``get_adaptive_puzzles`` READ but left ``update_puzzle_stats``' write
+    unfolded, so a direct caller passing "Alice" stored ``('p','Alice')`` and
+    then read with ``.lower()`` — ``all_stats`` came back empty and every
+    puzzle collapsed to the never-seen tier. A one-sided fold is strictly worse
+    than no fold, because no fold at least round-trips.
+
+    So this asserts the round trip through the real functions rather than
+    against a hand-inserted row: whatever ``update_puzzle_stats`` writes,
+    ``get_puzzle_stats`` and ``get_adaptive_puzzles`` must find.
+    """
+    reviewed = datetime.now(timezone.utc) - timedelta(days=30)
+
+    # puzzle_reviews.puzzle_id and puzzle_stats.puzzle_id both reference
+    # puzzles, so the round trip below needs real parent rows. Under the
+    # canonical handle: the point is that the ugly spelling still reaches them.
+    ensure_puzzle(db_session, "rt-nc", "alice")
+    ensure_puzzle(db_session, "new-rt", "alice")
+
+    # Write through the public API with the ugly handle.
+    insert_puzzle_review(db_session, "rt-nc", handle, "pass", reviewed_at=reviewed)
+    update_puzzle_stats(db_session, "rt-nc", handle, "pass", reviewed_at=reviewed)
+    db_session.commit()
+
+    # The review row too. Without this the insert_puzzle_review call above is
+    # decorative: update_puzzle_stats folds independently, so every assertion
+    # below passes while puzzle_reviews forks — and diagnosis_repository reads
+    # verified reviews BY USERNAME for the cause-accuracy column, so a forked
+    # row silently drops out of it.
+    from services.api.models import PuzzleReview
+
+    review_row = db_session.query(PuzzleReview).filter_by(puzzle_id="rt-nc").one()
+    assert review_row.username == "alice", (
+        f"{handle!r} wrote a review row under {review_row.username!r}; it will "
+        "not be counted by any canonical read"
+    )
+
+    # The row must exist under the canonical key, not the caller's spelling.
+    stored = db_session.query(PuzzleStats).filter_by(puzzle_id="rt-nc").one()
+    assert stored.username == "alice", (
+        f"{handle!r} was stored under {stored.username!r}; a write that does "
+        "not fold forks the user's data away from every canonical read"
+    )
+
+    # And every read path must find it — the caller's spelling, the canonical
+    # spelling, and the scheduler alike.
+    assert get_puzzle_stats(db_session, "rt-nc", handle) is not None
+    assert get_puzzle_stats(db_session, "rt-nc", "alice") is not None
+
+    ordered, all_stats = get_adaptive_puzzles(
+        db_session, handle, ["new-rt", "rt-nc"], n=2
+    )
+    assert "rt-nc" in all_stats, "write/read fold asymmetry: stats unreachable"
+    assert ordered[0] == "rt-nc", "a puzzle 29 days overdue was served as new"
 
 
 class TestVarietyCap:

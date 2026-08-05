@@ -622,6 +622,57 @@ async def test_execute_job_dispatches_on_type(mock_to_thread, db_session):
     assert seen == {"username": "dispatch-test", "params": {"k": "v"}}
 
 
+@pytest.mark.parametrize(
+    "stored",
+    [" JobUser ", "ＪＯＢＵＳＥＲ", "JOBUSER\xa0", " Ｊobuser\xa0"],
+)
+@patch("asyncio.to_thread", side_effect=run_sync_in_thread)
+@pytest.mark.asyncio
+async def test_execute_job_canonicalises_the_job_username(
+    mock_to_thread, db_session, stored
+):
+    """The job boundary canonicalises exactly like the HTTP boundary does.
+
+    Every ``Job`` row is created today from a ``Username``-annotated request, or
+    copied from an existing job by ``_enqueue_diagnosis`` — so in production
+    ``job.username`` is already canonical and this fold is a no-op. But that is
+    an invariant nothing enforces: it holds only as long as every future job
+    creator remembers, and the failure is silent rather than loud. A generation
+    job whose username misses by one space runs a full Stockfish pass against an
+    empty corpus and reports success.
+
+    Asserted on ``ctx.username``, because that is what the handlers actually use
+    as a storage key (``generate_puzzles`` and ``run_diagnosis`` both take it
+    straight from the context).
+    """
+    from services.api.worker import JOB_HANDLERS, worker
+
+    seen = {}
+
+    def fake_handler(ctx):
+        seen["username"] = ctx.username
+        return {"ok": True}
+
+    job = Job(username=stored, type="fold_probe", status=JobStatus.RUNNING)
+    db_session.add(job)
+    db_session.commit()
+    db_session.refresh(job)
+
+    JOB_HANDLERS["fold_probe"] = fake_handler
+    try:
+        with patch("services.api.worker.SessionLocal") as mock_sl:
+            mock_sl.return_value.__enter__.return_value = db_session
+            mock_sl.return_value.__exit__.return_value = None
+            await worker.execute_job(job.id)
+    finally:
+        JOB_HANDLERS.pop("fold_probe", None)
+
+    assert seen["username"] == "jobuser", (
+        f"job username {stored!r} reached the handler as {seen['username']!r}; "
+        "a handler using that as a storage key would find nothing"
+    )
+
+
 @patch("services.api.worker.generate_puzzles")
 @patch("asyncio.to_thread", side_effect=run_sync_in_thread)
 @pytest.mark.asyncio

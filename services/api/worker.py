@@ -14,6 +14,7 @@ from services.api.diagnosis.job import DIAGNOSIS_BATCH_MAX, run_diagnosis
 from services.api.models import Job, JobStatus, JobType
 from services.api.puzzles.generator import generate_puzzles
 from services.api.storage.diagnosis_repository import DiagnosisRepository
+from services.api.usernames import canonical_username
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,8 @@ class JobContext:
     """
 
     job_id: str
+    # Canonical, folded by ``execute_job``. A handler may use it as a storage
+    # key without folding it again.
     username: str
     params: dict
     heartbeat: Callable[[], bool]
@@ -385,7 +388,15 @@ class JobWorker:
                 job = db.scalars(stmt).first()
                 if not job:
                     return  # Should not happen
-                username = job.username
+                # The job boundary is an entry point in its own right, so it
+                # canonicalises exactly like the HTTP boundary does. Today every
+                # Job row is created from a ``Username``-annotated request (see
+                # /puzzles/generate and /users/{username}/diagnose) or copied
+                # from an existing job by ``_enqueue_diagnosis``, so this is a
+                # no-op — but "the row was written by a canonical caller" is an
+                # invariant nothing enforces, and a job whose username misses by
+                # a space runs a full generation against an empty corpus.
+                username = canonical_username(job.username)
                 # Use params from job if available, otherwise defaults
                 params = job.params or {}
                 job_type = job.type

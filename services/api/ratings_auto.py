@@ -22,6 +22,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from services.api.models import RatingSnapshot
+from services.api.usernames import canonical_username
 from services.ingest import get_player_stats
 
 logger = logging.getLogger(__name__)
@@ -66,6 +67,13 @@ async def auto_snapshot(
     Skips a time control when the latest stored snapshot already has the same
     rating. Never raises: failures are logged and swallowed.
     """
+    # RatingSnapshot is read and written here directly rather than through a
+    # repository, so this is the fold boundary for that table. The dedupe below
+    # compares the latest STORED snapshot against a freshly fetched rating: if
+    # the read key and the write key disagree the dedupe never matches, and
+    # every call appends a duplicate row instead of skipping an unchanged one.
+    username = canonical_username(username)
+
     try:
         stats = await get_player_stats(username)
     except Exception as e:
@@ -118,7 +126,9 @@ async def auto_snapshot(
 
 async def auto_snapshot_throttled(username: str, db: Session) -> None:
     """Opportunistic ``auto_snapshot``, at most once per throttle interval."""
-    key = username.lower()
+    # Same fold as the storage key, so two spellings of one handle share one
+    # throttle slot rather than each getting their own allowance.
+    key = canonical_username(username)
     now = time.monotonic()
     last = _last_checked.get(key)
     if last is not None and now - last < AUTO_SNAPSHOT_MIN_INTERVAL_SECONDS:

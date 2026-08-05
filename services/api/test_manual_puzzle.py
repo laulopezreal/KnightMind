@@ -431,3 +431,72 @@ def test_concurrent_manual_saves_of_different_positions_both_persist(
         .where(PuzzleStats.puzzle_id == saved_id)
     )
     assert stats_count == 1
+
+
+@pytest.mark.parametrize(
+    "handle", [" TestUser ", "ＴＥＳＴＵＳＥＲ", "TESTUSER\xa0", " Ｔestuser\xa0"]
+)
+def test_manual_puzzle_username_is_canonicalised_at_the_boundary(
+    client, db_session, handle
+):
+    """This route was the one live HTTP path that could write a non-canonical key.
+
+    ``ManualPuzzleRequest.username`` was a bare ``str`` while every other request
+    model used the ``Username`` annotation, and the handler compensated with a
+    ``.lower()`` — a DIFFERENT fold. ``' TestUser '`` lowercases to
+    ``' testuser '``, so "Save as puzzle" wrote the Puzzle, its PuzzleStats and
+    its synthetic Game row under a key that no canonical read ever matches. The
+    puzzle existed and was invisible, and its stats row silently inflated
+    nothing because nothing could see it.
+
+    Asserted end-to-end rather than on the model, because the bug was that the
+    annotation and the handler disagreed — only the round trip catches that.
+    """
+    resp = client.post("/puzzles/manual", json=_payload(username=handle))
+    assert resp.status_code == 200, resp.text
+    puzzle_id = resp.json()["puzzle_id"]
+
+    stored = db_session.get(PuzzleModel, puzzle_id)
+    assert stored.username == "testuser", (
+        f"{handle!r} was stored as {stored.username!r}; a non-canonical write "
+        "forks the puzzle away from every canonical read"
+    )
+
+    # The stats row and the synthetic game row must land on the same key, or
+    # the puzzle is unschedulable / orphaned from its FK sentinel.
+    stats = db_session.get(PuzzleStats, puzzle_id)
+    assert stats is not None and stats.username == "testuser"
+    assert PuzzleRepository(db_session).get_puzzle("testuser", puzzle_id) is not None
+
+    # The synthetic games row, asserted directly. Everything above routes
+    # through PuzzleRepository and therefore observes its fold — none of it can
+    # see this row, which the handler writes itself, outside storage/. Without
+    # this line the test passes even when the game row forks to ' TestUser ',
+    # orphaning the FK anchor of the puzzle it exists to support while
+    # GameRepository's counts silently never see it.
+    from services.api.models import Game as GameModel
+
+    assert (
+        db_session.get(GameModel, (MANUAL_GAME_ID, "testuser")) is not None
+    ), "synthetic game row forked from the puzzle it anchors"
+
+    # And the canonical spelling must find it through the ordinary library read.
+    listed = client.get("/puzzles/list?username=testuser")
+    assert listed.status_code == 200, listed.text
+    assert [p["id"] for p in listed.json()["puzzles"]] == [puzzle_id]
+
+    # Idempotency still holds across spellings: the same position posted under
+    # the canonical handle must resolve to the SAME puzzle, not a duplicate.
+    again = client.post("/puzzles/manual", json=_payload(username="testuser"))
+    assert again.json() == {"puzzle_id": puzzle_id, "is_new": False}
+
+
+def test_manual_puzzle_rejects_whitespace_only_username(client):
+    """The deliberate behaviour change from annotating the field.
+
+    Previously ``"   "`` lowercased to ``"   "`` and wrote a puzzle under a
+    whitespace key nobody could ever read back. ``Username`` rejects it as 422,
+    which is the same answer every other route already gives.
+    """
+    resp = client.post("/puzzles/manual", json=_payload(username="   "))
+    assert resp.status_code == 422
