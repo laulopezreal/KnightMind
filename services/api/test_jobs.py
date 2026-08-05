@@ -12,31 +12,10 @@ from services.api.main import app
 from services.api.models import Game, Job, JobStatus, Puzzle
 from services.api.worker import JobWorker
 
-# Use a file-based DB for tests to ensure threading works if needed,
-# but :memory: is usually fine for single thread tests.
-# However, worker runs in thread.
-TEST_DATABASE_URL = "sqlite:///./test_jobs.db"
-
-engine = create_engine(TEST_DATABASE_URL, connect_args={"check_same_thread": False})
-TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
-
-@pytest.fixture(scope="module")
-def setup_db():
-    Base.metadata.create_all(bind=engine)
-    yield
-    Base.metadata.drop_all(bind=engine)
-    if os.path.exists("./test_jobs.db"):
-        os.remove("./test_jobs.db")
-
-
-@pytest.fixture
-def db_session(setup_db):
-    session = TestingSessionLocal()
-    try:
-        yield session
-    finally:
-        session.close()
+# The worker runs in a thread, which is why this module used a file-based
+# SQLite rather than :memory:. The shared Postgres fixture handles concurrent
+# connections natively, so both the file and the module-scoped schema setup are
+# gone; db_session comes from conftest.
 
 
 # Override dependency so the API endpoints use the test session.
