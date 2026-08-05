@@ -118,6 +118,20 @@ echo "[$(date -Iseconds)] Backup complete: ${DUMP_FILE} (${FILESIZE}), gzip veri
 # leave only whichever dump this run just wrote.
 MIN_KEEP="${MIN_KEEP:-3}"
 
+# Labelled dumps are deliberate, but not immortal -- an earlier version of this
+# policy exempted them entirely and the directory ended up with four copies of
+# ONE schema revision, kept forever because each had a nice name. A dump's
+# restore value decays as the schema moves past it: recovering to a revision
+# 26 days and several migrations back means replaying all of them onto data
+# that old, which nobody chooses outside a catastrophe.
+#
+# 90 days, with a floor of 2, so the horizon is long enough to cover "what did
+# this look like before that release" while still bounded. Prune further by hand
+# when several labelled dumps share a revision; the script cannot tell which
+# label matters.
+MILESTONE_RETENTION_DAYS="${MILESTONE_RETENTION_DAYS:-90}"
+MILESTONE_MIN_KEEP="${MILESTONE_MIN_KEEP:-2}"
+
 is_routine() {
     # knightmind_20260806_000531.sql.gz  (this script)
     # knightmind-db-20260805T144157+0200.dump  (legacy hand-taken -Fc)
@@ -130,19 +144,32 @@ is_routine() {
     esac
 }
 
-# Newest first, so the MIN_KEEP floor keeps the most recent rather than whatever
-# the directory order happened to be.
+# Newest first, so each floor keeps the most recent rather than whatever the
+# directory order happened to be. The two classes are counted independently:
+# a burst of routine dumps must not push labelled ones past their floor.
 DELETED=0
-INDEX=0
+MILESTONES_DELETED=0
+ROUTINE_INDEX=0
+LABELLED_INDEX=0
 while IFS= read -r dump; do
     [ -n "${dump}" ] || continue
-    is_routine "${dump}" || continue
-    INDEX=$((INDEX + 1))
-    [ "${INDEX}" -le "${MIN_KEEP}" ] && continue
+    if is_routine "${dump}"; then
+        ROUTINE_INDEX=$((ROUTINE_INDEX + 1))
+        [ "${ROUTINE_INDEX}" -le "${MIN_KEEP}" ] && continue
+        keep_days="${RETENTION_DAYS}"
+    else
+        LABELLED_INDEX=$((LABELLED_INDEX + 1))
+        [ "${LABELLED_INDEX}" -le "${MILESTONE_MIN_KEEP}" ] && continue
+        keep_days="${MILESTONE_RETENTION_DAYS}"
+    fi
     # -mtime +N is "strictly older than N days", matching the documented rule.
-    if [ -n "$(find "${dump}" -maxdepth 0 -mtime +"${RETENTION_DAYS}" -print 2>/dev/null)" ]; then
+    if [ -n "$(find "${dump}" -maxdepth 0 -mtime +"${keep_days}" -print 2>/dev/null)" ]; then
         rm -f "${dump}"
-        DELETED=$((DELETED + 1))
+        if is_routine "${dump}"; then
+            DELETED=$((DELETED + 1))
+        else
+            MILESTONES_DELETED=$((MILESTONES_DELETED + 1))
+        fi
     fi
 done <<EOF
 $(find "${BACKUP_DIR}" -maxdepth 1 -type f \( -name '*.dump' -o -name '*.sql.gz' \) -printf '%T@ %p\n' 2>/dev/null | sort -rn | cut -d' ' -f2-)
@@ -150,6 +177,9 @@ EOF
 
 if [ "${DELETED}" -gt 0 ]; then
     echo "[$(date -Iseconds)] Pruned ${DELETED} routine backup(s) older than ${RETENTION_DAYS} days (keeping the newest ${MIN_KEEP})."
+fi
+if [ "${MILESTONES_DELETED}" -gt 0 ]; then
+    echo "[$(date -Iseconds)] Pruned ${MILESTONES_DELETED} labelled backup(s) older than ${MILESTONE_RETENTION_DAYS} days (keeping the newest ${MILESTONE_MIN_KEEP})."
 fi
 
 # Then drop any .sha256 whose dump is gone, plus the legacy .meta.txt sidecars.

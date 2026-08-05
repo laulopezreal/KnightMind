@@ -1,5 +1,5 @@
 ---
-last_edited_at: 2026-08-06T00:33:40+02:00
+last_edited_at: 2026-08-06T00:43:15+02:00
 ---
 # KnightMind Operations
 
@@ -162,7 +162,29 @@ Backups live in **`/home/lauureal/backups/knightmind/`** and nowhere else. Take 
 cd /home/lauureal/apps/knightmind && ./deploy/postgres-backup.sh
 ```
 
-That is the only sanctioned mechanism. It writes `knightmind_<YYYYMMDD>_<HHMMSS>.sql.gz` plus a matching `.sha256`, verifies the gzip stream before reporting success, and prunes dumps older than `RETENTION_DAYS` (default 14) along with any orphaned checksums.
+That is the only sanctioned mechanism. It writes `knightmind_<YYYYMMDD>_<HHMMSS>.sql.gz` plus a matching `.sha256`, verifies the gzip stream before reporting success, and applies the retention policy below.
+
+### Retention
+
+Two classes, distinguished by filename, each with an age limit and a floor:
+
+| class | shape | kept | floor |
+| --- | --- | --- | --- |
+| routine | `knightmind_<date>_<time>.sql.gz`, `knightmind-db-<ISO>.dump` | `RETENTION_DAYS`, default 14 | `MIN_KEEP`, default 3 |
+| labelled | a word between prefix and timestamp, e.g. `knightmind-pre-release-pr343-...` | `MILESTONE_RETENTION_DAYS`, default 90 | `MILESTONE_MIN_KEEP`, default 2 |
+
+The floors matter because backups here are manual: without them a quiet fortnight ages out every routine copy and leaves only whatever the current run just wrote. The two classes are counted independently, so a burst of routine dumps cannot push labelled ones past their floor.
+
+**Label a dump when you take it before something risky**, and say what it precedes — `pre-release-pr343`, `pre-strip-flag`, `pre-hardening`. That is what buys it the longer horizon. Rename an existing dump to promote it, and rewrite its `.sha256` to match: the checksum records a bare filename, so a rename without it makes `sha256sum -c` fail on an intact file.
+
+**Labelled does not mean immortal.** Until 2026-08-06 they were exempt entirely, and the directory accumulated four dumps of a single schema revision, each kept forever because it had a nice name. A dump's restore value decays as the schema moves past it: recovering to a revision several migrations back means replaying all of them onto data that old. When several labelled dumps share a revision, prune by hand — the script cannot tell which label matters.
+
+To see what a dump would restore to:
+
+```bash
+zcat BACKUP.sql.gz | grep -A1 'COPY public.alembic_version' | sed -n 2p   # plain SQL
+pg_restore -f - < BACKUP.dump | grep -A1 'COPY public.alembic_version' | sed -n 2p   # -Fc
+```
 
 There is **no cron entry and no systemd timer**, so a backup exists only when someone runs this. Do not add a second mechanism: until 2026-08-06 this section documented an inline `pg_dump -Fc` instead of the script, so the directory accumulated two formats that need two different restore commands and only one of which was pruned.
 
@@ -214,7 +236,7 @@ Applied on 2026-07-20 after taking and verifying the backup above:
 - API and DB are healthy after recreation; public `https://api.guessme.world/ops/ping` returns `200 {"status":"pong"}`.
 - Multi-user auth remains intentionally disabled until Lau provisions the account and flips `KNIGHTMIND_REQUIRE_AUTH=true` in `.env.docker`.
 
-Applied on 2026-08-05, after taking backup `knightmind-db-20260805T103703+0200.dump`:
+Applied on 2026-08-05, after taking backup `knightmind-pre-strip-flag-20260805T103703+0200.dump`:
 
 - **`KNIGHTMIND_STRIP_PUZZLE_SOLUTIONS=1` is now set** in `.env.docker`. Before this,
   the flag defaulted OFF and `/puzzles/due` shipped `best_move_uci`,
