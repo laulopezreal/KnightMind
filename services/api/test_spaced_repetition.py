@@ -949,6 +949,9 @@ def test_the_two_caps_compose_and_neither_orders_alone(db_session):
     for i, (pid, game) in enumerate(
         [("p1", "gameA"), ("p2", "gameB"), ("p3", "gameA"), ("p4", "gameC")]
     ):
+        # puzzles(source_game_id, username) is a real composite FK, so the game
+        # has to exist before the puzzle that names it.
+        ensure_game(db_session, game, "u")
         db_session.add(
             Puzzle(
                 id=pid,
