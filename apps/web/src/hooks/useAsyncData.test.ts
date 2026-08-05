@@ -187,19 +187,45 @@ describe('useAsyncData', () => {
         expect(signals[1].aborted).toBe(false);
     });
 
-    it('does not write state after unmount', async () => {
-        // The deferred-effect-outliving-its-state shape from PR #286: the fetch
-        // resolves after the component is gone.
+    it('aborts the in-flight request on unmount', async () => {
+        // This replaces a test that asserted "no console.error after unmount".
+        // React 18 removed the setState-after-unmount warning, so that assertion
+        // passed even with the staleness guard deleted entirely -- it could not
+        // fail. Aborting the signal is the property that is actually observable.
+        let captured: AbortSignal | undefined;
         const pending = deferred<string>();
-        const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => { });
+        const { unmount } = renderHook(() =>
+            useAsyncData((signal) => {
+                captured = signal;
+                return pending.promise;
+            }, []),
+        );
 
-        const { unmount } = renderHook(() => useAsyncData(() => pending.promise, []));
+        await waitFor(() => expect(captured).toBeDefined());
+        expect(captured!.aborted).toBe(false);
         unmount();
+        expect(captured!.aborted).toBe(true);
+    });
+
+    it('discards an in-flight result when `enabled` flips to false', async () => {
+        // Disabling begins no new request, so isStale() stays false unless the
+        // hook explicitly invalidates. Without that, a user disconnecting their
+        // account mid-load gets the old username's data rendered as their own.
+        const pending = deferred<string>();
+        const fetcher = vi.fn(() => pending.promise);
+        const { result, rerender } = renderHook(
+            ({ on }) => useAsyncData(fetcher, ['user'], { enabled: on }),
+            { initialProps: { on: true } },
+        );
+        await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1));
+
+        rerender({ on: false });
         await act(async () => {
-            pending.resolve('late');
+            pending.resolve('data-for-a-disconnected-account');
         });
 
-        expect(errorSpy).not.toHaveBeenCalled();
-        errorSpy.mockRestore();
+        expect(result.current.data).toBeNull();
+        expect(result.current.loading).toBe(false);
     });
+
 });

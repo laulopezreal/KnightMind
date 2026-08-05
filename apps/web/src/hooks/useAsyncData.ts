@@ -48,6 +48,11 @@ export interface UseAsyncDataOptions {
  * fetcher itself a dependency would either force every caller to wrap it in
  * useCallback or spin forever, and the second failure mode is silent until it
  * saturates the API.
+ *
+ * `deps` must be a fixed length across renders, the same rule React applies to
+ * any dependency array -- it is spread into this hook's own. A varying length
+ * happens to refetch rather than throw on the current React, but that is not a
+ * contract to lean on.
  */
 export function useAsyncData<T>(
     fetcher: (signal: AbortSignal) => Promise<T>,
@@ -75,6 +80,13 @@ export function useAsyncData<T>(
 
     useEffect(() => {
         if (!enabled) {
+            // Bump the generation so anything already in flight counts as
+            // superseded. Without this, becoming disabled does not invalidate the
+            // running request -- isStale() only turns true when a NEWER request
+            // begins, and disabling begins none. A user disconnecting their
+            // account mid-load would then have the old username's response land
+            // and render as though it were still theirs.
+            request.begin();
             // Settle rather than hang: a page with no username should render its
             // empty state, not a spinner forever.
             setLoading(false);
