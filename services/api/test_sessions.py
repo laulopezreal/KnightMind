@@ -42,11 +42,10 @@ def db_session():
         session.close()
 
 
-@pytest.mark.asyncio
-async def test_start_session(db_session):
+def test_start_session(db_session):
     """Test starting a new training session."""
     request = StartSessionRequest(username="testuser", n=5)
-    response = await start_session(request, db_session)
+    response = start_session(request, db_session)
 
     assert response.session_id is not None
     assert response.requested_n == 5
@@ -157,8 +156,7 @@ async def test_complete_session_wrong_user(db_session):
     assert exc_info.value.status_code == 403
 
 
-@pytest.mark.asyncio
-async def test_get_recent_sessions(db_session):
+def test_get_recent_sessions(db_session):
     """Test getting recent sessions."""
     # Create multiple sessions
     now = datetime.now(timezone.utc)
@@ -176,7 +174,7 @@ async def test_get_recent_sessions(db_session):
     db_session.commit()
 
     # Get recent sessions (default limit 10)
-    sessions = await get_recent_sessions("testuser", 10, db_session)
+    sessions = get_recent_sessions("testuser", 10, db_session)
 
     assert len(sessions) == 10
     # Should be ordered by created_at desc (newest first)
@@ -184,8 +182,7 @@ async def test_get_recent_sessions(db_session):
     assert sessions[9].pass_count == 9
 
 
-@pytest.mark.asyncio
-async def test_get_recent_sessions_max_limit(db_session):
+def test_get_recent_sessions_max_limit(db_session):
     """Test that limit is capped at 50."""
     # Create 60 sessions
     for _ in range(60):
@@ -196,7 +193,7 @@ async def test_get_recent_sessions_max_limit(db_session):
     db_session.commit()
 
     # Request 100, should get max 50
-    sessions = await get_recent_sessions("testuser", 100, db_session)
+    sessions = get_recent_sessions("testuser", 100, db_session)
 
     assert len(sessions) == 50
 
@@ -249,14 +246,13 @@ def test_review_without_session_backward_compatible(db_session):
     assert review.result == "pass"
 
 
-@pytest.mark.asyncio
-async def test_get_session(db_session):
+def test_get_session(db_session):
     """Test getting a session by ID."""
     request = StartSessionRequest(username="testuser", n=5)
-    start_response = await start_session(request, db_session)
+    start_response = start_session(request, db_session)
     session_id = start_response.session_id
 
-    session = await get_session(session_id, db_session)
+    session = get_session(session_id, db_session)
 
     assert session.session_id == session_id
     assert session.requested_n == 5
@@ -266,19 +262,17 @@ async def test_get_session(db_session):
     assert session.fail_count == 0
 
 
-@pytest.mark.asyncio
-async def test_get_session_not_found(db_session):
+def test_get_session_not_found(db_session):
     """Test getting a non-existent session."""
     from fastapi import HTTPException
 
     with pytest.raises(HTTPException) as exc_info:
-        await get_session("nonexistent", db_session)
+        get_session("nonexistent", db_session)
 
     assert exc_info.value.status_code == 404
 
 
-@pytest.mark.asyncio
-async def test_use_hint_increments_counter(db_session):
+def test_use_hint_increments_counter(db_session):
     """Test using a hint increments hint counter."""
     session_id = str(uuid.uuid4())
     session = TrainingSession(id=session_id, username="testuser", requested_n=5)
@@ -286,13 +280,12 @@ async def test_use_hint_increments_counter(db_session):
     db_session.commit()
 
     request = UseHintRequest(username="testuser")
-    response = await use_hint(session_id, request, db_session)
+    response = use_hint(session_id, request, db_session)
 
     assert response.hints_used == 1
 
 
-@pytest.mark.asyncio
-async def test_use_hint_wrong_user(db_session):
+def test_use_hint_wrong_user(db_session):
     """Test using a hint with the wrong user."""
     from fastapi import HTTPException
 
@@ -303,13 +296,12 @@ async def test_use_hint_wrong_user(db_session):
 
     request = UseHintRequest(username="intruder")
     with pytest.raises(HTTPException) as exc_info:
-        await use_hint(session_id, request, db_session)
+        use_hint(session_id, request, db_session)
 
     assert exc_info.value.status_code == 403
 
 
-@pytest.mark.asyncio
-async def test_use_hint_completed_session(db_session):
+def test_use_hint_completed_session(db_session):
     """Test using a hint on a completed session fails."""
     from fastapi import HTTPException
 
@@ -325,13 +317,12 @@ async def test_use_hint_completed_session(db_session):
 
     request = UseHintRequest(username="testuser")
     with pytest.raises(HTTPException) as exc_info:
-        await use_hint(session_id, request, db_session)
+        use_hint(session_id, request, db_session)
 
     assert exc_info.value.status_code == 400
 
 
-@pytest.mark.asyncio
-async def test_session_reports_the_focus_it_was_started_with(db_session):
+def test_session_reports_the_focus_it_was_started_with(db_session):
     """A resumed session must be orderable the way it was served.
 
     The client re-fetches its puzzles on resume and restores the user's place
@@ -346,26 +337,22 @@ async def test_session_reports_the_focus_it_was_started_with(db_session):
         n=5,
         session_data={"focus_cause": "loose_piece_awareness"},
     )
-    started = await start_session(request, db_session)
+    started = start_session(request, db_session)
 
-    summary = await get_session(started.session_id, db_session)
+    summary = get_session(started.session_id, db_session)
     assert summary.focus_cause == "loose_piece_awareness"
 
 
-@pytest.mark.asyncio
-async def test_an_unfocused_session_reports_no_focus(db_session):
-    started = await start_session(
-        StartSessionRequest(username="testuser", n=5), db_session
-    )
-    summary = await get_session(started.session_id, db_session)
+def test_an_unfocused_session_reports_no_focus(db_session):
+    started = start_session(StartSessionRequest(username="testuser", n=5), db_session)
+    summary = get_session(started.session_id, db_session)
     assert summary.focus_cause is None
 
 
-@pytest.mark.asyncio
-async def test_focus_does_not_disturb_other_session_data(db_session):
+def test_focus_does_not_disturb_other_session_data(db_session):
     # session_data is shared with the warm-up flag; one key must not clobber
     # the other.
-    started = await start_session(
+    started = start_session(
         StartSessionRequest(
             username="testuser",
             n=5,
@@ -373,7 +360,7 @@ async def test_focus_does_not_disturb_other_session_data(db_session):
         ),
         db_session,
     )
-    summary = await get_session(started.session_id, db_session)
+    summary = get_session(started.session_id, db_session)
     assert summary.focus_cause == "king_safety_blindness"
 
     stmt = select(TrainingSession).where(TrainingSession.id == started.session_id)
@@ -381,8 +368,7 @@ async def test_focus_does_not_disturb_other_session_data(db_session):
     assert stored.session_data["is_warmup"] is True
 
 
-@pytest.mark.asyncio
-async def test_session_reports_the_motif_it_was_started_with(db_session):
+def test_session_reports_the_motif_it_was_started_with(db_session):
     """A motif-filtered session must be re-servable as it was served.
 
     Same failure as the focus (see above), but worse: motif *filters* the
@@ -391,7 +377,7 @@ async def test_session_reports_the_motif_it_was_started_with(db_session):
     already did — a second genuine review, which advances that puzzle's
     interval twice.
     """
-    started = await start_session(
+    started = start_session(
         StartSessionRequest(
             username="testuser",
             n=5,
@@ -400,24 +386,20 @@ async def test_session_reports_the_motif_it_was_started_with(db_session):
         db_session,
     )
 
-    summary = await get_session(started.session_id, db_session)
+    summary = get_session(started.session_id, db_session)
     assert summary.motif == "fork"
 
 
-@pytest.mark.asyncio
-async def test_an_unfiltered_session_reports_no_motif(db_session):
-    started = await start_session(
-        StartSessionRequest(username="testuser", n=5), db_session
-    )
-    summary = await get_session(started.session_id, db_session)
+def test_an_unfiltered_session_reports_no_motif(db_session):
+    started = start_session(StartSessionRequest(username="testuser", n=5), db_session)
+    summary = get_session(started.session_id, db_session)
     assert summary.motif is None
 
 
-@pytest.mark.asyncio
-async def test_motif_does_not_disturb_other_session_data(db_session):
+def test_motif_does_not_disturb_other_session_data(db_session):
     # session_data now carries three independent keys; none may clobber
     # another.
-    started = await start_session(
+    started = start_session(
         StartSessionRequest(
             username="testuser",
             n=5,
@@ -429,7 +411,7 @@ async def test_motif_does_not_disturb_other_session_data(db_session):
         ),
         db_session,
     )
-    summary = await get_session(started.session_id, db_session)
+    summary = get_session(started.session_id, db_session)
     assert summary.motif == "pin"
     assert summary.focus_cause == "king_safety_blindness"
 
@@ -442,12 +424,12 @@ async def test_motif_does_not_disturb_other_session_data(db_session):
 async def test_motif_survives_hint_and_completion_summaries(db_session):
     # Every SessionSummary the client sees must carry the motif — the resume
     # path reads whichever one it happens to hold.
-    started = await start_session(
+    started = start_session(
         StartSessionRequest(username="testuser", n=5, session_data={"motif": "skewer"}),
         db_session,
     )
 
-    hinted = await use_hint(
+    hinted = use_hint(
         started.session_id, UseHintRequest(username="testuser"), db_session
     )
     assert hinted.motif == "skewer"

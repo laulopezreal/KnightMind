@@ -202,10 +202,11 @@ async def lifespan(app: FastAPI):
 
     await anyio.to_thread.run_sync(_run_backfill)
 
-    # Build the ECO table off the request path. /openings is an `async def`
-    # handler, so FastAPI runs it on the event loop rather than the threadpool,
-    # and the image runs a single worker — left lazy, the first request after a
-    # deploy stalls every other in-flight request behind ~370ms of replay.
+    # Build the ECO table off the request path. /openings now runs on the
+    # threadpool, so a lazy build would no longer stall unrelated requests —
+    # but it would still make whichever user arrives first after a deploy wait
+    # ~370ms of python-chess replay, and several concurrent first-requests
+    # would each pay it (lru_cache dedupes the result, not the work).
     await anyio.to_thread.run_sync(warm_eco)
 
     # Start session cleanup background task if not disabled
@@ -284,7 +285,7 @@ class UserStatusResponse(BaseModel):
 
 
 @app.get("/users", dependencies=[Depends(require_operator)])
-async def get_users(db: Session = Depends(get_db)):
+def get_users(db: Session = Depends(get_db)):
     """Get list of all users who have imported games.
 
     Operator-only (enumerates every account) — gated to the tailnet. The public
@@ -296,7 +297,7 @@ async def get_users(db: Session = Depends(get_db)):
 
 
 @app.get("/users/{username}/status", response_model=UserStatusResponse)
-async def get_user_status(
+def get_user_status(
     username: Username,
     db: Session = Depends(get_db),
     account: Account | None = Depends(require_account),
@@ -347,7 +348,7 @@ async def get_user_status(
 @app.get(
     "/users/{username}/motifs/performance", response_model=MotifPerformanceResponse
 )
-async def get_motif_performance(
+def get_motif_performance(
     username: Username,
     db: Session = Depends(get_db),
     account: Account | None = Depends(require_account),
@@ -508,7 +509,7 @@ async def import_chesscom_games(
 
 
 @app.get("/import/status", response_model=ImportStatusResponse)
-async def get_import_status(
+def get_import_status(
     username: Username,
     db: Session = Depends(get_db),
     account: Account | None = Depends(require_account),
@@ -750,7 +751,7 @@ async def root():
 
 
 @app.get("/openings")
-async def get_openings(
+def get_openings(
     username: Annotated[
         Username, Query(description="Username to build opening tree for")
     ],
@@ -1018,8 +1019,13 @@ async def get_opening_baseline(
 
 
 @app.get("/engine/status", response_model=EngineStatusResponse)
-async def get_engine_status():
-    """Check if the Stockfish engine is available."""
+def get_engine_status():
+    """Check if the Stockfish engine is available.
+
+    Sync on purpose: is_engine_available() spawns a Stockfish subprocess and
+    does a round of IPC before tearing it down. On the event loop that stalled
+    every other in-flight request for the life of the probe.
+    """
     available, message = is_engine_available()
     return EngineStatusResponse(available=available, message=message)
 
@@ -1093,7 +1099,7 @@ async def evaluate_fen(
         )
     ],
 )
-async def generate_puzzles_endpoint(
+def generate_puzzles_endpoint(
     username: Annotated[
         Username,
         Query(max_length=64, description="Username to generate puzzles for"),
@@ -1201,7 +1207,7 @@ def _next_manual_ply(db: Session, username_lower: str) -> int:
 
 
 @app.post("/puzzles/manual", response_model=ManualPuzzleResponse)
-async def create_manual_puzzle(
+def create_manual_puzzle(
     request: ManualPuzzleRequest,
     db: Session = Depends(get_db),
     account: Account | None = Depends(require_account),
@@ -1375,7 +1381,7 @@ async def create_manual_puzzle(
 
 
 @app.get("/jobs/{job_id}", response_model=JobStatusResponse)
-async def get_job_status(
+def get_job_status(
     job_id: str,
     db: Session = Depends(get_db),
     account: Account | None = Depends(require_account),
@@ -1401,7 +1407,7 @@ async def get_job_status(
 
 
 @app.post("/jobs/{job_id}/cancel", response_model=JobStatusResponse)
-async def cancel_job(
+def cancel_job(
     job_id: str,
     db: Session = Depends(get_db),
     account: Account | None = Depends(require_account),
@@ -1437,7 +1443,7 @@ async def cancel_job(
 
 
 @app.post("/daily-puzzle-sessions", response_model=DailyPuzzlesResponse)
-async def create_daily_puzzle_session(
+def create_daily_puzzle_session(
     request: DailyPuzzleSessionRequest,
     db: Session = Depends(get_db),
     account: Account | None = Depends(require_account),
@@ -1545,7 +1551,7 @@ def _queue_reason(stats, in_focus: bool, focus_name: str | None, now: datetime) 
 
 
 @app.get("/puzzles/due", response_model=DuePuzzlesResponse)
-async def get_due_puzzles_endpoint(
+def get_due_puzzles_endpoint(
     username: Annotated[Username, Query(description="Username to get puzzles for")],
     n: int = Query(5, ge=1, le=20, description="Number of puzzles to return"),
     session_type: str = Query(
@@ -1955,7 +1961,7 @@ def _check_solution_move(
 
 
 @app.get("/puzzles/list", response_model=PuzzleListResponse)
-async def list_puzzles(
+def list_puzzles(
     username: Annotated[Username, Query(description="Username to list puzzles for")],
     q: str = Query(None, description="Search by title or puzzle ID"),
     status: str = Query(None, description="Filter: new, due, learning, mastered"),
@@ -2285,7 +2291,7 @@ async def list_puzzles(
 
 
 @app.get("/puzzles/{puzzle_id}", response_model=PuzzleListItem)
-async def get_puzzle_detail(
+def get_puzzle_detail(
     puzzle_id: str,
     username: Annotated[Username, Query(description="Username to look up puzzle for")],
     reveal: bool = Query(
@@ -2481,7 +2487,7 @@ def _diagnosis_response(
 
 
 @app.get("/puzzles/{puzzle_id}/diagnosis", response_model=DiagnosisResponse)
-async def get_puzzle_diagnosis(
+def get_puzzle_diagnosis(
     puzzle_id: str,
     username: Annotated[Username, Query(description="Username the puzzle belongs to")],
     reveal: bool = Query(
@@ -2625,7 +2631,7 @@ class SimilarPuzzlesResponse(BaseModel):
 
 
 @app.get("/puzzles/{puzzle_id}/similar", response_model=SimilarPuzzlesResponse)
-async def get_similar_puzzles(
+def get_similar_puzzles(
     puzzle_id: str,
     username: Annotated[Username, Query(description="Owner of the puzzle")],
     n: int = Query(5, ge=1, le=20, description="How many siblings to return"),
@@ -2724,7 +2730,7 @@ async def get_similar_puzzles(
 
 
 @app.get("/users/{username}/mistake-patterns", response_model=MistakePatternsResponse)
-async def get_mistake_patterns(
+def get_mistake_patterns(
     username: Username,
     db: Session = Depends(get_db),
     account: Account | None = Depends(require_account),
@@ -2811,7 +2817,7 @@ class TodaysFocusResponse(BaseModel):
 
 
 @app.get("/users/{username}/todays-focus", response_model=TodaysFocusResponse)
-async def get_todays_focus(
+def get_todays_focus(
     username: Username,
     db: Session = Depends(get_db),
     account: Account | None = Depends(require_account),
@@ -2887,7 +2893,7 @@ MIN_PUZZLES_FOR_LINE_PRACTICE = 3
 
 
 @app.get("/users/{username}/opening-practice", response_model=OpeningPracticeResponse)
-async def get_opening_practice(
+def get_opening_practice(
     username: Username,
     opening_name: str = Query(
         ..., description="Full opening name from the explorer tree node"
@@ -2920,7 +2926,7 @@ async def get_opening_practice(
 
 
 @app.get("/users/{username}/mistake-causes", response_model=MistakeCausesResponse)
-async def get_mistake_causes(
+def get_mistake_causes(
     username: Username,
     db: Session = Depends(get_db),
     account: Account | None = Depends(require_account),
@@ -2964,7 +2970,7 @@ async def get_mistake_causes(
 
 
 @app.get("/users/{username}/diagnosis/pending", response_model=PendingDiagnosisResponse)
-async def get_pending_diagnoses(
+def get_pending_diagnoses(
     username: Username,
     db: Session = Depends(get_db),
     account: Account | None = Depends(require_account),
@@ -2984,7 +2990,7 @@ async def get_pending_diagnoses(
     response_model=JobStatusResponse,
     dependencies=[Depends(rate_limit("diagnose", default_limit=RATE_LIMIT_DIAGNOSE))],
 )
-async def diagnose_puzzles_endpoint(
+def diagnose_puzzles_endpoint(
     username: Username,
     limit: int = Query(
         DIAGNOSIS_BATCH_DEFAULT,
@@ -3060,7 +3066,7 @@ async def diagnose_puzzles_endpoint(
 
 
 @app.post("/puzzles/{puzzle_id}/diagnosis/confirm", response_model=DiagnosisResponse)
-async def confirm_puzzle_diagnosis(
+def confirm_puzzle_diagnosis(
     puzzle_id: str,
     payload: DiagnosisConfirmRequest,
     username: Annotated[Username, Query(description="Username the puzzle belongs to")],
@@ -3161,7 +3167,7 @@ def _build_review_response(
 
 
 @app.post("/puzzles/{puzzle_id}/review")
-async def review_puzzle(
+def review_puzzle(
     puzzle_id: str,
     request: ReviewRequest,
     db: Session = Depends(get_db),
@@ -3354,7 +3360,7 @@ async def review_puzzle(
 
 
 @app.post("/puzzles/{puzzle_id}/check", response_model=CheckResponse)
-async def check_puzzle(
+def check_puzzle(
     puzzle_id: str,
     request: CheckRequest,
     db: Session = Depends(get_db),
@@ -3381,7 +3387,7 @@ async def check_puzzle(
 
 
 @app.post("/puzzles/{puzzle_id}/reveal", response_model=RevealResponse)
-async def reveal_puzzle(
+def reveal_puzzle(
     puzzle_id: str,
     request: RevealRequest,
     db: Session = Depends(get_db),
@@ -3530,7 +3536,7 @@ class SnapshotHistoryItem(BaseModel):
 
 
 @app.get("/ratings/history", response_model=list[SnapshotHistoryItem])
-async def get_rating_history(
+def get_rating_history(
     username: Username,
     time_control: str = "rapid",
     limit: int = Query(50, ge=1, le=200),
