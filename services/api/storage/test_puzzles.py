@@ -396,3 +396,53 @@ def test_puzzle_repository_username_case_insensitive(repository):
 def test_validate_puzzle_data_missing_fields():
     errors = validate_puzzle_data({"id": "p1"})
     assert any(error.startswith("missing_fields") for error in errors)
+
+
+def test_get_all_puzzles_is_deterministic_and_oldest_first(repository, db_session):
+    """The candidate order is the session order, so it has to be defined.
+
+    Every new puzzle produces an identical sort key in get_adaptive_puzzles, and
+    Python's sort is stable — so whatever order this returns is the order the
+    user trains in. Without an ORDER BY that was Postgres heap order: free to
+    change after an UPDATE or VACUUM, and grouped by import batch.
+    """
+    from datetime import datetime, timezone
+
+    from services.api.models import Puzzle as PuzzleModel
+
+    _add_game(db_session, "gameA")
+    _add_game(db_session, "gameB")
+
+    # Deliberately inserted newest-first, and with two sharing a timestamp so
+    # the id tiebreak is actually exercised rather than incidentally satisfied.
+    stamp = datetime(2026, 1, 2, tzinfo=timezone.utc)
+    older = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    for pid, game, created in (
+        ("p-newer-b", "gameB", stamp),
+        ("p-newer-a", "gameA", stamp),
+        ("p-oldest", "gameA", older),
+    ):
+        db_session.add(
+            PuzzleModel(
+                id=pid,
+                username="testuser",
+                source_game_id=game,
+                ply=len(pid),
+                fen="fen",
+                side_to_move="white",
+                played_move_uci="e2e4",
+                best_move_uci="d2d4",
+                eval_before=0.5,
+                eval_after=-1.5,
+                swing=2.0,
+                created_at=created,
+            )
+        )
+    db_session.commit()
+
+    ids = [p.id for p in repository.get_all_puzzles("testuser")]
+
+    assert ids == ["p-oldest", "p-newer-a", "p-newer-b"]
+    # Repeating the call must not reshuffle: an unstable candidate order makes
+    # a session unreproducible even with no data change.
+    assert [p.id for p in repository.get_all_puzzles("testuser")] == ids

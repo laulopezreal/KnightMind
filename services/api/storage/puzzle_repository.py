@@ -184,8 +184,32 @@ class PuzzleRepository:
         return None
 
     def get_all_puzzles(self, username: str) -> list[Puzzle]:
+        """Every puzzle this user owns, in a defined order.
+
+        The ordering is load-bearing, which is easy to miss because nothing
+        here reads it. This is the candidate list feeding ``/puzzles/due``, and
+        in ``get_adaptive_puzzles`` every *new* puzzle produces an identical
+        sort key — same tier, and ``time_factor`` is the single ``now`` value
+        computed once for the whole call. Python's sort is stable, so for the
+        new tier (the overwhelming majority of a fresh corpus) the session order
+        is exactly this query's output order.
+
+        Without an ORDER BY that was Postgres heap order: unspecified by the
+        standard, free to change after an UPDATE or a VACUUM, and in practice
+        grouped by import batch — so a session drew several puzzles from the
+        same game in a row, and two identical requests could legitimately
+        return different puzzles.
+
+        ``created_at`` then ``id`` gives oldest-first with a total order:
+        ``created_at`` alone is not unique, since one generation run stamps a
+        whole batch, and ties would fall back to heap order again.
+        """
         username_lower = username.lower()
-        stmt = select(PuzzleModel).where(PuzzleModel.username == username_lower)
+        stmt = (
+            select(PuzzleModel)
+            .where(PuzzleModel.username == username_lower)
+            .order_by(PuzzleModel.created_at, PuzzleModel.id)
+        )
         puzzles = self.db.scalars(stmt).all()
         return [self._to_puzzle(puzzle) for puzzle in puzzles]
 
