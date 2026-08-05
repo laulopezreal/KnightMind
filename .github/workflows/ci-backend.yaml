@@ -25,31 +25,38 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.11"]
+        # 3.13 only, because that is what the production image runs (see
+        # Dockerfile). This job used to test 3.11 exclusively -- a version
+        # nothing deploys and no developer here uses, while production's own
+        # interpreter went unverified. NB pyproject still declares
+        # requires-python = ">=3.11"; that floor is now unverified, and should
+        # either be raised to match or re-added to this matrix deliberately.
+        python-version: ["3.13"]
 
     steps:
     - uses: actions/checkout@v5
 
-    - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v6
+    - name: Install uv
+      uses: astral-sh/setup-uv@v5
       with:
-        python-version: ${{ matrix.python-version }}
-        cache: 'pip'
+        enable-cache: true
 
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -e ".[dev]"
+    # `pip install -e ".[dev]"` re-resolved every dependency on every run while
+    # uv.lock sat in the repo unused, so CI tested versions no developer had.
+    # It resolved FastAPI 0.141 against a lock pinning 0.128 -- and those two
+    # expose sub-routers differently. --locked fails if the lock has drifted
+    # from pyproject.toml rather than quietly resolving around it.
+    - name: Install locked dependencies
+      run: uv sync --locked --extra dev --python ${{ matrix.python-version }}
 
     - name: Lint
       run: |
-        ruff check .
-        black --check .
+        uv run ruff check .
+        uv run black --check .
 
     - name: Run Tests
       working-directory: ./services/api
-      run: |
-        pytest
+      run: uv run pytest
 
   # Targeted Postgres integration job: proves the migration chain applies on a
   # real Postgres from zero and runs the PG-only concurrency/migration tests
@@ -84,21 +91,21 @@ jobs:
     steps:
     - uses: actions/checkout@v5
 
-    - name: Set up Python
-      uses: actions/setup-python@v6
+    - name: Install uv
+      uses: astral-sh/setup-uv@v5
       with:
-        python-version: "3.11"
-        cache: 'pip'
+        enable-cache: true
 
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -e ".[dev]"
+    # 3.13 to match the production image: this job is the one that touches a
+    # real Postgres and the migration chain, so it should run the interpreter
+    # production runs.
+    - name: Install locked dependencies
+      run: uv sync --locked --extra dev --python 3.13
 
     - name: Apply migrations on Postgres (from zero)
       working-directory: ./services/api
       run: |
-        alembic upgrade head
+        uv run alembic upgrade head
 
     # Guards the gap between the two schema sources of truth: the tests build
     # their schema with Base.metadata.create_all(), production applies the
@@ -107,9 +114,9 @@ jobs:
     - name: Check models and migrations agree
       working-directory: ./services/api
       run: |
-        alembic check
+        uv run alembic check
 
     - name: Run Postgres integration tests
       working-directory: ./services/api
       run: |
-        pytest -m postgres -v
+        uv run pytest -m postgres -v
