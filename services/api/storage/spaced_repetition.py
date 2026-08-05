@@ -281,8 +281,13 @@ def get_adaptive_puzzles(
     focus = focus_puzzle_ids or set()
 
     # Query stats for the given puzzle IDs
+    # Folded, matching _source_games and get_all_puzzles. Inert today because
+    # Username canonicalises at the request boundary, but the failure mode is
+    # silent and severe: an empty all_stats collapses every puzzle to the
+    # never-seen tier and serves due puzzles as new.
     stmt = select(PuzzleStats).where(
-        PuzzleStats.username == username, PuzzleStats.puzzle_id.in_(puzzle_ids)
+        PuzzleStats.username == username.lower(),
+        PuzzleStats.puzzle_id.in_(puzzle_ids),
     )
     all_stats = {s.puzzle_id: s for s in db.scalars(stmt).all()}
 
@@ -331,6 +336,14 @@ def get_adaptive_puzzles(
 
     sorted_pids = sorted(puzzle_ids, key=sort_key)
 
+    # Counters reset per tier, so one game may contribute at most one puzzle
+    # PER TIER — up to two in a session that spans tiers. Sharing them globally
+    # would be tighter, but it is also the direction that risks starving a tier:
+    # once the due tier consumes its games, every new puzzle from those games
+    # would defer. Per-tier is the more permissive and therefore safer default,
+    # and tightening it is a behaviour change that deserves its own replay
+    # against the live pool rather than riding along here.
+    #
     # A focused session is *asked* to be concentrated on one cause or opening,
     # so capping by motif would fight the user's explicit choice. Spreading
     # across GAMES does not: a focus asks for a kind of mistake, never for five
@@ -411,9 +424,9 @@ def _vary_session(
     """Reorder so one game — or one motif — cannot monopolise a session.
 
     Deferred puzzles are appended rather than dropped, so this returns the same
-    set in a different order — never a shorter list. That says nothing about the
-    *session*: the caller slices to ``n``, so reordering does change which
-    puzzles are served, which is exactly why this runs per tier. A session with nothing else available stays as concentrated as the
+    set in a different order — never a shorter list. That says nothing about
+    the *session*: the caller slices to ``n``, so reordering does change which
+    puzzles get served. That is exactly why this runs per tier. A session with nothing else available stays as concentrated as the
     corpus forces it to be; the caps cannot invent variety that is not there.
 
     Both constraints are applied in one pass on purpose. Run as two passes they

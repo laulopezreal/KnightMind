@@ -721,7 +721,7 @@ class TestDiversityNeverDisplacesDuePuzzles:
     def _corpus(self, db):
         # 10 due puzzles across 4 games, mirroring production.
         # Clustered, NOT round-robined: the three most overdue all come from
-        # dueGame0. With  the top of the tier was already four distinct
+        # dueGame0. With `i % 4` the top of the tier was already four distinct
         # games before any cap ran, so no assertion about spreading could fail.
         due_ids = []
         for i in range(10):
