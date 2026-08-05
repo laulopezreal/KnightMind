@@ -139,6 +139,20 @@ def humanise_cause(cause: str) -> str:
     return CAUSE_LABELS.get(cause, cause.replace("_", " ").strip())
 
 
+def humanise_motif(motif: str) -> str:
+    """The readable form of a motif key, for use inside a sentence.
+
+    Motif keys are snake_case (``hanging_piece``, ``back_rank``) and were being
+    interpolated raw — "on a hanging_piece in the middlegame" — for 37% of the
+    anchors that reach a motif tier. Mirrors the frontend's ``formatMotifName``,
+    lowercased because this lands mid-sentence rather than as a label.
+
+    Deliberately not ``MOTIF_TITLES``: those are headlines ("The Fork", "Pinned
+    and Lost") and would render "on a The Fork".
+    """
+    return motif.replace("_", " ").strip().lower()
+
+
 def describe(key: ClusterKey, tier: MatchTier) -> str:
     """One sentence saying why these puzzles are grouped together.
 
@@ -147,11 +161,12 @@ def describe(key: ClusterKey, tier: MatchTier) -> str:
     surfaces, which have the scheduling context this module does not.
     """
     cause = humanise_cause(key.cause)
+    motif = humanise_motif(key.motif or "")
     phase = _PHASE_LABEL.get(key.phase or "", key.phase or "")
     if tier is MatchTier.EXACT:
-        return f"Same mistake — {cause} — on a {key.motif} in {phase}."
+        return f"Same mistake — {cause} — on a {motif} in {phase}."
     if tier is MatchTier.CAUSE_AND_MOTIF:
-        return f"Same mistake — {cause} — on a {key.motif}."
+        return f"Same mistake — {cause} — on a {motif}."
     if tier is MatchTier.CAUSE_AND_PHASE:
         return f"Same mistake — {cause} — in {phase}."
     # Deliberately does not claim the positions *differ*. This tier is reached

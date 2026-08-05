@@ -418,6 +418,27 @@ describe('LibraryPuzzle', () => {
             expect(mockGetPuzzleDiagnosis).not.toHaveBeenCalled();
             expect(screen.getByRole('button', { name: /reveal/i })).toBeInTheDocument();
         });
+
+        it('does not leak the next puzzle when the current diagnosis never loaded', async () => {
+            // The reset runs AFTER the getLibraryPuzzle round-trip, so for the
+            // whole request `status` is still 'revealed' while puzzleId is
+            // already the sibling's. The test above only passes because its
+            // diagnosis had loaded, making the effect's `|| diagnosis` guard
+            // short-circuit. When that fetch failed — or simply lost the race
+            // against /similar — nothing stops it.
+            mockGetPuzzleDiagnosis.mockRejectedValue(new Error('diagnosis down'));
+            const { rerender } = render(<LibraryPuzzle />);
+            await waitFor(() => expect(screen.getByText('Deadly Fork')).toBeInTheDocument());
+            fireEvent.click(screen.getByRole('button', { name: /reveal/i }));
+            await waitFor(() => expect(mockGetPuzzleDiagnosis).toHaveBeenCalled());
+
+            mockGetPuzzleDiagnosis.mockClear();
+            mockPuzzleId = 'sibling-1';
+            rerender(<LibraryPuzzle />);
+            await waitFor(() => expect(mockGetLibraryPuzzle).toHaveBeenCalledWith('sibling-1', 'testplayer'));
+
+            expect(mockGetPuzzleDiagnosis).not.toHaveBeenCalled();
+        });
     });
 
     describe('similar weaknesses', () => {

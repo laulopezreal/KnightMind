@@ -258,7 +258,7 @@ export async function getLibraryPuzzle(
 }
 
 /** How closely a sibling puzzle matches, widest last. */
-export type SimilarMatch = 'exact' | 'cause_and_motif' | 'cause_only';
+export type SimilarMatch = 'exact' | 'cause_and_motif' | 'cause_and_phase' | 'cause_only';
 
 export interface SimilarPuzzle {
     id: string;

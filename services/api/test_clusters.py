@@ -179,27 +179,32 @@ def test_describe_uses_the_house_cause_label_not_its_own():
 
     Owning a second translation here put "Loose piece awareness" and "loose
     piece awareness" on one screen.
+
+    The motif is deliberately a real snake_case key from the corpus. An earlier
+    version of this test used "Fork", which has no underscore, so the
+    no-slug assertion passed while `hanging_piece` was shipping raw.
     """
-    key = ClusterKey("calculation_stopped_early", "Fork", "middlegame")
+    key = ClusterKey("calculation_stopped_early", "hanging_piece", "middlegame")
     exact = describe(key, MatchTier.EXACT)
     assert "Calculation stopped early" in exact
     assert "_" not in exact
-    assert "Fork" in exact and "middlegame" in exact
+    assert "hanging piece" in exact and "middlegame" in exact
 
 
 def test_describe_never_claims_more_than_the_tier_matched():
-    key = ClusterKey("calculation_stopped_early", "Fork", "middlegame")
+    key = ClusterKey("calculation_stopped_early", "hanging_piece", "middlegame")
 
     # Motif matched, phase did not.
     assert "middlegame" not in describe(key, MatchTier.CAUSE_AND_MOTIF)
+    assert "_" not in describe(key, MatchTier.CAUSE_AND_MOTIF)
     # Phase matched, motif did not.
     phase_only = describe(key, MatchTier.CAUSE_AND_PHASE)
-    assert "Fork" not in phase_only and "middlegame" in phase_only
+    assert "hanging" not in phase_only and "middlegame" in phase_only
     # The widest tier is reached whenever nothing tighter matched, which
     # includes puzzles whose motif was never recorded — so it must not assert
     # the positions differ, which nothing checked.
     widest = describe(key, MatchTier.CAUSE_ONLY)
-    assert "Fork" not in widest
+    assert "hanging" not in widest
     assert "different kind of position" not in widest
 
 

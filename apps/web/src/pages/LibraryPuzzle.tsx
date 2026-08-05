@@ -115,7 +115,18 @@ export default function LibraryPuzzle() {
     // it is not even requested until the puzzle has been solved or revealed.
     // `reveal` is passed for the same reason getLibraryPuzzle passes it — by
     // this point the answer is already on screen.
-    const resolved = status === 'correct' || status === 'incorrect' || status === 'revealed';
+    // Gated on the loaded puzzle matching the route, not just on `status`.
+    //
+    // resetPuzzleState() runs *after* the getLibraryPuzzle round-trip, so for
+    // the whole request `status` still describes the previous puzzle while
+    // puzzleId is already the new one. Without this identity check the effects
+    // below fire for the sibling — requesting its diagnosis, which names the
+    // best move, with no attempt made. `puzzle` only becomes the new one once
+    // its fetch succeeds, so this is false for exactly the window in question.
+    const resolvedPuzzleId = puzzle?.id === puzzleId ? puzzleId : null;
+    const resolved =
+        resolvedPuzzleId !== null &&
+        (status === 'correct' || status === 'incorrect' || status === 'revealed');
 
     useEffect(() => {
         if (!resolved || !username || !puzzleId || diagnosis) return;
