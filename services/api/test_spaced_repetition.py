@@ -404,6 +404,43 @@ def test_a_never_reviewed_puzzle_counts_as_due(db_session):
     assert get_due_puzzle_count(db_session, "u") == 1
 
 
+def test_mixed_case_username_finds_lowercase_stats(db_session):
+    """Mixed-case caller finds lowercase PuzzleStats and respects due ordering.
+
+    get_adaptive_puzzles folds the username before querying PuzzleStats.
+    Live/API traffic is unaffected (Username canonicalises at the boundary);
+    direct/internal callers with mixed-case are intentionally repaired.
+    Candidates are listed new-first so a broken fold yields equal priorities
+    and stable-sort keeps the wrong order — making both asserts fail.
+    """
+    now = datetime.now(timezone.utc)
+
+    # Stats stored lowercase, as the API route writes them.
+    db_session.add(
+        PuzzleStats(
+            puzzle_id="due-mc",
+            username="alice",
+            attempts=1,
+            pass_count=1,
+            ease_factor=2.0,
+            interval_days=1,
+            next_due_at=(now - timedelta(days=1)).replace(tzinfo=None),
+        )
+    )
+    # "new-mc" has no stats row — it lands in the never-seen tier.
+    db_session.commit()
+
+    # Pass mixed-case and new-puzzle first so order matters.
+    ordered, all_stats = get_adaptive_puzzles(
+        db_session, "Alice", ["new-mc", "due-mc"], n=2
+    )
+
+    assert (
+        "due-mc" in all_stats
+    ), "fold failed: mixed-case caller missed lowercase stats"
+    assert ordered[0] == "due-mc", "due puzzle must rank before never-seen"
+
+
 class TestVarietyCap:
     """One motif must not monopolise a session.
 

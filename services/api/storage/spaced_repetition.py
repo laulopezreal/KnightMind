@@ -281,10 +281,12 @@ def get_adaptive_puzzles(
     focus = focus_puzzle_ids or set()
 
     # Query stats for the given puzzle IDs
-    # Folded, matching _source_games and get_all_puzzles. Inert today because
-    # Username canonicalises at the request boundary, but the failure mode is
-    # silent and severe: an empty all_stats collapses every puzzle to the
-    # never-seen tier and serves due puzzles as new.
+    # Folded to lower-case, matching _source_games and get_all_puzzles.
+    # Live/API traffic is unaffected because Username canonicalises at the
+    # request boundary; direct/internal callers with a mixed-case username
+    # are intentionally repaired here. The failure mode is silent and severe:
+    # a missed fold produces an empty all_stats, collapsing every puzzle to
+    # the never-seen tier and serving due puzzles as new.
     stmt = select(PuzzleStats).where(
         PuzzleStats.username == username.lower(),
         PuzzleStats.puzzle_id.in_(puzzle_ids),
