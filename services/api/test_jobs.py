@@ -12,31 +12,10 @@ from services.api.main import app
 from services.api.models import Game, Job, JobStatus, Puzzle
 from services.api.worker import JobWorker
 
-# Use a file-based DB for tests to ensure threading works if needed,
-# but :memory: is usually fine for single thread tests.
-# However, worker runs in thread.
-TEST_DATABASE_URL = "sqlite:///./test_jobs.db"
-
-engine = create_engine(TEST_DATABASE_URL, connect_args={"check_same_thread": False})
-TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
-
-@pytest.fixture(scope="module")
-def setup_db():
-    Base.metadata.create_all(bind=engine)
-    yield
-    Base.metadata.drop_all(bind=engine)
-    if os.path.exists("./test_jobs.db"):
-        os.remove("./test_jobs.db")
-
-
-@pytest.fixture
-def db_session(setup_db):
-    session = TestingSessionLocal()
-    try:
-        yield session
-    finally:
-        session.close()
+# The worker runs in a thread, which is why this module used a file-based
+# SQLite rather than :memory:. The shared Postgres fixture handles concurrent
+# connections natively, so both the file and the module-scoped schema setup are
+# gone; db_session comes from conftest.
 
 
 # Override dependency so the API endpoints use the test session.
@@ -432,10 +411,7 @@ def test_claim_job_returns_none_when_empty(db_session):
     assert JobWorker._claim_job(db_session) is None
 
 
-@pytest.mark.skipif(
-    not os.getenv("KNIGHTMIND_TEST_POSTGRES_URL"),
-    reason="requires a disposable Postgres (set KNIGHTMIND_TEST_POSTGRES_URL)",
-)
+@pytest.mark.postgres
 def test_claim_job_concurrent_postgres():
     """Integration: two concurrent workers claiming from a shared Postgres must
     never claim the same job. Skipped unless a disposable Postgres is provided
@@ -483,10 +459,7 @@ def test_claim_job_concurrent_postgres():
             assert s.get(Job, jid).heartbeat_at is not None
 
 
-@pytest.mark.skipif(
-    not os.getenv("KNIGHTMIND_TEST_POSTGRES_URL"),
-    reason="requires a disposable Postgres (set KNIGHTMIND_TEST_POSTGRES_URL)",
-)
+@pytest.mark.postgres
 def test_migration_applied_heartbeat_column_postgres():
     """Migration smoke: after `alembic upgrade head` (run by CI before pytest),
     the real Postgres jobs table has the heartbeat_at lease column. Proves the
@@ -499,10 +472,7 @@ def test_migration_applied_heartbeat_column_postgres():
     assert "heartbeat_at" in cols
 
 
-@pytest.mark.skipif(
-    not os.getenv("KNIGHTMIND_TEST_POSTGRES_URL"),
-    reason="requires a disposable Postgres (set KNIGHTMIND_TEST_POSTGRES_URL)",
-)
+@pytest.mark.postgres
 def test_active_job_unique_under_concurrency_postgres():
     """Integration (dim 19): two workers inserting a QUEUED job for the SAME
     username over separate Postgres connections must yield exactly ONE active
@@ -776,10 +746,7 @@ def test_generate_reports_the_generation_job_not_another_type(client, db_session
     assert response.json()["job_id"] != other.id
 
 
-@pytest.mark.skipif(
-    not os.getenv("KNIGHTMIND_TEST_POSTGRES_URL"),
-    reason="requires a disposable Postgres (set KNIGHTMIND_TEST_POSTGRES_URL)",
-)
+@pytest.mark.postgres
 def test_migration_scoped_active_job_index_postgres():
     """Migration smoke: after `alembic upgrade head` (run by CI before pytest),
     the real Postgres active-job index is keyed on (username, type)."""

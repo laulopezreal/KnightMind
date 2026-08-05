@@ -1,10 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
-import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-
-from services.api.models import Base, PuzzleStats
+from services.api.models import PuzzleStats
 from services.api.storage.spaced_repetition import (
     _utcnow_naive,
     get_adaptive_puzzles,
@@ -14,29 +10,15 @@ from services.api.storage.spaced_repetition import (
     insert_puzzle_review,
     update_puzzle_stats,
 )
+from services.api.testdata import ensure_game, ensure_puzzle
 
 # Use in-memory SQLite for tests
-SQLALCHEMY_DATABASE_URL = "sqlite:///:memory:"
-engine = create_engine(
-    SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False}
-)
-TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
-
-@pytest.fixture
-def db_session():
-    Base.metadata.create_all(bind=engine)
-    db = TestingSessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-        Base.metadata.drop_all(bind=engine)
 
 
 def test_record_pass_review(db_session):
     puzzle_id = "test-puzzle-1"
     username = "testuser"
+    ensure_puzzle(db_session, puzzle_id, username)
 
     # Record a pass review
     review = insert_puzzle_review(
@@ -61,6 +43,7 @@ def test_record_pass_review(db_session):
 def test_record_fail_review(db_session):
     puzzle_id = "test-puzzle-2"
     username = "testuser"
+    ensure_puzzle(db_session, puzzle_id, username)
 
     # Record a fail review
     update_puzzle_stats(db_session, puzzle_id, username, "fail")
@@ -76,6 +59,7 @@ def test_record_fail_review(db_session):
 def test_update_puzzle_stats_preserves_existing_identity(db_session):
     """Review updates preserve existing puzzle title and motif identity fields."""
 
+    ensure_puzzle(db_session, "test-puzzle-identity", "testuser")
     db_session.add(
         PuzzleStats(
             puzzle_id="test-puzzle-identity",
@@ -103,6 +87,7 @@ def test_update_puzzle_stats_preserves_existing_identity(db_session):
 def test_sequential_reviews(db_session):
     puzzle_id = "test-puzzle-3"
     username = "testuser"
+    ensure_puzzle(db_session, puzzle_id, username)
 
     # 1. First review: Fail
     update_puzzle_stats(db_session, puzzle_id, username, "fail")
@@ -151,6 +136,8 @@ def test_due_paths_agree_with_adaptive_classification(db_session):
     now = datetime.now(timezone.utc)
     naive = lambda dt: dt.replace(tzinfo=None)  # noqa: E731 - stored form
 
+    for _pid in ("due-old", "due-edge", "future"):
+        ensure_puzzle(db_session, _pid, "u")
     db_session.add_all(
         [
             PuzzleStats(  # clearly due
@@ -215,6 +202,8 @@ def test_get_adaptive_puzzles_accuracy_goal_sorting(db_session):
 
     now = datetime.now(timezone.utc)
 
+    ensure_puzzle(db_session, "p1", "testuser")
+    ensure_puzzle(db_session, "p2", "testuser")
     stats_high_accuracy = PuzzleStats(
         puzzle_id="p1",
         username="testuser",
@@ -271,6 +260,7 @@ class TestFocusBias:
             due = now + timedelta(days=due_in_days)
         else:
             due = None
+        ensure_puzzle(db, pid, "u")
         db.add(
             PuzzleStats(
                 puzzle_id=pid,
@@ -389,6 +379,7 @@ def test_a_never_reviewed_puzzle_counts_as_due(db_session):
     from services.api.models import PuzzleStats
     from services.api.storage.spaced_repetition import get_due_puzzle_count
 
+    ensure_puzzle(db_session, "never-reviewed", "u")
     db_session.add(
         PuzzleStats(
             puzzle_id="never-reviewed",
@@ -416,6 +407,7 @@ def test_mixed_case_username_finds_lowercase_stats(db_session):
     now = datetime.now(timezone.utc)
 
     # Stats stored lowercase, as the API route writes them.
+    ensure_puzzle(db_session, "due-mc", "alice")
     db_session.add(
         PuzzleStats(
             puzzle_id="due-mc",
@@ -454,6 +446,7 @@ class TestVarietyCap:
 
         from services.api.models import PuzzleStats
 
+        ensure_puzzle(db, pid, "u")
         db.add(
             PuzzleStats(
                 puzzle_id=pid,
@@ -552,6 +545,7 @@ class TestGameDiversity:
     def _puzzle(self, db, pid, game, motif="Fork", days_overdue=None, ply=None):
         from services.api.models import Puzzle, PuzzleStats
 
+        ensure_game(db, game, "u")
         db.add(
             Puzzle(
                 id=pid,
@@ -722,6 +716,7 @@ class TestDiversityNeverDisplacesDuePuzzles:
     def _p(self, db, pid, game, due_days=None, ply=None, motif="blunder"):
         from services.api.models import Puzzle, PuzzleStats
 
+        ensure_game(db, game, "u")
         db.add(
             Puzzle(
                 id=pid,
@@ -854,6 +849,7 @@ def test_counters_do_not_carry_across_tiers(db_session):
     now = datetime.now(timezone.utc)
 
     def add(pid, game, due_days, ply):
+        ensure_game(db_session, game, "u")
         db_session.add(
             Puzzle(
                 id=pid,

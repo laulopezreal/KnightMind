@@ -7,14 +7,10 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
 
 from services.api.day_boundary import utc_today
 from services.api.main import app, get_db
 from services.api.models import (
-    Base,
     Game,
     Job,
     JobStatus,
@@ -24,23 +20,6 @@ from services.api.models import (
     Puzzle as PuzzleModel,
 )
 from services.api.storage.game_repository import GameRepository
-
-
-@pytest.fixture
-def db_session():
-    engine = create_engine(
-        "sqlite:///:memory:",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    Base.metadata.create_all(bind=engine)
-    SessionLocal = sessionmaker(bind=engine)
-    session = SessionLocal()
-    try:
-        yield session
-    finally:
-        session.close()
-        Base.metadata.drop_all(bind=engine)
 
 
 @pytest.fixture

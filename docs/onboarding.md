@@ -34,7 +34,7 @@ The API needs a database and fails fast at startup without one. For a local run 
 Postgres, opt into the SQLite dev fallback:
 
 ```bash
-export KNIGHTMIND_DEV_SQLITE=1   # or set DATABASE_URL to a Postgres connection string
+export DATABASE_URL=postgresql+psycopg://knightmind:knightmind@localhost:5432/knightmind
 make back
 ```
 
@@ -69,7 +69,7 @@ Frontend URL: `http://localhost:5173`
 - **No engine analysis results**: verify `stockfish --version` works and `STOCKFISH_PATH` is valid.
 - **Frontend cannot call backend**: ensure API is on port `8000` and frontend runs on `5173`.
 - **No games imported**: verify Chess.com username spelling and account visibility.
-- **API exits immediately on startup**: `DATABASE_URL` is unset and `KNIGHTMIND_DEV_SQLITE`
+- **API exits immediately on startup**: `DATABASE_URL` is unset, or points at SQLite, which
   is not enabled. Set one of them.
 - **`pip install -r requirements.txt` fails**: that file does not exist. Install from the
   repo root with `pip install -e ".[dev]"`.

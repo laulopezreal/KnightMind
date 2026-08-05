@@ -4,23 +4,19 @@ Usage::
 
     python -m services.api.benchmarks --scale small
     python -m services.api.benchmarks --scale medium --out /tmp/bench.json
-    KNIGHTMIND_DEV_SQLITE=1 python -m services.api.benchmarks --scale small
+    DATABASE_URL=postgresql+psycopg://... python -m services.api.benchmarks --scale small
 
-The ``KNIGHTMIND_DEV_SQLITE=1`` env is only needed so importing the app modules
-does not fail fast on a missing ``DATABASE_URL``; the harness itself always binds
+DATABASE_URL must be set: the app fails fast without it.
 its own throwaway SQLite DB regardless.
 """
 
 import argparse
 import json
-import os
 import sys
 
 # Importing services.api.db (transitively) requires a resolvable DB URL. The
 # harness never uses this engine (it binds its own), but the import must succeed,
 # so opt into the documented SQLite dev fallback if nothing else is configured.
-os.environ.setdefault("KNIGHTMIND_DEV_SQLITE", "1")
-
 from services.api.benchmarks.runner import SCALES, format_human, run_all  # noqa: E402
 
 

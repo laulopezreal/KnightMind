@@ -81,7 +81,7 @@ class UseHintRequest(BaseModel):
 
 
 @router.post("/start", response_model=StartSessionResponse)
-async def start_session(
+def start_session(
     request: StartSessionRequest,
     db: Session = Depends(get_db),
     account: Account | None = Depends(require_account),
@@ -123,7 +123,7 @@ async def start_session(
 
 
 @router.get("/recent", response_model=list[SessionSummary])
-async def get_recent_sessions(
+def get_recent_sessions(
     username: Username,
     limit: int = 10,
     db: Session = Depends(get_db),
@@ -169,7 +169,7 @@ async def get_recent_sessions(
 
 
 @router.get("/{session_id}", response_model=SessionSummary)
-async def get_session(
+def get_session(
     session_id: str,
     db: Session = Depends(get_db),
     account: Account | None = Depends(require_account),
@@ -275,7 +275,7 @@ async def complete_session(
 
 
 @router.post("/{session_id}/use_hint", response_model=SessionSummary)
-async def use_hint(
+def use_hint(
     session_id: str,
     request: UseHintRequest,
     db: Session = Depends(get_db),

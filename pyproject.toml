@@ -9,7 +9,10 @@ include = ["services*", "scripts*"]
 name = "knightmind"
 version = "0.1.0"
 description = "Personal Chess Intelligence Platform"
-requires-python = ">=3.11"
+# Matches the production image (python:3.13-slim, see Dockerfile) and the only
+# version CI exercises. The previous ">=3.11" floor was never verified anywhere
+# once CI moved to 3.13, so it claimed support nothing tested.
+requires-python = ">=3.13"
 # All deps below are installed together. Rough mapping: API (services/api) — alembic, anthropic, chess, fastapi, pydantic*, psycopg, python-dotenv, sqlalchemy, stockfish, uvicorn. Ingest (services/ingest) — httpx, truststore. Some are shared.
 dependencies = [
     "alembic>=1.13.0",
@@ -51,6 +54,12 @@ testpaths = [
     "services/ingest",
 ]
 python_files = ["test_*.py", "*_test.py"]
+markers = [
+    # Needs a real, disposable Postgres (KNIGHTMIND_TEST_POSTGRES_URL). Skipped
+    # automatically when unset -- see pytest_collection_modifyitems in the root
+    # conftest.py. CI runs these with `pytest -m postgres`.
+    "postgres: requires a disposable Postgres instance",
+]
 
 [tool.ruff]
 # Exclude a variety of commonly ignored directories.

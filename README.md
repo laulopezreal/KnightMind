@@ -154,7 +154,7 @@ make back        # or: cd services/api && python -m uvicorn main:app --reload --
 ```
 
 The API requires a database: set `DATABASE_URL` (e.g. in `services/api/.env`), or for a
-quick local start without Postgres set `KNIGHTMIND_DEV_SQLITE=1` to use a local SQLite file.
+local Postgres, `make docker-up` starts one.
 Startup fails fast if neither is set.
 
 API will be available at http://localhost:8000
@@ -220,7 +220,7 @@ make lint-back    # python -m ruff check . && python -m black --check .
 ```
 
 Pytest collects from `services/api` and `services/ingest` (see `[tool.pytest.ini_options]`
-in `pyproject.toml`). The root `conftest.py` sets `KNIGHTMIND_DEV_SQLITE=1` so the suite
+in `pyproject.toml`). The root `conftest.py` requires `KNIGHTMIND_TEST_DATABASE_URL` so the suite
 runs without a Postgres instance.
 
 ### Frontend
@@ -329,7 +329,7 @@ fails fast at startup if it is unset, rather than silently writing to an ephemer
 SQLite file.
 
 - **Postgres example:** `postgresql+psycopg://user:password@host:5432/knightmind`
-- **Local-dev escape hatch:** set `KNIGHTMIND_DEV_SQLITE=1` to opt into
+- **Local development:** point `DATABASE_URL` at the compose Postgres; there is no opt-in
   `sqlite:///./knightmind.db` without setting `DATABASE_URL`. Never use this in production.
 
 Alembic migrations load `services/api/.env` (the same file the API reads) and use the same
@@ -385,7 +385,7 @@ Alembic migrations load `services/api/.env` (the same file the API reads) and us
 
 - **Frontend**: React, Vite, TypeScript, Tailwind CSS, D3.js
 - **Backend**: FastAPI, Pydantic, python-chess
-- **Database**: Postgres (via `DATABASE_URL`), SQLite (local-dev opt-in via `KNIGHTMIND_DEV_SQLITE=1`)
+- **Database**: Postgres (via `DATABASE_URL`) everywhere — production, local dev and tests
 - **Engine**: Stockfish (via `stockfish` PyPI package)
 - **Future**: Neo4j
 
