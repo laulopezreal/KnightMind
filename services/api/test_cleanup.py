@@ -4,31 +4,8 @@ Tests for session cleanup job.
 
 from datetime import datetime, timedelta, timezone
 
-import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
-
-from services.api.db import Base
 from services.api.jobs.cleanup_sessions import cleanup_abandoned_sessions
 from services.api.models import TrainingSession
-
-
-@pytest.fixture
-def db_session():
-    """Create an in-memory SQLite database for testing."""
-    engine = create_engine(
-        "sqlite:///:memory:",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    Base.metadata.create_all(engine)
-    SessionLocal = sessionmaker(bind=engine)
-    session = SessionLocal()
-    try:
-        yield session
-    finally:
-        session.close()
 
 
 def test_cleanup_abandoned_sessions(db_session):

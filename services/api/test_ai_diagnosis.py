@@ -12,16 +12,13 @@ os.environ["KNIGHTMIND_WORKER_DISABLED"] = "true"
 from datetime import datetime, timedelta, timezone  # noqa: E402
 
 import pytest  # noqa: E402
-from sqlalchemy import create_engine  # noqa: E402
-from sqlalchemy.orm import sessionmaker  # noqa: E402
-from sqlalchemy.pool import StaticPool  # noqa: E402
 
 from services.api.ai import client as ai_client  # noqa: E402
 from services.api.ai.schema import AIDiagnosis  # noqa: E402
 from services.api.diagnosis import job as diagnosis_job  # noqa: E402
 from services.api.diagnosis.job import run_diagnosis  # noqa: E402
 from services.api.jobs.cleanup_sessions import purge_expired_ai_audit  # noqa: E402
-from services.api.models import Base, DiagnosisAuditLog  # noqa: E402
+from services.api.models import DiagnosisAuditLog  # noqa: E402
 from services.api.storage.ai_audit_repository import (  # noqa: E402
     AIAuditRepository,
     AuditWrite,
@@ -37,22 +34,6 @@ from services.api.test_diagnosis_store import (  # noqa: E402
     _NoClose,
     _puzzle,
 )
-
-
-@pytest.fixture
-def db_session():
-    engine = create_engine(
-        "sqlite:///:memory:",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    Base.metadata.create_all(bind=engine)
-    session = sessionmaker(bind=engine)()
-    try:
-        yield session
-    finally:
-        session.close()
-        Base.metadata.drop_all(bind=engine)
 
 
 @pytest.fixture(autouse=True)

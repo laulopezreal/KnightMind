@@ -14,12 +14,9 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
 
 from services.api.main import app, get_db
-from services.api.models import Base, Game
+from services.api.models import Game
 from services.api.usernames import (
     MAX_USERNAME_LENGTH,
     canonical_username,
@@ -80,23 +77,6 @@ def test_validate_username_rejects_overlong():
 
 
 # --- End-to-end fixtures ---
-
-
-@pytest.fixture
-def db_session():
-    engine = create_engine(
-        "sqlite:///:memory:",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    Base.metadata.create_all(bind=engine)
-    SessionLocal = sessionmaker(bind=engine)
-    session = SessionLocal()
-    try:
-        yield session
-    finally:
-        session.close()
-        Base.metadata.drop_all(bind=engine)
 
 
 @pytest.fixture

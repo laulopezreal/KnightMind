@@ -6,9 +6,8 @@ from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, select
+from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
 
 from services.api.db import get_db
 from services.api.main import (
@@ -16,7 +15,7 @@ from services.api.main import (
     calculate_expected_score,
     get_opponent_rating_from_pgn,
 )
-from services.api.models import Base, Game, RatingSnapshot
+from services.api.models import Game, RatingSnapshot
 from services.api.time_control import classify_time_control
 
 client = TestClient(app)
@@ -94,23 +93,6 @@ def test_classify_time_control_unrecognized():
     assert classify_time_control("daily") is None
     assert classify_time_control("1/259200") is None
     assert classify_time_control("unknown") is None
-
-
-@pytest.fixture
-def db_session():
-    engine = create_engine(
-        "sqlite:///:memory:",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    Base.metadata.create_all(bind=engine)
-    SessionLocal = sessionmaker(bind=engine)
-    session = SessionLocal()
-    try:
-        yield session
-    finally:
-        session.close()
-        Base.metadata.drop_all(bind=engine)
 
 
 @pytest.fixture

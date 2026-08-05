@@ -6,11 +6,8 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from sqlalchemy import create_engine, select
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
+from sqlalchemy import select
 
-from services.api.db import Base
 from services.api.models import PuzzleResult, TrainingSession
 from services.api.sessions import (
     CompleteSessionRequest,
@@ -23,23 +20,6 @@ from services.api.sessions import (
     use_hint,
 )
 from services.api.storage.spaced_repetition import insert_puzzle_review
-
-
-@pytest.fixture
-def db_session():
-    """Create an in-memory SQLite database for testing."""
-    engine = create_engine(
-        "sqlite:///:memory:",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    Base.metadata.create_all(engine)
-    SessionLocal = sessionmaker(bind=engine)
-    session = SessionLocal()
-    try:
-        yield session
-    finally:
-        session.close()
 
 
 def test_start_session(db_session):

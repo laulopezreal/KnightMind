@@ -11,13 +11,7 @@ as a fork and a back-rank mate, then assert:
 
 from datetime import datetime
 
-import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
-
 from scripts.reclassify_motifs import reclassify_motifs
-from services.api.db import Base
 from services.api.models import Puzzle, PuzzleStats
 
 # Positions whose current-classifier motif is NOT "blunder".
@@ -30,24 +24,6 @@ BACK_RANK_BEST = "e1e8"  # Re8# -> "back_rank"
 # A genuinely quiet solution the classifier legitimately leaves as "blunder".
 QUIET_FEN = "8/8/8/8/8/5k2/8/6K1 w - - 0 1"
 QUIET_BEST = "g1f1"
-
-
-@pytest.fixture
-def db_session():
-    """In-memory SQLite session with the full schema."""
-    engine = create_engine(
-        "sqlite:///:memory:",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    Base.metadata.create_all(engine)
-    SessionLocal = sessionmaker(bind=engine)
-    session = SessionLocal()
-    try:
-        yield session
-    finally:
-        session.close()
-        Base.metadata.drop_all(engine)
 
 
 def _seed_puzzle(

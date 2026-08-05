@@ -18,14 +18,12 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
 
 from services.api import analytics_confidence
 from services.api.db import get_db
 from services.api.main import app
-from services.api.models import Base, Game, PuzzleReview, PuzzleStats, RatingSnapshot
+from services.api.models import Game, PuzzleReview, PuzzleStats, RatingSnapshot
 
 _ENV_NAMES = (
     "ANALYTICS_MIN_REVIEWS_FORM_TREND",
@@ -83,23 +81,6 @@ def test_invalid_env_falls_back_to_default(monkeypatch, bad):
 # ---------------------------------------------------------------------------
 # Boundary behavior at the default thresholds (N emitted, N-1 gated).
 # ---------------------------------------------------------------------------
-@pytest.fixture
-def db_session():
-    engine = create_engine(
-        "sqlite:///:memory:",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    Base.metadata.create_all(bind=engine)
-    SessionLocal = sessionmaker(bind=engine)
-    session = SessionLocal()
-    try:
-        yield session
-    finally:
-        session.close()
-        Base.metadata.drop_all(bind=engine)
-
-
 @pytest.fixture
 def client_with_db(db_session, monkeypatch):
     def override_get_db():

@@ -1,8 +1,127 @@
-"""Shared pytest fixtures for the API test suite."""
+"""Shared pytest fixtures for the API test suite.
 
+Database fixtures
+-----------------
+Thirty test modules each built their own engine, session and TestClient from a
+near-identical twelve-line block. They had already drifted -- some dropped
+tables on teardown, some did not -- and the duplication was what kept the suite
+pinned to SQLite: repointing it meant thirty edits.
+
+The backend is chosen by ``KNIGHTMIND_TEST_DATABASE_URL``:
+
+  unset (default)  in-memory SQLite, a fresh schema per test. Identical to what
+                   every module did by hand, so the default path is unchanged.
+  a Postgres URL   one schema for the session, truncated between tests. This is
+                   what production runs, and where SQLite quietly differs:
+                   aggregate typing, partial indexes, naive-vs-aware datetime
+                   comparison, integer division.
+
+A test that passes on only one backend is describing a real portability bug,
+not a fixture problem.
+"""
+
+import os
 from unittest.mock import AsyncMock
 
 import pytest
+from sqlalchemy import create_engine, text
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
+
+from services.api.db import Base
+
+TEST_DB_URL_ENV = "KNIGHTMIND_TEST_DATABASE_URL"
+DEFAULT_TEST_DB_URL = "sqlite:///:memory:"
+
+
+def _is_sqlite(url: str) -> bool:
+    return url.startswith("sqlite")
+
+
+@pytest.fixture(scope="session")
+def db_url() -> str:
+    return os.getenv(TEST_DB_URL_ENV, DEFAULT_TEST_DB_URL)
+
+
+@pytest.fixture(scope="session")
+def _postgres_engine(db_url):
+    """One engine and one schema for the whole session (Postgres only).
+
+    Creating and dropping 14 tables per test is trivial on in-memory SQLite and
+    ruinous over a real connection, so the schema is built once and the *rows*
+    are cleared between tests instead.
+    """
+    if _is_sqlite(db_url):
+        yield None
+        return
+    engine = create_engine(db_url)
+    # Drop first: an aborted earlier run may have left tables behind, and
+    # create_all would accept a stale schema rather than rebuild it.
+    Base.metadata.drop_all(engine)
+    Base.metadata.create_all(engine)
+    yield engine
+    Base.metadata.drop_all(engine)
+    engine.dispose()
+
+
+@pytest.fixture
+def db_engine(db_url, _postgres_engine):
+    """An engine whose schema is empty at the start of every test."""
+    if not _is_sqlite(db_url):
+        # One TRUNCATE so CASCADE resolves the FK graph for us; RESTART IDENTITY
+        # stops sequence values leaking between tests the way a fresh SQLite
+        # database never would.
+        tables = ", ".join(f'"{t.name}"' for t in Base.metadata.sorted_tables)
+        if tables:
+            with _postgres_engine.begin() as conn:
+                conn.execute(text(f"TRUNCATE {tables} RESTART IDENTITY CASCADE"))
+        yield _postgres_engine
+        return
+
+    # StaticPool keeps every connection pointed at the same in-memory database;
+    # without it each connection gets its own empty one.
+    engine = create_engine(
+        db_url,
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(bind=engine)
+    try:
+        yield engine
+    finally:
+        Base.metadata.drop_all(bind=engine)
+        engine.dispose()
+
+
+@pytest.fixture
+def db_session(db_engine):
+    """A Session on the test database -- the dominant fixture across the suite."""
+    session_local = sessionmaker(bind=db_engine, autocommit=False, autoflush=False)
+    session = session_local()
+    try:
+        yield session
+    finally:
+        session.close()
+
+
+@pytest.fixture
+def client(db_session, monkeypatch):
+    """TestClient with ``get_db`` overridden to the test session.
+
+    Imported lazily because binding services.api.main constructs the app, and
+    the many modules that never build a client should not pay for it.
+    """
+    from fastapi.testclient import TestClient
+
+    from services.api.db import get_db
+    from services.api.main import app
+
+    monkeypatch.setenv("KNIGHTMIND_WORKER_DISABLED", "true")
+    app.dependency_overrides[get_db] = lambda: db_session
+    try:
+        yield TestClient(app)
+    finally:
+        app.dependency_overrides.clear()
 
 
 @pytest.fixture(autouse=True)
