@@ -825,3 +825,75 @@ class TestDiversityNeverDisplacesDuePuzzles:
         # Without the cap this is dueGame0 three times, because the three most
         # overdue puzzles all come from it.
         assert len(set(games)) == 4, games
+
+
+def test_one_game_can_reach_a_session_once_per_tier(db_session):
+    """Pins the real per-game bound: three through this helper, two in production.
+
+    Counters reset per tier, so one game may supply a due puzzle, a never-seen
+    one, and a scheduled-later one. `/puzzles/due` narrows the scheduled-later
+    tier away first, so the shipped bound is two; the third is reachable only
+    via get_due_puzzles, which has no production caller today.
+
+    Asserted rather than described, because the comment that said "up to two"
+    read as verified and was not.
+    """
+    from services.api.models import Puzzle, PuzzleStats
+    from services.api.storage.spaced_repetition import (
+        get_due_puzzles,
+        get_trainable_puzzle_ids,
+    )
+
+    now = datetime.now(timezone.utc)
+
+    def add(pid, game, due_days, ply):
+        db_session.add(
+            Puzzle(
+                id=pid,
+                username="u",
+                source_game_id=game,
+                ply=ply,
+                fen="8/8/8/8/8/8/8/8 w - - 0 1",
+                side_to_move="white",
+                played_move_uci="e2e4",
+                best_move_uci="d2d4",
+                eval_before=0.5,
+                eval_after=-1.5,
+                swing=2.0,
+            )
+        )
+        due = (
+            None
+            if due_days is None
+            else (now - timedelta(days=due_days)).replace(tzinfo=None)
+        )
+        db_session.add(
+            PuzzleStats(
+                puzzle_id=pid,
+                username="u",
+                primary_motif="blunder",
+                attempts=1 if due else 0,
+                pass_count=0,
+                ease_factor=2.0,
+                interval_days=1 if due else None,
+                next_due_at=due,
+            )
+        )
+
+    add("x_due", "gameX", 10, 1)
+    add("x_new", "gameX", None, 2)
+    add("x_future", "gameX", -30, 3)
+    for i in range(4):
+        add(f"filler{i}", f"gameF{i}", None, 10 + i)
+    db_session.commit()
+
+    ids = [p.id for p in db_session.query(Puzzle).all()]
+
+    session, _ = get_due_puzzles(db_session, "u", ids, n=7)
+    from_one_game = [
+        pid for pid in session if db_session.get(Puzzle, pid).source_game_id == "gameX"
+    ]
+    assert len(from_one_game) == 3, from_one_game
+
+    # The endpoint path never sees the third: futures are dropped upstream.
+    assert "x_future" not in get_trainable_puzzle_ids(db_session, "u", ids)

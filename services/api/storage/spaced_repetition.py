@@ -338,8 +338,16 @@ def get_adaptive_puzzles(
 
     sorted_pids = sorted(puzzle_ids, key=sort_key)
 
-    # Counters reset per tier, so one game may contribute at most one puzzle
-    # PER TIER — up to two in a session that spans tiers. Sharing them globally
+    # Counters reset per tier, so one game contributes at most one puzzle PER
+    # TIER. In production that bound is two: ``/puzzles/due`` narrows the
+    # scheduled-later tier away before this runs (``get_trainable_puzzle_ids``),
+    # leaving only due and never-seen. The function itself permits three — one
+    # game supplying a due, a never-seen and a scheduled-later puzzle — reachable
+    # through the unnarrowed ``get_due_puzzles`` helper, which currently has no
+    # production caller. Pinned by
+    # ``test_one_game_can_reach_a_session_once_per_tier`` rather than asserted
+    # here, because the previous wording said "up to two" and was wrong.
+    # Sharing counters globally
     # would be tighter, but it is also the direction that risks starving a tier:
     # once the due tier consumes its games, every new puzzle from those games
     # would defer. Per-tier is the more permissive and therefore safer default,
