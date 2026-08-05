@@ -100,6 +100,15 @@ jobs:
       run: |
         alembic upgrade head
 
+    # Guards the gap between the two schema sources of truth: the tests build
+    # their schema with Base.metadata.create_all(), production applies the
+    # migration chain, and nothing compared them. A model change with no
+    # migration used to pass every job here and fail on the first prod query.
+    - name: Check models and migrations agree
+      working-directory: ./services/api
+      run: |
+        alembic check
+
     - name: Run Postgres integration tests
       working-directory: ./services/api
       run: |
