@@ -758,10 +758,9 @@ def test_wrong_move_resets_session_streak(client, test_db):
 
 POSTGRES_URL = os.getenv("KNIGHTMIND_TEST_POSTGRES_URL")
 
-requires_postgres = pytest.mark.skipif(
-    not POSTGRES_URL,
-    reason="requires a disposable Postgres (set KNIGHTMIND_TEST_POSTGRES_URL)",
-)
+# The skip itself is applied centrally (root conftest.py) so the marker is also
+# selectable: CI runs `pytest -m postgres` over the whole suite.
+requires_postgres = pytest.mark.postgres
 
 # Child-first delete order so a clean-up never trips a foreign key.
 _PG_CLEANUP_MODELS = (PuzzleReview, PuzzleStats, TrainingSession, PuzzleModel, Game)

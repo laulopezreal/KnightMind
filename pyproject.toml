@@ -51,6 +51,12 @@ testpaths = [
     "services/ingest",
 ]
 python_files = ["test_*.py", "*_test.py"]
+markers = [
+    # Needs a real, disposable Postgres (KNIGHTMIND_TEST_POSTGRES_URL). Skipped
+    # automatically when unset -- see pytest_collection_modifyitems in the root
+    # conftest.py. CI runs these with `pytest -m postgres`.
+    "postgres: requires a disposable Postgres instance",
+]
 
 [tool.ruff]
 # Exclude a variety of commonly ignored directories.

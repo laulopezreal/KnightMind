@@ -55,6 +55,10 @@ jobs:
   # real Postgres from zero and runs the PG-only concurrency/migration tests
   # that the default SQLite job skips. Deliberately NOT the whole suite — the
   # rest of the tests build their own SQLite engines and assume SQLite.
+  #
+  # Selection is by MARKER (`-m postgres`), never by filename: this job used to
+  # run `test_jobs.py -k postgres`, so the four review/session concurrency tests
+  # added later in test_review_session_integration.py never ran here at all.
   test-postgres:
     runs-on: ubuntu-latest
 
@@ -96,7 +100,16 @@ jobs:
       run: |
         alembic upgrade head
 
+    # Guards the gap between the two schema sources of truth: the tests build
+    # their schema with Base.metadata.create_all(), production applies the
+    # migration chain, and nothing compared them. A model change with no
+    # migration used to pass every job here and fail on the first prod query.
+    - name: Check models and migrations agree
+      working-directory: ./services/api
+      run: |
+        alembic check
+
     - name: Run Postgres integration tests
       working-directory: ./services/api
       run: |
-        pytest test_jobs.py -k "postgres" -v
+        pytest -m postgres -v
