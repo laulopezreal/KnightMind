@@ -16,6 +16,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Literal
 
+import anyio
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -314,7 +315,20 @@ async def explain_rating_changes(
     db: Session = Depends(get_db),
     account: Account | None = Depends(require_account),
 ):
-    """Explain rating drivers based on recent games."""
+    """Explain rating drivers based on recent games.
+
+    Stays ``async`` because auto_snapshot_throttled is genuinely awaitable, but
+    everything after it is synchronous DB work and Elo arithmetic -- roughly 450
+    lines of it, the largest single stretch this API ran on the event loop after
+    #349 moved the other 34 handlers off. One request could hold the loop for the
+    whole aggregation while every other request waited.
+
+    The body is delegated to a worker thread. The Session is handed across, which
+    is safe because the two never touch it at once: this coroutine awaits until
+    the thread is finished. SQLAlchemy Sessions are not thread-SAFE, but they are
+    not thread-AFFINE either, and the SQLite check_same_thread problem went away
+    with SQLite itself.
+    """
 
     assert_owns_username(account, username, db)
 
@@ -322,6 +336,35 @@ async def explain_rating_changes(
     # snapshot opportunistically (throttled per username, best-effort) so the
     # end anchor stays fresh without the user ever pressing a button.
     await auto_snapshot_throttled(username, db)
+
+    return await anyio.to_thread.run_sync(
+        lambda: _build_rating_explanation(
+            username=username,
+            time_control=time_control,
+            since_session_id=since_session_id,
+            since=since,
+            limit_games=limit_games,
+            db=db,
+            account=account,
+        )
+    )
+
+
+def _build_rating_explanation(
+    *,
+    username: Username,
+    time_control: str,
+    since_session_id: str | None,
+    since: datetime | None,
+    limit_games: int,
+    db: Session,
+    account: Account | None,
+):
+    """The synchronous aggregation behind /ratings/explain (see the caller).
+
+    account is needed for the second ownership check: a since_session_id the
+    caller does not own must 404 rather than reveal another tenant's window.
+    """
 
     # 1. Determine Window
     now = datetime.now(timezone.utc)
