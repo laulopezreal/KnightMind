@@ -25,8 +25,9 @@ There is exactly one intended KnightMind app/deploy instance on claw-home.
   - Containers: `knightmind-api-1`, `knightmind-db-1`
   - Network: `knightmind_default` with static Linux bridge name `km-bridge`
   - DB volume: `knightmind_pgdata`
-- **Backups:** `/home/lauureal/backups/knightmind/`
-  - Take a fresh backup before any Compose, migration, rebuild, or ingress change.
+- **Backups:** `/home/lauureal/backups/knightmind/` — the only backup location. See "Backup first rule".
+  - Take a fresh backup before any Compose, migration, rebuild, ingress change, or release merge.
+  - `/home/lauureal/apps/knightmind/backups/` is NOT a backup location. Two stray dumps lived there until 2026-08-06 and were moved here; the directory was removed. Backups do not belong inside the deploy clone, which `deploy.yaml` runs `git reset --hard` in.
 - **Public frontend:** Cloudflare Pages currently serving `https://guessme.world` and `https://knightmind.pages.dev`.
 - **Public API:** Caddy container `knightmind-public-caddy` is deployed from `/home/lauureal/apps/knightmind/deploy/public-caddy/`, runs with `network_mode: host`, binds only `${PUBLIC_IP:-65.108.67.53}`, and reverse-proxies `api.guessme.world` to `127.0.0.1:8000`. `https://api.guessme.world/ops/ping` returns JSON and Caddy obtained a Let's Encrypt certificate on 2026-07-10.
 
@@ -151,15 +152,47 @@ docker compose --env-file .env.docker ps
 
 Before any command that can recreate, stop, remove, migrate, or rebuild the live stack, create a fresh DB backup.
 
-Current backup command:
+**Merging a `dev` -> `main` release PR counts.** `deploy.yaml` fires on push to `main` and runs build -> `alembic upgrade head` -> traffic switch, unattended, and takes no backup of its own. The backup is a manual step *before* the merge; nothing in the pipeline waits for it.
+
+### The one location, the one command
+
+Backups live in **`/home/lauureal/backups/knightmind/`** and nowhere else. Take one with:
 
 ```bash
-TS=$(date +%Y%m%dT%H%M%S%z)
-BACKUP_DIR=/home/lauureal/backups/knightmind
-mkdir -p "$BACKUP_DIR"
-docker exec knightmind-db-1 sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc' > "$BACKUP_DIR/knightmind-db-$TS.dump"
-sha256sum "$BACKUP_DIR/knightmind-db-$TS.dump" > "$BACKUP_DIR/knightmind-db-$TS.dump.sha256"
+cd /home/lauureal/apps/knightmind && ./deploy/postgres-backup.sh
 ```
+
+That is the only sanctioned mechanism. It writes `knightmind_<YYYYMMDD>_<HHMMSS>.sql.gz` plus a matching `.sha256`, verifies the gzip stream before reporting success, and prunes dumps older than `RETENTION_DAYS` (default 14) along with any orphaned checksums.
+
+There is **no cron entry and no systemd timer**, so a backup exists only when someone runs this. Do not add a second mechanism: until 2026-08-06 this section documented an inline `pg_dump -Fc` instead of the script, so the directory accumulated two formats that need two different restore commands and only one of which was pruned.
+
+### Restoring
+
+The two formats in the directory restore differently. Check the extension first.
+
+```bash
+# knightmind_*.sql.gz  -- plain SQL, written by the script
+zcat BACKUP.sql.gz | docker exec -i knightmind-db-1 psql -U knightmind -d knightmind -v ON_ERROR_STOP=1
+
+# knightmind-db-*.dump -- legacy pg_dump custom format (-Fc), taken by hand before 2026-08-06
+docker exec -i knightmind-db-1 pg_restore -U knightmind -d knightmind --clean --if-exists < BACKUP.dump
+```
+
+### A dump is not verified until it has been restored
+
+`sha256sum -c` proves the file did not rot. It does not prove the dump is loadable or complete. Before relying on a backup for a risky change, restore it into a throwaway container and compare row counts to live:
+
+```bash
+docker run -d --name km-restorecheck -e POSTGRES_USER=knightmind -e POSTGRES_PASSWORD=knightmind \
+  -e POSTGRES_DB=restore_test postgres:16
+# wait for a real connection, not pg_isready -- that answers during initdb's temporary server
+until docker exec km-restorecheck psql -U knightmind -d restore_test -c 'SELECT 1' >/dev/null 2>&1; do sleep 1; done
+zcat BACKUP.sql.gz | docker exec -i km-restorecheck psql -U knightmind -d restore_test -v ON_ERROR_STOP=1
+docker exec km-restorecheck psql -U knightmind -d restore_test -At -c 'SELECT count(*) FROM games;'
+docker rm -f km-restorecheck
+```
+
+Counting `COPY` blocks in the gzipped dump is not a substitute; it over-counts and has given wrong figures for every table.
 
 Most recent restoration safety backup:
 

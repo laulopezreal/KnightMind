@@ -70,13 +70,47 @@ docker compose -f /home/lauureal/apps/knightmind/docker-compose.yml \
     | gzip > "${TMP_DUMP_FILE}"
 mv "${TMP_DUMP_FILE}" "${DUMP_FILE}"
 
+# Checksum every dump. The ad-hoc dumps taken by hand have always carried a
+# .sha256 beside them; the ones this script produced did not, so the sanctioned
+# mechanism was the only one whose output could not be checked for bit rot or a
+# truncated copy. Written after the atomic move, so a .sha256 existing implies a
+# complete dump.
+sha256sum "${DUMP_FILE}" > "${DUMP_FILE}.sha256"
+
+# Read it straight back. gzip -t catches a truncated or corrupt stream that
+# pg_dump exited 0 on, which is the failure this file exists to detect --
+# verifying the checksum we just computed against the file we just wrote would
+# prove nothing on its own.
+if ! gzip -t "${DUMP_FILE}"; then
+    echo "[$(date -Iseconds)] ERROR: ${DUMP_FILE} failed gzip integrity check" >&2
+    exit 1
+fi
+
 FILESIZE=$(du -h "${DUMP_FILE}" | cut -f1)
-echo "[$(date -Iseconds)] Backup complete: ${DUMP_FILE} (${FILESIZE})"
+echo "[$(date -Iseconds)] Backup complete: ${DUMP_FILE} (${FILESIZE}), gzip verified"
 
 # Prune old backups
 DELETED=$(find "${BACKUP_DIR}" -name "${POSTGRES_DB}_*.sql.gz" -mtime +"${RETENTION_DAYS}" -delete -print | wc -l)
 if [ "${DELETED}" -gt 0 ]; then
     echo "[$(date -Iseconds)] Pruned ${DELETED} backup(s) older than ${RETENTION_DAYS} days."
+fi
+
+# Then drop any .sha256 whose dump is gone. Deliberately keyed to the dump's
+# absence rather than to the checksum's own age: the prune above matches only
+# *.sql.gz, so without this every retention cycle would leave its checksums
+# behind and the directory would fill with references to files that no longer
+# exist. Self-healing, so it also clears orphans left by a manual delete.
+ORPHANS=0
+for checksum in "${BACKUP_DIR}"/${POSTGRES_DB}_*.sql.gz.sha256; do
+    # The glob matching nothing yields the literal pattern; -e rejects it.
+    [ -e "${checksum}" ] || continue
+    if [ ! -e "${checksum%.sha256}" ]; then
+        rm -f "${checksum}"
+        ORPHANS=$((ORPHANS + 1))
+    fi
+done
+if [ "${ORPHANS}" -gt 0 ]; then
+    echo "[$(date -Iseconds)] Removed ${ORPHANS} orphaned checksum(s)."
 fi
 
 echo "[$(date -Iseconds)] Done."
