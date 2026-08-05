@@ -7,11 +7,8 @@ from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
 import pytest
-from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
 
-from services.api.db import Base
 from services.api.models import FenEvalCache
 
 from . import stockfish as sf_module
@@ -483,14 +480,13 @@ class TestGetEngineVersion:
 
 
 @contextmanager
-def _cache_db():
-    """In-memory SQLite DB patched into stockfish.SessionLocal."""
-    engine = create_engine(
-        "sqlite:///:memory:",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    Base.metadata.create_all(engine)
+def _cache_db(engine):
+    """Patch stockfish.SessionLocal onto the shared test database.
+
+    Takes the engine rather than building one: this used to create its own
+    in-memory SQLite, which meant the FEN eval cache was the one part of the
+    engine layer never exercised against Postgres.
+    """
     Session = sessionmaker(bind=engine)
 
     @contextmanager
@@ -523,11 +519,11 @@ def _live_key(engine_version: str, fen: str = _START_FEN) -> str:
 class TestVersionAwareCache:
     """End-to-end cache behaviour across engine versions/configs."""
 
-    def test_stale_entry_not_reused_after_version_change(self):
+    def test_stale_entry_not_reused_after_version_change(self, db_engine):
         """Core regression: an entry cached under engine version A must NOT be
         returned for the same FEN under version B (the pre-fix bug returned the
         stale eval because the key omitted the version)."""
-        with _cache_db() as Session:
+        with _cache_db(db_engine) as Session:
             # Seed a row as if computed under version A -> eval 1.0.
             with Session() as db:
                 db.add(
@@ -563,10 +559,10 @@ class TestVersionAwareCache:
                 assert b_row.eval_pawns == 2.0
                 assert b_row.engine_version == "B"
 
-    def test_same_config_hits_cache(self):
+    def test_same_config_hits_cache(self, db_engine):
         """A matching engine version/config still hits the cache without
         touching the engine at all."""
-        with _cache_db() as Session:
+        with _cache_db(db_engine) as Session:
             with Session() as db:
                 db.add(
                     FenEvalCache(
@@ -592,10 +588,10 @@ class TestVersionAwareCache:
             assert result.eval == 0.42
             assert stats == {"hits": 1}
 
-    def test_computed_entry_is_self_describing(self):
+    def test_computed_entry_is_self_describing(self, db_engine):
         """A freshly computed entry records engine version + full config so it
         is reproducible/auditable."""
-        with _cache_db() as Session:
+        with _cache_db(db_engine) as Session:
             with (
                 patch.object(sf_module, "get_engine_version", return_value="16.1"),
                 patch.object(
@@ -617,10 +613,10 @@ class TestVersionAwareCache:
             assert row.multipv == sf_module.get_engine_multipv()
             assert row.conversion_version == EVAL_CONVERSION_VERSION
 
-    def test_terminal_eval_not_cached(self):
+    def test_terminal_eval_not_cached(self, db_engine):
         """Terminal positions (no best move) are intentionally not cached, so a
         cache miss/failure only ever costs performance, never correctness."""
-        with _cache_db() as Session:
+        with _cache_db(db_engine) as Session:
             terminal = EvalResult(
                 best_move_uci=None, eval=-MATE_EVALUATION, mate_in=0, is_terminal=True
             )
@@ -638,12 +634,12 @@ class TestVersionAwareCache:
             with Session() as db:
                 assert db.get(FenEvalCache, _live_key("16.1")) is None
 
-    def test_cached_mate_preserves_mate_in_on_hit(self):
+    def test_cached_mate_preserves_mate_in_on_hit(self, db_engine):
         """Regression (dim 6): a mate-scored (non-terminal) position must return
         the same mate_in on a cache HIT as it did on the fresh compute. The
         pre-fix read path rebuilt EvalResult without mate_in/is_terminal, so a
         cached mate silently lost its distance-to-mate (mate_in -> None)."""
-        with _cache_db() as Session:
+        with _cache_db(db_engine) as Session:
             mate_result = EvalResult(
                 best_move_uci="d8h4", eval=MATE_EVALUATION, mate_in=3
             )
@@ -674,10 +670,10 @@ class TestVersionAwareCache:
             assert row.mate_in == 3
             assert row.is_terminal is False
 
-    def test_cached_non_mate_eval_has_no_mate_distance(self):
+    def test_cached_non_mate_eval_has_no_mate_distance(self, db_engine):
         """A plain centipawn eval round-trips through the cache with mate_in
         None and is_terminal False (mate columns must not leak onto it)."""
-        with _cache_db() as Session:
+        with _cache_db(db_engine) as Session:
             cp_result = EvalResult(best_move_uci="e2e4", eval=0.3)
             with (
                 patch.object(sf_module, "get_engine_version", return_value="16.1"),
@@ -698,11 +694,11 @@ class TestVersionAwareCache:
             assert row.mate_in is None
             assert row.is_terminal is False
 
-    def test_concurrent_insert_returns_existing_entry(self):
+    def test_concurrent_insert_returns_existing_entry(self, db_engine):
         """If a concurrent writer inserts the same key between our miss-read and
         our commit, the IntegrityError path re-selects and returns that row
         rather than raising."""
-        with _cache_db() as Session:
+        with _cache_db(db_engine) as Session:
             key = _live_key("16.1")
 
             # A fake SessionLocal that, on the *write* (2nd) use, first inserts a

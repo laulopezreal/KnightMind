@@ -1,10 +1,8 @@
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
 
-from services.api.models import Base, PuzzleStats
+from services.api.models import PuzzleStats
 from services.api.storage.spaced_repetition import (
     _utcnow_naive,
     get_adaptive_puzzles,
@@ -14,29 +12,15 @@ from services.api.storage.spaced_repetition import (
     insert_puzzle_review,
     update_puzzle_stats,
 )
+from services.api.testdata import ensure_game, ensure_puzzle
 
 # Use in-memory SQLite for tests
-SQLALCHEMY_DATABASE_URL = "sqlite:///:memory:"
-engine = create_engine(
-    SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False}
-)
-TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
-
-@pytest.fixture
-def db_session():
-    Base.metadata.create_all(bind=engine)
-    db = TestingSessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-        Base.metadata.drop_all(bind=engine)
 
 
 def test_record_pass_review(db_session):
     puzzle_id = "test-puzzle-1"
     username = "testuser"
+    ensure_puzzle(db_session, puzzle_id, username)
 
     # Record a pass review
     review = insert_puzzle_review(
@@ -61,6 +45,7 @@ def test_record_pass_review(db_session):
 def test_record_fail_review(db_session):
     puzzle_id = "test-puzzle-2"
     username = "testuser"
+    ensure_puzzle(db_session, puzzle_id, username)
 
     # Record a fail review
     update_puzzle_stats(db_session, puzzle_id, username, "fail")
@@ -76,6 +61,7 @@ def test_record_fail_review(db_session):
 def test_update_puzzle_stats_preserves_existing_identity(db_session):
     """Review updates preserve existing puzzle title and motif identity fields."""
 
+    ensure_puzzle(db_session, "test-puzzle-identity", "testuser")
     db_session.add(
         PuzzleStats(
             puzzle_id="test-puzzle-identity",
@@ -103,6 +89,7 @@ def test_update_puzzle_stats_preserves_existing_identity(db_session):
 def test_sequential_reviews(db_session):
     puzzle_id = "test-puzzle-3"
     username = "testuser"
+    ensure_puzzle(db_session, puzzle_id, username)
 
     # 1. First review: Fail
     update_puzzle_stats(db_session, puzzle_id, username, "fail")
@@ -151,6 +138,8 @@ def test_due_paths_agree_with_adaptive_classification(db_session):
     now = datetime.now(timezone.utc)
     naive = lambda dt: dt.replace(tzinfo=None)  # noqa: E731 - stored form
 
+    for _pid in ("due-old", "due-edge", "future"):
+        ensure_puzzle(db_session, _pid, "u")
     db_session.add_all(
         [
             PuzzleStats(  # clearly due
@@ -215,6 +204,8 @@ def test_get_adaptive_puzzles_accuracy_goal_sorting(db_session):
 
     now = datetime.now(timezone.utc)
 
+    ensure_puzzle(db_session, "p1", "testuser")
+    ensure_puzzle(db_session, "p2", "testuser")
     stats_high_accuracy = PuzzleStats(
         puzzle_id="p1",
         username="testuser",
@@ -271,6 +262,7 @@ class TestFocusBias:
             due = now + timedelta(days=due_in_days)
         else:
             due = None
+        ensure_puzzle(db, pid, "u")
         db.add(
             PuzzleStats(
                 puzzle_id=pid,
@@ -389,6 +381,7 @@ def test_a_never_reviewed_puzzle_counts_as_due(db_session):
     from services.api.models import PuzzleStats
     from services.api.storage.spaced_repetition import get_due_puzzle_count
 
+    ensure_puzzle(db_session, "never-reviewed", "u")
     db_session.add(
         PuzzleStats(
             puzzle_id="never-reviewed",
@@ -404,6 +397,183 @@ def test_a_never_reviewed_puzzle_counts_as_due(db_session):
     assert get_due_puzzle_count(db_session, "u") == 1
 
 
+def test_mixed_case_username_finds_lowercase_stats(db_session):
+    """Mixed-case caller finds lowercase PuzzleStats and respects due ordering.
+
+    get_adaptive_puzzles folds the username before querying PuzzleStats.
+    Live/API traffic is unaffected (Username canonicalises at the boundary);
+    direct/internal callers with mixed-case are repaired.
+    Candidates are listed new-first so a broken fold yields equal priorities
+    and stable-sort keeps the wrong order — making both asserts fail.
+
+    NB this covers CASE ONLY. It passes against a plain ``.lower()``, which is a
+    different fold from ``canonical_username`` and silently wrong on whitespace
+    and compatibility forms. ``test_noncanonical_username_reaches_canonical_rows``
+    below is the one that pins the actual fold; keep both.
+    """
+    now = datetime.now(timezone.utc)
+
+    # Stats stored lowercase, as the API route writes them.
+    ensure_puzzle(db_session, "due-mc", "alice")
+    db_session.add(
+        PuzzleStats(
+            puzzle_id="due-mc",
+            username="alice",
+            attempts=1,
+            pass_count=1,
+            ease_factor=2.0,
+            interval_days=1,
+            next_due_at=(now - timedelta(days=1)).replace(tzinfo=None),
+        )
+    )
+    # "new-mc" has no stats row — it lands in the never-seen tier.
+    db_session.commit()
+
+    # Pass mixed-case and new-puzzle first so order matters.
+    ordered, all_stats = get_adaptive_puzzles(
+        db_session, "Alice", ["new-mc", "due-mc"], n=2
+    )
+
+    assert (
+        "due-mc" in all_stats
+    ), "fold failed: mixed-case caller missed lowercase stats"
+    assert ordered[0] == "due-mc", "due puzzle must rank before never-seen"
+
+
+# One handle, spelled every way a non-canonical caller might spell it. Each
+# folds to "alice" under canonical_username but NOT under a bare .lower():
+#   " Alice "  -> .lower() = " alice "   (leading/trailing space survives)
+#   "Ａｌｉｃｅ" -> .lower() = "ａｌｉｃｅ" (fullwidth survives; NFKC folds it)
+#   "ALICE\xa0" -> .lower() = "alice\xa0" (NBSP is not stripped by .strip()
+#                                          until NFKC turns it into a space)
+# The last one is the sharpest: it needs NFKC *before* strip, which is exactly
+# the ordering canonical_username documents and a hand-rolled fold gets wrong.
+# The last entry combines all three defects at once, which is the case the task
+# actually cares about: mixed case AND surrounding whitespace AND a fullwidth
+# character in one handle.
+NONCANONICAL_SPELLINGS = [
+    " Alice ",
+    "Ａｌｉｃｅ",
+    "ALICE\xa0",
+    " Ａlice\xa0",
+]
+
+
+@pytest.mark.parametrize("handle", NONCANONICAL_SPELLINGS)
+def test_noncanonical_username_reaches_canonical_rows(db_session, handle):
+    """A non-canonical handle must reach the SAME rows as its canonical form.
+
+    Covers mixed case AND surrounding whitespace AND a fullwidth (NFKC
+    compatibility) form in one parametrised sweep, because the three fail
+    independently: a fold that lowercases but does not strip passes the
+    case-only test and still returns nothing for " Alice ".
+
+    Asserts the scheduling TIER, not a row count. The named failure mode is not
+    "fewer rows" — it is that ``spaced_repetition`` reads missing stats as
+    "never seen", so a due puzzle is served as new and ``update_puzzle_stats``
+    then re-anchors its interval off the wrong date. Checking that "due-nc"
+    still sorts ahead of a never-seen puzzle is the property that matters; a
+    count would pass on a fold that returned the right number of wrong rows.
+    """
+    now = datetime.now(timezone.utc)
+
+    # puzzle_stats.puzzle_id is a real FK, so both puzzles must exist before
+    # any stats row can name one. Created under the CANONICAL handle, which is
+    # the whole premise: the caller's ugly spelling has to reach these rows.
+    ensure_puzzle(db_session, "due-nc", "alice")
+    ensure_puzzle(db_session, "new-nc", "alice")
+
+    # Stored canonically, as every live writer stores it.
+    db_session.add(
+        PuzzleStats(
+            puzzle_id="due-nc",
+            username="alice",
+            attempts=1,
+            pass_count=1,
+            ease_factor=2.0,
+            interval_days=1,
+            next_due_at=(now - timedelta(days=1)).replace(tzinfo=None),
+        )
+    )
+    db_session.commit()
+
+    # "new-nc" has no stats row, and is listed FIRST so a broken fold leaves
+    # both puzzles in the never-seen tier with equal keys — stable sort then
+    # preserves this (wrong) order and the tier assert fails.
+    ordered, all_stats = get_adaptive_puzzles(
+        db_session, handle, ["new-nc", "due-nc"], n=2
+    )
+
+    assert "due-nc" in all_stats, (
+        f"fold failed for {handle!r}: canonical stats not found. "
+        "A .lower()-only fold produces a key that matches no row."
+    )
+    assert ordered[0] == "due-nc", (
+        f"fold failed for {handle!r}: an overdue puzzle was demoted below a "
+        "never-seen one, i.e. a due puzzle would be served as new."
+    )
+
+
+@pytest.mark.parametrize("handle", NONCANONICAL_SPELLINGS)
+def test_noncanonical_username_write_and_read_agree(db_session, handle):
+    """The write path and the read path must fold identically.
+
+    This is the regression for the asymmetry #345 introduced: it folded the
+    ``get_adaptive_puzzles`` READ but left ``update_puzzle_stats``' write
+    unfolded, so a direct caller passing "Alice" stored ``('p','Alice')`` and
+    then read with ``.lower()`` — ``all_stats`` came back empty and every
+    puzzle collapsed to the never-seen tier. A one-sided fold is strictly worse
+    than no fold, because no fold at least round-trips.
+
+    So this asserts the round trip through the real functions rather than
+    against a hand-inserted row: whatever ``update_puzzle_stats`` writes,
+    ``get_puzzle_stats`` and ``get_adaptive_puzzles`` must find.
+    """
+    reviewed = datetime.now(timezone.utc) - timedelta(days=30)
+
+    # puzzle_reviews.puzzle_id and puzzle_stats.puzzle_id both reference
+    # puzzles, so the round trip below needs real parent rows. Under the
+    # canonical handle: the point is that the ugly spelling still reaches them.
+    ensure_puzzle(db_session, "rt-nc", "alice")
+    ensure_puzzle(db_session, "new-rt", "alice")
+
+    # Write through the public API with the ugly handle.
+    insert_puzzle_review(db_session, "rt-nc", handle, "pass", reviewed_at=reviewed)
+    update_puzzle_stats(db_session, "rt-nc", handle, "pass", reviewed_at=reviewed)
+    db_session.commit()
+
+    # The review row too. Without this the insert_puzzle_review call above is
+    # decorative: update_puzzle_stats folds independently, so every assertion
+    # below passes while puzzle_reviews forks — and diagnosis_repository reads
+    # verified reviews BY USERNAME for the cause-accuracy column, so a forked
+    # row silently drops out of it.
+    from services.api.models import PuzzleReview
+
+    review_row = db_session.query(PuzzleReview).filter_by(puzzle_id="rt-nc").one()
+    assert review_row.username == "alice", (
+        f"{handle!r} wrote a review row under {review_row.username!r}; it will "
+        "not be counted by any canonical read"
+    )
+
+    # The row must exist under the canonical key, not the caller's spelling.
+    stored = db_session.query(PuzzleStats).filter_by(puzzle_id="rt-nc").one()
+    assert stored.username == "alice", (
+        f"{handle!r} was stored under {stored.username!r}; a write that does "
+        "not fold forks the user's data away from every canonical read"
+    )
+
+    # And every read path must find it — the caller's spelling, the canonical
+    # spelling, and the scheduler alike.
+    assert get_puzzle_stats(db_session, "rt-nc", handle) is not None
+    assert get_puzzle_stats(db_session, "rt-nc", "alice") is not None
+
+    ordered, all_stats = get_adaptive_puzzles(
+        db_session, handle, ["new-rt", "rt-nc"], n=2
+    )
+    assert "rt-nc" in all_stats, "write/read fold asymmetry: stats unreachable"
+    assert ordered[0] == "rt-nc", "a puzzle 29 days overdue was served as new"
+
+
 class TestVarietyCap:
     """One motif must not monopolise a session.
 
@@ -417,6 +587,7 @@ class TestVarietyCap:
 
         from services.api.models import PuzzleStats
 
+        ensure_puzzle(db, pid, "u")
         db.add(
             PuzzleStats(
                 puzzle_id=pid,
@@ -502,3 +673,461 @@ class TestVarietyCap:
         ordered, _ = get_adaptive_puzzles(db_session, "u", ids, n=4)
         forks = [p for p in ordered if p.startswith("fork")]
         assert forks == ["fork0", "fork1", "fork2"]
+
+
+class TestGameDiversity:
+    """Two positions from one game are not two problems.
+
+    Same opening, same opponent, same sitting, often a few moves apart. On the
+    live corpus the candidates average 3.19 puzzles per game, so without a cap a
+    default five-puzzle session is drawn from one or two games.
+    """
+
+    def _puzzle(self, db, pid, game, motif="Fork", days_overdue=None, ply=None):
+        from services.api.models import Puzzle, PuzzleStats
+
+        ensure_game(db, game, "u")
+        db.add(
+            Puzzle(
+                id=pid,
+                username="u",
+                source_game_id=game,
+                ply=ply if ply is not None else abs(hash(pid)) % 10_000,
+                fen="8/8/8/8/8/8/8/8 w - - 0 1",
+                side_to_move="white",
+                played_move_uci="e2e4",
+                best_move_uci="d2d4",
+                eval_before=0.5,
+                eval_after=-1.5,
+                swing=2.0,
+            )
+        )
+        due = None
+        if days_overdue is not None:
+            due = (datetime.now(timezone.utc) - timedelta(days=days_overdue)).replace(
+                tzinfo=None
+            )
+        db.add(
+            PuzzleStats(
+                puzzle_id=pid,
+                username="u",
+                primary_motif=motif,
+                attempts=1 if due else 0,
+                pass_count=1 if due else 0,
+                ease_factor=2.0,
+                interval_days=1 if due else None,
+                next_due_at=due,
+            )
+        )
+
+    def test_a_session_spreads_across_games_when_it_can(self, db_session):
+        # gameA holds the six most overdue puzzles; four other games hold one
+        # each, all less overdue. Without the cap the session is five from
+        # gameA and nothing else is ever seen.
+        # motif="blunder" is exempt from the motif cap, so this isolates the
+        # game constraint. With a real motif the two caps compose and only
+        # three of one motif fit in a five-puzzle session.
+        for i in range(6):
+            self._puzzle(
+                db_session,
+                f"a{i}",
+                "gameA",
+                motif="blunder",
+                days_overdue=30 - i,
+                ply=i,
+            )
+        for j, g in enumerate("bcde"):
+            self._puzzle(
+                db_session,
+                f"{g}0",
+                f"game{g.upper()}",
+                motif="blunder",
+                days_overdue=5 - j,
+                ply=50 + j,
+            )
+        db_session.commit()
+
+        ids = [f"a{i}" for i in range(6)] + [f"{g}0" for g in "bcde"]
+        ordered, _ = get_adaptive_puzzles(db_session, "u", ids, n=5)
+
+        session = ordered[:5]
+        assert len({p[0] for p in session}) == 5, session
+        # The most overdue puzzle still leads: the cap reorders, it does not
+        # demote priority.
+        assert session[0] == "a0"
+
+    def test_the_cap_cannot_invent_variety_that_is_not_there(self, db_session):
+        # Only two games exist, so a five-puzzle session must repeat one. What
+        # the cap guarantees is that the *distinct* game comes early rather
+        # than being buried behind every repeat.
+        for i in range(6):
+            self._puzzle(db_session, f"a{i}", "gameA", days_overdue=30 - i, ply=i)
+        self._puzzle(db_session, "b0", "gameB", days_overdue=1, ply=99)
+        db_session.commit()
+
+        ids = [f"a{i}" for i in range(6)] + ["b0"]
+        ordered, _ = get_adaptive_puzzles(db_session, "u", ids, n=5)
+
+        assert ordered[:2] == ["a0", "b0"]
+        assert len(ordered[:5]) == 5
+
+    def test_the_game_cap_holds_in_a_focused_session_too(self, db_session):
+        # A focus asks for a kind of mistake, never for five positions out of
+        # the same game — so unlike the motif cap this one stays on.
+        # motif="blunder" is exempt from the motif cap, so this isolates the
+        # game constraint. With a real motif the two caps compose and only
+        # three of one motif fit in a five-puzzle session.
+        for i in range(6):
+            self._puzzle(
+                db_session,
+                f"a{i}",
+                "gameA",
+                motif="blunder",
+                days_overdue=30 - i,
+                ply=i,
+            )
+        for j, g in enumerate("bcde"):
+            self._puzzle(
+                db_session,
+                f"{g}0",
+                f"game{g.upper()}",
+                motif="blunder",
+                days_overdue=5 - j,
+                ply=50 + j,
+            )
+        db_session.commit()
+
+        ids = [f"a{i}" for i in range(6)] + [f"{g}0" for g in "bcde"]
+        ordered, _ = get_adaptive_puzzles(
+            db_session, "u", ids, n=5, focus_puzzle_ids={"a0", "a1"}
+        )
+
+        assert len({p[0] for p in ordered[:5]}) == 5, ordered[:5]
+
+    def test_never_shortens_or_changes_the_set(self, db_session):
+        # Everything from one game: the cap cannot invent variety that is not
+        # there, and must not drop puzzles trying.
+        for i in range(6):
+            self._puzzle(db_session, f"a{i}", "gameA", days_overdue=30 - i, ply=i)
+        db_session.commit()
+
+        ids = [f"a{i}" for i in range(6)]
+        ordered, _ = get_adaptive_puzzles(db_session, "u", ids, n=5)
+        assert len(ordered) == 5
+
+        everything, _ = get_adaptive_puzzles(db_session, "u", ids, n=10)
+        assert sorted(everything) == sorted(ids)
+
+    def test_blunder_is_exempt_from_the_motif_cap(self, db_session):
+        """The exemption for an unrecorded motif never fired before.
+
+        assign_primary_motif returns "blunder" when no tactic is identified, so
+        it is the unknown sentinel — 65% of puzzle_stats. The cap exempted NULL,
+        but no row is NULL, so the population the exemption was written to
+        protect was the one being capped.
+        """
+        for i in range(6):
+            self._puzzle(
+                db_session,
+                f"g{i}",
+                f"game{i}",
+                motif="blunder",
+                days_overdue=30 - i,
+                ply=i,
+            )
+        db_session.commit()
+
+        ids = [f"g{i}" for i in range(6)]
+        ordered, _ = get_adaptive_puzzles(db_session, "u", ids, n=5)
+
+        # All six are "blunder" and each is from its own game, so nothing should
+        # be deferred: the session is the five most overdue, in order.
+        assert ordered[:5] == ["g0", "g1", "g2", "g3", "g4"]
+
+
+class TestDiversityNeverDisplacesDuePuzzles:
+    """The production shape: a small due set in few games, a large new pool.
+
+    Every other diversity test builds a pool that is all-due or all-new, so none
+    of them can observe a due puzzle being pushed behind a new one — which is
+    exactly the regression a global variety pass introduces. On the live corpus
+    the due tier is 10 puzzles across only 4 games.
+    """
+
+    def _p(self, db, pid, game, due_days=None, ply=None, motif="blunder"):
+        from services.api.models import Puzzle, PuzzleStats
+
+        ensure_game(db, game, "u")
+        db.add(
+            Puzzle(
+                id=pid,
+                username="u",
+                source_game_id=game,
+                ply=ply if ply is not None else abs(hash(pid)) % 10_000,
+                fen="8/8/8/8/8/8/8/8 w - - 0 1",
+                side_to_move="white",
+                played_move_uci="e2e4",
+                best_move_uci="d2d4",
+                eval_before=0.5,
+                eval_after=-1.5,
+                swing=2.0,
+            )
+        )
+        due = None
+        if due_days is not None:
+            due = (datetime.now(timezone.utc) - timedelta(days=due_days)).replace(
+                tzinfo=None
+            )
+        db.add(
+            PuzzleStats(
+                puzzle_id=pid,
+                username="u",
+                primary_motif=motif,
+                attempts=1 if due else 0,
+                pass_count=1 if due else 0,
+                ease_factor=2.0,
+                interval_days=1 if due else None,
+                next_due_at=due,
+            )
+        )
+
+    def _corpus(self, db):
+        # 10 due puzzles across 4 games, mirroring production.
+        # Clustered, NOT round-robined: the three most overdue all come from
+        # dueGame0. With `i % 4` the top of the tier was already four distinct
+        # games before any cap ran, so no assertion about spreading could fail.
+        due_ids = []
+        for i in range(10):
+            pid = f"due{i}"
+            self._p(db, pid, f"dueGame{i // 3}", due_days=30 - i, ply=i)
+            due_ids.append(pid)
+        # A large new pool, each from its own game.
+        new_ids = []
+        for i in range(40):
+            pid = f"new{i}"
+            self._p(db, pid, f"newGame{i}", ply=100 + i)
+            new_ids.append(pid)
+        db.commit()
+        return due_ids, new_ids
+
+    def test_a_large_session_still_serves_every_due_puzzle(self, db_session):
+        # The regression: a one-per-game cap applied across the whole queue let
+        # only 4 of the 10 due puzzles in, no matter how many were asked for.
+        due_ids, new_ids = self._corpus(db_session)
+
+        ordered, _ = get_adaptive_puzzles(db_session, "u", due_ids + new_ids, n=20)
+        session = ordered[:20]
+
+        assert sum(1 for p in session if p.startswith("due")) == 10, session
+
+    def test_tiers_are_emitted_in_scheduling_order(self, db_session):
+        """Guards tier ORDER, not displacement.
+
+        Note this inspects the already-sliced session, so the pre-fix code also
+        passed it — by serving fewer due puzzles rather than out-of-order ones.
+        test_a_large_session_still_serves_every_due_puzzle is the displacement
+        guard.
+        """
+        due_ids, new_ids = self._corpus(db_session)
+
+        ordered, _ = get_adaptive_puzzles(db_session, "u", due_ids + new_ids, n=20)
+
+        first_new = next(i for i, p in enumerate(ordered) if p.startswith("new"))
+        last_due = max(i for i, p in enumerate(ordered) if p.startswith("due"))
+        assert last_due < first_new, ordered[:22]
+
+    def test_a_small_session_still_prefers_due_over_new(self, db_session):
+        due_ids, new_ids = self._corpus(db_session)
+
+        ordered, _ = get_adaptive_puzzles(db_session, "u", due_ids + new_ids, n=5)
+
+        assert all(p.startswith("due") for p in ordered[:5]), ordered[:5]
+
+    def test_variety_still_applies_inside_the_due_tier(self, db_session):
+        """Tier-safety must not mean "no variety" within the tier.
+
+        Reads the real source_game_id rather than deriving it from the pid —
+        an earlier version did pid.replace("due", ""), which yields the loop
+        index, so four distinct pids always looked like four distinct games and
+        the assertion could not fail.
+        """
+        from services.api.models import Puzzle
+
+        due_ids, new_ids = self._corpus(db_session)
+
+        ordered, _ = get_adaptive_puzzles(db_session, "u", due_ids + new_ids, n=4)
+
+        games = [db_session.get(Puzzle, pid).source_game_id for pid in ordered[:4]]
+        # Without the cap this is dueGame0 three times, because the three most
+        # overdue puzzles all come from it.
+        assert len(set(games)) == 4, games
+
+
+def test_counters_do_not_carry_across_tiers(db_session):
+    """A game used in the due tier can still be picked in the never-seen tier.
+
+    Asserts ORDER, not a count. The previous version of this test counted how
+    many puzzles from one game appeared in the session, with n equal to the
+    whole corpus — so the slice was everything and the count was a tautology.
+    It passed with every line of variety logic deleted.
+
+    The count is unobservable in principle here: for the scheduled-later puzzle
+    to be in the slice at all, n must exceed the due and never-seen tiers
+    combined, which forces those tiers in whole. So the observable difference is
+    where the tier-1 puzzle from an already-used game ranks — behind the
+    fillers if counters were shared, ahead of them if they reset per tier.
+
+    Scope, stated so this is not mistaken for a general variety guard: deleting
+    the variety pass entirely leaves priority order intact and this test still
+    passes. That mutation is caught by five other tests, spanning three classes
+    — TestVarietyCap (1 of its 6), TestGameDiversity (3), and
+    TestDiversityNeverDisplacesDuePuzzles (1). What this one uniquely catches is
+    sharing the counters across tiers, which before it no test in the repo
+    detected at all.
+    """
+    from services.api.models import Puzzle, PuzzleStats
+
+    now = datetime.now(timezone.utc)
+
+    def add(pid, game, due_days, ply):
+        ensure_game(db_session, game, "u")
+        db_session.add(
+            Puzzle(
+                id=pid,
+                username="u",
+                source_game_id=game,
+                ply=ply,
+                fen="8/8/8/8/8/8/8/8 w - - 0 1",
+                side_to_move="white",
+                played_move_uci="e2e4",
+                best_move_uci="d2d4",
+                eval_before=0.5,
+                eval_after=-1.5,
+                swing=2.0,
+            )
+        )
+        due = (
+            None
+            if due_days is None
+            else (now - timedelta(days=due_days)).replace(tzinfo=None)
+        )
+        db_session.add(
+            PuzzleStats(
+                puzzle_id=pid,
+                username="u",
+                primary_motif="blunder",
+                attempts=1 if due else 0,
+                pass_count=0,
+                ease_factor=2.0,
+                interval_days=1 if due else None,
+                next_due_at=due,
+            )
+        )
+
+    # Two due puzzles from two games — two, so the len(ordered) <= 1 early
+    # return cannot short-circuit the pass under test.
+    add("x_due", "gameX", 20, 1)
+    add("y_due", "gameY", 10, 2)
+    # gameX appears again in the never-seen tier, alongside unrelated fillers.
+    add("x_new", "gameX", None, 3)
+    for i in range(3):
+        add(f"filler{i}", f"gameF{i}", None, 10 + i)
+    db_session.commit()
+
+    # Spelled out rather than read from a query, because the candidate order is
+    # load-bearing here and must not be left to an unordered SELECT. Every
+    # never-seen puzzle produces an IDENTICAL sort key — same tier, same focus
+    # flag, and time_factor is the single `now` bound once per call — so the
+    # sort is a no-op within tier 1 and the caller's order IS the tie-break.
+    # (`ply` is not part of the sort key and influences nothing.)
+    ids = ["x_due", "y_due", "x_new", "filler0", "filler1", "filler2"]
+
+    # n cuts inside tier 1, so the third slot is contested.
+    ordered, _ = get_adaptive_puzzles(db_session, "u", ids, n=3)
+
+    # gameX was counted in tier 0. Per-tier reset means it is eligible again in
+    # tier 1, so x_new is NOT deferred and keeps its place at the head of the
+    # tier. Shared counters would defer it and a filler would take the slot.
+    assert ordered[:3] == ["x_due", "y_due", "x_new"], ordered[:3]
+
+
+def test_the_two_caps_compose_and_neither_orders_alone(db_session):
+    """A distinct game can be deferred by the MOTIF cap and land behind a repeat.
+
+    Each existing class isolates ONE cap, from opposite directions:
+
+    - Three of TestGameDiversity's five tests set motif="blunder", which
+      _NON_MOTIFS exempts, so they isolate the game cap. (Not "the
+      multi-game tests" — four of the five are multi-game.)
+    - TestVarietyCap goes the other way: its _stats helper creates PuzzleStats
+      but no Puzzle rows, so _source_games returns {} and `game` is None for
+      every id — the game cap is exempt for all six of its tests, and what they
+      exercise is the motif cap.
+
+    So neither class has both caps binding at once, which is what falsified
+    three successive attempts to write an ordering invariant into the call site.
+
+    Games A, B, A, C, all sharing one real motif. With n=3 the motif cap
+    (int(3 * 2/3) = 2) is reached after p1 and p2, so p4 — the only puzzle from
+    game C — is deferred and never promoted. p3 lands in slot 3 from the head of
+    the deferred tail, and a distinct game that was available is never served.
+
+    Note the expected order here is also the INPUT order, so a mutation that
+    made the whole variety pass a no-op would not fail this test. That one is
+    caught by the five tests listed in test_counters_do_not_carry_across_tiers.
+    What it pins: that the motif cap BINDS at n=3 — loosen it and p4 is
+    promoted, failing this test — and the order of the deferred tail, which it
+    catches alone (reversing the tail kills only this test).
+
+    What it does NOT pin: the cap's exact value. Tighten _VARIETY_SHARE to 1/3
+    and the cap becomes 1; p2, p3 and p4 are all deferred and the served order
+    is identical, so this test cannot tell cap 1 from cap 2. It detects
+    loosening only.
+
+    That is a limit of THIS test, not of the suite: the tightening is caught,
+    by TestGameDiversity::test_the_cap_cannot_invent_variety_that_is_not_there,
+    which is one of the two in its class that does not set motif="blunder" and
+    so has the motif cap live. Both directions verified by mutation.
+    """
+    from services.api.models import Puzzle, PuzzleStats
+
+    for i, (pid, game) in enumerate(
+        [("p1", "gameA"), ("p2", "gameB"), ("p3", "gameA"), ("p4", "gameC")]
+    ):
+        # puzzles(source_game_id, username) is a real composite FK, so the game
+        # has to exist before the puzzle that names it.
+        ensure_game(db_session, game, "u")
+        db_session.add(
+            Puzzle(
+                id=pid,
+                username="u",
+                source_game_id=game,
+                ply=i + 1,
+                fen="8/8/8/8/8/8/8/8 w - - 0 1",
+                side_to_move="white",
+                played_move_uci="e2e4",
+                best_move_uci="d2d4",
+                eval_before=0.5,
+                eval_after=-1.5,
+                swing=2.0,
+            )
+        )
+        db_session.add(
+            PuzzleStats(
+                puzzle_id=pid,
+                username="u",
+                # A REAL motif, not the exempt "blunder" — that is the point.
+                primary_motif="fork",
+                attempts=0,
+                pass_count=0,
+                ease_factor=2.0,
+                next_due_at=None,
+            )
+        )
+    db_session.commit()
+
+    ordered, _ = get_adaptive_puzzles(db_session, "u", ["p1", "p2", "p3", "p4"], n=3)
+    games = [db_session.get(Puzzle, pid).source_game_id for pid in ordered[:3]]
+
+    assert games == ["gameA", "gameB", "gameA"], games
+    assert "gameC" not in games

@@ -8,6 +8,12 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from services.api.models import Game
+from services.api.usernames import canonical_username
+
+# Username convention: every public method here folds its ``username`` argument
+# once with ``canonical_username`` before it touches the Game/ImportSummary
+# key. See the "storage-boundary rule" section of ``services.api.usernames``
+# for why a bare ``.lower()`` is not an acceptable substitute.
 
 MANUAL_GAME_ID = "__manual__"
 
@@ -84,7 +90,9 @@ class GameRepository:
             # unrelated games into a single identity.
             raise ValueError("store_game requires a non-empty game url")
 
-        username_lower = username.lower()
+        # One fold for the ownership probe and the INSERT: a game probed under
+        # one key and written under another is a game its owner cannot see.
+        username_lower = canonical_username(username)
         game_id = self._game_id_from_url(url)
 
         # Ownership is per (game_id, username): the same canonical game may be
@@ -129,7 +137,7 @@ class GameRepository:
         return [row[0] for row in self.db.execute(stmt).all()]
 
     def get_game_count(self, username: str) -> int:
-        username_lower = username.lower()
+        username_lower = canonical_username(username)
         stmt = (
             select(func.count())
             .select_from(Game)
@@ -138,7 +146,7 @@ class GameRepository:
         return self.db.scalar(stmt) or 0
 
     def get_all_metadata(self, username: str) -> list[GameMetadata]:
-        username_lower = username.lower()
+        username_lower = canonical_username(username)
         # Select only the metadata columns: full Game rows would drag every
         # PGN blob into memory alongside the metadata.
         stmt = (
@@ -162,7 +170,7 @@ class GameRepository:
 
     def get_latest_game_time(self, username: str) -> datetime | None:
         """Get the timestamp of the most recent game for a user."""
-        username_lower = username.lower()
+        username_lower = canonical_username(username)
         stmt = select(func.max(Game.end_time)).where(
             Game.username == username_lower, Game.game_id != MANUAL_GAME_ID
         )
@@ -172,7 +180,7 @@ class GameRepository:
     def get_pgn(self, username: str, game_id: str) -> str | None:
         if game_id == MANUAL_GAME_ID:
             return None
-        game = self.db.get(Game, (game_id, username.lower()))
+        game = self.db.get(Game, (game_id, canonical_username(username)))
         if game and game.pgn_blob:
             return game.pgn_blob
         return None
@@ -184,6 +192,7 @@ class GameRepository:
         Only games owned by ``username`` are returned; ids belonging to other
         users (or games without PGN content) are silently omitted.
         """
+        username = canonical_username(username)
         pgns: dict[str, str] = {}
         for start in range(0, len(game_ids), PGN_BATCH_SIZE):
             pgns.update(
@@ -200,6 +209,7 @@ class GameRepository:
         memory at a time. Ids without PGN content (or owned by another user)
         are skipped.
         """
+        username = canonical_username(username)
         for start in range(0, len(game_ids), PGN_BATCH_SIZE):
             batch = game_ids[start : start + PGN_BATCH_SIZE]
             pgns = self._fetch_pgn_batch(username, batch)
@@ -211,9 +221,10 @@ class GameRepository:
     def _fetch_pgn_batch(
         self, username: str, game_ids: Sequence[str]
     ) -> dict[str, str]:
-        username_lower = username.lower()
+        # Private: ``username`` arrives already folded from get_pgns/iter_pgns,
+        # which are the public boundary.
         stmt = select(Game.game_id, Game.pgn_blob).where(
-            Game.username == username_lower,
+            Game.username == username,
             Game.game_id != MANUAL_GAME_ID,
             Game.game_id.in_(game_ids),
         )
@@ -225,7 +236,7 @@ class GameRepository:
         """Store the last import summary for a user in the database."""
         from services.api.models import ImportSummary
 
-        username_lower = username.lower()
+        username_lower = canonical_username(username)
         if imported_at is None:
             ts = datetime.now(timezone.utc)
         else:
@@ -249,7 +260,7 @@ class GameRepository:
         """Get the last import summary for a user from the database."""
         from services.api.models import ImportSummary
 
-        summary = self.db.get(ImportSummary, username.lower())
+        summary = self.db.get(ImportSummary, canonical_username(username))
         if not summary:
             return None
         return {

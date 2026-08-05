@@ -3,24 +3,10 @@
 from unittest.mock import patch
 
 import pytest
-from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from scripts.backfill_storage import validate_game_metadata
-from services.api.db import Base
 from services.api.storage.game_repository import GameRepository
-
-
-@pytest.fixture
-def db_session(tmp_path):
-    engine = create_engine(f"sqlite:///{tmp_path / 'test.db'}")
-    Base.metadata.create_all(engine)
-    session_local = sessionmaker(bind=engine)
-    session = session_local()
-    try:
-        yield session
-    finally:
-        session.close()
 
 
 @pytest.fixture
@@ -350,3 +336,58 @@ def test_game_repository_iter_pgns_preserves_order_and_batches(repository, monke
 def test_validate_game_metadata_missing_fields():
     errors = validate_game_metadata({"game_id": "g1"})
     assert any(error.startswith("missing_fields") for error in errors)
+
+
+# See services.api.usernames for why these four spellings and not just one:
+# each folds to "testuser" under canonical_username, and each survives a bare
+# .lower() as a key that matches no row.
+NONCANONICAL_SPELLINGS = [
+    " TestUser ",
+    "ＴＥＳＴＵＳＥＲ",
+    "TESTUSER\xa0",
+    " Ｔestuser\xa0",
+]
+
+
+@pytest.mark.parametrize("handle", NONCANONICAL_SPELLINGS)
+def test_game_repository_folds_noncanonical_usernames(repository, handle):
+    """A non-canonical handle reads and writes the same rows as its canonical form.
+
+    The pre-existing coverage above only exercised case ("TESTUSER"), which a
+    plain .lower() satisfies. Whitespace and compatibility forms do not: they
+    produce a key that silently matches nothing, and an empty read here means
+    "this user has imported no games" — which the import path then acts on.
+
+    Reads AND writes are asserted together on purpose. A fold on one side only
+    is worse than none: store_game would insert under ' testuser ' while every
+    query looked under 'testuser', so the game would exist and be invisible.
+    """
+    own_id = _store_game(repository, "testuser", 0)
+
+    assert repository.get_game_count(handle) == 1
+    assert repository.get_pgn(handle, own_id) is not None
+    assert set(repository.get_pgns(handle, [own_id])) == {own_id}
+    assert list(repository.iter_pgns(handle, [own_id])) == [
+        '[Event "testuser 0"]\n1. e4 e5 *'
+    ]
+    assert [m.game_id for m in repository.get_all_metadata(handle)] == [own_id]
+
+    # A write under the ugly spelling must land on the SAME key, not fork.
+    repository.record_import_summary(handle, new_games=7)
+    summary = repository.get_last_import_summary("testuser")
+    assert summary is not None and summary["last_new_games"] == 7
+
+    # And storing a game under the ugly spelling must not create a second user.
+    repository.store_game(
+        username=handle,
+        url="https://chess.com/game/noncanonical",
+        pgn='[Event "x"]\n1. e4 *',
+        white_username="testuser",
+        black_username="opponent",
+        white_result="win",
+        black_result="lose",
+        time_control="600",
+        end_time=1234567890,
+        rated=True,
+    )
+    assert repository.get_users() == ["testuser"]

@@ -10,9 +10,6 @@ import time
 import jwt
 import pytest
 from fastapi import HTTPException
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
 
 from services.api import security
 from services.api.identity import (
@@ -23,7 +20,7 @@ from services.api.identity import (
     require_account,
     require_authenticated_account,
 )
-from services.api.models import Account, AccountChessUsername, Base
+from services.api.models import Account, AccountChessUsername
 from services.api.security import (
     JWTSecretMissingError,
     create_access_token,
@@ -36,20 +33,8 @@ SECRET = "test-secret-please-ignore-0123456789-abcdef"
 
 
 @pytest.fixture
-def db():
-    engine = create_engine(
-        "sqlite:///:memory:",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    Base.metadata.create_all(bind=engine)
-    SessionLocal = sessionmaker(bind=engine)
-    session = SessionLocal()
-    try:
-        yield session
-    finally:
-        session.close()
-        Base.metadata.drop_all(bind=engine)
+def db(db_session):
+    return db_session
 
 
 def _make_account(db, email="alice@example.com", password="hunter2", disabled=False):

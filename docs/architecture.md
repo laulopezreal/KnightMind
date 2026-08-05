@@ -237,7 +237,7 @@ steadily advancing job is never reported as timed out.
 
 ## Persistence
 
-Postgres in production; SQLite is a local-dev opt-in (`KNIGHTMIND_DEV_SQLITE=1`). The
+Postgres everywhere: production, local development and the test suite. The
 API fails fast at startup when `DATABASE_URL` is unset rather than silently writing to an
 ephemeral file. Schema changes go through Alembic (`alembic upgrade head`).
 

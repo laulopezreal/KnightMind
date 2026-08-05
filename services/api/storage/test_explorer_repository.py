@@ -3,10 +3,9 @@
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from services.api.models import Base, OpeningExplorerCache
+from services.api.models import OpeningExplorerCache
 from services.api.openings.explorer import CACHE_TTL_DAYS, ExplorerStats
 from services.api.storage.explorer_repository import ExplorerRepository
 
@@ -14,11 +13,9 @@ STATS = ExplorerStats(white=600, draws=200, black=200)
 
 
 @pytest.fixture
-def sessions(tmp_path):
+def sessions(db_engine):
     """Two sessions on one database, so a real write race can be staged."""
-    engine = create_engine(f"sqlite:///{tmp_path/'explorer.db'}")
-    Base.metadata.create_all(engine)
-    factory = sessionmaker(bind=engine, autoflush=False)
+    factory = sessionmaker(bind=db_engine, autoflush=False)
     first, second = factory(), factory()
     try:
         yield first, second

@@ -11,6 +11,14 @@ from sqlalchemy.orm import Session
 from services.api.models import Puzzle, PuzzleResult, PuzzleReview, PuzzleStats
 from services.api.puzzles.identity import assign_primary_motif, generate_puzzle_title
 from services.api.storage.puzzle_repository import PuzzleRepository
+from services.api.usernames import canonical_username
+
+# Username convention: every public function here folds its ``username``
+# argument once with ``canonical_username`` and works with the folded value
+# thereafter. See the "storage-boundary rule" section of
+# ``services.api.usernames`` for why a bare ``.lower()`` is not an acceptable
+# substitute — the failure mode is specifically severe in this module, because
+# an unmatched fold yields empty stats and empty stats mean "never seen".
 
 # Datetime convention (single documented rule for all "due" comparisons):
 # every datetime is persisted as naive-UTC (values come from
@@ -77,7 +85,8 @@ def get_puzzle_stats(
     doesn't support ``FOR UPDATE`` and serializes writers anyway).
     """
     stmt = select(PuzzleStats).where(
-        PuzzleStats.puzzle_id == puzzle_id, PuzzleStats.username == username
+        PuzzleStats.puzzle_id == puzzle_id,
+        PuzzleStats.username == canonical_username(username),
     )
     if for_update and db.get_bind().dialect.name == "postgresql":
         stmt = stmt.with_for_update()
@@ -86,7 +95,9 @@ def get_puzzle_stats(
 
 def get_all_puzzle_stats(db: Session, username: str) -> dict[str, PuzzleStats]:
     """Get statistics for all puzzles belonging to a user."""
-    stmt = select(PuzzleStats).where(PuzzleStats.username == username)
+    stmt = select(PuzzleStats).where(
+        PuzzleStats.username == canonical_username(username)
+    )
     return {stats.puzzle_id: stats for stats in db.scalars(stmt).all()}
 
 
@@ -147,7 +158,7 @@ def insert_puzzle_review(
 
     review = PuzzleReview(
         puzzle_id=puzzle_id,
-        username=username,
+        username=canonical_username(username),
         reviewed_at=reviewed_at,
         result=result_val,
         time_spent_ms=time_spent_ms,
@@ -191,6 +202,11 @@ def update_puzzle_stats(
     """
     if reviewed_at is None:
         reviewed_at = datetime.now(timezone.utc)
+
+    # Folded once here, then reused for the read, the PuzzleRepository lookup
+    # and the INSERT. Folding per-statement instead would let a future edit
+    # change one of the three and fork a user's stats row from their puzzles.
+    username = canonical_username(username)
 
     # Lock the stats row so the counter read-modify-write and the scheduling
     # computed from the post-increment counts are race-safe: concurrent reviews
@@ -280,9 +296,21 @@ def get_adaptive_puzzles(
     now = datetime.now(timezone.utc)
     focus = focus_puzzle_ids or set()
 
+    # Folded once for both reads below (stats here, source games in
+    # _source_games). Live/API traffic is unaffected because Username already
+    # canonicalises at the request boundary; direct/internal callers with a
+    # non-canonical handle are repaired here. The failure mode is silent and
+    # severe: an unmatched fold produces an empty all_stats, collapsing every
+    # puzzle to the never-seen tier and serving due puzzles as new — which then
+    # re-anchors their intervals off the wrong date. This was previously a
+    # `.lower()`, which is not the same fold: ' Bob ' lowercased is ' bob ',
+    # a key that matches nothing, so the guard looked present and did nothing.
+    username = canonical_username(username)
+
     # Query stats for the given puzzle IDs
     stmt = select(PuzzleStats).where(
-        PuzzleStats.username == username, PuzzleStats.puzzle_id.in_(puzzle_ids)
+        PuzzleStats.username == username,
+        PuzzleStats.puzzle_id.in_(puzzle_ids),
     )
     all_stats = {s.puzzle_id: s for s in db.scalars(stmt).all()}
 
@@ -331,12 +359,93 @@ def get_adaptive_puzzles(
 
     sorted_pids = sorted(puzzle_ids, key=sort_key)
 
-    # A focused session is *asked* to be concentrated, so the variety cap would
-    # be fighting the user's explicit choice. Everywhere else, spread it.
-    if not focus:
-        sorted_pids = _vary_motifs(sorted_pids, all_stats, n)
+    # Counters reset per tier, so within a tier one puzzle per game is
+    # *preferred* — but that is a preference, not a bound on the session. The
+    # rest are deferred, not dropped, and ``varied[:n]`` reaches straight into
+    # them whenever a tier holds fewer distinct games than the session has slots
+    # — which the live due tier did when this was written (3 distinct games
+    # against a default n=5), so a default session necessarily repeats a game.
+    # ``_vary_session``'s own docstring says it: the caps cannot invent variety
+    # that is not there.
+    #
+    # No ordering invariant is stated here, because three attempts to state one
+    # were all wrong: "up to two spanning tiers", then "in production that bound
+    # is two", then "within the first n of a tier, distinct games come first".
+    # The last fails because the two caps COMPOSE. With only the game cap active
+    # every deferred puzzle is by definition a repeat, so distinct-first does
+    # hold — asserted by
+    # TestGameDiversity::test_the_cap_cannot_invent_variety_that_is_not_there.
+    # Turn the motif cap on and a distinct-GAME puzzle can be deferred for
+    # motif reasons and land behind a game repeat inside the first ``n``:
+    # games A, B, A, C all sharing one motif, n=3, serves A twice and never C.
+    # Pinned by ``test_the_two_caps_compose_and_neither_orders_alone``.
+    #
+    # Three of TestGameDiversity's five tests set motif="blunder" to neutralise
+    # the motif cap; the other two take the helper default "Fork", where at
+    # _GAME_CAP=1 the motif cap never binds. So the class does not assert the
+    # composition at the current constants — not that it could not: raise
+    # _GAME_CAP to 3 and one of them becomes composition-sensitive.
+    #
+    # The lesson these three attempts share: a measured count rots (the due tier
+    # went 9 -> 12 in a day) and an ordering rule stated over one cap is falsified
+    # by the other. Assert structure here, put behaviour in tests.
+    #
+    # Sharing counters globally
+    # would be tighter, but it is also the direction that risks starving a tier:
+    # once the due tier consumes its games, every new puzzle from those games
+    # would defer. Per-tier is the more permissive and therefore safer default,
+    # and tightening it is a behaviour change that deserves its own replay
+    # against the live pool rather than riding along here.
+    #
+    # A focused session is *asked* to be concentrated on one cause or opening,
+    # so capping by motif would fight the user's explicit choice. Spreading
+    # across GAMES does not: a focus asks for a kind of mistake, never for five
+    # positions out of the same game, so that cap stays on in both modes.
+    source_games = _source_games(db, username, sorted_pids)
+    varied: list[str] = []
+    for tier in sorted({_tier_of(pid, all_stats, now) for pid in sorted_pids}):
+        tier_pids = [p for p in sorted_pids if _tier_of(p, all_stats, now) == tier]
+        varied.extend(
+            _vary_session(tier_pids, all_stats, source_games, n, cap_motifs=not focus)
+        )
 
-    return sorted_pids[:n], all_stats
+    return varied[:n], all_stats
+
+
+def _tier_of(pid: str, all_stats: dict[str, PuzzleStats], now: datetime) -> int:
+    """Scheduling tier: 0 due, 1 never-seen, 2 scheduled for later.
+
+    Mirrors ``base_priority`` in ``sort_key``. Extracted so the variety pass can
+    group by the same boundary the sort established, instead of re-deriving it.
+    """
+    stats = all_stats.get(pid)
+    if stats is None or stats.next_due_at is None:
+        return 1
+    next_due = stats.next_due_at
+    if next_due.tzinfo is None:
+        next_due = next_due.replace(tzinfo=timezone.utc)
+    return 0 if next_due <= now else 2
+
+
+def _source_games(db: Session, username: str, puzzle_ids: list[str]) -> dict[str, str]:
+    """Map puzzle id -> source game id for the candidates.
+
+    A separate read because the sort works on ids and stats alone, and
+    PuzzleStats does not carry the source game. One indexed query on the
+    candidate set, not per puzzle.
+
+    Private: ``username`` arrives already folded from ``get_adaptive_puzzles``,
+    which is the public boundary. Re-folding here would be harmless but would
+    blur where the single fold lives.
+    """
+    if not puzzle_ids:
+        return {}
+    rows = db.execute(
+        select(Puzzle.id, Puzzle.source_game_id).where(
+            Puzzle.username == username, Puzzle.id.in_(puzzle_ids)
+        )
+    ).all()
+    return {pid: game for pid, game in rows}
 
 
 # At most this share of a session may share one motif. Five forks in a row is a
@@ -345,56 +454,85 @@ def get_adaptive_puzzles(
 # your way through it.
 _VARIETY_SHARE = 2 / 3
 
+# Motif values that are not motifs. assign_primary_motif returns "blunder"
+# when no specific tactic is identified, and it is 65% of puzzle_stats. The
+# cap below already exempts a missing motif, for the stated reason that
+# capping "unknown" would penalise the puzzles the user has seen least — but no
+# row is actually NULL, so without this the exemption never fired and the
+# population it was written to protect was the one being capped.
+_NON_MOTIFS = frozenset({"blunder"})
 
-def _vary_motifs(
-    ordered: list[str], all_stats: dict[str, PuzzleStats], n: int
+# How many puzzles from one game may appear in a session. One, because two
+# positions from the same game are not two problems: same opening, same
+# opponent, same sitting, often a few moves apart. Measured on the live corpus
+# the candidates average 3.19 puzzles per game, so without this a default
+# five-puzzle session is drawn from one or two games.
+_GAME_CAP = 1
+
+
+def _vary_session(
+    ordered: list[str],
+    all_stats: dict[str, PuzzleStats],
+    source_games: dict[str, str],
+    n: int,
+    *,
+    cap_motifs: bool,
 ) -> list[str]:
-    """Reorder so one motif cannot monopolise a session.
+    """Reorder so one game — or one motif — cannot monopolise a session.
 
-    Deferred puzzles are appended rather than dropped, so this can only change
-    the *order* of what was already selectable — never the set, and never the
-    length. A session with nothing else available stays as concentrated as the
-    corpus forces it to be; the cap cannot invent variety that is not there.
+    Deferred puzzles are appended rather than dropped, so this returns the same
+    set in a different order — never a shorter list. That says nothing about
+    the *session*: the caller slices to ``n``, so reordering does change which
+    puzzles get served. That is exactly why this runs per tier. A session with nothing else available stays as concentrated as the
+    corpus forces it to be; the caps cannot invent variety that is not there.
 
-    Puzzles with no recorded motif are exempt: "unknown" is not a motif, and
-    treating it as one would cap the very puzzles the user has seen least.
+    Both constraints are applied in one pass on purpose. Run as two passes they
+    fight: whichever runs second re-defers the other's picks, and the winner is
+    decided by call order rather than by which grouping matters more.
+
+    Puzzles with no recorded motif are exempt from the motif cap: "unknown" is
+    not a motif, and treating it as one would cap the very puzzles the user has
+    seen least. A puzzle with no known source game is likewise exempt from the
+    game cap rather than being lumped into one pseudo-game.
     """
     if n <= 1 or len(ordered) <= 1:
         return ordered
 
-    cap = max(1, int(n * _VARIETY_SHARE))
+    motif_cap = max(1, int(n * _VARIETY_SHARE))
     taken: list[str] = []
     deferred: list[str] = []
-    counts: dict[str, int] = {}
+    motif_counts: dict[str, int] = {}
+    game_counts: dict[str, int] = {}
 
     for pid in ordered:
-        stats = all_stats.get(pid)
-        motif = stats.primary_motif if stats else None
-        if motif is None:
+        # Once the session is full every remaining puzzle is tail padding, so
+        # stop deferring and keep the underlying priority order intact.
+        if len(taken) >= n:
             taken.append(pid)
             continue
-        if counts.get(motif, 0) >= cap and len(taken) < n:
+
+        stats = all_stats.get(pid)
+        motif = stats.primary_motif if stats else None
+        if motif is not None and motif.strip().lower() in _NON_MOTIFS:
+            motif = None
+        game = source_games.get(pid)
+
+        over_motif = (
+            cap_motifs and motif is not None and motif_counts.get(motif, 0) >= motif_cap
+        )
+        over_game = game is not None and game_counts.get(game, 0) >= _GAME_CAP
+        if over_motif or over_game:
             deferred.append(pid)
             continue
-        counts[motif] = counts.get(motif, 0) + 1
+
+        if motif is not None:
+            motif_counts[motif] = motif_counts.get(motif, 0) + 1
+        if game is not None:
+            game_counts[game] = game_counts.get(game, 0) + 1
         taken.append(pid)
 
     # Anything held back rejoins immediately after, so the set is unchanged.
     return taken + deferred
-
-
-def get_due_puzzles(
-    db: Session, username: str, puzzle_ids: list[str], n: int = 5
-) -> tuple[list[str], dict[str, PuzzleStats]]:
-    """
-    Get puzzles for the user from the candidate list, ordered by SR priority.
-
-    Priority:
-    1. Due: next_due_at <= now
-    2. New: next_due_at IS NULL
-    3. Future: ordered by next_due_at ASC
-    """
-    return get_adaptive_puzzles(db, username, puzzle_ids, n)
 
 
 def get_trainable_puzzle_ids(
@@ -424,7 +562,7 @@ def get_trainable_puzzle_ids(
     scheduled_later = set(
         db.scalars(
             select(PuzzleStats.puzzle_id).where(
-                PuzzleStats.username == username,
+                PuzzleStats.username == canonical_username(username),
                 PuzzleStats.puzzle_id.in_(puzzle_ids),
                 PuzzleStats.next_due_at.isnot(None),
                 PuzzleStats.next_due_at > now,
@@ -455,7 +593,7 @@ def get_trainable_puzzle_count(db: Session, username: str) -> int:
             ),
         )
         .where(
-            Puzzle.username == username,
+            Puzzle.username == canonical_username(username),
             or_(
                 PuzzleStats.puzzle_id.is_(None),
                 PuzzleStats.next_due_at.is_(None),
@@ -475,7 +613,7 @@ def get_scheduled_within_count(db: Session, username: str, hours: int) -> int:
     """
     now = _utcnow_naive()
     stmt = select(func.count(PuzzleStats.puzzle_id)).where(
-        PuzzleStats.username == username,
+        PuzzleStats.username == canonical_username(username),
         PuzzleStats.next_due_at.isnot(None),
         PuzzleStats.next_due_at > now,
         PuzzleStats.next_due_at <= now + timedelta(hours=hours),
@@ -500,7 +638,7 @@ def get_due_puzzle_count(db: Session, username: str) -> int:
     # naive-UTC bound: match the naive-UTC storage of next_due_at (see module note)
     now = _utcnow_naive()
     stmt = select(func.count(PuzzleStats.puzzle_id)).where(
-        PuzzleStats.username == username,
+        PuzzleStats.username == canonical_username(username),
         or_(PuzzleStats.next_due_at.is_(None), PuzzleStats.next_due_at <= now),
     )
     return db.scalar(stmt) or 0
@@ -511,6 +649,7 @@ def get_next_due_date(db: Session, username: str) -> datetime | None:
     # naive-UTC bound: match the naive-UTC storage of next_due_at (see module note)
     now = _utcnow_naive()
     stmt = select(func.min(PuzzleStats.next_due_at)).where(
-        PuzzleStats.username == username, PuzzleStats.next_due_at > now
+        PuzzleStats.username == canonical_username(username),
+        PuzzleStats.next_due_at > now,
     )
     return db.scalar(stmt)

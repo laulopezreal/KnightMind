@@ -25,12 +25,13 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
+# Importing `models` is what actually registers the 14 tables on Base.metadata --
+# `db` only defines the empty declarative Base. Without this import
+# target_metadata is empty, so `alembic check` reports every table as removed and
+# `revision --autogenerate` emits a migration that drops the whole schema.
+import services.api.models  # noqa: F401
 from services.api.db import Base
 
-# add your model's MetaData object here
-# for 'autogenerate' support
-# from myapp import mymodel
-# target_metadata = mymodel.Base.metadata
 target_metadata = Base.metadata
 
 database_url = os.getenv("DATABASE_URL")

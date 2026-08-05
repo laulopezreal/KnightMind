@@ -16,7 +16,7 @@ vi.mock('../context/ChessUsernameContext', () => ({
     useChessUsername: () => ({ username: mockUsername }),
 }));
 
-const { MockApiError, mockGetLibraryPuzzle, mockReviewPuzzle, mockGetPuzzleDiagnosis } = vi.hoisted(() => {
+const { MockApiError, mockGetLibraryPuzzle, mockReviewPuzzle, mockGetPuzzleDiagnosis, mockGetSimilarPuzzles } = vi.hoisted(() => {
     class MockApiError extends Error {
         statusCode: number;
         detail?: string;
@@ -32,6 +32,7 @@ const { MockApiError, mockGetLibraryPuzzle, mockReviewPuzzle, mockGetPuzzleDiagn
         mockGetLibraryPuzzle: vi.fn(),
         mockReviewPuzzle: vi.fn(),
         mockGetPuzzleDiagnosis: vi.fn(),
+        mockGetSimilarPuzzles: vi.fn(),
     };
 });
 
@@ -43,6 +44,7 @@ vi.mock('../api/puzzles', () => ({
     getLibraryPuzzle: (...args: unknown[]) => mockGetLibraryPuzzle(...args),
     reviewPuzzle: (...args: unknown[]) => mockReviewPuzzle(...args),
     getPuzzleDiagnosis: (...args: unknown[]) => mockGetPuzzleDiagnosis(...args),
+    getSimilarPuzzles: (...args: unknown[]) => mockGetSimilarPuzzles(...args),
 }));
 
 vi.mock('react-chessboard', () => ({
@@ -102,8 +104,18 @@ describe('LibraryPuzzle', () => {
         vi.resetAllMocks();
         mockUsername = 'testplayer';
         mockPuzzleId = 'puzzle-abc';
-        mockGetLibraryPuzzle.mockResolvedValue(MOCK_PUZZLE);
+        // Honour the requested id. The real endpoint always echoes back the
+        // row it matched, and a fixed id here makes `puzzle?.id === puzzleId`
+        // permanently false after navigation — which silently satisfies every
+        // "did not fetch the sibling" assertion without exercising anything.
+        mockGetLibraryPuzzle.mockImplementation(async (id: string) => ({
+            ...MOCK_PUZZLE,
+            id,
+        }));
         mockGetPuzzleDiagnosis.mockResolvedValue(MOCK_DIAGNOSIS);
+        // Default to no siblings: these tests are about the diagnosis surface,
+        // and an unstubbed promise would fail them for the wrong reason.
+        mockGetSimilarPuzzles.mockResolvedValue({ puzzles: [] });
         mockReviewPuzzle.mockResolvedValue({
             next_due_at: '2026-02-10T12:00:00Z',
             interval_days: 7,
@@ -389,6 +401,171 @@ describe('LibraryPuzzle', () => {
 
             await waitFor(() => expect(mockGetPuzzleDiagnosis).toHaveBeenCalled());
             expect(screen.queryByText(/boom/i)).not.toBeInTheDocument();
+            expect(screen.getByText('Deadly Fork')).toBeInTheDocument();
+        });
+    });
+
+    describe('navigating between puzzles', () => {
+        it('does not carry a revealed state onto the next puzzle', async () => {
+            // SimilarWeaknessCard is the first link from /library/:id TO
+            // /library/:id, so the component is reused rather than remounted.
+            // If solved/revealed state survives, the next puzzle opens with its
+            // answer already granted — and its diagnosis, which names the best
+            // move, is fetched with reveal=true without an attempt.
+            const { rerender } = render(<LibraryPuzzle />);
+            await waitFor(() => expect(screen.getByText('Deadly Fork')).toBeInTheDocument());
+            fireEvent.click(screen.getByRole('button', { name: /reveal/i }));
+            await waitFor(() => expect(mockGetPuzzleDiagnosis).toHaveBeenCalled());
+
+            mockGetPuzzleDiagnosis.mockClear();
+            mockPuzzleId = 'sibling-1';
+            rerender(<LibraryPuzzle />);
+            await waitFor(() => expect(mockGetLibraryPuzzle).toHaveBeenCalledWith('sibling-1', 'testplayer'));
+
+            expect(mockGetPuzzleDiagnosis).not.toHaveBeenCalled();
+            expect(screen.getByRole('button', { name: /reveal/i })).toBeInTheDocument();
+        });
+
+        it('loads the sibling as its own puzzle, not a rerun of the previous one', async () => {
+            // The counterpart to the leak tests: having proved the sibling does
+            // NOT inherit resolved state, prove it can still resolve on its own
+            // and fetches its own diagnosis and siblings. Without this, every
+            // navigation assertion is satisfied by the page simply never
+            // working after a navigation.
+            const { rerender } = render(<LibraryPuzzle />);
+            await waitFor(() => expect(screen.getByText('Deadly Fork')).toBeInTheDocument());
+            fireEvent.click(screen.getByRole('button', { name: /reveal/i }));
+            await waitFor(() => expect(mockGetSimilarPuzzles).toHaveBeenCalledWith('puzzle-abc', 'testplayer'));
+
+            mockGetPuzzleDiagnosis.mockClear();
+            mockGetSimilarPuzzles.mockClear();
+            mockPuzzleId = 'sibling-1';
+            rerender(<LibraryPuzzle />);
+            await waitFor(() => expect(mockGetLibraryPuzzle).toHaveBeenCalledWith('sibling-1', 'testplayer'));
+
+            // Resolved state did not carry over...
+            expect(mockGetPuzzleDiagnosis).not.toHaveBeenCalled();
+            // ...and the sibling still works, fetching ITS own post-mortem.
+            fireEvent.click(screen.getByRole('button', { name: /reveal/i }));
+            await waitFor(() =>
+                expect(mockGetPuzzleDiagnosis).toHaveBeenCalledWith('sibling-1', 'testplayer', true)
+            );
+            expect(mockGetSimilarPuzzles).toHaveBeenCalledWith('sibling-1', 'testplayer');
+        });
+
+        it('does not show the previous puzzle\'s siblings on the next one', async () => {
+            // `similar` is reset on load; without that reset the similar-effect
+            // early-returns on `|| similar` and the sibling page renders the
+            // PREVIOUS puzzle's cluster and reason sentence as though it were
+            // its own. Deleting setSimilar(null) previously failed no test.
+            mockGetSimilarPuzzles.mockResolvedValue({
+                cause: 'loose_piece_awareness',
+                cause_label: 'Loose piece awareness',
+                match: 'exact',
+                reason: 'ANCHOR-A REASON',
+                puzzles: [
+                    {
+                        id: 'from-puzzle-a',
+                        title: 'Belongs to puzzle A',
+                        primary_motif: 'hanging_piece',
+                        difficulty: 'medium',
+                        swing: 3.1,
+                        fen: '8/8/8/8/8/8/8/8 w - - 0 1',
+                        side_to_move: 'white',
+                        created_at: null,
+                        attempts: 1,
+                        fail_count: 1,
+                    },
+                ],
+            });
+            const { rerender } = render(<LibraryPuzzle />);
+            await waitFor(() => expect(screen.getByText('Deadly Fork')).toBeInTheDocument());
+            fireEvent.click(screen.getByRole('button', { name: /reveal/i }));
+            await waitFor(() => expect(screen.getByText('ANCHOR-A REASON')).toBeInTheDocument());
+
+            mockGetSimilarPuzzles.mockResolvedValue({ puzzles: [] });
+            mockPuzzleId = 'sibling-1';
+            rerender(<LibraryPuzzle />);
+            await waitFor(() => expect(mockGetLibraryPuzzle).toHaveBeenCalledWith('sibling-1', 'testplayer'));
+            fireEvent.click(screen.getByRole('button', { name: /reveal/i }));
+
+            await waitFor(() => expect(mockGetSimilarPuzzles).toHaveBeenCalledWith('sibling-1', 'testplayer'));
+            expect(screen.queryByText('ANCHOR-A REASON')).not.toBeInTheDocument();
+            expect(screen.queryByText('Belongs to puzzle A')).not.toBeInTheDocument();
+        });
+
+        it('does not leak the next puzzle when the current diagnosis never loaded', async () => {
+            // The reset runs AFTER the getLibraryPuzzle round-trip, so for the
+            // whole request `status` is still 'revealed' while puzzleId is
+            // already the sibling's. The test above only passes because its
+            // diagnosis had loaded, making the effect's `|| diagnosis` guard
+            // short-circuit. When that fetch failed — or simply lost the race
+            // against /similar — nothing stops it.
+            mockGetPuzzleDiagnosis.mockRejectedValue(new Error('diagnosis down'));
+            const { rerender } = render(<LibraryPuzzle />);
+            await waitFor(() => expect(screen.getByText('Deadly Fork')).toBeInTheDocument());
+            fireEvent.click(screen.getByRole('button', { name: /reveal/i }));
+            await waitFor(() => expect(mockGetPuzzleDiagnosis).toHaveBeenCalled());
+
+            mockGetPuzzleDiagnosis.mockClear();
+            mockPuzzleId = 'sibling-1';
+            rerender(<LibraryPuzzle />);
+            await waitFor(() => expect(mockGetLibraryPuzzle).toHaveBeenCalledWith('sibling-1', 'testplayer'));
+
+            expect(mockGetPuzzleDiagnosis).not.toHaveBeenCalled();
+        });
+    });
+
+    describe('similar weaknesses', () => {
+        it('is not requested while the puzzle is unsolved', async () => {
+            // Siblings name the shared motif, so asking for them mid-solve
+            // would hand over the tactic before the attempt.
+            render(<LibraryPuzzle />);
+            await waitFor(() => expect(screen.getByText('Deadly Fork')).toBeInTheDocument());
+
+            expect(screen.queryByRole('heading', { name: /more like this weakness/i })).not.toBeInTheDocument();
+            expect(mockGetSimilarPuzzles).not.toHaveBeenCalled();
+        });
+
+        it('appears once the solution has been revealed', async () => {
+            mockGetSimilarPuzzles.mockResolvedValue({
+                cause: 'calculation_stopped_early',
+                cause_label: 'calculation stopped early',
+                match: 'exact',
+                reason: 'Same mistake — calculation stopped early — on a Fork in the middlegame.',
+                puzzles: [
+                    {
+                        id: 'sibling-1',
+                        title: 'Another fork missed',
+                        primary_motif: 'Fork',
+                        difficulty: 'medium',
+                        swing: 3.1,
+                        fen: '8/8/8/8/8/8/8/8 w - - 0 1',
+                        side_to_move: 'white',
+                        created_at: null,
+                        attempts: 1,
+                        fail_count: 1,
+                    },
+                ],
+            });
+            render(<LibraryPuzzle />);
+            await waitFor(() => expect(screen.getByText('Deadly Fork')).toBeInTheDocument());
+            fireEvent.click(screen.getByRole('button', { name: /reveal/i }));
+
+            await waitFor(() =>
+                expect(screen.getByRole('heading', { name: /more like this weakness/i })).toBeInTheDocument()
+            );
+            expect(screen.getByText('Another fork missed')).toBeInTheDocument();
+        });
+
+        it('stays silent when the siblings fetch fails', async () => {
+            mockGetSimilarPuzzles.mockRejectedValue(new Error('kaboom'));
+            render(<LibraryPuzzle />);
+            await waitFor(() => expect(screen.getByText('Deadly Fork')).toBeInTheDocument());
+            fireEvent.click(screen.getByRole('button', { name: /reveal/i }));
+
+            await waitFor(() => expect(mockGetSimilarPuzzles).toHaveBeenCalled());
+            expect(screen.queryByText(/kaboom/i)).not.toBeInTheDocument();
             expect(screen.getByText('Deadly Fork')).toBeInTheDocument();
         });
     });

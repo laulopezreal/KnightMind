@@ -36,7 +36,7 @@ Usage:
     python -m scripts.reclassify_motifs --username lauureal --dry-run
 
 Requires:
-    - DATABASE_URL set (or KNIGHTMIND_DEV_SQLITE=1 for local dev).
+    - DATABASE_URL set (Postgres; `make docker-up` starts one locally).
     - The puzzles / puzzle_stats tables to exist (alembic upgrade head).
 """
 

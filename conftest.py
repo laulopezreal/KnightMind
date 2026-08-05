@@ -1,7 +1,81 @@
 import os
+import re
 
-# Backend tests build their own SQLite engines/sessions in fixtures, but they
-# import the app (and therefore services.api.db) at module import time without
-# setting DATABASE_URL. Opt in to the explicit SQLite dev fallback so that
-# import doesn't fail fast; the fallback engine itself is never used by tests.
-os.environ.setdefault("KNIGHTMIND_DEV_SQLITE", "1")
+import pytest
+
+# The application is Postgres-only (see services/api/db.py), so the suite needs
+# a real Postgres. Tests import the app -- and therefore services.api.db -- at
+# module import time, and db.py fails fast without DATABASE_URL, so the URL has
+# to be in the environment before collection starts.
+TEST_DB_URL_ENV = "KNIGHTMIND_TEST_DATABASE_URL"
+
+
+def _resolve_test_database_url() -> str:
+    url = (os.getenv(TEST_DB_URL_ENV) or "").strip()
+    if not url:
+        raise RuntimeError(
+            f"{TEST_DB_URL_ENV} is not set. The suite runs against Postgres, the "
+            "database production uses. Start one with `make docker-up`, then:\n\n"
+            f"  export {TEST_DB_URL_ENV}="
+            "postgresql+psycopg://knightmind:knightmind@localhost:5432/knightmind_test"
+        )
+    # The fixtures DROP and TRUNCATE every table. Pointed at a development or
+    # production database that destroys real data, and this URL comes from an
+    # environment variable that is easy to have left set from something else.
+    # Requiring the name to say so is a cheap guard against the one mistake here
+    # that cannot be undone.
+    #
+    # Matched as a whole word, not a substring: `"test" in name` also accepts
+    # `latest`, `contest`, `attestation` -- and `knightmind_latest` is an
+    # entirely plausible name for a database someone would be upset to lose.
+    # A guard against irreversible loss should not be the loose kind.
+    database = url.rsplit("/", 1)[-1].split("?", 1)[0]
+    if not re.search(r"(^|[_-])tests?([_-]|$)", database.lower()):
+        raise RuntimeError(
+            f"Refusing to run: {TEST_DB_URL_ENV} names a database {database!r}, "
+            "and the fixtures drop and truncate every table in it. Name the "
+            "scratch database so 'test' appears as a whole word (e.g. "
+            "'knightmind_test') to confirm it is disposable."
+        )
+    return url
+
+
+TEST_DATABASE_URL = _resolve_test_database_url()
+
+# Hand the same URL to the application under test.
+os.environ["DATABASE_URL"] = TEST_DATABASE_URL
+
+POSTGRES_URL_ENV = "KNIGHTMIND_TEST_POSTGRES_URL"
+
+# The @pytest.mark.postgres tests predate the suite itself running on Postgres,
+# and had their own env var because back then a Postgres was optional. It no
+# longer is, so leaving them gated on a *second* variable meant eight tests
+# silently skipping next to a perfectly good database -- the same silently-lost
+# coverage that let four of them go unrun in CI for months (#346).
+#
+# They manage their own schema and connections (create_all is idempotent and
+# they only delete rows, never drop tables), so pointing them at the same
+# database is safe. The variable is still honoured when set explicitly, for
+# anyone who wants them somewhere separate.
+os.environ.setdefault(POSTGRES_URL_ENV, TEST_DATABASE_URL)
+
+
+def pytest_collection_modifyitems(config, items):
+    """Skip ``@pytest.mark.postgres`` tests unless a disposable Postgres is set.
+
+    The gate lives here, once, rather than as a per-file ``skipif``. Tests only
+    declare *that* they need Postgres; how that is detected is this hook's
+    business. CI selects them with ``-m postgres`` across the whole suite, so a
+    new Postgres test in any file is picked up without touching the workflow --
+    which is the failure this replaces: the workflow named ``test_jobs.py``
+    explicitly, and four concurrency tests added later in
+    ``test_review_session_integration.py`` never ran in CI at all.
+    """
+    if os.getenv(POSTGRES_URL_ENV):
+        return
+    skip_postgres = pytest.mark.skip(
+        reason=f"requires a disposable Postgres (set {POSTGRES_URL_ENV})"
+    )
+    for item in items:
+        if "postgres" in item.keywords:
+            item.add_marker(skip_postgres)

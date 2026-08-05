@@ -1,18 +1,15 @@
-import { useState, useEffect, useCallback, useRef, type ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
     getDashboardSummary,
     getTrickyPuzzles,
     getMotifPerformance,
     getUserStatus,
-    type DashboardSummary,
-    type TrickyPuzzlesResponse,
     type MotifPerformanceResponse,
-    type UserStatus,
 } from '../api/users';
-import { getRatingExplain, type ExplainResponse } from '../api/ratings';
-import { getTodaysFocus, type TodaysFocusResponse } from '../api/users';
-import { getRecentSessions, type SessionSummary } from '../api/sessions';
+import { getRatingExplain } from '../api/ratings';
+import { getTodaysFocus } from '../api/users';
+import { getRecentSessions } from '../api/sessions';
 import { formatMotifName, weakestMotif } from '../utils/motif';
 import { TC_LABEL, type TimeControl } from '../utils/ratings';
 import { useChessUsername } from '../context/ChessUsernameContext';
@@ -30,7 +27,7 @@ import { ConnectAccountEmpty } from '../components/ConnectAccountEmpty';
 import { CardErrorBoundary } from '../components/CardErrorBoundary';
 import { trainEntryDestination } from '../utils/trainEntry';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
-import { useLatestRequest } from '../hooks/useLatestRequest';
+import { useAsyncData } from '../hooks/useAsyncData';
 
 // The Rating tile mirrors whatever time control the Ratings page is set to, so
 // the two surfaces agree. Read-only here (the Ratings page owns the setter).
@@ -67,108 +64,68 @@ export default function Dashboard() {
     const { username } = useChessUsername();
     const navigate = useNavigate();
 
-    const [dashboardData, setDashboardData] = useState<DashboardSummary | null>(null);
-    const [trickyPuzzles, setTrickyPuzzles] = useState<TrickyPuzzlesResponse | null>(null);
-    const [recentSessions, setRecentSessions] = useState<SessionSummary[]>([]);
-    const [loading, setLoading] = useState(true);
-    const [error, setError] = useState<string | null>(null);
-    const hasLoadedRef = useRef(false);
-
     // "Improvement strip" data — the motif diagnosis + rating outcome that tie
     // the training loop together. Fetched SEPARATELY from the core dashboard so a
     // slow/failed rating analysis never blocks or errors the primary page. Each
     // tile renders independently; a null slice just omits its tile.
-    const [motifPerf, setMotifPerf] = useState<MotifPerformanceResponse | null>(null);
-    const [ratingData, setRatingData] = useState<ExplainResponse | null>(null);
-    const [userStatus, setUserStatus] = useState<UserStatus | null>(null);
-    const [todaysFocus, setTodaysFocus] = useState<TodaysFocusResponse | null>(null);
-    const [stripLoading, setStripLoading] = useState(true);
     const timeControl = readTimeControl();
 
     const online = useOnlineStatus();
-    const request = useLatestRequest();
-
-    // Load all dashboard data - extracted for reusability
-    const loadDashboardData = useCallback(async () => {
-        if (!username) return;
-
-        // Guard against stale-response races: a username change (or a focus
-        // refresh) begins a newer request; the older, slower response must not
-        // clobber the newer one.
-        const token = request.begin();
-        try {
-            // Only show full-page spinner on initial load, not on background refreshes
-            if (!hasLoadedRef.current) {
-                setLoading(true);
-            }
-            setError(null);
-
+    // Primary page data. The loading/error/staleness bookkeeping that used to
+    // be written out here now lives in useAsyncData.
+    const { data: primary, error, loading, reload } = useAsyncData(
+        async () => {
             const [dashboard, sessions, tricky] = await Promise.all([
-                getDashboardSummary(username),
-                getRecentSessions(username, 5),
-                getTrickyPuzzles(username, 5)
+                getDashboardSummary(username!),
+                getRecentSessions(username!, 5),
+                getTrickyPuzzles(username!, 5),
             ]);
+            return { dashboard, sessions, tricky };
+        },
+        [username],
+        { enabled: Boolean(username), errorMessage: 'Failed to load dashboard data' },
+    );
 
-            if (token.isStale()) return;
-            setDashboardData(dashboard);
-            setRecentSessions(sessions);
-            setTrickyPuzzles(tricky);
-            hasLoadedRef.current = true;
-        } catch (err) {
-            if (token.isStale()) return;
-            console.error('Failed to load dashboard:', err);
-            setError(err instanceof Error ? err.message : 'Failed to load dashboard data');
-        } finally {
-            if (!token.isStale()) setLoading(false);
-        }
-    }, [username, request]);
+    const dashboardData = primary?.dashboard ?? null;
+    const recentSessions = primary?.sessions ?? [];
+    const trickyPuzzles = primary?.tricky ?? null;
 
-    // Initial load
+    // Auto-refresh on window focus.
     useEffect(() => {
-        loadDashboardData();
-    }, [loadDashboardData]);
-
-    // Auto-refresh on window focus
-    useEffect(() => {
-        const handleFocus = () => {
-            loadDashboardData();
-        };
-
-        window.addEventListener('focus', handleFocus);
-        return () => {
-            window.removeEventListener('focus', handleFocus);
-        };
-    }, [loadDashboardData]);
+        window.addEventListener('focus', reload);
+        return () => window.removeEventListener('focus', reload);
+    }, [reload]);
 
     // Secondary load: improvement-strip data. allSettled so one failing call
     // (e.g. the heavier rating analysis) doesn't take down the others. Runs once
     // per username — deliberately NOT on focus, to avoid re-running rating
     // analysis on every tab switch.
-    useEffect(() => {
-        if (!username) return;
-        let cancelled = false;
-        setStripLoading(true);
-        setMotifPerf(null);
-        setRatingData(null);
-        setUserStatus(null);
-        setTodaysFocus(null);
+    // allSettled so one failing call (e.g. the heavier rating analysis) does not
+    // take down the others. Runs per username/timeControl -- deliberately NOT on
+    // focus, to avoid re-running rating analysis on every tab switch.
+    const { data: strip, loading: stripLoading } = useAsyncData(
+        async () => {
+            const [motif, rating, status, focus] = await Promise.allSettled([
+                getMotifPerformance(username!),
+                getRatingExplain(username!, timeControl),
+                getUserStatus(username!),
+                getTodaysFocus(username!),
+            ]);
+            return {
+                motifPerf: motif.status === 'fulfilled' ? motif.value : null,
+                ratingData: rating.status === 'fulfilled' ? rating.value : null,
+                userStatus: status.status === 'fulfilled' ? status.value : null,
+                todaysFocus: focus.status === 'fulfilled' ? focus.value : null,
+            };
+        },
+        [username, timeControl],
+        { enabled: Boolean(username) },
+    );
 
-        Promise.allSettled([
-            getMotifPerformance(username),
-            getRatingExplain(username, timeControl),
-            getUserStatus(username),
-            getTodaysFocus(username),
-        ]).then(([motif, rating, status, focus]) => {
-            if (cancelled) return;
-            if (motif.status === 'fulfilled') setMotifPerf(motif.value);
-            if (rating.status === 'fulfilled') setRatingData(rating.value);
-            if (status.status === 'fulfilled') setUserStatus(status.value);
-            if (focus.status === 'fulfilled') setTodaysFocus(focus.value);
-            setStripLoading(false);
-        });
-
-        return () => { cancelled = true; };
-    }, [username, timeControl]);
+    const motifPerf = strip?.motifPerf ?? null;
+    const ratingData = strip?.ratingData ?? null;
+    const userStatus = strip?.userStatus ?? null;
+    const todaysFocus = strip?.todaysFocus ?? null;
 
     // No account connected. Explain in place instead of redirecting to Home:
     // the bounce announced nothing, so the sidebar link read as broken. Must
@@ -213,11 +170,11 @@ export default function Dashboard() {
         return (
             <DashboardShell>
                 {!online ? (
-                    <DataStateOffline onRetry={loadDashboardData} />
+                    <DataStateOffline onRetry={reload} />
                 ) : (
                     <DataStateError
                         message={error || 'Failed to load dashboard data'}
-                        onRetry={loadDashboardData}
+                        onRetry={reload}
                         retryLabel="Retry"
                         ariaLabel="Retry loading dashboard"
                     />

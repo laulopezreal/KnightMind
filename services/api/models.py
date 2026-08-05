@@ -14,6 +14,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
     text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
@@ -117,7 +118,6 @@ class Job(Base):
             "type",
             unique=True,
             postgresql_where=text("status IN ('queued', 'running')"),
-            sqlite_where=text("status IN ('queued', 'running')"),
         ),
         {"extend_existing": True},
     )
@@ -262,6 +262,16 @@ class PuzzleDiagnosis(Base):
             "username",
             "extraction_version",
             "rule_version",
+        ),
+        # Drives the Library opening/opening_line filters. Partial because most
+        # rows have no opening attributed and only the non-NULL ones are ever
+        # searched. Created in e8f9a0b1c2d3 but never declared here, so tests'
+        # create_all() built a schema without it and planned differently to prod.
+        Index(
+            "ix_puzzle_diagnoses_username_opening_name",
+            "username",
+            "opening_name",
+            postgresql_where=text("opening_name IS NOT NULL"),
         ),
         {"extend_existing": True},
     )
@@ -567,12 +577,17 @@ class Puzzle(Base):
     __tablename__ = "puzzles"
     __table_args__ = (
         Index("ix_puzzles_username_created_at", "username", "created_at"),
-        Index(
-            "ix_puzzles_username_source_game_id_ply",
+        # Declared as the named UNIQUE CONSTRAINT the deployed schema actually
+        # has (created in b7a2c7d2b7c9), not an equivalent unique Index. Both
+        # enforce the same rule, but the mismatch made `alembic check` report
+        # perpetual drift, and renaming it in the DB would mean dropping and
+        # rebuilding a uniqueness guarantee that the review path's
+        # IntegrityError-replay backstop depends on.
+        UniqueConstraint(
             "username",
             "source_game_id",
             "ply",
-            unique=True,
+            name="uq_puzzles_username_source_game_id_ply",
         ),
         # Idempotency backstop for manual (analysis-save) puzzles: two saves of
         # the SAME board position (see normalized_position — first four FEN
@@ -590,9 +605,6 @@ class Puzzle(Base):
             "normalized_position",
             unique=True,
             postgresql_where=text(
-                "source_game_id = '__manual__' AND normalized_position IS NOT NULL"
-            ),
-            sqlite_where=text(
                 "source_game_id = '__manual__' AND normalized_position IS NOT NULL"
             ),
         ),

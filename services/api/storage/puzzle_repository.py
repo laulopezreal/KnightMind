@@ -10,6 +10,7 @@ from services.api.day_boundary import utc_today
 from services.api.models import Puzzle as PuzzleModel
 from services.api.models import PuzzleStats
 from services.api.puzzles.identity import assign_primary_motif, generate_puzzle_title
+from services.api.usernames import canonical_username
 
 
 def normalized_position(fen: str) -> str:
@@ -113,7 +114,10 @@ class PuzzleRepository:
     ) -> tuple[bool, str]:
         """Persist a new puzzle and its identity stats, or return an existing id."""
 
-        username_lower = username.lower()
+        # One fold for the dedup read, the Puzzle INSERT and the PuzzleStats
+        # INSERT: a puzzle and its stats row MUST land under the same key or
+        # the scheduler will never find the stats it just wrote.
+        username_lower = canonical_username(username)
         existing = self._existing_puzzle_id(username_lower, source_game_id, ply)
         if existing:
             return False, existing
@@ -179,19 +183,43 @@ class PuzzleRepository:
 
     def get_puzzle(self, username: str, puzzle_id: str) -> Puzzle | None:
         puzzle = self.db.get(PuzzleModel, puzzle_id)
-        if puzzle and puzzle.username == username.lower():
+        if puzzle and puzzle.username == canonical_username(username):
             return self._to_puzzle(puzzle)
         return None
 
     def get_all_puzzles(self, username: str) -> list[Puzzle]:
-        username_lower = username.lower()
-        stmt = select(PuzzleModel).where(PuzzleModel.username == username_lower)
+        """Every puzzle this user owns, in a defined order.
+
+        The ordering is load-bearing, which is easy to miss because nothing
+        here reads it. This is the candidate list feeding ``/puzzles/due``, and
+        in ``get_adaptive_puzzles`` every *new* puzzle produces an identical
+        sort key — same tier, and ``time_factor`` is the single ``now`` value
+        computed once for the whole call. Python's sort is stable, so for the
+        new tier (the overwhelming majority of a fresh corpus) the session order
+        is exactly this query's output order.
+
+        Without an ORDER BY that was Postgres heap order: unspecified by the
+        standard, free to change after an UPDATE or a VACUUM, and in practice
+        grouped by import batch — so a session drew several puzzles from the
+        same game in a row, and two identical requests could legitimately
+        return different puzzles.
+
+        ``created_at`` then ``id`` gives oldest-first with a total order:
+        ``created_at`` alone is not unique, since one generation run stamps a
+        whole batch, and ties would fall back to heap order again.
+        """
+        username_lower = canonical_username(username)
+        stmt = (
+            select(PuzzleModel)
+            .where(PuzzleModel.username == username_lower)
+            .order_by(PuzzleModel.created_at, PuzzleModel.id)
+        )
         puzzles = self.db.scalars(stmt).all()
         return [self._to_puzzle(puzzle) for puzzle in puzzles]
 
     def get_latest_puzzle_time(self, username: str) -> datetime | None:
         """Get the timestamp of the most recently created puzzle for a user."""
-        username_lower = username.lower()
+        username_lower = canonical_username(username)
         stmt = select(func.max(PuzzleModel.created_at)).where(
             PuzzleModel.username == username_lower
         )
@@ -233,7 +261,7 @@ class PuzzleRepository:
             # UTC day boundary — consistent with get_daily_puzzles' read.
             used_date = utc_today()
 
-        username_lower = username.lower()
+        username_lower = canonical_username(username)
         stmt = (
             update(PuzzleModel)
             .where(
@@ -246,7 +274,7 @@ class PuzzleRepository:
         return result.rowcount or 0
 
     def get_puzzle_count(self, username: str) -> int:
-        username_lower = username.lower()
+        username_lower = canonical_username(username)
         stmt = (
             select(func.count())
             .select_from(PuzzleModel)
@@ -256,7 +284,7 @@ class PuzzleRepository:
 
     def get_puzzle_stats(self, username: str, puzzle_id: str) -> dict:
         puzzle = self.db.get(PuzzleModel, puzzle_id)
-        if puzzle and puzzle.username == username.lower():
+        if puzzle and puzzle.username == canonical_username(username):
             return {
                 "fen": puzzle.fen,
                 "best_move": puzzle.best_move_uci,

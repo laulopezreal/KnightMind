@@ -1,6 +1,10 @@
 name: Backend CI
 
 on:
+  # uv.lock and Dockerfile decide what actually ships, so a change to either
+  # must run the suite. Without them a lock bump reached `dev` with zero checks
+  # and a green PR — and `main` auto-deploys, so "no checks" would have meant
+  # untested dependencies going to production.
   push:
     branches: [ main, dev ]
     paths:
@@ -9,6 +13,8 @@ on:
       - 'scripts/**'
       - 'conftest.py'
       - 'pyproject.toml'
+      - 'uv.lock'
+      - 'Dockerfile'
       - '.github/workflows/ci-backend.yaml'
   pull_request:
     branches: [ main, dev ]
@@ -18,6 +24,8 @@ on:
       - 'scripts/**'
       - 'conftest.py'
       - 'pyproject.toml'
+      - 'uv.lock'
+      - 'Dockerfile'
       - '.github/workflows/ci-backend.yaml'
 
 jobs:
@@ -25,46 +33,23 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.11"]
+        # 3.13 only, matching the production image (python:3.13-slim, see
+        # Dockerfile) and requires-python in pyproject. This job used to test
+        # 3.11 exclusively -- a version nothing deploys and no developer here
+        # uses -- while production's own interpreter went unverified. Keep this
+        # list, requires-python, and the Dockerfile base image in step.
+        python-version: ["3.13"]
 
-    steps:
-    - uses: actions/checkout@v5
-
-    - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v6
-      with:
-        python-version: ${{ matrix.python-version }}
-        cache: 'pip'
-
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -e ".[dev]"
-
-    - name: Lint
-      run: |
-        ruff check .
-        black --check .
-
-    - name: Run Tests
-      working-directory: ./services/api
-      run: |
-        pytest
-
-  # Targeted Postgres integration job: proves the migration chain applies on a
-  # real Postgres from zero and runs the PG-only concurrency/migration tests
-  # that the default SQLite job skips. Deliberately NOT the whole suite — the
-  # rest of the tests build their own SQLite engines and assume SQLite.
-  test-postgres:
-    runs-on: ubuntu-latest
-
+    # The application is Postgres-only and so is the suite. There is no SQLite
+    # fallback to fall back to any more, which is the point: the tests run on
+    # the database production runs, or they do not run.
     services:
       postgres:
         image: postgres:16
         env:
           POSTGRES_USER: knightmind
           POSTGRES_PASSWORD: knightmind
-          POSTGRES_DB: knightmind
+          POSTGRES_DB: knightmind_test
         ports:
           - 5432:5432
         options: >-
@@ -74,29 +59,172 @@ jobs:
           --health-retries 5
 
     env:
-      DATABASE_URL: postgresql+psycopg://knightmind:knightmind@localhost:5432/knightmind
-      KNIGHTMIND_TEST_POSTGRES_URL: postgresql+psycopg://knightmind:knightmind@localhost:5432/knightmind
+      KNIGHTMIND_TEST_DATABASE_URL: postgresql+psycopg://knightmind:knightmind@localhost:5432/knightmind_test
 
     steps:
     - uses: actions/checkout@v5
 
-    - name: Set up Python
-      uses: actions/setup-python@v6
+    - name: Install uv
+      uses: astral-sh/setup-uv@v5
       with:
-        python-version: "3.11"
-        cache: 'pip'
+        enable-cache: true
 
-    - name: Install dependencies
+    # `pip install -e ".[dev]"` re-resolved every dependency on every run while
+    # uv.lock sat in the repo unused, so CI tested versions no developer had.
+    # It resolved FastAPI 0.141 against a lock pinning 0.128 -- and those two
+    # expose sub-routers differently. --locked fails if the lock has drifted
+    # from pyproject.toml rather than quietly resolving around it.
+    - name: Install locked dependencies
+      run: uv sync --locked --extra dev --python ${{ matrix.python-version }}
+
+    - name: Lint
       run: |
-        python -m pip install --upgrade pip
-        pip install -e ".[dev]"
+        uv run ruff check .
+        uv run black --check .
+
+    - name: Run Tests
+      working-directory: ./services/api
+      run: uv run pytest
+
+  # Migration job: proves the chain applies on a real Postgres from zero, that
+  # the migrated schema still matches the models, and runs the PG-only
+  # concurrency tests. The `test` job above already runs the whole suite on
+  # Postgres, so this one is deliberately narrow -- it exists for the migration
+  # checks, which need a database the suite has NOT rebuilt from the models.
+  #
+  # Selection is by MARKER (`-m postgres`), never by filename: this job used to
+  # run `test_jobs.py -k postgres`, so the four review/session concurrency tests
+  # added later in test_review_session_integration.py never ran here at all.
+  test-postgres:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: knightmind
+          POSTGRES_PASSWORD: knightmind
+          POSTGRES_DB: knightmind_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U knightmind"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql+psycopg://knightmind:knightmind@localhost:5432/knightmind_test
+      KNIGHTMIND_TEST_DATABASE_URL: postgresql+psycopg://knightmind:knightmind@localhost:5432/knightmind_test
+      KNIGHTMIND_TEST_POSTGRES_URL: postgresql+psycopg://knightmind:knightmind@localhost:5432/knightmind_test
+
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v5
+      with:
+        enable-cache: true
+
+    # 3.13 to match the production image: this job is the one that touches a
+    # real Postgres and the migration chain, so it should run the interpreter
+    # production runs.
+    - name: Install locked dependencies
+      run: uv sync --locked --extra dev --python 3.13
 
     - name: Apply migrations on Postgres (from zero)
       working-directory: ./services/api
       run: |
-        alembic upgrade head
+        uv run alembic upgrade head
+
+    # Guards the gap between the two schema sources of truth: the tests build
+    # their schema with Base.metadata.create_all(), production applies the
+    # migration chain, and nothing compared them. A model change with no
+    # migration used to pass every job here and fail on the first prod query.
+    - name: Check models and migrations agree
+      working-directory: ./services/api
+      run: |
+        uv run alembic check
 
     - name: Run Postgres integration tests
       working-directory: ./services/api
       run: |
-        pytest test_jobs.py -k "postgres" -v
+        uv run pytest -m postgres -v
+
+  # Builds the artefact that actually ships, which no other job does.
+  #
+  # Every job above installs dependencies with `uv sync` into a runner venv. The
+  # deployed system is a Docker image built from a different path -- `uv export
+  # --frozen` to a requirements file, then pip into a copied site-packages -- so
+  # a Dockerfile that cannot build, or a uv.lock that `--frozen` rejects, passes
+  # all of them. `deploy.yaml` builds on the server, which means the first thing
+  # to find out is the deploy.
+  #
+  # The smoke test is deliberately end-to-end rather than an import check: it
+  # migrates a real Postgres with the image, boots it under its own entrypoint,
+  # and asks for a route from an INCLUDED router (`/ops/health`). Import alone
+  # would not have caught the FastAPI 0.141 include_router change, and a bare
+  # build would not have caught a startup query against a missing column.
+  build-image:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: knightmind
+          POSTGRES_PASSWORD: knightmind
+          POSTGRES_DB: knightmind_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U knightmind"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Build the production image
+      run: docker build -t knightmind-ci:${{ github.sha }} .
+
+    # host networking so the container reaches the job's Postgres service on
+    # localhost, the same address the other jobs use.
+    - name: Apply migrations with the built image
+      run: |
+        docker run --rm --network host \
+          -e DATABASE_URL=postgresql+psycopg://knightmind:knightmind@localhost:5432/knightmind_test \
+          knightmind-ci:${{ github.sha }} \
+          alembic -c services/api/alembic.ini upgrade head
+
+    - name: Boot it and serve a request
+      run: |
+        docker run -d --name knightmind-smoke --network host \
+          -e DATABASE_URL=postgresql+psycopg://knightmind:knightmind@localhost:5432/knightmind_test \
+          -e KNIGHTMIND_WORKER_DISABLED=true \
+          knightmind-ci:${{ github.sha }}
+
+        for i in $(seq 1 30); do
+          if curl -fsS http://127.0.0.1:8000/ops/health > /dev/null 2>&1; then
+            echo "healthy after ${i} attempt(s)"
+            curl -fsS http://127.0.0.1:8000/ops/health
+            exit 0
+          fi
+          # A container that died will never become healthy; fail now with the
+          # reason rather than after the full timeout with none.
+          if [ -z "$(docker ps -q -f name=knightmind-smoke)" ]; then
+            echo "::error::container exited during startup"
+            docker logs knightmind-smoke
+            exit 1
+          fi
+          sleep 2
+        done
+
+        echo "::error::/ops/health never returned 200"
+        docker logs knightmind-smoke
+        exit 1
+
+    - name: Container logs on failure
+      if: failure()
+      run: docker logs knightmind-smoke || true

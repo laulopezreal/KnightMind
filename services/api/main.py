@@ -34,6 +34,7 @@ from services.api.analytics_confidence import (
 )
 from services.api.auth import require_operator
 from services.api.db import SessionLocal, get_db
+from services.api.diagnosis.clusters import describe, humanise_cause, usable_motif
 from services.api.diagnosis.job import (
     DIAGNOSIS_BATCH_DEFAULT,
     DIAGNOSIS_BATCH_MAX,
@@ -201,10 +202,11 @@ async def lifespan(app: FastAPI):
 
     await anyio.to_thread.run_sync(_run_backfill)
 
-    # Build the ECO table off the request path. /openings is an `async def`
-    # handler, so FastAPI runs it on the event loop rather than the threadpool,
-    # and the image runs a single worker — left lazy, the first request after a
-    # deploy stalls every other in-flight request behind ~370ms of replay.
+    # Build the ECO table off the request path. /openings now runs on the
+    # threadpool, so a lazy build would no longer stall unrelated requests —
+    # but it would still make whichever user arrives first after a deploy wait
+    # ~370ms of python-chess replay, and several concurrent first-requests
+    # would each pay it (lru_cache dedupes the result, not the work).
     await anyio.to_thread.run_sync(warm_eco)
 
     # Start session cleanup background task if not disabled
@@ -283,7 +285,7 @@ class UserStatusResponse(BaseModel):
 
 
 @app.get("/users", dependencies=[Depends(require_operator)])
-async def get_users(db: Session = Depends(get_db)):
+def get_users(db: Session = Depends(get_db)):
     """Get list of all users who have imported games.
 
     Operator-only (enumerates every account) — gated to the tailnet. The public
@@ -295,7 +297,7 @@ async def get_users(db: Session = Depends(get_db)):
 
 
 @app.get("/users/{username}/status", response_model=UserStatusResponse)
-async def get_user_status(
+def get_user_status(
     username: Username,
     db: Session = Depends(get_db),
     account: Account | None = Depends(require_account),
@@ -346,7 +348,7 @@ async def get_user_status(
 @app.get(
     "/users/{username}/motifs/performance", response_model=MotifPerformanceResponse
 )
-async def get_motif_performance(
+def get_motif_performance(
     username: Username,
     db: Session = Depends(get_db),
     account: Account | None = Depends(require_account),
@@ -507,7 +509,7 @@ async def import_chesscom_games(
 
 
 @app.get("/import/status", response_model=ImportStatusResponse)
-async def get_import_status(
+def get_import_status(
     username: Username,
     db: Session = Depends(get_db),
     account: Account | None = Depends(require_account),
@@ -730,7 +732,16 @@ class RevealResponse(BaseModel):
 
 
 class ManualPuzzleRequest(BaseModel):
-    username: str
+    # ``Username``, not ``str``: this was the one request model that still typed
+    # the handle as a bare string, so "Save as puzzle" was the single live HTTP
+    # path that could reach storage with a non-canonical key. It compensated
+    # with a ``.lower()`` at the top of the handler, which is a DIFFERENT fold —
+    # ``' Bob '`` lowercases to ``' bob '`` and writes a puzzle (plus its
+    # PuzzleStats and its synthetic Game row) under a key no canonical read ever
+    # matches. Annotating it puts this route on the same boundary as every other
+    # one; the trade is that a whitespace-only handle now 422s instead of
+    # writing a row under ``''``.
+    username: Username
     fen: str
     title: str
     motif: str
@@ -749,7 +760,7 @@ async def root():
 
 
 @app.get("/openings")
-async def get_openings(
+def get_openings(
     username: Annotated[
         Username, Query(description="Username to build opening tree for")
     ],
@@ -1017,8 +1028,13 @@ async def get_opening_baseline(
 
 
 @app.get("/engine/status", response_model=EngineStatusResponse)
-async def get_engine_status():
-    """Check if the Stockfish engine is available."""
+def get_engine_status():
+    """Check if the Stockfish engine is available.
+
+    Sync on purpose: is_engine_available() spawns a Stockfish subprocess and
+    does a round of IPC before tearing it down. On the event loop that stalled
+    every other in-flight request for the life of the probe.
+    """
     available, message = is_engine_available()
     return EngineStatusResponse(available=available, message=message)
 
@@ -1092,7 +1108,7 @@ async def evaluate_fen(
         )
     ],
 )
-async def generate_puzzles_endpoint(
+def generate_puzzles_endpoint(
     username: Annotated[
         Username,
         Query(max_length=64, description="Username to generate puzzles for"),
@@ -1200,14 +1216,22 @@ def _next_manual_ply(db: Session, username_lower: str) -> int:
 
 
 @app.post("/puzzles/manual", response_model=ManualPuzzleResponse)
-async def create_manual_puzzle(
+def create_manual_puzzle(
     request: ManualPuzzleRequest,
     db: Session = Depends(get_db),
     account: Account | None = Depends(require_account),
 ):
     """Create a puzzle from an arbitrary position (Engine Analysis → Save as puzzle)."""
     assert_owns_username(account, request.username, db)
-    username_lower = request.username.lower()
+    # Folded, not merely aliased. The annotation makes this canonical today, but
+    # this handler writes the synthetic ``games`` row itself (below) instead of
+    # going through ``services/api/storage/`` — so the storage-boundary fold
+    # that protects every other write does not reach it, and the annotation is
+    # the ONLY thing standing between a non-canonical handle and a forked game
+    # row. ``dev`` folded here; replacing that with a comment asserting
+    # canonicality is the exact substitution this PR exists to undo.
+    # Idempotent on annotated input, so no behaviour change today.
+    username_lower = canonical_username(request.username)
 
     # Validate FEN
     try:
@@ -1374,7 +1398,7 @@ async def create_manual_puzzle(
 
 
 @app.get("/jobs/{job_id}", response_model=JobStatusResponse)
-async def get_job_status(
+def get_job_status(
     job_id: str,
     db: Session = Depends(get_db),
     account: Account | None = Depends(require_account),
@@ -1400,7 +1424,7 @@ async def get_job_status(
 
 
 @app.post("/jobs/{job_id}/cancel", response_model=JobStatusResponse)
-async def cancel_job(
+def cancel_job(
     job_id: str,
     db: Session = Depends(get_db),
     account: Account | None = Depends(require_account),
@@ -1436,7 +1460,7 @@ async def cancel_job(
 
 
 @app.post("/daily-puzzle-sessions", response_model=DailyPuzzlesResponse)
-async def create_daily_puzzle_session(
+def create_daily_puzzle_session(
     request: DailyPuzzleSessionRequest,
     db: Session = Depends(get_db),
     account: Account | None = Depends(require_account),
@@ -1544,7 +1568,7 @@ def _queue_reason(stats, in_focus: bool, focus_name: str | None, now: datetime) 
 
 
 @app.get("/puzzles/due", response_model=DuePuzzlesResponse)
-async def get_due_puzzles_endpoint(
+def get_due_puzzles_endpoint(
     username: Annotated[Username, Query(description="Username to get puzzles for")],
     n: int = Query(5, ge=1, le=20, description="Number of puzzles to return"),
     session_type: str = Query(
@@ -1954,7 +1978,7 @@ def _check_solution_move(
 
 
 @app.get("/puzzles/list", response_model=PuzzleListResponse)
-async def list_puzzles(
+def list_puzzles(
     username: Annotated[Username, Query(description="Username to list puzzles for")],
     q: str = Query(None, description="Search by title or puzzle ID"),
     status: str = Query(None, description="Filter: new, due, learning, mastered"),
@@ -2284,7 +2308,7 @@ async def list_puzzles(
 
 
 @app.get("/puzzles/{puzzle_id}", response_model=PuzzleListItem)
-async def get_puzzle_detail(
+def get_puzzle_detail(
     puzzle_id: str,
     username: Annotated[Username, Query(description="Username to look up puzzle for")],
     reveal: bool = Query(
@@ -2480,7 +2504,7 @@ def _diagnosis_response(
 
 
 @app.get("/puzzles/{puzzle_id}/diagnosis", response_model=DiagnosisResponse)
-async def get_puzzle_diagnosis(
+def get_puzzle_diagnosis(
     puzzle_id: str,
     username: Annotated[Username, Query(description="Username the puzzle belongs to")],
     reveal: bool = Query(
@@ -2593,8 +2617,137 @@ class MistakePatternsResponse(BaseModel):
     pending: int
 
 
+class SimilarPuzzleItem(BaseModel):
+    """A sibling puzzle in the same weakness cluster.
+
+    Carries no solution fields at all — not even behind ``?reveal``. This is a
+    discovery surface reached *from* a puzzle the user is studying, so shipping
+    answers here would put four more solutions on screen for every one they
+    asked to see. Following a link lands on the detail page, which owns the
+    reveal decision.
+    """
+
+    id: str
+    title: str | None = None
+    primary_motif: str | None = None
+    difficulty: str
+    swing: float
+    fen: str
+    side_to_move: str
+    created_at: datetime | None = None
+    attempts: int = 0
+    fail_count: int = 0
+
+
+class SimilarPuzzlesResponse(BaseModel):
+    cause: str | None = None
+    cause_label: str | None = None
+    match: str | None = None
+    reason: str | None = None
+    puzzles: list[SimilarPuzzleItem] = []
+
+
+@app.get("/puzzles/{puzzle_id}/similar", response_model=SimilarPuzzlesResponse)
+def get_similar_puzzles(
+    puzzle_id: str,
+    username: Annotated[Username, Query(description="Owner of the puzzle")],
+    n: int = Query(5, ge=1, le=20, description="How many siblings to return"),
+    db: Session = Depends(get_db),
+    account: Account | None = Depends(require_account),
+):
+    """Other puzzles the user got wrong for the same reason.
+
+    Answers "what else does this weakness cost me", which the training queue
+    does not: the queue orders what is *due*, and a weakness is worth seeing
+    whole regardless of when its puzzles next come round.
+
+    An empty list is a normal answer, not an error — an undiagnosed puzzle, an
+    unclassified cause, or a weakness with exactly one example all legitimately
+    have no siblings, and the caller renders nothing rather than an error card.
+    """
+    from services.api.models import Puzzle as PuzzleModel
+
+    assert_owns_username(account, username, db)
+    username_lower = username
+
+    # Ownership is a WHERE, not a get(): the puzzles PK is `id` alone, so
+    # filtering on username here is what stops one account probing another's
+    # corpus for which weaknesses it contains.
+    owns = db.execute(
+        select(PuzzleModel.id).where(
+            PuzzleModel.id == puzzle_id,
+            PuzzleModel.username == username_lower,
+        )
+    ).first()
+    if owns is None:
+        raise HTTPException(status_code=404, detail="Puzzle not found")
+
+    repo = DiagnosisRepository(db)
+    key = repo.cluster_key_for(username_lower, puzzle_id)
+    if key is None:
+        return SimilarPuzzlesResponse()
+
+    sibling_ids, tier = repo.similar_puzzle_ids(username_lower, puzzle_id, key, n)
+    if not sibling_ids or tier is None:
+        return SimilarPuzzlesResponse(
+            cause=key.cause, cause_label=humanise_cause(key.cause)
+        )
+
+    # Stats ride in on the join rather than a second round trip. PuzzleStats is
+    # keyed on puzzle_id alone, so the username predicate belongs in the ON
+    # clause — the same shape GET /puzzles/{id} uses.
+    rows = db.execute(
+        select(PuzzleModel, PuzzleStats)
+        .outerjoin(
+            PuzzleStats,
+            (PuzzleModel.id == PuzzleStats.puzzle_id)
+            & (PuzzleStats.username == username_lower),
+        )
+        .where(
+            PuzzleModel.username == username_lower,
+            PuzzleModel.id.in_(sibling_ids),
+        )
+    ).all()
+
+    # Preserve the repository's recency order; the IN query above does not
+    # promise one, and re-sorting here would quietly discard the ranking. A
+    # diagnosis whose puzzle row is missing is skipped, so the list can be
+    # shorter than n.
+    by_id = {puzzle.id: (puzzle, stats) for puzzle, stats in rows}
+    items = []
+    for pid in sibling_ids:
+        found = by_id.get(pid)
+        if found is None:
+            continue
+        row, stats = found
+        items.append(
+            SimilarPuzzleItem(
+                id=row.id,
+                title=stats.title if stats else None,
+                # "blunder" means no motif was identified; tagging a row with it
+                # says nothing and contradicts the reason line, which omits it.
+                primary_motif=usable_motif(stats.primary_motif) if stats else None,
+                difficulty=_swing_to_difficulty(row.swing),
+                swing=row.swing,
+                fen=row.fen,
+                side_to_move=row.side_to_move,
+                created_at=row.created_at,
+                attempts=stats.attempts if stats else 0,
+                fail_count=stats.fail_count if stats else 0,
+            )
+        )
+
+    return SimilarPuzzlesResponse(
+        cause=key.cause,
+        cause_label=humanise_cause(key.cause),
+        match=tier.value,
+        reason=describe(key, tier),
+        puzzles=items,
+    )
+
+
 @app.get("/users/{username}/mistake-patterns", response_model=MistakePatternsResponse)
-async def get_mistake_patterns(
+def get_mistake_patterns(
     username: Username,
     db: Session = Depends(get_db),
     account: Account | None = Depends(require_account),
@@ -2681,7 +2834,7 @@ class TodaysFocusResponse(BaseModel):
 
 
 @app.get("/users/{username}/todays-focus", response_model=TodaysFocusResponse)
-async def get_todays_focus(
+def get_todays_focus(
     username: Username,
     db: Session = Depends(get_db),
     account: Account | None = Depends(require_account),
@@ -2757,7 +2910,7 @@ MIN_PUZZLES_FOR_LINE_PRACTICE = 3
 
 
 @app.get("/users/{username}/opening-practice", response_model=OpeningPracticeResponse)
-async def get_opening_practice(
+def get_opening_practice(
     username: Username,
     opening_name: str = Query(
         ..., description="Full opening name from the explorer tree node"
@@ -2790,7 +2943,7 @@ async def get_opening_practice(
 
 
 @app.get("/users/{username}/mistake-causes", response_model=MistakeCausesResponse)
-async def get_mistake_causes(
+def get_mistake_causes(
     username: Username,
     db: Session = Depends(get_db),
     account: Account | None = Depends(require_account),
@@ -2834,7 +2987,7 @@ async def get_mistake_causes(
 
 
 @app.get("/users/{username}/diagnosis/pending", response_model=PendingDiagnosisResponse)
-async def get_pending_diagnoses(
+def get_pending_diagnoses(
     username: Username,
     db: Session = Depends(get_db),
     account: Account | None = Depends(require_account),
@@ -2854,7 +3007,7 @@ async def get_pending_diagnoses(
     response_model=JobStatusResponse,
     dependencies=[Depends(rate_limit("diagnose", default_limit=RATE_LIMIT_DIAGNOSE))],
 )
-async def diagnose_puzzles_endpoint(
+def diagnose_puzzles_endpoint(
     username: Username,
     limit: int = Query(
         DIAGNOSIS_BATCH_DEFAULT,
@@ -2930,7 +3083,7 @@ async def diagnose_puzzles_endpoint(
 
 
 @app.post("/puzzles/{puzzle_id}/diagnosis/confirm", response_model=DiagnosisResponse)
-async def confirm_puzzle_diagnosis(
+def confirm_puzzle_diagnosis(
     puzzle_id: str,
     payload: DiagnosisConfirmRequest,
     username: Annotated[Username, Query(description="Username the puzzle belongs to")],
@@ -3031,7 +3184,7 @@ def _build_review_response(
 
 
 @app.post("/puzzles/{puzzle_id}/review")
-async def review_puzzle(
+def review_puzzle(
     puzzle_id: str,
     request: ReviewRequest,
     db: Session = Depends(get_db),
@@ -3224,7 +3377,7 @@ async def review_puzzle(
 
 
 @app.post("/puzzles/{puzzle_id}/check", response_model=CheckResponse)
-async def check_puzzle(
+def check_puzzle(
     puzzle_id: str,
     request: CheckRequest,
     db: Session = Depends(get_db),
@@ -3251,7 +3404,7 @@ async def check_puzzle(
 
 
 @app.post("/puzzles/{puzzle_id}/reveal", response_model=RevealResponse)
-async def reveal_puzzle(
+def reveal_puzzle(
     puzzle_id: str,
     request: RevealRequest,
     db: Session = Depends(get_db),
@@ -3400,7 +3553,7 @@ class SnapshotHistoryItem(BaseModel):
 
 
 @app.get("/ratings/history", response_model=list[SnapshotHistoryItem])
-async def get_rating_history(
+def get_rating_history(
     username: Username,
     time_control: str = "rapid",
     limit: int = Query(50, ge=1, le=200),
@@ -3657,7 +3810,12 @@ async def explain_rating_changes(
         if not pgn:
             continue
 
-        user_is_white = meta.white_username.lower() == username.lower()
+        # A comparison, not a storage key: ``white_username`` is whatever
+        # Chess.com put in the game record, so it is folded rather than trusted.
+        # Both sides must use the SAME fold or the match silently fails —
+        # ``username`` is already canonical (folded at the request boundary), so
+        # folding the header with anything else would reintroduce the mismatch.
+        user_is_white = canonical_username(meta.white_username) == username
 
         result_score = 0.0
         if user_is_white:
