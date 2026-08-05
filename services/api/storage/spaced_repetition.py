@@ -11,6 +11,14 @@ from sqlalchemy.orm import Session
 from services.api.models import Puzzle, PuzzleResult, PuzzleReview, PuzzleStats
 from services.api.puzzles.identity import assign_primary_motif, generate_puzzle_title
 from services.api.storage.puzzle_repository import PuzzleRepository
+from services.api.usernames import canonical_username
+
+# Username convention: every public function here folds its ``username``
+# argument once with ``canonical_username`` and works with the folded value
+# thereafter. See the "storage-boundary rule" section of
+# ``services.api.usernames`` for why a bare ``.lower()`` is not an acceptable
+# substitute — the failure mode is specifically severe in this module, because
+# an unmatched fold yields empty stats and empty stats mean "never seen".
 
 # Datetime convention (single documented rule for all "due" comparisons):
 # every datetime is persisted as naive-UTC (values come from
@@ -77,7 +85,8 @@ def get_puzzle_stats(
     doesn't support ``FOR UPDATE`` and serializes writers anyway).
     """
     stmt = select(PuzzleStats).where(
-        PuzzleStats.puzzle_id == puzzle_id, PuzzleStats.username == username
+        PuzzleStats.puzzle_id == puzzle_id,
+        PuzzleStats.username == canonical_username(username),
     )
     if for_update and db.get_bind().dialect.name == "postgresql":
         stmt = stmt.with_for_update()
@@ -86,7 +95,9 @@ def get_puzzle_stats(
 
 def get_all_puzzle_stats(db: Session, username: str) -> dict[str, PuzzleStats]:
     """Get statistics for all puzzles belonging to a user."""
-    stmt = select(PuzzleStats).where(PuzzleStats.username == username)
+    stmt = select(PuzzleStats).where(
+        PuzzleStats.username == canonical_username(username)
+    )
     return {stats.puzzle_id: stats for stats in db.scalars(stmt).all()}
 
 
@@ -147,7 +158,7 @@ def insert_puzzle_review(
 
     review = PuzzleReview(
         puzzle_id=puzzle_id,
-        username=username,
+        username=canonical_username(username),
         reviewed_at=reviewed_at,
         result=result_val,
         time_spent_ms=time_spent_ms,
@@ -191,6 +202,11 @@ def update_puzzle_stats(
     """
     if reviewed_at is None:
         reviewed_at = datetime.now(timezone.utc)
+
+    # Folded once here, then reused for the read, the PuzzleRepository lookup
+    # and the INSERT. Folding per-statement instead would let a future edit
+    # change one of the three and fork a user's stats row from their puzzles.
+    username = canonical_username(username)
 
     # Lock the stats row so the counter read-modify-write and the scheduling
     # computed from the post-increment counts are race-safe: concurrent reviews
@@ -280,15 +296,20 @@ def get_adaptive_puzzles(
     now = datetime.now(timezone.utc)
     focus = focus_puzzle_ids or set()
 
+    # Folded once for both reads below (stats here, source games in
+    # _source_games). Live/API traffic is unaffected because Username already
+    # canonicalises at the request boundary; direct/internal callers with a
+    # non-canonical handle are repaired here. The failure mode is silent and
+    # severe: an unmatched fold produces an empty all_stats, collapsing every
+    # puzzle to the never-seen tier and serving due puzzles as new — which then
+    # re-anchors their intervals off the wrong date. This was previously a
+    # `.lower()`, which is not the same fold: ' Bob ' lowercased is ' bob ',
+    # a key that matches nothing, so the guard looked present and did nothing.
+    username = canonical_username(username)
+
     # Query stats for the given puzzle IDs
-    # Folded to lower-case, matching _source_games and get_all_puzzles.
-    # Live/API traffic is unaffected because Username canonicalises at the
-    # request boundary; direct/internal callers with a mixed-case username
-    # are intentionally repaired here. The failure mode is silent and severe:
-    # a missed fold produces an empty all_stats, collapsing every puzzle to
-    # the never-seen tier and serving due puzzles as new.
     stmt = select(PuzzleStats).where(
-        PuzzleStats.username == username.lower(),
+        PuzzleStats.username == username,
         PuzzleStats.puzzle_id.in_(puzzle_ids),
     )
     all_stats = {s.puzzle_id: s for s in db.scalars(stmt).all()}
@@ -412,12 +433,16 @@ def _source_games(db: Session, username: str, puzzle_ids: list[str]) -> dict[str
     A separate read because the sort works on ids and stats alone, and
     PuzzleStats does not carry the source game. One indexed query on the
     candidate set, not per puzzle.
+
+    Private: ``username`` arrives already folded from ``get_adaptive_puzzles``,
+    which is the public boundary. Re-folding here would be harmless but would
+    blur where the single fold lives.
     """
     if not puzzle_ids:
         return {}
     rows = db.execute(
         select(Puzzle.id, Puzzle.source_game_id).where(
-            Puzzle.username == username.lower(), Puzzle.id.in_(puzzle_ids)
+            Puzzle.username == username, Puzzle.id.in_(puzzle_ids)
         )
     ).all()
     return {pid: game for pid, game in rows}
@@ -537,7 +562,7 @@ def get_trainable_puzzle_ids(
     scheduled_later = set(
         db.scalars(
             select(PuzzleStats.puzzle_id).where(
-                PuzzleStats.username == username,
+                PuzzleStats.username == canonical_username(username),
                 PuzzleStats.puzzle_id.in_(puzzle_ids),
                 PuzzleStats.next_due_at.isnot(None),
                 PuzzleStats.next_due_at > now,
@@ -568,7 +593,7 @@ def get_trainable_puzzle_count(db: Session, username: str) -> int:
             ),
         )
         .where(
-            Puzzle.username == username,
+            Puzzle.username == canonical_username(username),
             or_(
                 PuzzleStats.puzzle_id.is_(None),
                 PuzzleStats.next_due_at.is_(None),
@@ -588,7 +613,7 @@ def get_scheduled_within_count(db: Session, username: str, hours: int) -> int:
     """
     now = _utcnow_naive()
     stmt = select(func.count(PuzzleStats.puzzle_id)).where(
-        PuzzleStats.username == username,
+        PuzzleStats.username == canonical_username(username),
         PuzzleStats.next_due_at.isnot(None),
         PuzzleStats.next_due_at > now,
         PuzzleStats.next_due_at <= now + timedelta(hours=hours),
@@ -613,7 +638,7 @@ def get_due_puzzle_count(db: Session, username: str) -> int:
     # naive-UTC bound: match the naive-UTC storage of next_due_at (see module note)
     now = _utcnow_naive()
     stmt = select(func.count(PuzzleStats.puzzle_id)).where(
-        PuzzleStats.username == username,
+        PuzzleStats.username == canonical_username(username),
         or_(PuzzleStats.next_due_at.is_(None), PuzzleStats.next_due_at <= now),
     )
     return db.scalar(stmt) or 0
@@ -624,6 +649,7 @@ def get_next_due_date(db: Session, username: str) -> datetime | None:
     # naive-UTC bound: match the naive-UTC storage of next_due_at (see module note)
     now = _utcnow_naive()
     stmt = select(func.min(PuzzleStats.next_due_at)).where(
-        PuzzleStats.username == username, PuzzleStats.next_due_at > now
+        PuzzleStats.username == canonical_username(username),
+        PuzzleStats.next_due_at > now,
     )
     return db.scalar(stmt)

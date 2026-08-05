@@ -35,6 +35,14 @@ from services.api.models import (
     PuzzleReview,
     PuzzleStats,
 )
+from services.api.usernames import canonical_username
+
+# Username convention: every public method here folds its ``username`` once with
+# ``canonical_username`` before it reaches a query. This module previously did
+# no folding at all and trusted the caller — which was true for HTTP traffic
+# (the ``Username`` annotation folds at the request boundary) and unverifiable
+# for everything else. See the "storage-boundary rule" section of
+# ``services.api.usernames``.
 
 # How far back a game counts as "recent" for pattern prioritisation. Long
 # enough that a casual player still has a populated window, short enough that a
@@ -115,7 +123,7 @@ class DiagnosisRepository:
     # -- reads ---------------------------------------------------------
 
     def get(self, username: str, puzzle_id: str) -> PuzzleDiagnosis | None:
-        return self.db.get(PuzzleDiagnosis, (puzzle_id, username))
+        return self.db.get(PuzzleDiagnosis, (puzzle_id, canonical_username(username)))
 
     def _stale_clause(self):
         """A stored row that no longer reflects the current code.
@@ -133,6 +141,7 @@ class DiagnosisRepository:
         )
 
     def _pending_query(self, username: str) -> Select:
+        # Private: callers below have already folded.
         join = (PuzzleDiagnosis.puzzle_id == Puzzle.id) & (
             PuzzleDiagnosis.username == username
         )
@@ -161,7 +170,7 @@ class DiagnosisRepository:
         """
         family = opening_name.split(":", 1)[0].strip()
         base = (
-            PuzzleDiagnosis.username == username,
+            PuzzleDiagnosis.username == canonical_username(username),
             PuzzleDiagnosis.status == DiagnosisStatus.OK,
         )
         line_count = (
@@ -204,7 +213,7 @@ class DiagnosisRepository:
             opening_name.split(":", 1)[0].strip() if family else opening_name.strip()
         )
         stmt = select(PuzzleDiagnosis.puzzle_id).where(
-            PuzzleDiagnosis.username == username,
+            PuzzleDiagnosis.username == canonical_username(username),
             PuzzleDiagnosis.status == DiagnosisStatus.OK,
             func.lower(column) == target.lower(),
         )
@@ -225,7 +234,7 @@ class DiagnosisRepository:
             PuzzleDiagnosis.user_confirmed_cause, PuzzleDiagnosis.primary_cause
         )
         stmt = select(PuzzleDiagnosis.puzzle_id).where(
-            PuzzleDiagnosis.username == username,
+            PuzzleDiagnosis.username == canonical_username(username),
             PuzzleDiagnosis.status == DiagnosisStatus.OK,
             cause_col == cause,
         )
@@ -247,6 +256,8 @@ class DiagnosisRepository:
            plays now than one from two years ago.
         3. **Largest swing** — among equals, the costliest blunders first.
         """
+        # Both helpers are private and take the folded value; fold once here.
+        username = canonical_username(username)
         stmt = self._diagnostic_order(self._pending_query(username), username)
         if limit is not None:
             stmt = stmt.limit(limit)
@@ -254,6 +265,8 @@ class DiagnosisRepository:
 
     def _diagnostic_order(self, stmt: Select, username: str) -> Select:
         """The backfill's priority rule: most diagnostic puzzle first.
+
+        Private: ``username`` arrives already folded.
 
         Shared by the pending and re-enrichment queries so a run cut short — by
         cancellation, the batch limit, or the daily budget — spends what it has
@@ -290,6 +303,9 @@ class DiagnosisRepository:
         UNAVAILABLE rows are excluded — a puzzle that could not be analysed at
         all has nothing for the model to explain.
         """
+        # One fold shared by the join predicate, the WHERE and the ordering
+        # helper: three places that must agree on who the user is.
+        username = canonical_username(username)
         stmt = (
             select(Puzzle.id)
             .join(
@@ -309,13 +325,14 @@ class DiagnosisRepository:
         return list(self.db.scalars(stmt).all())
 
     def unenriched_count(self, username: str) -> int:
+        # Delegates to a public method, which folds. No second fold here.
         return len(self.unenriched_puzzle_ids(username))
 
     def pending_count(self, username: str) -> int:
         return (
             self.db.scalar(
                 select(func.count()).select_from(
-                    self._pending_query(username).subquery()
+                    self._pending_query(canonical_username(username)).subquery()
                 )
             )
             or 0
@@ -357,10 +374,14 @@ class DiagnosisRepository:
         ``user_confirmed_cause`` is never touched here: a re-run of the rules
         must not silently discard a label the user fixed by hand.
         """
-        row = self.get(write.username, write.puzzle_id)
+        # Folded once here so the lookup and the INSERT cannot disagree: an
+        # upsert that probes under one key and inserts under another would
+        # create a duplicate diagnosis on every run instead of updating.
+        username = canonical_username(write.username)
+        row = self.get(username, write.puzzle_id)
         changed = True
         if row is None:
-            row = PuzzleDiagnosis(puzzle_id=write.puzzle_id, username=write.username)
+            row = PuzzleDiagnosis(puzzle_id=write.puzzle_id, username=username)
             self.db.add(row)
         else:
             changed = not self._is_same_diagnosis(row, write)
@@ -445,9 +466,10 @@ class DiagnosisRepository:
         cause_col = func.coalesce(
             PuzzleDiagnosis.user_confirmed_cause, PuzzleDiagnosis.primary_cause
         )
+        folded = canonical_username(username)
         for tier in tiers_for(key):
             conditions = [
-                PuzzleDiagnosis.username == username,
+                PuzzleDiagnosis.username == folded,
                 PuzzleDiagnosis.status == DiagnosisStatus.OK,
                 PuzzleDiagnosis.puzzle_id != puzzle_id,
                 cause_col == key.cause,
@@ -487,7 +509,7 @@ class DiagnosisRepository:
         stmt = (
             select(cause.label("cause"), func.count().label("n"))
             .where(
-                PuzzleDiagnosis.username == username,
+                PuzzleDiagnosis.username == canonical_username(username),
                 PuzzleDiagnosis.status == DiagnosisStatus.OK,
                 cause.isnot(None),
             )
@@ -507,6 +529,10 @@ class DiagnosisRepository:
         cause_col = func.coalesce(
             PuzzleDiagnosis.user_confirmed_cause, PuzzleDiagnosis.primary_cause
         )
+        # Three queries below share one fold: the cause rows, the verified
+        # reviews and the recent-game set must all describe the same user, or
+        # the accuracy column is computed against somebody else's reviews.
+        username = canonical_username(username)
         rows = self.db.execute(
             select(
                 PuzzleDiagnosis.puzzle_id,
