@@ -21,23 +21,36 @@ RUN apt-get update && \
     && rm -rf /var/lib/apt/lists/*
 
 # ---------------------------------------------------------------------------
-# Dependencies layer (cached unless pyproject.toml changes)
+# Dependencies layer (cached unless pyproject.toml / uv.lock change)
 # ---------------------------------------------------------------------------
 FROM base AS deps
 
 WORKDIR /app
 
-COPY pyproject.toml ./
-# Create minimal package structure so pip install -e works
-RUN mkdir -p services/api services/ingest scripts && \
-    touch services/__init__.py services/api/__init__.py services/ingest/__init__.py scripts/__init__.py
+# uv is used only to turn uv.lock into a pinned requirements file; the install
+# itself stays pip, because the runtime stage copies site-packages wholesale
+# and `uv sync` would put everything in a .venv instead.
+COPY --from=ghcr.io/astral-sh/uv:0.11.3 /uv /bin/uv
 
-# Install to pull in dependencies, then uninstall the "knightmind" package
-# itself: it was built from the dummy __init__.py stubs above, and leaving it
-# in site-packages could shadow the real services/ and scripts/ code copied
-# into /app in the runtime stage. Dependencies stay installed.
-RUN pip install --no-cache-dir . && \
-    pip uninstall -y knightmind
+COPY pyproject.toml uv.lock ./
+
+# Install the LOCKED dependency set, not "whatever resolves today".
+#
+# This build used to run `pip install .`, which re-resolved every dependency at
+# build time. Two builds a week apart could ship different versions, and nothing
+# recorded which ones went out. That is not hypothetical: FastAPI changed how
+# include_router() exposes sub-routers between 0.128 and 0.141, both of which
+# satisfy the `fastapi>=0.109.0` floor in pyproject.
+#
+# --frozen fails the build if uv.lock has drifted from pyproject.toml, so the
+# lock cannot silently go stale. --no-emit-project exports dependencies only,
+# which also retires the old dummy-package-then-uninstall dance: the project's
+# own code is copied into /app by the runtime stage and was never wanted in
+# site-packages, where it could shadow the real thing.
+RUN uv export --frozen --no-dev --no-emit-project --format requirements-txt \
+        -o /tmp/requirements.txt && \
+    pip install --no-cache-dir -r /tmp/requirements.txt && \
+    rm /tmp/requirements.txt
 
 # ---------------------------------------------------------------------------
 # Application layer
