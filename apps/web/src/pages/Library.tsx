@@ -1,16 +1,15 @@
 import { LOCALE } from '../utils/locale';
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { useAsyncData } from '../hooks/useAsyncData';
 import { useChessUsername } from '../context/ChessUsernameContext';
 import {
     getLibraryPuzzles,
     type LibraryPuzzle,
-    type LibraryCorpusStats,
     type PuzzleDiagnosisSummary,
     type PuzzleStatus,
     type PuzzleDifficulty,
     type PuzzleSort,
-    type CauseOption,
 } from '../api/puzzles';
 import { PageHeader } from '../components/PageHeader';
 import { DataStateError, DataStateLoading } from '../components/DataState';
@@ -153,14 +152,6 @@ function PuzzleRow({ puzzle }: { puzzle: LibraryPuzzle }) {
 export default function Library() {
     const { username } = useChessUsername();
 
-    // Data
-    const [puzzles, setPuzzles] = useState<LibraryPuzzle[]>([]);
-    const [total, setTotal] = useState(0);
-    const [availableMotifs, setAvailableMotifs] = useState<string[]>([]);
-    const [corpusStats, setCorpusStats] = useState<LibraryCorpusStats | null>(null);
-    const [isLoading, setIsLoading] = useState(false);
-    const [error, setError] = useState<string | null>(null);
-
     // Filters
     const [search, setSearch] = useState('');
     const [statusFilter, setStatusFilter] = useState<PuzzleStatus | ''>('');
@@ -172,7 +163,6 @@ export default function Library() {
     const [causeFilter, setCauseFilter] = useState(
         () => new URLSearchParams(window.location.search).get('cause') ?? ''
     );
-    const [availableCauses, setAvailableCauses] = useState<CauseOption[]>([]);
     const [phaseFilter, setPhaseFilter] = useState(
         () => new URLSearchParams(window.location.search).get('phase') ?? ''
     );
@@ -185,7 +175,6 @@ export default function Library() {
     const [openingLineFilter, setOpeningLineFilter] = useState(
         () => new URLSearchParams(window.location.search).get('opening_line') ?? ''
     );
-    const [availableOpenings, setAvailableOpenings] = useState<string[]>([]);
     const [sort, setSort] = useState<PuzzleSort>('due_soonest');
     const [offset, setOffset] = useState(0);
 
@@ -196,18 +185,37 @@ export default function Library() {
         return () => clearTimeout(timer);
     }, [search]);
 
-    // Reset offset when filters change
-    useEffect(() => {
+    // Reset paging when the filters change. Adjusted during render rather than
+    // in an effect: `offset` is a dependency of the fetch below, so resetting it
+    // from an effect fired a SECOND request on every filter change -- one for the
+    // old offset, then one for 0. This is React's documented
+    // adjusting-state-when-props-change pattern; the re-render happens before
+    // anything commits, so no request goes out for the intermediate state.
+    const filterKey = [
+        debouncedSearch,
+        statusFilter,
+        difficultyFilter,
+        motifFilter,
+        causeFilter,
+        phaseFilter,
+        openingFilter,
+        openingLineFilter,
+        sort,
+    ].join('\u0000');
+    const [lastFilterKey, setLastFilterKey] = useState(filterKey);
+    if (filterKey !== lastFilterKey) {
+        setLastFilterKey(filterKey);
         setOffset(0);
-    }, [debouncedSearch, statusFilter, difficultyFilter, motifFilter, causeFilter, phaseFilter, openingFilter, openingLineFilter, sort]);
+    }
 
-    const fetchPuzzles = useCallback(async () => {
-        if (!username) return;
-        setIsLoading(true);
-        setError(null);
-        try {
-            const res = await getLibraryPuzzles({
-                username,
+    // One request, guarded. Previously this page had no staleness guard at all:
+    // typing in the search box or flipping filters quickly could let an earlier,
+    // slower response land after a later one and repopulate the table with
+    // results for filters no longer selected.
+    const { data, error, loading, refreshing, reload } = useAsyncData(
+        () =>
+            getLibraryPuzzles({
+                username: username!,
                 q: debouncedSearch || undefined,
                 status: statusFilter || undefined,
                 motif: motifFilter || undefined,
@@ -219,23 +227,32 @@ export default function Library() {
                 sort,
                 limit: PAGE_SIZE,
                 offset,
-            });
-            setPuzzles(res.puzzles);
-            setTotal(res.total);
-            setAvailableMotifs(res.available_motifs);
-            setAvailableCauses(res.available_causes ?? []);
-            setAvailableOpenings(res.available_openings ?? []);
-            setCorpusStats(res.stats);
-        } catch (err) {
-            setError(err instanceof Error ? err.message : 'Failed to load puzzles');
-        } finally {
-            setIsLoading(false);
-        }
-    }, [username, debouncedSearch, statusFilter, difficultyFilter, motifFilter, causeFilter, phaseFilter, openingFilter, openingLineFilter, sort, offset]);
+            }),
+        [
+            username,
+            debouncedSearch,
+            statusFilter,
+            difficultyFilter,
+            motifFilter,
+            causeFilter,
+            phaseFilter,
+            openingFilter,
+            openingLineFilter,
+            sort,
+            offset,
+        ],
+        { enabled: Boolean(username), errorMessage: 'Failed to load puzzles' },
+    );
 
-    useEffect(() => {
-        fetchPuzzles();
-    }, [fetchPuzzles]);
+    const puzzles = data?.puzzles ?? [];
+    const total = data?.total ?? 0;
+    const availableMotifs = data?.available_motifs ?? [];
+    const availableCauses = data?.available_causes ?? [];
+    const availableOpenings = data?.available_openings ?? [];
+    const corpusStats = data?.stats ?? null;
+    // Every fetch showed the loading state here, not just the first -- a filter
+    // change should visibly reload the table.
+    const isLoading = loading || refreshing;
 
     const totalPages = Math.ceil(total / PAGE_SIZE);
     const currentPage = Math.floor(offset / PAGE_SIZE) + 1;
@@ -435,7 +452,7 @@ export default function Library() {
             {error && (
                 <DataStateError
                     message={error}
-                    onRetry={fetchPuzzles}
+                    onRetry={reload}
                     retryLabel="Retry"
                     ariaLabel="Retry loading library puzzles"
                     compact
