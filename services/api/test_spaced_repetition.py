@@ -671,3 +671,120 @@ class TestGameDiversity:
         # All six are "blunder" and each is from its own game, so nothing should
         # be deferred: the session is the five most overdue, in order.
         assert ordered[:5] == ["g0", "g1", "g2", "g3", "g4"]
+
+
+class TestDiversityNeverDisplacesDuePuzzles:
+    """The production shape: a small due set in few games, a large new pool.
+
+    Every other diversity test builds a pool that is all-due or all-new, so none
+    of them can observe a due puzzle being pushed behind a new one — which is
+    exactly the regression a global variety pass introduces. On the live corpus
+    the due tier is 10 puzzles across only 4 games.
+    """
+
+    def _p(self, db, pid, game, due_days=None, ply=None, motif="blunder"):
+        from services.api.models import Puzzle, PuzzleStats
+
+        db.add(
+            Puzzle(
+                id=pid,
+                username="u",
+                source_game_id=game,
+                ply=ply if ply is not None else abs(hash(pid)) % 10_000,
+                fen="8/8/8/8/8/8/8/8 w - - 0 1",
+                side_to_move="white",
+                played_move_uci="e2e4",
+                best_move_uci="d2d4",
+                eval_before=0.5,
+                eval_after=-1.5,
+                swing=2.0,
+            )
+        )
+        due = None
+        if due_days is not None:
+            due = (datetime.now(timezone.utc) - timedelta(days=due_days)).replace(
+                tzinfo=None
+            )
+        db.add(
+            PuzzleStats(
+                puzzle_id=pid,
+                username="u",
+                primary_motif=motif,
+                attempts=1 if due else 0,
+                pass_count=1 if due else 0,
+                ease_factor=2.0,
+                interval_days=1 if due else None,
+                next_due_at=due,
+            )
+        )
+
+    def _corpus(self, db):
+        # 10 due puzzles across 4 games, mirroring production.
+        # Clustered, NOT round-robined: the three most overdue all come from
+        # dueGame0. With  the top of the tier was already four distinct
+        # games before any cap ran, so no assertion about spreading could fail.
+        due_ids = []
+        for i in range(10):
+            pid = f"due{i}"
+            self._p(db, pid, f"dueGame{i // 3}", due_days=30 - i, ply=i)
+            due_ids.append(pid)
+        # A large new pool, each from its own game.
+        new_ids = []
+        for i in range(40):
+            pid = f"new{i}"
+            self._p(db, pid, f"newGame{i}", ply=100 + i)
+            new_ids.append(pid)
+        db.commit()
+        return due_ids, new_ids
+
+    def test_a_large_session_still_serves_every_due_puzzle(self, db_session):
+        # The regression: a one-per-game cap applied across the whole queue let
+        # only 4 of the 10 due puzzles in, no matter how many were asked for.
+        due_ids, new_ids = self._corpus(db_session)
+
+        ordered, _ = get_adaptive_puzzles(db_session, "u", due_ids + new_ids, n=20)
+        session = ordered[:20]
+
+        assert sum(1 for p in session if p.startswith("due")) == 10, session
+
+    def test_tiers_are_emitted_in_scheduling_order(self, db_session):
+        """Guards tier ORDER, not displacement.
+
+        Note this inspects the already-sliced session, so the pre-fix code also
+        passed it — by serving fewer due puzzles rather than out-of-order ones.
+        test_a_large_session_still_serves_every_due_puzzle is the displacement
+        guard.
+        """
+        due_ids, new_ids = self._corpus(db_session)
+
+        ordered, _ = get_adaptive_puzzles(db_session, "u", due_ids + new_ids, n=20)
+
+        first_new = next(i for i, p in enumerate(ordered) if p.startswith("new"))
+        last_due = max(i for i, p in enumerate(ordered) if p.startswith("due"))
+        assert last_due < first_new, ordered[:22]
+
+    def test_a_small_session_still_prefers_due_over_new(self, db_session):
+        due_ids, new_ids = self._corpus(db_session)
+
+        ordered, _ = get_adaptive_puzzles(db_session, "u", due_ids + new_ids, n=5)
+
+        assert all(p.startswith("due") for p in ordered[:5]), ordered[:5]
+
+    def test_variety_still_applies_inside_the_due_tier(self, db_session):
+        """Tier-safety must not mean "no variety" within the tier.
+
+        Reads the real source_game_id rather than deriving it from the pid —
+        an earlier version did pid.replace("due", ""), which yields the loop
+        index, so four distinct pids always looked like four distinct games and
+        the assertion could not fail.
+        """
+        from services.api.models import Puzzle
+
+        due_ids, new_ids = self._corpus(db_session)
+
+        ordered, _ = get_adaptive_puzzles(db_session, "u", due_ids + new_ids, n=4)
+
+        games = [db_session.get(Puzzle, pid).source_game_id for pid in ordered[:4]]
+        # Without the cap this is dueGame0 three times, because the three most
+        # overdue puzzles all come from it.
+        assert len(set(games)) == 4, games
