@@ -398,6 +398,28 @@ describe('LibraryPuzzle', () => {
         });
     });
 
+    describe('navigating between puzzles', () => {
+        it('does not carry a revealed state onto the next puzzle', async () => {
+            // SimilarWeaknessCard is the first link from /library/:id TO
+            // /library/:id, so the component is reused rather than remounted.
+            // If solved/revealed state survives, the next puzzle opens with its
+            // answer already granted — and its diagnosis, which names the best
+            // move, is fetched with reveal=true without an attempt.
+            const { rerender } = render(<LibraryPuzzle />);
+            await waitFor(() => expect(screen.getByText('Deadly Fork')).toBeInTheDocument());
+            fireEvent.click(screen.getByRole('button', { name: /reveal/i }));
+            await waitFor(() => expect(mockGetPuzzleDiagnosis).toHaveBeenCalled());
+
+            mockGetPuzzleDiagnosis.mockClear();
+            mockPuzzleId = 'sibling-1';
+            rerender(<LibraryPuzzle />);
+            await waitFor(() => expect(mockGetLibraryPuzzle).toHaveBeenCalledWith('sibling-1', 'testplayer'));
+
+            expect(mockGetPuzzleDiagnosis).not.toHaveBeenCalled();
+            expect(screen.getByRole('button', { name: /reveal/i })).toBeInTheDocument();
+        });
+    });
+
     describe('similar weaknesses', () => {
         it('is not requested while the puzzle is unsolved', async () => {
             // Siblings name the shared motif, so asking for them mid-solve

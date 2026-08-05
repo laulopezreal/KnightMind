@@ -128,25 +128,79 @@ def test_key_requires_a_cause():
 
 
 def test_tiers_skip_steps_that_would_restate_a_narrower_one():
-    """A missing motif must not produce two identical queries."""
+    """A missing leg must not produce two identical queries."""
     full = tiers_for(ClusterKey("c", "Fork", "middlegame"))
-    assert full == [MatchTier.EXACT, MatchTier.CAUSE_AND_MOTIF, MatchTier.CAUSE_ONLY]
+    assert full == [
+        MatchTier.EXACT,
+        MatchTier.CAUSE_AND_MOTIF,
+        MatchTier.CAUSE_AND_PHASE,
+        MatchTier.CAUSE_ONLY,
+    ]
 
+    # Phase is recorded on every diagnosed puzzle while a usable motif is on
+    # roughly a quarter, so this is the common shape — it must still offer a
+    # tighter grouping than "same cause, somewhere".
     no_motif = tiers_for(ClusterKey("c", None, "middlegame"))
-    assert no_motif == [MatchTier.CAUSE_ONLY]
+    assert no_motif == [MatchTier.CAUSE_AND_PHASE, MatchTier.CAUSE_ONLY]
 
     no_phase = tiers_for(ClusterKey("c", "Fork", None))
     assert no_phase == [MatchTier.CAUSE_AND_MOTIF, MatchTier.CAUSE_ONLY]
 
 
-def test_describe_reads_as_a_sentence_without_taxonomy_slugs():
+def test_unclassified_is_not_a_weakness():
+    """The classifier declining to name a cause is not a shared weakness.
+
+    Every other cause surface excludes it; grouping by it would collect every
+    unexplained mistake into one bucket and call it a pattern.
+    """
+    assert key_for("unclassified", "Fork", "middlegame") is None
+
+
+def test_blunder_is_treated_as_no_motif_recorded():
+    """ "blunder" is assign_primary_motif's fallback, not a tactic.
+
+    It is 45% of diagnoses, so honouring it would report an `exact` tactical
+    match for the plurality of the corpus while carrying no tactical
+    information at all.
+    """
+    key = key_for("calculation_stopped_early", "blunder", "middlegame")
+    assert key is not None
+    assert key.motif is None
+    assert tiers_for(key) == [MatchTier.CAUSE_AND_PHASE, MatchTier.CAUSE_ONLY]
+
+    # Case-insensitive on the check, but a real motif keeps its stored spelling
+    # because it is used verbatim as a SQL equality predicate.
+    assert key_for("c", "BLUNDER", "middlegame").motif is None
+    assert key_for("c", "Fork", "middlegame").motif == "Fork"
+
+
+def test_describe_uses_the_house_cause_label_not_its_own():
+    """The diagnosis card renders directly above this one on the same page.
+
+    Owning a second translation here put "Loose piece awareness" and "loose
+    piece awareness" on one screen.
+    """
     key = ClusterKey("calculation_stopped_early", "Fork", "middlegame")
     exact = describe(key, MatchTier.EXACT)
-    assert "calculation stopped early" in exact
+    assert "Calculation stopped early" in exact
     assert "_" not in exact
-    # The widest tier must not imply a motif or phase match it did not make.
+    assert "Fork" in exact and "middlegame" in exact
+
+
+def test_describe_never_claims_more_than_the_tier_matched():
+    key = ClusterKey("calculation_stopped_early", "Fork", "middlegame")
+
+    # Motif matched, phase did not.
+    assert "middlegame" not in describe(key, MatchTier.CAUSE_AND_MOTIF)
+    # Phase matched, motif did not.
+    phase_only = describe(key, MatchTier.CAUSE_AND_PHASE)
+    assert "Fork" not in phase_only and "middlegame" in phase_only
+    # The widest tier is reached whenever nothing tighter matched, which
+    # includes puzzles whose motif was never recorded — so it must not assert
+    # the positions differ, which nothing checked.
     widest = describe(key, MatchTier.CAUSE_ONLY)
     assert "Fork" not in widest
+    assert "different kind of position" not in widest
 
 
 # -- repository ---------------------------------------------------------
@@ -259,7 +313,7 @@ def test_similar_reports_which_tier_answered(client, db_session):
 
     assert body["match"] == "cause_only"
     assert body["cause"] == "calculation_stopped_early"
-    assert body["cause_label"] == "calculation stopped early"
+    assert body["cause_label"] == "Calculation stopped early"
     assert "Pin" not in body["reason"]
 
 
@@ -287,3 +341,78 @@ def test_limit_is_respected(client, db_session):
 
     assert len(body["puzzles"]) == 2
     assert "p1" not in [p["id"] for p in body["puzzles"]]
+
+
+def test_cause_and_phase_tier_groups_puzzles_with_no_usable_motif(db_session):
+    """The common shape: phase is always recorded, a real motif rarely is.
+
+    Before this tier existed these fell straight to CAUSE_ONLY and were told
+    their siblings came from "a different kind of position" — when they in fact
+    shared the phase, and nothing had checked the position at all.
+    """
+    _puzzle(db_session, "p1")
+    _diagnosis(db_session, "p1", motif="blunder", phase="middlegame")
+    _puzzle(db_session, "p2")
+    _diagnosis(db_session, "p2", motif=None, phase="middlegame")
+    _puzzle(db_session, "p3")
+    _diagnosis(db_session, "p3", motif="blunder", phase="endgame")
+
+    repo = DiagnosisRepository(db_session)
+    key = repo.cluster_key_for(USER, "p1")
+    assert key.motif is None  # "blunder" is not a motif
+
+    ids, tier = repo.similar_puzzle_ids(USER, "p1", key, 5)
+    assert tier is MatchTier.CAUSE_AND_PHASE
+    assert ids == ["p2"]  # p3 shares the cause but not the phase
+
+
+def test_siblings_are_ordered_by_puzzle_recency_not_diagnosis_time(db_session):
+    """A backfill stamps every diagnosis within seconds, in scan order.
+
+    Ordering by the diagnosis timestamp is therefore arbitrary, and the card
+    displays the puzzle's date — so it would be labelled with a date it was not
+    sorted by.
+    """
+    from datetime import timedelta
+
+    _puzzle(db_session, "old", created_days_ago=30)
+    _puzzle(db_session, "recent", created_days_ago=1)
+    _puzzle(db_session, "anchor", created_days_ago=10)
+    # Diagnose in the opposite order to puzzle recency, as a backfill would.
+    now = datetime.now(timezone.utc)
+    for i, pid in enumerate(("anchor", "recent", "old")):
+        db_session.add(
+            PuzzleDiagnosis(
+                puzzle_id=pid,
+                username=USER,
+                status=DiagnosisStatus.OK,
+                primary_cause="calculation_stopped_early",
+                primary_motif="Fork",
+                phase="middlegame",
+                created_at=now + timedelta(seconds=i),
+            )
+        )
+    db_session.commit()
+
+    repo = DiagnosisRepository(db_session)
+    key = repo.cluster_key_for(USER, "anchor")
+    ids, _ = repo.similar_puzzle_ids(USER, "anchor", key, 5)
+
+    assert ids == ["recent", "old"]
+
+
+def test_similar_enforces_ownership(client, db_session):
+    """Regression guard for the house tenant-isolation pattern.
+
+    A foreign puzzle must be indistinguishable from a nonexistent one, so the
+    endpoint cannot be used to probe whether another account owns a given id.
+    """
+    _puzzle(db_session, "mine")
+    _diagnosis(db_session, "mine")
+    _puzzle(db_session, "theirs", username=OTHER)
+    _diagnosis(db_session, "theirs", username=OTHER)
+
+    res = client.get(f"/puzzles/theirs/similar?username={USER}")
+
+    assert res.status_code == 404
+    assert res.json()["detail"] == "Puzzle not found"

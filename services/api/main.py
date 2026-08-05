@@ -2661,7 +2661,7 @@ async def get_similar_puzzles(
 
     repo = DiagnosisRepository(db)
     key = repo.cluster_key_for(username_lower, puzzle_id)
-    if key is None or not key.is_groupable:
+    if key is None:
         return SimilarPuzzlesResponse()
 
     sibling_ids, tier = repo.similar_puzzle_ids(username_lower, puzzle_id, key, n)
@@ -2670,31 +2670,33 @@ async def get_similar_puzzles(
             cause=key.cause, cause_label=humanise_cause(key.cause)
         )
 
-    rows = db.scalars(
-        select(PuzzleModel).where(
+    # Stats ride in on the join rather than a second round trip. PuzzleStats is
+    # keyed on puzzle_id alone, so the username predicate belongs in the ON
+    # clause — the same shape GET /puzzles/{id} uses.
+    rows = db.execute(
+        select(PuzzleModel, PuzzleStats)
+        .outerjoin(
+            PuzzleStats,
+            (PuzzleModel.id == PuzzleStats.puzzle_id)
+            & (PuzzleStats.username == username_lower),
+        )
+        .where(
             PuzzleModel.username == username_lower,
             PuzzleModel.id.in_(sibling_ids),
         )
     ).all()
-    stats_by_id = {
-        s.puzzle_id: s
-        for s in db.scalars(
-            select(PuzzleStats).where(
-                PuzzleStats.username == username_lower,
-                PuzzleStats.puzzle_id.in_(sibling_ids),
-            )
-        ).all()
-    }
 
     # Preserve the repository's recency order; the IN query above does not
-    # promise one, and re-sorting here would quietly discard the ranking.
-    by_id = {row.id: row for row in rows}
+    # promise one, and re-sorting here would quietly discard the ranking. A
+    # diagnosis whose puzzle row is missing is skipped, so the list can be
+    # shorter than n.
+    by_id = {puzzle.id: (puzzle, stats) for puzzle, stats in rows}
     items = []
     for pid in sibling_ids:
-        row = by_id.get(pid)
-        if row is None:
+        found = by_id.get(pid)
+        if found is None:
             continue
-        stats = stats_by_id.get(pid)
+        row, stats = found
         items.append(
             SimilarPuzzleItem(
                 id=row.id,

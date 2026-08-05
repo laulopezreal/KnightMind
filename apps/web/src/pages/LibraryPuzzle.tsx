@@ -58,6 +58,29 @@ export default function LibraryPuzzle() {
     const online = useOnlineStatus();
     const request = useLatestRequest();
 
+    // Everything above that describes *this* puzzle rather than the page.
+    //
+    // Kept adjacent to the declarations on purpose: this route can navigate to
+    // itself. SimilarWeaknessCard links from /library/:id to /library/:id, so
+    // React reuses the component instead of remounting it, and any state left
+    // behind is inherited by the next puzzle. When `status` stayed 'revealed',
+    // the sibling opened with its answer already granted and its diagnosis —
+    // which names the best move — was fetched with reveal=true, with no attempt
+    // made. Add state above, reset it here.
+    const resetPuzzleState = useCallback(() => {
+        setStatus('solving');
+        setUserMove('');
+        setShowUciInput(false);
+        setRecorded(false);
+        setNextDueAt(null);
+        setFeedback('');
+        setSolveTimeMs(null);
+        setRecordError(null);
+        setDiagnosis(null);
+        setDiagnosisLoading(false);
+        setSimilar(null);
+    }, []);
+
     const fetchPuzzle = useCallback(async () => {
         if (!username || !puzzleId) return;
         // Guard against stale-response races: if the username (or puzzle) changes
@@ -70,8 +93,7 @@ export default function LibraryPuzzle() {
             if (token.isStale()) return;
             setPuzzle(found);
             setGame(new Chess(found.fen));
-            setDiagnosis(null);
-            setSimilar(null);
+            resetPuzzleState();
             solveStartRef.current = Date.now();
         } catch (err) {
             if (token.isStale()) return;
@@ -83,7 +105,7 @@ export default function LibraryPuzzle() {
         } finally {
             if (!token.isStale()) setIsLoading(false);
         }
-    }, [username, puzzleId, request]);
+    }, [username, puzzleId, request, resetPuzzleState]);
 
     useEffect(() => {
         fetchPuzzle();
@@ -484,7 +506,7 @@ export default function LibraryPuzzle() {
 
                     {/* Sits below the diagnosis on purpose: it only means
                         something once the user knows what went wrong here. */}
-                    {resolved && puzzle && (
+                    {resolved && (
                         <SimilarWeaknessCard data={similar} currentPuzzleId={puzzle.id} />
                     )}
                 </div>

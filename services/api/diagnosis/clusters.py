@@ -26,6 +26,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
+from services.api.diagnosis.causes import CAUSE_LABELS, UNCLASSIFIED
+
 # Human labels for the phase values the diagnosis layer records. Anything
 # unrecognised falls back to the raw value rather than being dropped, so a new
 # phase shows up as itself instead of silently vanishing from the sentence.
@@ -36,16 +38,33 @@ _PHASE_LABEL = {
 }
 
 
+# Motif values that carry no tactical information. ``assign_primary_motif``
+# returns "blunder" when no specific motif can be identified, so it is the
+# unknown sentinel wearing a motif's clothes — on the live corpus it is 45% of
+# diagnoses (65% of puzzle_stats). Matching two puzzles because both say
+# "blunder" would report a tactical match that was never made, and produce the
+# sentence "…on a blunder in the middlegame."
+_NON_MOTIFS = frozenset({"blunder"})
+
+
 class MatchTier(str, Enum):
     """How closely a sibling puzzle matches, widest last.
 
     Ordered by how much the match actually tells the user. ``CAUSE_ONLY`` still
     earns its place: two puzzles sharing only ``calculation_stopped_early`` are
     genuinely the same blindspot even when the tactic and phase differ.
+
+    ``CAUSE_AND_PHASE`` exists because phase is recorded on every diagnosed
+    puzzle while a real motif is recorded on about a quarter of them. Without
+    it, the majority with no usable motif fell straight to ``CAUSE_ONLY`` and
+    were told their siblings came from "a different kind of position" — when in
+    fact they shared the phase, and nothing had checked whether the position
+    differed at all.
     """
 
     EXACT = "exact"
     CAUSE_AND_MOTIF = "cause_and_motif"
+    CAUSE_AND_PHASE = "cause_and_phase"
     CAUSE_ONLY = "cause_only"
 
 
@@ -62,10 +81,6 @@ class ClusterKey:
     motif: str | None = None
     phase: str | None = None
 
-    @property
-    def is_groupable(self) -> bool:
-        return bool(self.cause)
-
 
 def key_for(
     cause: str | None, motif: str | None, phase: str | None
@@ -76,10 +91,20 @@ def key_for(
     exists, the computed cause otherwise — because that is what every other
     cause-facing surface uses, and a cluster that disagreed with Insights would
     just look broken.
+
+    ``unclassified`` is not a weakness, it is the classifier declining to name
+    one, and every other surface excludes it (``patterns.identify`` returns
+    None for it; the mistake-causes endpoint skips it). Grouping by it would
+    collect every unexplained mistake into one bucket and call it a shared
+    weakness — the meaningless bucket this module exists to avoid.
     """
-    if not cause:
+    if not cause or cause == UNCLASSIFIED:
         return None
-    return ClusterKey(cause=cause, motif=motif or None, phase=phase or None)
+    # Compare case-insensitively but keep the stored spelling: the motif is used
+    # verbatim as a SQL equality predicate, so folding it here would stop
+    # matching rows the moment anything writes a capitalised motif.
+    usable_motif = motif if (motif or "").strip().lower() not in _NON_MOTIFS else None
+    return ClusterKey(cause=cause, motif=usable_motif or None, phase=phase or None)
 
 
 def tiers_for(key: ClusterKey) -> list[MatchTier]:
@@ -94,18 +119,24 @@ def tiers_for(key: ClusterKey) -> list[MatchTier]:
         tiers.append(MatchTier.EXACT)
     if key.motif:
         tiers.append(MatchTier.CAUSE_AND_MOTIF)
+    if key.phase:
+        tiers.append(MatchTier.CAUSE_AND_PHASE)
     tiers.append(MatchTier.CAUSE_ONLY)
     return tiers
 
 
 def humanise_cause(cause: str) -> str:
-    """Turn a taxonomy slug into something readable in a sentence.
+    """The user-facing name for a cause.
 
-    The taxonomy is written for the classifier (``calculation_stopped_early``),
-    not for a person reading a card, and the UI should not have to own that
-    translation in two places.
+    Defers to ``CAUSE_LABELS``, which every other cause surface already uses —
+    including the diagnosis card that renders directly above this one on the
+    puzzle detail page. Owning a second translation here put "Loose piece
+    awareness" and "loose piece awareness" on the same screen.
+
+    The slug fallback is for a cause the label map has not caught up with, so a
+    new taxonomy entry degrades to readable words rather than raw snake_case.
     """
-    return cause.replace("_", " ").strip().lower()
+    return CAUSE_LABELS.get(cause, cause.replace("_", " ").strip())
 
 
 def describe(key: ClusterKey, tier: MatchTier) -> str:
@@ -116,13 +147,15 @@ def describe(key: ClusterKey, tier: MatchTier) -> str:
     surfaces, which have the scheduling context this module does not.
     """
     cause = humanise_cause(key.cause)
+    phase = _PHASE_LABEL.get(key.phase or "", key.phase or "")
     if tier is MatchTier.EXACT:
-        phase = _PHASE_LABEL.get(key.phase or "", key.phase or "")
-        return (
-            f"Same mistake — {cause} — on a {key.motif} in {phase}."
-            if phase
-            else f"Same mistake — {cause} — on a {key.motif}."
-        )
+        return f"Same mistake — {cause} — on a {key.motif} in {phase}."
     if tier is MatchTier.CAUSE_AND_MOTIF:
         return f"Same mistake — {cause} — on a {key.motif}."
-    return f"Same mistake — {cause} — in a different kind of position."
+    if tier is MatchTier.CAUSE_AND_PHASE:
+        return f"Same mistake — {cause} — in {phase}."
+    # Deliberately does not claim the positions *differ*. This tier is reached
+    # whenever nothing tighter matched, which includes puzzles whose motif was
+    # simply never recorded — asserting a difference nothing checked was the
+    # previous wording's error.
+    return f"Same mistake — {cause} — across different positions."

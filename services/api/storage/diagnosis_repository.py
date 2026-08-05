@@ -433,9 +433,14 @@ class DiagnosisRepository:
         is. Returning a cause-only match labelled as an exact one would be the
         easy lie here.
 
-        Ordered most-recent-first: a weakness you showed last week is more
-        useful to revisit than the same weakness from two years ago, and the
-        corpus is ordered by import anyway.
+        Ordered by when the *puzzle* was created, newest first — a weakness you
+        showed last week is more useful to revisit than the same weakness from
+        two years ago. Deliberately not ``PuzzleDiagnosis.created_at``, which is
+        the diagnosis job's timestamp: a backfill stamps a whole corpus within
+        seconds, in scan order, so ordering by it is arbitrary and can even run
+        opposite to puzzle recency. The card shows the puzzle's date, so sorting
+        by anything else would label rows with a date they are not ordered by.
+        ``puzzle_id`` breaks ties so the order is total.
         """
         cause_col = func.coalesce(
             PuzzleDiagnosis.user_confirmed_cause, PuzzleDiagnosis.primary_cause
@@ -449,13 +454,18 @@ class DiagnosisRepository:
             ]
             if tier in (MatchTier.EXACT, MatchTier.CAUSE_AND_MOTIF):
                 conditions.append(PuzzleDiagnosis.primary_motif == key.motif)
-            if tier is MatchTier.EXACT:
+            if tier in (MatchTier.EXACT, MatchTier.CAUSE_AND_PHASE):
                 conditions.append(PuzzleDiagnosis.phase == key.phase)
 
             stmt = (
                 select(PuzzleDiagnosis.puzzle_id)
+                .join(
+                    Puzzle,
+                    (Puzzle.id == PuzzleDiagnosis.puzzle_id)
+                    & (Puzzle.username == PuzzleDiagnosis.username),
+                )
                 .where(*conditions)
-                .order_by(PuzzleDiagnosis.created_at.desc())
+                .order_by(Puzzle.created_at.desc(), PuzzleDiagnosis.puzzle_id)
                 .limit(limit)
             )
             found = list(self.db.scalars(stmt).all())
