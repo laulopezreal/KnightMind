@@ -202,10 +202,11 @@ async def lifespan(app: FastAPI):
 
     await anyio.to_thread.run_sync(_run_backfill)
 
-    # Build the ECO table off the request path. /openings is an `async def`
-    # handler, so FastAPI runs it on the event loop rather than the threadpool,
-    # and the image runs a single worker — left lazy, the first request after a
-    # deploy stalls every other in-flight request behind ~370ms of replay.
+    # Build the ECO table off the request path. /openings now runs on the
+    # threadpool, so a lazy build would no longer stall unrelated requests —
+    # but it would still make whichever user arrives first after a deploy wait
+    # ~370ms of python-chess replay, and several concurrent first-requests
+    # would each pay it (lru_cache dedupes the result, not the work).
     await anyio.to_thread.run_sync(warm_eco)
 
     # Start session cleanup background task if not disabled

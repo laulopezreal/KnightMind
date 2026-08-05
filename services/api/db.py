@@ -33,9 +33,13 @@ connect_args = {"check_same_thread": False} if _is_sqlite else {}
 # Sized against the request threadpool, not guessed. The route handlers that do
 # blocking DB work are plain `def`, so Starlette runs them on anyio's threadpool
 # (default limiter: 40 tokens) and up to that many can hold a Session at once.
-# The in-process job worker and the hourly cleanup task draw from this same
-# engine, so the ceiling is set a little above the threadpool limit rather than
-# exactly at it.
+# The ceiling sits a little above that limit rather than exactly at it, because
+# a second, independent pool also reaches this engine: `asyncio.to_thread` (used
+# by /engine/eval, the Chess.com import, the job worker and the hourly cleanup)
+# dispatches to asyncio's default executor, NOT anyio's threadpool, so its
+# threads do not consume threadpool tokens. Its DB-touching users are each
+# separately bounded -- ENGINE_EVAL_MAX_CONCURRENCY (4), the import rate limit,
+# and a single worker -- so ~10 is the realistic worst case on top of the 40.
 #
 # Getting this wrong is not subtle: SQLAlchemy's defaults (pool_size=5,
 # max_overflow=10) cap the pool at 15, and a 16th concurrent handler blocks for
