@@ -144,7 +144,7 @@ _VALID_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
 
 def _mock_eval():
     return patch(
-        "services.api.main.get_or_compute_eval",
+        "services.api.engine_routes.get_or_compute_eval",
         return_value=EvalResult(
             best_move_uci="e2e4", eval=0.2, mate_in=None, is_terminal=False
         ),
@@ -222,7 +222,7 @@ def test_window_reset_lets_the_caller_through_again(monkeypatch):
 def test_oversized_fen_is_rejected_with_400():
     reset_limiters()
     client = TestClient(app)
-    from services.api.main import MAX_FEN_LENGTH
+    from services.api.engine_routes import MAX_FEN_LENGTH
 
     huge = "8/" * 400  # far longer than any legal FEN
     assert len(huge) > MAX_FEN_LENGTH

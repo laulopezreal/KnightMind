@@ -57,6 +57,7 @@ ROUTER_SENTINELS = {
     "login": "auth_routes.py router",
     "explain_rating_changes": "ratings.py router",
     "get_openings": "openings_routes.py router",
+    "evaluate_fen": "engine_routes.py router",
 }
 
 
