@@ -827,22 +827,27 @@ class TestDiversityNeverDisplacesDuePuzzles:
         assert len(set(games)) == 4, games
 
 
-def test_one_game_can_reach_a_session_once_per_tier(db_session):
-    """Pins the real per-game bound: three through this helper, two in production.
+def test_counters_do_not_carry_across_tiers(db_session):
+    """A game used in the due tier can still be picked in the never-seen tier.
 
-    Counters reset per tier, so one game may supply a due puzzle, a never-seen
-    one, and a scheduled-later one. `/puzzles/due` narrows the scheduled-later
-    tier away first, so the shipped bound is two; the third is reachable only
-    via get_due_puzzles, which has no production caller today.
+    Asserts ORDER, not a count. The previous version of this test counted how
+    many puzzles from one game appeared in the session, with n equal to the
+    whole corpus — so the slice was everything and the count was a tautology.
+    It passed with every line of variety logic deleted.
 
-    Asserted rather than described, because the comment that said "up to two"
-    read as verified and was not.
+    The count is unobservable in principle here: for the scheduled-later puzzle
+    to be in the slice at all, n must exceed the due and never-seen tiers
+    combined, which forces those tiers in whole. So the observable difference is
+    where the tier-1 puzzle from an already-used game ranks — behind the
+    fillers if counters were shared, ahead of them if they reset per tier.
+
+    Scope, stated so this is not mistaken for a general variety guard: deleting
+    the variety pass entirely leaves priority order intact and this test still
+    passes. That mutation is caught by five other tests (TestVarietyCap and
+    TestGameDiversity). What this one uniquely catches is sharing the counters
+    across tiers, which before it no test in the repo detected at all.
     """
     from services.api.models import Puzzle, PuzzleStats
-    from services.api.storage.spaced_repetition import (
-        get_due_puzzles,
-        get_trainable_puzzle_ids,
-    )
 
     now = datetime.now(timezone.utc)
 
@@ -880,20 +885,60 @@ def test_one_game_can_reach_a_session_once_per_tier(db_session):
             )
         )
 
-    add("x_due", "gameX", 10, 1)
-    add("x_new", "gameX", None, 2)
-    add("x_future", "gameX", -30, 3)
-    for i in range(4):
+    # Two due puzzles from two games — two, so the len(ordered) <= 1 early
+    # return cannot short-circuit the pass under test.
+    add("x_due", "gameX", 20, 1)
+    add("y_due", "gameY", 10, 2)
+    # gameX appears again in the never-seen tier, ahead of unrelated fillers.
+    add("x_new", "gameX", None, 3)
+    for i in range(3):
         add(f"filler{i}", f"gameF{i}", None, 10 + i)
     db_session.commit()
 
     ids = [p.id for p in db_session.query(Puzzle).all()]
 
-    session, _ = get_due_puzzles(db_session, "u", ids, n=7)
-    from_one_game = [
-        pid for pid in session if db_session.get(Puzzle, pid).source_game_id == "gameX"
-    ]
-    assert len(from_one_game) == 3, from_one_game
+    # n cuts inside tier 1, so the third slot is contested.
+    ordered, _ = get_adaptive_puzzles(db_session, "u", ids, n=3)
 
-    # The endpoint path never sees the third: futures are dropped upstream.
-    assert "x_future" not in get_trainable_puzzle_ids(db_session, "u", ids)
+    # gameX was counted in tier 0; per-tier reset means it is eligible again in
+    # tier 1 and wins the slot on priority. Shared counters would defer it and
+    # serve a filler instead.
+    assert ordered[:3] == ["x_due", "y_due", "x_new"], ordered[:3]
+
+
+def test_the_scheduled_later_tier_never_reaches_the_endpoint(db_session):
+    """/puzzles/due narrows futures away before selection ever runs."""
+    from services.api.models import Puzzle, PuzzleStats
+    from services.api.storage.spaced_repetition import get_trainable_puzzle_ids
+
+    future = (datetime.now(timezone.utc) + timedelta(days=30)).replace(tzinfo=None)
+    db_session.add(
+        Puzzle(
+            id="later",
+            username="u",
+            source_game_id="gameZ",
+            ply=1,
+            fen="8/8/8/8/8/8/8/8 w - - 0 1",
+            side_to_move="white",
+            played_move_uci="e2e4",
+            best_move_uci="d2d4",
+            eval_before=0.5,
+            eval_after=-1.5,
+            swing=2.0,
+        )
+    )
+    db_session.add(
+        PuzzleStats(
+            puzzle_id="later",
+            username="u",
+            primary_motif="blunder",
+            attempts=1,
+            pass_count=1,
+            ease_factor=2.0,
+            interval_days=30,
+            next_due_at=future,
+        )
+    )
+    db_session.commit()
+
+    assert get_trainable_puzzle_ids(db_session, "u", ["later"]) == []

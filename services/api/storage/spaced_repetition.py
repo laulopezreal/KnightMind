@@ -338,15 +338,20 @@ def get_adaptive_puzzles(
 
     sorted_pids = sorted(puzzle_ids, key=sort_key)
 
-    # Counters reset per tier, so one game contributes at most one puzzle PER
-    # TIER. In production that bound is two: ``/puzzles/due`` narrows the
-    # scheduled-later tier away before this runs (``get_trainable_puzzle_ids``),
-    # leaving only due and never-seen. The function itself permits three — one
-    # game supplying a due, a never-seen and a scheduled-later puzzle — reachable
-    # through the unnarrowed ``get_due_puzzles`` helper, which currently has no
-    # production caller. Pinned by
-    # ``test_one_game_can_reach_a_session_once_per_tier`` rather than asserted
-    # here, because the previous wording said "up to two" and was wrong.
+    # Counters reset per tier, so within a tier one puzzle per game is
+    # *preferred* — but that is a preference, not a bound on the session. The
+    # rest are deferred, not dropped, and ``varied[:n]`` reaches straight into
+    # them whenever a tier has fewer distinct games than slots to fill. The live
+    # due tier is exactly that shape: 9 puzzles across 3 games, one holding 5, so
+    # a five-puzzle session necessarily repeats a game. ``_vary_session``'s own
+    # docstring says it — the caps cannot invent variety that is not there.
+    #
+    # Two earlier attempts to state a numeric bound here were both wrong ("up to
+    # two spanning tiers", then "in production that bound is two"). There isn't
+    # one: it depends on the tier's game composition, which changes as the user
+    # reviews. What IS invariant is the ordering — distinct games come first
+    # within a tier — and that is what the tests assert.
+    #
     # Sharing counters globally
     # would be tighter, but it is also the direction that risks starving a tier:
     # once the due tier consumes its games, every new puzzle from those games
