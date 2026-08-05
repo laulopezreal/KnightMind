@@ -45,16 +45,34 @@ runs on an in-process worker backed by a `jobs` table.
 │    Ingest    │      │   Postgres    │   │  Stockfish   │
 │ (services/   │      │ (SQLite for   │   │ local binary │
 │  ingest)     │      │  local dev)   │   │ STOCKFISH_   │
-│  Chess.com   │      │   Alembic     │   │ PATH         │
+│              │      │   Alembic     │   │ PATH         │
+└──────┬───────┘      └───────────────┘   └──────────────┘
+       │
+       │  outbound (all three egress the container)
+       ▼
+┌──────────────┐      ┌───────────────┐   ┌──────────────┐
+│  Chess.com   │      │    Lichess    │   │  Anthropic   │
+│  public API  │      │   explorer    │   │  (optional — │
+│  game import │      │   baselines   │   │  prose only) │
 └──────────────┘      └───────────────┘   └──────────────┘
-                              │
-                              ▼
-                      ┌───────────────┐
-                      │  Anthropic    │
-                      │  (optional —  │
-                      │  prose only)  │
-                      └───────────────┘
 ```
+
+Three external services are reached at runtime, all of them best-effort — a failure
+degrades one feature and never takes the API down:
+
+| Host | Used by | On failure |
+|---|---|---|
+| `api.chess.com` | game import, rating snapshots | the import or snapshot fails and is reported to the caller |
+| `explorer.lichess.ovh` | `/openings/baseline` | serves a stale cached row if one exists, else 503; the Openings page just omits the comparison |
+| Anthropic API | diagnosis prose (optional) | falls back to the rules-based diagnosis |
+
+No user data goes to the Lichess explorer — the request carries a position and a rating
+band, no username or game. Its cached rows have a 30-day TTL and are still served when
+the explorer is unreachable, so blocking egress to it is a supported configuration.
+
+> `OPERATIONS.md` is the source of truth here, but its outbound table currently lists
+> only the first two: it predates the AI-enrichment restore that added the Anthropic
+> egress path.
 
 ## Directory Structure
 
@@ -173,9 +191,25 @@ startup.
    recent period.
 2. The API builds a tree from stored games, labelled via the bundled ECO table
    (`openings/eco.tsv`).
-3. Results are memoised in `opening_explorer_cache`.
-4. D3 renders the interactive tree; a line you are losing can be sent straight to
+3. D3 renders the interactive tree; a line you are losing can be sent straight to
    practice.
+4. `GET /openings/baseline` adds an outside reference point: how a position actually
+   scores for players in your rating band, so a line can be judged as a real problem
+   rather than just an unfamiliar one.
+
+Two different caches back this, and they are not interchangeable:
+
+| | `openings/cache.py` | `opening_explorer_cache` (table) |
+|---|---|---|
+| Holds | the built tree for **one user** | aggregates for **one position + rating band** |
+| Derived from | that user's stored games | the public Lichess explorer |
+| Scope | process-local LRU, per worker | shared across all users |
+| Invalidation | key folds in `game_count` + latest game timestamp, so an import invalidates by construction | `key` folds in scheme version, speeds, and rating band |
+
+The tree cache is deliberately **not** a table: the tree is derived data that costs about
+a second to rebuild, so it does not justify a migration or the write traffic. The explorer
+cache is deliberately **not** process-local: a row is a fact about a public position, so
+one user's lookup answers everyone else's and saves an outbound call per selection.
 
 ## Background worker
 
