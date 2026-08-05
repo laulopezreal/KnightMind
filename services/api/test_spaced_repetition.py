@@ -536,6 +536,19 @@ def test_noncanonical_username_write_and_read_agree(db_session, handle):
     update_puzzle_stats(db_session, "rt-nc", handle, "pass", reviewed_at=reviewed)
     db_session.commit()
 
+    # The review row too. Without this the insert_puzzle_review call above is
+    # decorative: update_puzzle_stats folds independently, so every assertion
+    # below passes while puzzle_reviews forks — and diagnosis_repository reads
+    # verified reviews BY USERNAME for the cause-accuracy column, so a forked
+    # row silently drops out of it.
+    from services.api.models import PuzzleReview
+
+    review_row = db_session.query(PuzzleReview).filter_by(puzzle_id="rt-nc").one()
+    assert review_row.username == "alice", (
+        f"{handle!r} wrote a review row under {review_row.username!r}; it will "
+        "not be counted by any canonical read"
+    )
+
     # The row must exist under the canonical key, not the caller's spelling.
     stored = db_session.query(PuzzleStats).filter_by(puzzle_id="rt-nc").one()
     assert stored.username == "alice", (

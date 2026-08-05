@@ -19,6 +19,7 @@ from services.api.diagnosis.job import run_diagnosis  # noqa: E402
 from services.api.main import app, get_db  # noqa: E402
 from services.api.models import (  # noqa: E402
     Base,
+    DiagnosisAuditLog,
     DiagnosisStatus,
     Game,
     Job,
@@ -198,6 +199,63 @@ class TestUsernameFold:
         assert repo.puzzle_ids_for_cause(handle, "c") == {"p1"}
         assert repo.cause_counts(handle) == [("c", 1)]
         assert repo.pending_puzzle_ids(handle) == []
+
+    @pytest.mark.parametrize("handle", NONCANONICAL_SPELLINGS)
+    def test_first_upsert_under_an_ugly_handle_lands_canonically(
+        self, db_session, handle
+    ):
+        """The INSERT branch, which the in-place test cannot reach.
+
+        ``test_upsert_updates_in_place_instead_of_forking`` seeds a canonical
+        row first, so ``upsert``'s ``get`` probe always finds it and only the
+        UPDATE branch runs. And because ``get`` folds independently, the probe
+        resolves canonically however ``upsert`` folded — so mutating the fold
+        in ``upsert`` killed no test at all.
+
+        Seeding nothing forces the INSERT, which writes ``write.username``
+        directly and is the branch that can actually fork.
+        """
+        _puzzle(db_session)
+        repo = DiagnosisRepository(db_session)
+
+        repo.upsert(DiagnosisWrite(puzzle_id="p1", username=handle, primary_cause="a"))
+        db_session.commit()
+
+        rows = db_session.query(PuzzleDiagnosis).all()
+        assert len(rows) == 1
+        assert rows[0].username == USER, (
+            f"{handle!r} inserted a diagnosis under {rows[0].username!r}; every "
+            "canonical read, and the next upsert, will miss it"
+        )
+
+    @pytest.mark.parametrize("handle", NONCANONICAL_SPELLINGS)
+    def test_ai_audit_folds_so_the_daily_cap_cannot_be_bypassed(
+        self, db_session, handle
+    ):
+        """The audit log is the ledger the AI spend caps are counted from.
+
+        ``ai_audit_repository``'s own docstring says both sides fold so a user
+        cannot get a second daily allowance under a different spelling. Nothing
+        asserted it: mutating either fold killed no test.
+        """
+        from services.api.storage.ai_audit_repository import (
+            AIAuditRepository,
+            AuditWrite,
+        )
+
+        repo = AIAuditRepository(db_session)
+        repo.record(AuditWrite(username=handle, status="accepted", puzzle_id="p1"))
+        db_session.commit()
+
+        row = db_session.query(DiagnosisAuditLog).one()
+        assert row.username == USER, (
+            f"{handle!r} recorded spend under {row.username!r}; that row is "
+            "invisible to the per-user cap"
+        )
+        # And the counter must see it under either spelling, or the cap is
+        # bypassable by varying case or padding.
+        assert repo.budget_last_24h(USER).user_used == 1
+        assert repo.budget_last_24h(handle).user_used == 1
 
     @pytest.mark.parametrize("handle", NONCANONICAL_SPELLINGS)
     def test_upsert_updates_in_place_instead_of_forking(self, db_session, handle):
