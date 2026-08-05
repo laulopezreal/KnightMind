@@ -335,15 +335,30 @@ def get_adaptive_puzzles(
     # so capping by motif would fight the user's explicit choice. Spreading
     # across GAMES does not: a focus asks for a kind of mistake, never for five
     # positions out of the same game, so that cap stays on in both modes.
-    sorted_pids = _vary_session(
-        sorted_pids,
-        all_stats,
-        _source_games(db, username, sorted_pids),
-        n,
-        cap_motifs=not focus,
-    )
+    source_games = _source_games(db, username, sorted_pids)
+    varied: list[str] = []
+    for tier in sorted({_tier_of(pid, all_stats, now) for pid in sorted_pids}):
+        tier_pids = [p for p in sorted_pids if _tier_of(p, all_stats, now) == tier]
+        varied.extend(
+            _vary_session(tier_pids, all_stats, source_games, n, cap_motifs=not focus)
+        )
 
-    return sorted_pids[:n], all_stats
+    return varied[:n], all_stats
+
+
+def _tier_of(pid: str, all_stats: dict[str, PuzzleStats], now: datetime) -> int:
+    """Scheduling tier: 0 due, 1 never-seen, 2 scheduled for later.
+
+    Mirrors ``base_priority`` in ``sort_key``. Extracted so the variety pass can
+    group by the same boundary the sort established, instead of re-deriving it.
+    """
+    stats = all_stats.get(pid)
+    if stats is None or stats.next_due_at is None:
+        return 1
+    next_due = stats.next_due_at
+    if next_due.tzinfo is None:
+        next_due = next_due.replace(tzinfo=timezone.utc)
+    return 0 if next_due <= now else 2
 
 
 def _source_games(db: Session, username: str, puzzle_ids: list[str]) -> dict[str, str]:
@@ -357,7 +372,7 @@ def _source_games(db: Session, username: str, puzzle_ids: list[str]) -> dict[str
         return {}
     rows = db.execute(
         select(Puzzle.id, Puzzle.source_game_id).where(
-            Puzzle.username == username, Puzzle.id.in_(puzzle_ids)
+            Puzzle.username == username.lower(), Puzzle.id.in_(puzzle_ids)
         )
     ).all()
     return {pid: game for pid, game in rows}
@@ -395,9 +410,10 @@ def _vary_session(
 ) -> list[str]:
     """Reorder so one game — or one motif — cannot monopolise a session.
 
-    Deferred puzzles are appended rather than dropped, so this can only change
-    the *order* of what was already selectable — never the set, and never the
-    length. A session with nothing else available stays as concentrated as the
+    Deferred puzzles are appended rather than dropped, so this returns the same
+    set in a different order — never a shorter list. That says nothing about the
+    *session*: the caller slices to ``n``, so reordering does change which
+    puzzles are served, which is exactly why this runs per tier. A session with nothing else available stays as concentrated as the
     corpus forces it to be; the caps cannot invent variety that is not there.
 
     Both constraints are applied in one pass on purpose. Run as two passes they
