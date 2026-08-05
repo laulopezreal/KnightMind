@@ -912,3 +912,57 @@ def test_counters_do_not_carry_across_tiers(db_session):
     # tier 1, so x_new is NOT deferred and keeps its place at the head of the
     # tier. Shared counters would defer it and a filler would take the slot.
     assert ordered[:3] == ["x_due", "y_due", "x_new"], ordered[:3]
+
+
+def test_the_two_caps_compose_and_neither_orders_alone(db_session):
+    """A distinct game can be deferred by the MOTIF cap and land behind a repeat.
+
+    Every other variety test sets motif="blunder", which `_NON_MOTIFS` exempts,
+    so they exercise the game cap in isolation. That is deliberate there, but it
+    leaves the composition untested — and the composition is what falsified
+    three successive attempts to write an ordering invariant into the call site.
+
+    Games A, B, A, C, all sharing one real motif. With n=3 the motif cap
+    (int(3 * 2/3) = 2) defers the fourth puzzle, which is the only one from
+    game C. The third slot therefore goes to the game-A repeat, and a distinct
+    game that was available is never served.
+    """
+    from services.api.models import Puzzle, PuzzleStats
+
+    for i, (pid, game) in enumerate(
+        [("p1", "gameA"), ("p2", "gameB"), ("p3", "gameA"), ("p4", "gameC")]
+    ):
+        db_session.add(
+            Puzzle(
+                id=pid,
+                username="u",
+                source_game_id=game,
+                ply=i + 1,
+                fen="8/8/8/8/8/8/8/8 w - - 0 1",
+                side_to_move="white",
+                played_move_uci="e2e4",
+                best_move_uci="d2d4",
+                eval_before=0.5,
+                eval_after=-1.5,
+                swing=2.0,
+            )
+        )
+        db_session.add(
+            PuzzleStats(
+                puzzle_id=pid,
+                username="u",
+                # A REAL motif, not the exempt "blunder" — that is the point.
+                primary_motif="fork",
+                attempts=0,
+                pass_count=0,
+                ease_factor=2.0,
+                next_due_at=None,
+            )
+        )
+    db_session.commit()
+
+    ordered, _ = get_adaptive_puzzles(db_session, "u", ["p1", "p2", "p3", "p4"], n=3)
+    games = [db_session.get(Puzzle, pid).source_game_id for pid in ordered[:3]]
+
+    assert games == ["gameA", "gameB", "gameA"], games
+    assert "gameC" not in games

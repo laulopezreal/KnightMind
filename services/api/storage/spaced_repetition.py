@@ -341,21 +341,28 @@ def get_adaptive_puzzles(
     # Counters reset per tier, so within a tier one puzzle per game is
     # *preferred* — but that is a preference, not a bound on the session. The
     # rest are deferred, not dropped, and ``varied[:n]`` reaches straight into
-    # them whenever a tier has fewer distinct games than slots to fill. The live
-    # due tier is exactly that shape: 9 puzzles across 3 games, one holding 5, so
-    # a five-puzzle session necessarily repeats a game. ``_vary_session``'s own
-    # docstring says it — the caps cannot invent variety that is not there.
+    # them whenever a tier holds fewer distinct games than the session has slots
+    # — which the live due tier does, so a default session necessarily repeats a
+    # game. ``_vary_session``'s own docstring says it: the caps cannot invent
+    # variety that is not there.
     #
-    # Two earlier attempts to state a numeric bound here were both wrong ("up to
-    # two spanning tiers", then "in production that bound is two"). There isn't
-    # one: it depends on the tier's game composition, which changes as the user
-    # reviews. What holds is narrower: within the first ``n`` of a tier,
-    # distinct games come first. Beyond that the ``len(taken) >= n`` early-append
-    # stops deferring, so a repeat can precede a distinct game further down the
-    # returned list — invisible at the API boundary, which only ever sees the
-    # first ``n``, but not an invariant of this function's return value.
-    # Asserted by TestGameDiversity, not by the tests added alongside this
-    # comment.
+    # No ordering invariant is stated here, because three attempts to state one
+    # were all wrong: "up to two spanning tiers", then "in production that bound
+    # is two", then "within the first n of a tier, distinct games come first".
+    # The last fails because the two caps COMPOSE. With only the game cap active
+    # every deferred puzzle is by definition a repeat, so distinct-first does
+    # hold. Turn the motif cap on and a distinct-GAME puzzle can be deferred for
+    # motif reasons and land behind a game repeat inside the first ``n``:
+    # games A, B, A, C all sharing one motif, n=3, serves A twice and never C.
+    # Pinned by ``test_the_two_caps_compose_and_neither_orders_alone``.
+    #
+    # Note TestGameDiversity sets motif="blunder" precisely to neutralise the
+    # motif cap, so it asserts the game cap in isolation — it does not, and
+    # cannot, assert anything about the composition.
+    #
+    # The lesson these three attempts share: a measured count rots (the due tier
+    # went 9 -> 12 in a day) and an ordering rule stated over one cap is falsified
+    # by the other. Assert structure here, put behaviour in tests.
     #
     # Sharing counters globally
     # would be tighter, but it is also the direction that risks starving a tier:
