@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback, useRef, type ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { getMistakeCauses, getMistakePatterns, getTodaysFocus, getMotifPerformance, getMotifTrends, getTrickyPuzzles, type MistakeCausesResponse, type MistakePatternsResponse, type TodaysFocusResponse, type MotifPerformanceResponse, type TrendsResponse, type TrickyPuzzlesResponse } from '../api/users';
+import { getMistakeCauses, getMistakePatterns, getTodaysFocus, getMotifPerformance, getMotifTrends, getTrickyPuzzles } from '../api/users';
 import { useChessUsername } from '../context/ChessUsernameContext';
 import { TacticalRadar } from '../components/TacticalRadar';
 import { MistakePatternsCard } from '../components/MistakePatternsCard';
@@ -12,7 +12,7 @@ import { PageHeader } from '../components/PageHeader';
 import { DataStateEmpty, DataStateError, DataStateLoading, DataStateOffline } from '../components/DataState';
 import { ConnectAccountEmpty } from '../components/ConnectAccountEmpty';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
-import { useLatestRequest } from '../hooks/useLatestRequest';
+import { useAsyncData } from '../hooks/useAsyncData';
 
 /**
  * Page shell. The header (h1 + subtitle) renders in EVERY state — connect
@@ -34,80 +34,44 @@ export default function Insights() {
     const { username } = useChessUsername();
     const navigate = useNavigate();
 
-    const [motifPerformance, setMotifPerformance] = useState<MotifPerformanceResponse | null>(null);
-    const [trends, setTrends] = useState<TrendsResponse | null>(null);
-    const [trickyPuzzles, setTrickyPuzzles] = useState<TrickyPuzzlesResponse | null>(null);
-    const [causes, setCauses] = useState<MistakeCausesResponse | null>(null);
-    const [patterns, setPatterns] = useState<MistakePatternsResponse | null>(null);
-    const [focus, setFocus] = useState<TodaysFocusResponse | null>(null);
-    const [loading, setLoading] = useState(true);
-    const [error, setError] = useState<string | null>(null);
-    const hasLoadedRef = useRef(false);
-
     const online = useOnlineStatus();
-    const request = useLatestRequest();
 
-    // Load insights data
-    const loadInsightsData = useCallback(async () => {
-        if (!username) return;
-
-        // Guard against stale-response races: a username change (or a focus
-        // refresh) begins a newer request; the older, slower response must not
-        // clobber the newer one.
-        const token = request.begin();
-        try {
-            // Only show full-page spinner on initial load, not on background refreshes
-            if (!hasLoadedRef.current) {
-                setLoading(true);
-            }
-            setError(null);
-
+    // One request set, one loading flag, one error. The staleness guarding that
+    // used to be spelled out three times per page lives in the hook now.
+    const { data, error, loading, reload } = useAsyncData(
+        async () => {
+            // No signal threaded through: most of the api/ layer does not accept
+            // one yet. The hook's generation check guards the race regardless --
+            // a superseded response is dropped whether or not its fetch aborted.
             const [motifs, trendsData] = await Promise.all([
-                getMotifPerformance(username),
-                getMotifTrends(username, 30)
+                getMotifPerformance(username!),
+                getMotifTrends(username!, 30),
             ]);
-
-            // Supplementary: fail silently — page works without them
+            // Supplementary: fail silently — the page works without them.
             const [tricky, causeData, patternData, focusData] = await Promise.all([
-                getTrickyPuzzles(username, 5).catch(() => null),
-                getMistakeCauses(username).catch(() => null),
-                getMistakePatterns(username).catch(() => null),
-                getTodaysFocus(username).catch(() => null),
+                getTrickyPuzzles(username!, 5).catch(() => null),
+                getMistakeCauses(username!).catch(() => null),
+                getMistakePatterns(username!).catch(() => null),
+                getTodaysFocus(username!).catch(() => null),
             ]);
+            return { motifs, trendsData, tricky, causeData, patternData, focusData };
+        },
+        [username],
+        { enabled: Boolean(username), errorMessage: 'Failed to load insights data' },
+    );
 
-            if (token.isStale()) return;
-            setMotifPerformance(motifs);
-            setTrends(trendsData);
-            setTrickyPuzzles(tricky);
-            setCauses(causeData);
-            setPatterns(patternData);
-            setFocus(focusData);
-            hasLoadedRef.current = true;
-        } catch (err) {
-            if (token.isStale()) return;
-            console.error('Failed to load insights:', err);
-            setError(err instanceof Error ? err.message : 'Failed to load insights data');
-        } finally {
-            if (!token.isStale()) setLoading(false);
-        }
-    }, [username, request]);
+    const motifPerformance = data?.motifs ?? null;
+    const trends = data?.trendsData ?? null;
+    const trickyPuzzles = data?.tricky ?? null;
+    const causes = data?.causeData ?? null;
+    const patterns = data?.patternData ?? null;
+    const focus = data?.focusData ?? null;
 
-    // Initial load
+    // Auto-refresh on window focus.
     useEffect(() => {
-        loadInsightsData();
-    }, [loadInsightsData]);
-
-    // Auto-refresh on window focus
-    useEffect(() => {
-        const handleFocus = () => {
-            loadInsightsData();
-        };
-
-        window.addEventListener('focus', handleFocus);
-        return () => {
-            window.removeEventListener('focus', handleFocus);
-        };
-    }, [loadInsightsData]);
+        window.addEventListener('focus', reload);
+        return () => window.removeEventListener('focus', reload);
+    }, [reload]);
 
     const handleMotifClick = (motif: string) => {
         // Navigate to puzzles page with motif filter
@@ -139,11 +103,11 @@ export default function Insights() {
                 <DataStateLoading label="Loading insights..." />
             ) : error ? (
                 !online ? (
-                    <DataStateOffline onRetry={loadInsightsData} />
+                    <DataStateOffline onRetry={reload} />
                 ) : (
                     <DataStateError
                         message={error}
-                        onRetry={loadInsightsData}
+                        onRetry={reload}
                         retryLabel="Retry"
                         ariaLabel="Retry loading insights"
                     />
