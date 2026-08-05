@@ -88,13 +88,19 @@ Known live database contents at restoration time:
 
 ## Outbound dependencies
 
-The API makes egress calls to exactly two third parties. Both are best-effort:
+The API makes egress calls to exactly three third parties. All are best-effort:
 a failure degrades one feature and never takes the API down.
 
 | Host | Used by | On failure |
 | --- | --- | --- |
 | `api.chess.com` | game import, rating snapshots | the import or snapshot fails and is reported to the caller |
 | `explorer.lichess.ovh` | `/openings/baseline` | serves a stale cached row if one exists, else 503; the Openings page simply omits the comparison |
+| `api.anthropic.com` | AI diagnosis prose | diagnosis falls back to the rules-based cause; the written explanation is simply absent |
+
+This table must stay in step with `ALLOWED_HOST_SUFFIXES` in
+`deploy/egress-proxy/connect_proxy.py`, currently
+`("chess.com", "anthropic.com", "lichess.ovh")`. A host missing from that
+allowlist is unreachable from the container regardless of what the app expects.
 
 Notes for the lichess explorer:
 
@@ -107,6 +113,23 @@ Notes for the lichess explorer:
 - **Blocking egress to it is a supported configuration.** The Openings page
   drops the "vs expected" line and stays fully usable.
 - Per-principal rate limit: `RATE_LIMIT_OPENINGS_BASELINE` (default 60/min).
+
+Notes for the Anthropic API:
+
+- **Chess data does leave the box here**, unlike the explorer: the prompt carries
+  position and game context so the model can explain the mistake. No account
+  credentials are sent.
+- **Kill switch**: `KNIGHTMIND_AI_DIAGNOSIS=0` stops the model call entirely — no
+  request, no audit row, diagnosis falls back to rules.
+- **Absent key is safe.** `ANTHROPIC_API_KEY` is read at call time, never at
+  startup, so an unset key degrades to rules-only instead of blocking boot.
+- **Spend ceilings** are counted from `diagnosis_audit_log`:
+  `KNIGHTMIND_AI_DAILY_CAP_USER` (bounds one backfill) and
+  `KNIGHTMIND_AI_DAILY_CAP_GLOBAL` (backstop against a runaway loop).
+- **Prompts and responses are retained** in `diagnosis_audit_log` for incident
+  review and swept by the session-cleanup loop.
+- **Blocking egress to it is a supported configuration**, same as the explorer:
+  diagnoses keep working, just without the written explanation.
 
 ## Environment file
 
@@ -157,6 +180,32 @@ Applied on 2026-07-20 after taking and verifying the backup above:
 - API image was rebuilt and recreated with the unprivileged Docker user `knightmind`; `docker compose --env-file .env.docker exec -T api id` returns `uid=100(knightmind) gid=101(knightmind)`.
 - API and DB are healthy after recreation; public `https://api.guessme.world/ops/ping` returns `200 {"status":"pong"}`.
 - Multi-user auth remains intentionally disabled until Lau provisions the account and flips `KNIGHTMIND_REQUIRE_AUTH=true` in `.env.docker`.
+
+Applied on 2026-08-05, after taking backup `knightmind-db-20260805T103703+0200.dump`:
+
+- **`KNIGHTMIND_STRIP_PUZZLE_SOLUTIONS=1` is now set** in `.env.docker`. Before this,
+  the flag defaulted OFF and `/puzzles/due` shipped `best_move_uci`,
+  `accept_moves_uci`, `played_move_uci` and `solution_pv` straight to the browser —
+  the answer arrived with the question.
+- The flag was OFF by design, not by oversight: it let the API deploy before the
+  grading frontend, in either order. It was safe to flip once the deployed frontend
+  stopped reading solutions from the training payload. Confirmed against the **live**
+  Cloudflare Pages bundle (`assets/puzzles-*.js` contains `/puzzles/{id}/check`,
+  `/puzzles/{id}/reveal`, and `reveal:"true"`), not just the repo source — the two can
+  differ, and only the deployed bundle decides whether flipping breaks users.
+- Verified after the flip: `/puzzles/due` omits all four fields; `/puzzles/list` and
+  `/puzzles/{id}` return them as null; `/puzzles/{id}?reveal=true` still populates them
+  (the Library detail page depends on this); `POST /reveal` returns the solution (the
+  training board depends on this); `POST /check` still grades correctly.
+- **To roll back**, set `KNIGHTMIND_STRIP_PUZZLE_SOLUTIONS=0` (or remove the line) and
+  run `docker compose --env-file .env.docker up -d`. No rebuild or migration needed —
+  the flag is read at request time.
+- Server-side verification (`/check`, `/reveal`, `/review`) is unaffected by this flag
+  in either position. Flipping it closed an information leak; it never was the thing
+  preventing forged pass/fail results.
+- `README.md` states that puzzle solutions are not sent with the training payload.
+  That statement was false while the flag was OFF and is true now — if the flag is ever
+  turned back off, correct the README in the same change.
 
 ## Health checks
 
