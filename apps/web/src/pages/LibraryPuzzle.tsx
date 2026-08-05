@@ -4,8 +4,9 @@ import { Link, useParams } from 'react-router-dom';
 import { AccessibleChessboard } from '../components/AccessibleChessboard';
 import { Chess } from 'chess.js';
 import { useChessUsername } from '../context/ChessUsernameContext';
-import { getLibraryPuzzle, getPuzzleDiagnosis, reviewPuzzle, type LibraryPuzzle as LibraryPuzzleType, type PuzzleDiagnosis } from '../api/puzzles';
+import { getLibraryPuzzle, getPuzzleDiagnosis, getSimilarPuzzles, reviewPuzzle, type LibraryPuzzle as LibraryPuzzleType, type PuzzleDiagnosis, type SimilarPuzzlesResponse } from '../api/puzzles';
 import { MistakeDiagnosisCard } from '../components/MistakeDiagnosisCard';
+import { SimilarWeaknessCard } from '../components/SimilarWeaknessCard';
 import { ApiError } from '../api/core';
 import { DataStateError, DataStateOffline } from '../components/DataState';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
@@ -50,9 +51,35 @@ export default function LibraryPuzzle() {
     // the evidence names the solution move.
     const [diagnosis, setDiagnosis] = useState<PuzzleDiagnosis | null>(null);
     const [diagnosisLoading, setDiagnosisLoading] = useState(false);
+    // Siblings are post-mortem content for the same reason the diagnosis is:
+    // naming the shared motif before the attempt would hand over the tactic.
+    const [similar, setSimilar] = useState<SimilarPuzzlesResponse | null>(null);
 
     const online = useOnlineStatus();
     const request = useLatestRequest();
+
+    // Everything above that describes *this* puzzle rather than the page.
+    //
+    // Kept adjacent to the declarations on purpose: this route can navigate to
+    // itself. SimilarWeaknessCard links from /library/:id to /library/:id, so
+    // React reuses the component instead of remounting it, and any state left
+    // behind is inherited by the next puzzle. When `status` stayed 'revealed',
+    // the sibling opened with its answer already granted and its diagnosis —
+    // which names the best move — was fetched with reveal=true, with no attempt
+    // made. Add state above, reset it here.
+    const resetPuzzleState = useCallback(() => {
+        setStatus('solving');
+        setUserMove('');
+        setShowUciInput(false);
+        setRecorded(false);
+        setNextDueAt(null);
+        setFeedback('');
+        setSolveTimeMs(null);
+        setRecordError(null);
+        setDiagnosis(null);
+        setDiagnosisLoading(false);
+        setSimilar(null);
+    }, []);
 
     const fetchPuzzle = useCallback(async () => {
         if (!username || !puzzleId) return;
@@ -66,7 +93,7 @@ export default function LibraryPuzzle() {
             if (token.isStale()) return;
             setPuzzle(found);
             setGame(new Chess(found.fen));
-            setDiagnosis(null);
+            resetPuzzleState();
             solveStartRef.current = Date.now();
         } catch (err) {
             if (token.isStale()) return;
@@ -78,7 +105,7 @@ export default function LibraryPuzzle() {
         } finally {
             if (!token.isStale()) setIsLoading(false);
         }
-    }, [username, puzzleId, request]);
+    }, [username, puzzleId, request, resetPuzzleState]);
 
     useEffect(() => {
         fetchPuzzle();
@@ -88,7 +115,17 @@ export default function LibraryPuzzle() {
     // it is not even requested until the puzzle has been solved or revealed.
     // `reveal` is passed for the same reason getLibraryPuzzle passes it — by
     // this point the answer is already on screen.
-    const resolved = status === 'correct' || status === 'incorrect' || status === 'revealed';
+    // Gated on the loaded puzzle matching the route, not just on `status`.
+    //
+    // resetPuzzleState() runs *after* the getLibraryPuzzle round-trip, so for
+    // the whole request `status` still describes the previous puzzle while
+    // puzzleId is already the new one. Without this identity check the effects
+    // below fire for the sibling — requesting its diagnosis, which names the
+    // best move, with no attempt made. `puzzle` only becomes the new one once
+    // its fetch succeeds, so this is false for exactly the window in question.
+    const resolved =
+        puzzle?.id === puzzleId &&
+        (status === 'correct' || status === 'incorrect' || status === 'revealed');
 
     useEffect(() => {
         if (!resolved || !username || !puzzleId || diagnosis) return;
@@ -108,6 +145,21 @@ export default function LibraryPuzzle() {
             stale = true;
         };
     }, [resolved, username, puzzleId, diagnosis]);
+
+    useEffect(() => {
+        if (!resolved || !username || !puzzleId || similar) return;
+        let stale = false;
+        getSimilarPuzzles(puzzleId, username)
+            .then((result) => {
+                if (!stale) setSimilar(result);
+            })
+            // Supplementary, like the diagnosis: a failure leaves the section
+            // unrendered rather than failing a solved puzzle.
+            .catch(() => undefined);
+        return () => {
+            stale = true;
+        };
+    }, [resolved, username, puzzleId, similar]);
 
     const handleRecordResult = async (result: 'pass' | 'fail') => {
         if (!puzzle || !username || isRecording) return;
@@ -461,6 +513,12 @@ export default function LibraryPuzzle() {
                         revealed={resolved}
                         loading={diagnosisLoading}
                     />
+
+                    {/* Sits below the diagnosis on purpose: it only means
+                        something once the user knows what went wrong here. */}
+                    {resolved && (
+                        <SimilarWeaknessCard data={similar} currentPuzzleId={puzzle.id} />
+                    )}
                 </div>
             </section>
         </div>

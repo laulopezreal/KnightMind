@@ -19,6 +19,12 @@ from services.api.analytics_confidence import (
     MIN_PUZZLES_FOR_CAUSE_ACCURACY,
 )
 from services.api.diagnosis.causes import RULE_VERSION
+from services.api.diagnosis.clusters import (
+    ClusterKey,
+    MatchTier,
+    key_for,
+    tiers_for,
+)
 from services.api.diagnosis.evidence import EXTRACTION_VERSION
 from services.api.models import (
     DiagnosisStatus,
@@ -398,6 +404,74 @@ class DiagnosisRepository:
         row.user_confirmed_cause = cause
         row.confirmed_at = datetime.now(timezone.utc)
         return row
+
+    # -- clusters ------------------------------------------------------
+
+    def cluster_key_for(self, username: str, puzzle_id: str) -> ClusterKey | None:
+        """The weakness coordinates of one puzzle, or None if it has no cause.
+
+        Reads the correction over the computed cause, the same way every other
+        cause-facing surface does — a cluster that disagreed with Insights
+        about what a mistake *was* would read as a bug, not a feature.
+        """
+        row = self.get(username, puzzle_id)
+        if row is None or row.status != DiagnosisStatus.OK:
+            return None
+        return key_for(
+            row.user_confirmed_cause or row.primary_cause,
+            row.primary_motif,
+            row.phase,
+        )
+
+    def similar_puzzle_ids(
+        self, username: str, puzzle_id: str, key: ClusterKey, limit: int
+    ) -> tuple[list[str], MatchTier | None]:
+        """Other puzzles sharing this weakness, tightest match that has any.
+
+        Widens through the tiers only until one returns something, and reports
+        which tier answered so the caller can say how close the match really
+        is. Returning a cause-only match labelled as an exact one would be the
+        easy lie here.
+
+        Ordered by when the *puzzle* was created, newest first — a weakness you
+        showed last week is more useful to revisit than the same weakness from
+        two years ago. Deliberately not ``PuzzleDiagnosis.created_at``, which is
+        the diagnosis job's timestamp: a backfill stamps a whole corpus within
+        seconds, in scan order, so ordering by it is arbitrary and can even run
+        opposite to puzzle recency — the two are unrelated facts, and only one
+        of them is about the user. ``puzzle_id`` breaks ties so the order is
+        total.
+        """
+        cause_col = func.coalesce(
+            PuzzleDiagnosis.user_confirmed_cause, PuzzleDiagnosis.primary_cause
+        )
+        for tier in tiers_for(key):
+            conditions = [
+                PuzzleDiagnosis.username == username,
+                PuzzleDiagnosis.status == DiagnosisStatus.OK,
+                PuzzleDiagnosis.puzzle_id != puzzle_id,
+                cause_col == key.cause,
+            ]
+            if tier in (MatchTier.EXACT, MatchTier.CAUSE_AND_MOTIF):
+                conditions.append(PuzzleDiagnosis.primary_motif == key.motif)
+            if tier in (MatchTier.EXACT, MatchTier.CAUSE_AND_PHASE):
+                conditions.append(PuzzleDiagnosis.phase == key.phase)
+
+            stmt = (
+                select(PuzzleDiagnosis.puzzle_id)
+                .join(
+                    Puzzle,
+                    (Puzzle.id == PuzzleDiagnosis.puzzle_id)
+                    & (Puzzle.username == PuzzleDiagnosis.username),
+                )
+                .where(*conditions)
+                .order_by(Puzzle.created_at.desc(), PuzzleDiagnosis.puzzle_id)
+                .limit(limit)
+            )
+            found = list(self.db.scalars(stmt).all())
+            if found:
+                return found, tier
+        return [], None
 
     # -- aggregates ----------------------------------------------------
 

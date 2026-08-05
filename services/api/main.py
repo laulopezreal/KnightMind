@@ -34,6 +34,7 @@ from services.api.analytics_confidence import (
 )
 from services.api.auth import require_operator
 from services.api.db import SessionLocal, get_db
+from services.api.diagnosis.clusters import describe, humanise_cause, usable_motif
 from services.api.diagnosis.job import (
     DIAGNOSIS_BATCH_DEFAULT,
     DIAGNOSIS_BATCH_MAX,
@@ -2591,6 +2592,135 @@ class MistakePatternsResponse(BaseModel):
     # named list is everything.
     below_threshold: int
     pending: int
+
+
+class SimilarPuzzleItem(BaseModel):
+    """A sibling puzzle in the same weakness cluster.
+
+    Carries no solution fields at all — not even behind ``?reveal``. This is a
+    discovery surface reached *from* a puzzle the user is studying, so shipping
+    answers here would put four more solutions on screen for every one they
+    asked to see. Following a link lands on the detail page, which owns the
+    reveal decision.
+    """
+
+    id: str
+    title: str | None = None
+    primary_motif: str | None = None
+    difficulty: str
+    swing: float
+    fen: str
+    side_to_move: str
+    created_at: datetime | None = None
+    attempts: int = 0
+    fail_count: int = 0
+
+
+class SimilarPuzzlesResponse(BaseModel):
+    cause: str | None = None
+    cause_label: str | None = None
+    match: str | None = None
+    reason: str | None = None
+    puzzles: list[SimilarPuzzleItem] = []
+
+
+@app.get("/puzzles/{puzzle_id}/similar", response_model=SimilarPuzzlesResponse)
+async def get_similar_puzzles(
+    puzzle_id: str,
+    username: Annotated[Username, Query(description="Owner of the puzzle")],
+    n: int = Query(5, ge=1, le=20, description="How many siblings to return"),
+    db: Session = Depends(get_db),
+    account: Account | None = Depends(require_account),
+):
+    """Other puzzles the user got wrong for the same reason.
+
+    Answers "what else does this weakness cost me", which the training queue
+    does not: the queue orders what is *due*, and a weakness is worth seeing
+    whole regardless of when its puzzles next come round.
+
+    An empty list is a normal answer, not an error — an undiagnosed puzzle, an
+    unclassified cause, or a weakness with exactly one example all legitimately
+    have no siblings, and the caller renders nothing rather than an error card.
+    """
+    from services.api.models import Puzzle as PuzzleModel
+
+    assert_owns_username(account, username, db)
+    username_lower = username
+
+    # Ownership is a WHERE, not a get(): the puzzles PK is `id` alone, so
+    # filtering on username here is what stops one account probing another's
+    # corpus for which weaknesses it contains.
+    owns = db.execute(
+        select(PuzzleModel.id).where(
+            PuzzleModel.id == puzzle_id,
+            PuzzleModel.username == username_lower,
+        )
+    ).first()
+    if owns is None:
+        raise HTTPException(status_code=404, detail="Puzzle not found")
+
+    repo = DiagnosisRepository(db)
+    key = repo.cluster_key_for(username_lower, puzzle_id)
+    if key is None:
+        return SimilarPuzzlesResponse()
+
+    sibling_ids, tier = repo.similar_puzzle_ids(username_lower, puzzle_id, key, n)
+    if not sibling_ids or tier is None:
+        return SimilarPuzzlesResponse(
+            cause=key.cause, cause_label=humanise_cause(key.cause)
+        )
+
+    # Stats ride in on the join rather than a second round trip. PuzzleStats is
+    # keyed on puzzle_id alone, so the username predicate belongs in the ON
+    # clause — the same shape GET /puzzles/{id} uses.
+    rows = db.execute(
+        select(PuzzleModel, PuzzleStats)
+        .outerjoin(
+            PuzzleStats,
+            (PuzzleModel.id == PuzzleStats.puzzle_id)
+            & (PuzzleStats.username == username_lower),
+        )
+        .where(
+            PuzzleModel.username == username_lower,
+            PuzzleModel.id.in_(sibling_ids),
+        )
+    ).all()
+
+    # Preserve the repository's recency order; the IN query above does not
+    # promise one, and re-sorting here would quietly discard the ranking. A
+    # diagnosis whose puzzle row is missing is skipped, so the list can be
+    # shorter than n.
+    by_id = {puzzle.id: (puzzle, stats) for puzzle, stats in rows}
+    items = []
+    for pid in sibling_ids:
+        found = by_id.get(pid)
+        if found is None:
+            continue
+        row, stats = found
+        items.append(
+            SimilarPuzzleItem(
+                id=row.id,
+                title=stats.title if stats else None,
+                # "blunder" means no motif was identified; tagging a row with it
+                # says nothing and contradicts the reason line, which omits it.
+                primary_motif=usable_motif(stats.primary_motif) if stats else None,
+                difficulty=_swing_to_difficulty(row.swing),
+                swing=row.swing,
+                fen=row.fen,
+                side_to_move=row.side_to_move,
+                created_at=row.created_at,
+                attempts=stats.attempts if stats else 0,
+                fail_count=stats.fail_count if stats else 0,
+            )
+        )
+
+    return SimilarPuzzlesResponse(
+        cause=key.cause,
+        cause_label=humanise_cause(key.cause),
+        match=tier.value,
+        reason=describe(key, tier),
+        puzzles=items,
+    )
 
 
 @app.get("/users/{username}/mistake-patterns", response_model=MistakePatternsResponse)
