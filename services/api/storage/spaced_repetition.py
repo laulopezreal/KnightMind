@@ -281,8 +281,15 @@ def get_adaptive_puzzles(
     focus = focus_puzzle_ids or set()
 
     # Query stats for the given puzzle IDs
+    # Folded to lower-case, matching _source_games and get_all_puzzles.
+    # Live/API traffic is unaffected because Username canonicalises at the
+    # request boundary; direct/internal callers with a mixed-case username
+    # are intentionally repaired here. The failure mode is silent and severe:
+    # a missed fold produces an empty all_stats, collapsing every puzzle to
+    # the never-seen tier and serving due puzzles as new.
     stmt = select(PuzzleStats).where(
-        PuzzleStats.username == username, PuzzleStats.puzzle_id.in_(puzzle_ids)
+        PuzzleStats.username == username.lower(),
+        PuzzleStats.puzzle_id.in_(puzzle_ids),
     )
     all_stats = {s.puzzle_id: s for s in db.scalars(stmt).all()}
 
@@ -331,6 +338,22 @@ def get_adaptive_puzzles(
 
     sorted_pids = sorted(puzzle_ids, key=sort_key)
 
+    # Counters reset per tier, so one game contributes at most one puzzle PER
+    # TIER. In production that bound is two: ``/puzzles/due`` narrows the
+    # scheduled-later tier away before this runs (``get_trainable_puzzle_ids``),
+    # leaving only due and never-seen. The function itself permits three — one
+    # game supplying a due, a never-seen and a scheduled-later puzzle — reachable
+    # through the unnarrowed ``get_due_puzzles`` helper, which currently has no
+    # production caller. Pinned by
+    # ``test_one_game_can_reach_a_session_once_per_tier`` rather than asserted
+    # here, because the previous wording said "up to two" and was wrong.
+    # Sharing counters globally
+    # would be tighter, but it is also the direction that risks starving a tier:
+    # once the due tier consumes its games, every new puzzle from those games
+    # would defer. Per-tier is the more permissive and therefore safer default,
+    # and tightening it is a behaviour change that deserves its own replay
+    # against the live pool rather than riding along here.
+    #
     # A focused session is *asked* to be concentrated on one cause or opening,
     # so capping by motif would fight the user's explicit choice. Spreading
     # across GAMES does not: a focus asks for a kind of mistake, never for five
@@ -411,9 +434,9 @@ def _vary_session(
     """Reorder so one game — or one motif — cannot monopolise a session.
 
     Deferred puzzles are appended rather than dropped, so this returns the same
-    set in a different order — never a shorter list. That says nothing about the
-    *session*: the caller slices to ``n``, so reordering does change which
-    puzzles are served, which is exactly why this runs per tier. A session with nothing else available stays as concentrated as the
+    set in a different order — never a shorter list. That says nothing about
+    the *session*: the caller slices to ``n``, so reordering does change which
+    puzzles get served. That is exactly why this runs per tier. A session with nothing else available stays as concentrated as the
     corpus forces it to be; the caps cannot invent variety that is not there.
 
     Both constraints are applied in one pass on purpose. Run as two passes they
