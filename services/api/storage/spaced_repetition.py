@@ -343,8 +343,9 @@ def get_adaptive_puzzles(
     # rest are deferred, not dropped, and ``varied[:n]`` reaches straight into
     # them whenever a tier holds fewer distinct games than the session has slots
     # — which the live due tier did when this was written (3 distinct games
-    # against a default n=5), so a default session necessarily repeats a game. ``_vary_session``'s own docstring says it: the caps cannot invent
-    # variety that is not there.
+    # against a default n=5), so a default session necessarily repeats a game.
+    # ``_vary_session``'s own docstring says it: the caps cannot invent variety
+    # that is not there.
     #
     # No ordering invariant is stated here, because three attempts to state one
     # were all wrong: "up to two spanning tiers", then "in production that bound
@@ -352,7 +353,8 @@ def get_adaptive_puzzles(
     # The last fails because the two caps COMPOSE. With only the game cap active
     # every deferred puzzle is by definition a repeat, so distinct-first does
     # hold — asserted by
-    # TestGameDiversity::test_the_cap_cannot_invent_variety_that_is_not_there. Turn the motif cap on and a distinct-GAME puzzle can be deferred for
+    # TestGameDiversity::test_the_cap_cannot_invent_variety_that_is_not_there.
+    # Turn the motif cap on and a distinct-GAME puzzle can be deferred for
     # motif reasons and land behind a game repeat inside the first ``n``:
     # games A, B, A, C all sharing one motif, n=3, serves A twice and never C.
     # Pinned by ``test_the_two_caps_compose_and_neither_orders_alone``.

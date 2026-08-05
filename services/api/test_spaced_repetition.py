@@ -941,8 +941,12 @@ def test_the_two_caps_compose_and_neither_orders_alone(db_session):
     What it does NOT pin: the cap's exact value. Tighten _VARIETY_SHARE to 1/3
     and the cap becomes 1; p2, p3 and p4 are all deferred and the served order
     is identical, so this test cannot tell cap 1 from cap 2. It detects
-    loosening only. Do not read a green suite as evidence the constant is
-    pinned.
+    loosening only.
+
+    That is a limit of THIS test, not of the suite: the tightening is caught,
+    by TestGameDiversity::test_the_cap_cannot_invent_variety_that_is_not_there,
+    which is one of the two in its class that does not set motif="blunder" and
+    so has the motif cap live. Both directions verified by mutation.
     """
     from services.api.models import Puzzle, PuzzleStats
 
