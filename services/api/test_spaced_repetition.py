@@ -720,10 +720,13 @@ class TestDiversityNeverDisplacesDuePuzzles:
 
     def _corpus(self, db):
         # 10 due puzzles across 4 games, mirroring production.
+        # Clustered, NOT round-robined: the three most overdue all come from
+        # dueGame0. With  the top of the tier was already four distinct
+        # games before any cap ran, so no assertion about spreading could fail.
         due_ids = []
         for i in range(10):
             pid = f"due{i}"
-            self._p(db, pid, f"dueGame{i % 4}", due_days=30 - i, ply=i)
+            self._p(db, pid, f"dueGame{i // 3}", due_days=30 - i, ply=i)
             due_ids.append(pid)
         # A large new pool, each from its own game.
         new_ids = []
@@ -744,7 +747,14 @@ class TestDiversityNeverDisplacesDuePuzzles:
 
         assert sum(1 for p in session if p.startswith("due")) == 10, session
 
-    def test_due_puzzles_come_before_new_ones(self, db_session):
+    def test_tiers_are_emitted_in_scheduling_order(self, db_session):
+        """Guards tier ORDER, not displacement.
+
+        Note this inspects the already-sliced session, so the pre-fix code also
+        passed it — by serving fewer due puzzles rather than out-of-order ones.
+        test_a_large_session_still_serves_every_due_puzzle is the displacement
+        guard.
+        """
         due_ids, new_ids = self._corpus(db_session)
 
         ordered, _ = get_adaptive_puzzles(db_session, "u", due_ids + new_ids, n=20)
@@ -761,11 +771,20 @@ class TestDiversityNeverDisplacesDuePuzzles:
         assert all(p.startswith("due") for p in ordered[:5]), ordered[:5]
 
     def test_variety_still_applies_inside_the_due_tier(self, db_session):
-        # Tier-safety must not mean "no variety": the four distinct due games
-        # should still be front-loaded within the due block.
+        """Tier-safety must not mean "no variety" within the tier.
+
+        Reads the real source_game_id rather than deriving it from the pid —
+        an earlier version did pid.replace("due", ""), which yields the loop
+        index, so four distinct pids always looked like four distinct games and
+        the assertion could not fail.
+        """
+        from services.api.models import Puzzle
+
         due_ids, new_ids = self._corpus(db_session)
 
-        ordered, _ = get_adaptive_puzzles(db_session, "u", due_ids + new_ids, n=5)
+        ordered, _ = get_adaptive_puzzles(db_session, "u", due_ids + new_ids, n=4)
 
-        games = [p.replace("due", "") for p in ordered[:4]]
-        assert len(set(games)) == 4, ordered[:4]
+        games = [db_session.get(Puzzle, pid).source_game_id for pid in ordered[:4]]
+        # Without the cap this is dueGame0 three times, because the three most
+        # overdue puzzles all come from it.
+        assert len(set(games)) == 4, games
