@@ -1,6 +1,10 @@
 name: Backend CI
 
 on:
+  # uv.lock and Dockerfile decide what actually ships, so a change to either
+  # must run the suite. Without them a lock bump reached `dev` with zero checks
+  # and a green PR — and `main` auto-deploys, so "no checks" would have meant
+  # untested dependencies going to production.
   push:
     branches: [ main, dev ]
     paths:
@@ -9,6 +13,8 @@ on:
       - 'scripts/**'
       - 'conftest.py'
       - 'pyproject.toml'
+      - 'uv.lock'
+      - 'Dockerfile'
       - '.github/workflows/ci-backend.yaml'
   pull_request:
     branches: [ main, dev ]
@@ -18,6 +24,8 @@ on:
       - 'scripts/**'
       - 'conftest.py'
       - 'pyproject.toml'
+      - 'uv.lock'
+      - 'Dockerfile'
       - '.github/workflows/ci-backend.yaml'
 
 jobs:
