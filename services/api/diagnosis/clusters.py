@@ -82,6 +82,24 @@ class ClusterKey:
     phase: str | None = None
 
 
+def usable_motif(motif: str | None) -> str | None:
+    """The motif if it says something, else None.
+
+    ``assign_primary_motif`` returns "blunder" when no tactic is identified, so
+    a row saying "blunder" is a row with no motif — 45% of diagnoses, 65% of
+    ``puzzle_stats``. Shared with the API layer so the sentence and the row
+    beneath it cannot disagree about whether a motif exists: the reason line
+    omitting the motif while the card tagged every sibling "Blunder" was
+    exactly that disagreement.
+
+    Case-insensitive on the check, case-preserving on the value — the motif is
+    used verbatim as a SQL equality predicate elsewhere.
+    """
+    if not motif or motif.strip().lower() in _NON_MOTIFS:
+        return None
+    return motif
+
+
 def key_for(
     cause: str | None, motif: str | None, phase: str | None
 ) -> ClusterKey | None:
@@ -100,11 +118,7 @@ def key_for(
     """
     if not cause or cause == UNCLASSIFIED:
         return None
-    # Compare case-insensitively but keep the stored spelling: the motif is used
-    # verbatim as a SQL equality predicate, so folding it here would stop
-    # matching rows the moment anything writes a capitalised motif.
-    usable_motif = motif if (motif or "").strip().lower() not in _NON_MOTIFS else None
-    return ClusterKey(cause=cause, motif=usable_motif or None, phase=phase or None)
+    return ClusterKey(cause=cause, motif=usable_motif(motif), phase=phase or None)
 
 
 def tiers_for(key: ClusterKey) -> list[MatchTier]:

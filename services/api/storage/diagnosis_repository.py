@@ -438,9 +438,9 @@ class DiagnosisRepository:
         two years ago. Deliberately not ``PuzzleDiagnosis.created_at``, which is
         the diagnosis job's timestamp: a backfill stamps a whole corpus within
         seconds, in scan order, so ordering by it is arbitrary and can even run
-        opposite to puzzle recency. The card shows the puzzle's date, so sorting
-        by anything else would label rows with a date they are not ordered by.
-        ``puzzle_id`` breaks ties so the order is total.
+        opposite to puzzle recency — the two are unrelated facts, and only one
+        of them is about the user. ``puzzle_id`` breaks ties so the order is
+        total.
         """
         cause_col = func.coalesce(
             PuzzleDiagnosis.user_confirmed_cause, PuzzleDiagnosis.primary_cause

@@ -34,7 +34,7 @@ from services.api.analytics_confidence import (
 )
 from services.api.auth import require_operator
 from services.api.db import SessionLocal, get_db
-from services.api.diagnosis.clusters import describe, humanise_cause
+from services.api.diagnosis.clusters import describe, humanise_cause, usable_motif
 from services.api.diagnosis.job import (
     DIAGNOSIS_BATCH_DEFAULT,
     DIAGNOSIS_BATCH_MAX,
@@ -2701,7 +2701,9 @@ async def get_similar_puzzles(
             SimilarPuzzleItem(
                 id=row.id,
                 title=stats.title if stats else None,
-                primary_motif=stats.primary_motif if stats else None,
+                # "blunder" means no motif was identified; tagging a row with it
+                # says nothing and contradicts the reason line, which omits it.
+                primary_motif=usable_motif(stats.primary_motif) if stats else None,
                 difficulty=_swing_to_difficulty(row.swing),
                 swing=row.swing,
                 fen=row.fen,

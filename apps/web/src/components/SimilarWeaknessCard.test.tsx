@@ -15,7 +15,7 @@ function renderCard(data: SimilarPuzzlesResponse | null, currentPuzzleId = 'p1')
 const sibling = {
     id: 'p2',
     title: 'Missed the fork',
-    primary_motif: 'Fork',
+    primary_motif: 'hanging_piece',
     difficulty: 'medium' as const,
     swing: 3.2,
     fen: '8/8/8/8/8/8/8/8 w - - 0 1',
@@ -63,6 +63,15 @@ describe('SimilarWeaknessCard', () => {
             'href',
             '/library/p2'
         );
+    });
+
+    it('humanises the motif key rather than printing the slug', () => {
+        // Production motifs are snake_case (hanging_piece, back_rank,
+        // mate_threat). The fixture used 'Fork' — a value that occurs nowhere
+        // in the data — so a raw slug could never have failed this test.
+        renderCard({ puzzles: [sibling] });
+        expect(screen.getByText(/Hanging Piece/)).toBeInTheDocument();
+        expect(screen.queryByText(/hanging_piece/)).not.toBeInTheDocument();
     });
 
     it('survives a sibling with no title or motif', () => {

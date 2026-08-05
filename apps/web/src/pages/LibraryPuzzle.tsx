@@ -123,9 +123,8 @@ export default function LibraryPuzzle() {
     // below fire for the sibling — requesting its diagnosis, which names the
     // best move, with no attempt made. `puzzle` only becomes the new one once
     // its fetch succeeds, so this is false for exactly the window in question.
-    const resolvedPuzzleId = puzzle?.id === puzzleId ? puzzleId : null;
     const resolved =
-        resolvedPuzzleId !== null &&
+        puzzle?.id === puzzleId &&
         (status === 'correct' || status === 'incorrect' || status === 'revealed');
 
     useEffect(() => {

@@ -84,7 +84,7 @@ def _puzzle(db, puzzle_id, username=USER, created_days_ago=0, swing=3.0):
             puzzle_id=puzzle_id,
             username=username,
             title=f"Title {puzzle_id}",
-            primary_motif="Fork",
+            primary_motif="fork",
             attempts=1,
             pass_count=0,
             fail_count=1,
@@ -98,7 +98,7 @@ def _diagnosis(
     puzzle_id,
     username=USER,
     cause="calculation_stopped_early",
-    motif="Fork",
+    motif="fork",
     phase="middlegame",
     confirmed=None,
     status=DiagnosisStatus.OK,
@@ -231,7 +231,7 @@ def test_widens_to_cause_only_when_nothing_tighter_exists(db_session):
     _puzzle(db_session, "p1")
     _diagnosis(db_session, "p1")
     _puzzle(db_session, "p2")
-    _diagnosis(db_session, "p2", motif="Pin", phase="endgame")
+    _diagnosis(db_session, "p2", motif="pin", phase="endgame")
 
     repo = DiagnosisRepository(db_session)
     key = repo.cluster_key_for(USER, "p1")
@@ -312,14 +312,16 @@ def test_similar_reports_which_tier_answered(client, db_session):
     _puzzle(db_session, "p1")
     _diagnosis(db_session, "p1")
     _puzzle(db_session, "p2")
-    _diagnosis(db_session, "p2", motif="Pin", phase="endgame")
+    _diagnosis(db_session, "p2", motif="pin", phase="endgame")
 
     body = client.get(f"/puzzles/p1/similar?username={USER}").json()
 
     assert body["match"] == "cause_only"
     assert body["cause"] == "calculation_stopped_early"
     assert body["cause_label"] == "Calculation stopped early"
-    assert "Pin" not in body["reason"]
+    # Lowercased: humanise_motif folds case, so asserting "Pin" could never
+    # fail even if the widest tier regressed to naming the motif.
+    assert "pin" not in body["reason"].lower()
 
 
 def test_undiagnosed_puzzle_returns_empty_not_an_error(client, db_session):
@@ -392,7 +394,7 @@ def test_siblings_are_ordered_by_puzzle_recency_not_diagnosis_time(db_session):
                 username=USER,
                 status=DiagnosisStatus.OK,
                 primary_cause="calculation_stopped_early",
-                primary_motif="Fork",
+                primary_motif="fork",
                 phase="middlegame",
                 created_at=now + timedelta(seconds=i),
             )
@@ -421,3 +423,51 @@ def test_similar_enforces_ownership(client, db_session):
 
     assert res.status_code == 404
     assert res.json()["detail"] == "Puzzle not found"
+
+
+def test_endpoint_preserves_the_repository_ordering(client, db_session):
+    """The IN query does not promise an order, so main.py re-indexes by id.
+
+    The repository-level ordering test does not cover that loop: a regression to
+    iterating the query rows directly would be silent, because the response
+    would still contain the right puzzles.
+    """
+    from datetime import timedelta
+
+    now = datetime.now(timezone.utc)
+    _puzzle(db_session, "anchor")
+    _diagnosis(db_session, "anchor")
+    # Insert oldest-first so DB order runs opposite to the expected result.
+    for i, pid in enumerate(("oldest", "middle", "newest")):
+        _puzzle(db_session, pid)
+        db_session.query(PuzzleModel).filter(PuzzleModel.id == pid).update(
+            {"created_at": now - timedelta(days=10 - i * 4)}
+        )
+        _diagnosis(db_session, pid)
+    db_session.commit()
+
+    body = client.get(f"/puzzles/anchor/similar?username={USER}&n=3").json()
+
+    assert [p["id"] for p in body["puzzles"]] == ["newest", "middle", "oldest"]
+
+
+def test_endpoint_never_tags_a_sibling_with_the_blunder_sentinel(client, db_session):
+    """The reason line omits the sentinel; the row beneath must agree.
+
+    Otherwise the card reads "Same mistake — X — in the middlegame." above a
+    list of siblings each tagged "Blunder".
+    """
+    from services.api.models import PuzzleStats as Stats
+
+    _puzzle(db_session, "p1")
+    _diagnosis(db_session, "p1")
+    _puzzle(db_session, "p2")
+    _diagnosis(db_session, "p2")
+    db_session.query(Stats).filter(Stats.puzzle_id == "p2").update(
+        {"primary_motif": "blunder"}
+    )
+    db_session.commit()
+
+    body = client.get(f"/puzzles/p1/similar?username={USER}").json()
+
+    assert body["puzzles"][0]["primary_motif"] is None

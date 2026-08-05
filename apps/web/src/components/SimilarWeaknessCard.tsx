@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom';
 import { type SimilarPuzzlesResponse } from '../api/puzzles';
+import { formatMotifName } from '../utils/motif';
 
 interface SimilarWeaknessCardProps {
     data: SimilarPuzzlesResponse | null;
@@ -56,7 +57,7 @@ export function SimilarWeaknessCard({ data, currentPuzzleId }: SimilarWeaknessCa
                                 {puzzle.title ?? 'Untitled position'}
                             </p>
                             <p className="text-xs text-primary/70 font-sans">
-                                {puzzle.primary_motif && <>{puzzle.primary_motif} · </>}
+                                {puzzle.primary_motif && <>{formatMotifName(puzzle.primary_motif)} · </>}
                                 {puzzle.difficulty}
                                 {puzzle.fail_count > 0 && (
                                     <> · Failed {puzzle.fail_count}&times;</>
