@@ -919,8 +919,9 @@ def test_the_two_caps_compose_and_neither_orders_alone(db_session):
 
     Each existing class isolates ONE cap, from opposite directions:
 
-    - TestGameDiversity's three multi-game tests set motif="blunder", which
-      _NON_MOTIFS exempts, so they isolate the game cap.
+    - Three of TestGameDiversity's five tests set motif="blunder", which
+      _NON_MOTIFS exempts, so they isolate the game cap. (Not "the
+      multi-game tests" — four of the five are multi-game.)
     - TestVarietyCap goes the other way: its _stats helper creates PuzzleStats
       but no Puzzle rows, so _source_games returns {} and `game` is None for
       every id — the game cap is exempt for all six of its tests, and what they
@@ -937,8 +938,15 @@ def test_the_two_caps_compose_and_neither_orders_alone(db_session):
     Note the expected order here is also the INPUT order, so a mutation that
     made the whole variety pass a no-op would not fail this test. That one is
     caught by the five tests listed in test_counters_do_not_carry_across_tiers.
-    What this test uniquely pins is the motif-cap boundary at n=3 and the order
-    of the deferred tail.
+    What it pins: that the motif cap BINDS at n=3 — loosen it and p4 is
+    promoted, failing this test — and the order of the deferred tail, which it
+    catches alone (reversing the tail kills only this test).
+
+    What it does NOT pin: the cap's exact value. Tighten _VARIETY_SHARE to 1/3
+    and the cap becomes 1; p2, p3 and p4 are all deferred and the served order
+    is identical, so this test cannot tell cap 1 from cap 2. It detects
+    loosening only. Do not read a green suite as evidence the constant is
+    pinned.
     """
     from services.api.models import Puzzle, PuzzleStats
 
