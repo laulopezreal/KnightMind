@@ -58,17 +58,16 @@ host-and-depth-dependent quantity.
 
 ```bash
 # Smallest scale, human summary to stdout:
-KNIGHTMIND_DEV_SQLITE=1 python -m services.api.benchmarks --scale small
+DATABASE_URL=postgresql+psycopg://knightmind:knightmind@localhost:5432/knightmind python -m services.api.benchmarks --scale small
 
 # Medium scale, also write machine-readable JSON:
-KNIGHTMIND_DEV_SQLITE=1 python -m services.api.benchmarks --scale medium --out bench_medium.json
+DATABASE_URL=postgresql+psycopg://knightmind:knightmind@localhost:5432/knightmind python -m services.api.benchmarks --scale medium --out bench_medium.json
 
 # Reproduce the smoke test (CI-friendly, tiny iteration count):
-KNIGHTMIND_DEV_SQLITE=1 python -m pytest services/api/benchmarks/test_benchmarks_smoke.py -q
+DATABASE_URL=postgresql+psycopg://knightmind:knightmind@localhost:5432/knightmind python -m pytest services/api/benchmarks/test_benchmarks_smoke.py -q
 ```
 
-`KNIGHTMIND_DEV_SQLITE=1` is only needed so importing the app modules does not
-fail fast on a missing `DATABASE_URL`; the harness always binds its own throwaway
+`DATABASE_URL` must be set: the app fails fast without it, and refuses SQLite.
 DB regardless of that variable.
 
 Flags: `--scale {small,medium,large}`, `--iterations N` (override), `--seed N`

@@ -5,27 +5,12 @@ Unit tests for puzzle repository.
 from datetime import date
 
 import pytest
-from sqlalchemy import create_engine
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import sessionmaker
 
 from scripts.backfill_storage import validate_puzzle_data
-from services.api.db import Base
 from services.api.models import Game, PuzzleStats
 from services.api.puzzles.identity import assign_primary_motif, generate_puzzle_title
 from services.api.storage.puzzle_repository import PuzzleRepository
-
-
-@pytest.fixture
-def db_session(tmp_path):
-    engine = create_engine(f"sqlite:///{tmp_path / 'test.db'}")
-    Base.metadata.create_all(engine)
-    session_local = sessionmaker(bind=engine)
-    session = session_local()
-    try:
-        yield session
-    finally:
-        session.close()
 
 
 @pytest.fixture

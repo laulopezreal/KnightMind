@@ -8,9 +8,6 @@ from datetime import datetime, timedelta, timezone  # noqa: E402
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
-from sqlalchemy import create_engine  # noqa: E402
-from sqlalchemy.orm import sessionmaker  # noqa: E402
-from sqlalchemy.pool import StaticPool  # noqa: E402
 
 from services.api.diagnosis.clusters import (  # noqa: E402
     ClusterKey,
@@ -21,33 +18,18 @@ from services.api.diagnosis.clusters import (  # noqa: E402
 )
 from services.api.main import app, get_db  # noqa: E402
 from services.api.models import (  # noqa: E402
-    Base,
     DiagnosisStatus,
+    Game,
     PuzzleDiagnosis,
     PuzzleStats,
 )
 from services.api.models import Puzzle as PuzzleModel  # noqa: E402
 from services.api.storage.diagnosis_repository import DiagnosisRepository  # noqa: E402
+from services.api.storage.game_repository import MANUAL_GAME_ID  # noqa: E402
 
 USER = "clusteruser"
 OTHER = "someoneelse"
 FEN = "6k1/pp3ppp/8/3q4/8/8/PP3PPP/3Q2K1 w - - 0 1"
-
-
-@pytest.fixture
-def db_session():
-    engine = create_engine(
-        "sqlite:///:memory:",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    Base.metadata.create_all(bind=engine)
-    session = sessionmaker(bind=engine)()
-    try:
-        yield session
-    finally:
-        session.close()
-        Base.metadata.drop_all(bind=engine)
 
 
 @pytest.fixture
@@ -60,14 +42,43 @@ def client(db_session):
 _PLY = iter(range(1, 10_000))
 
 
+def _manual_game(db, username):
+    """The parent row a manual puzzle's composite FK points at.
+
+    puzzles(source_game_id, username) references games(game_id, username), and
+    create_manual_puzzle creates this placeholder before inserting the puzzle
+    (see main.py). Fixtures skipped it and SQLite let them, because SQLite does
+    not enforce foreign keys unless PRAGMA foreign_keys is turned on -- so these
+    tests were asserting against orphaned puzzles, a state production cannot
+    produce. Postgres rejects the insert outright.
+    """
+    if db.get(Game, (MANUAL_GAME_ID, username)) is not None:
+        return
+    db.add(
+        Game(
+            game_id=MANUAL_GAME_ID,
+            url="",
+            username=username,
+            white_username=username,
+            black_username="",
+            white_result="",
+            black_result="",
+            time_control="",
+            end_time=0,
+        )
+    )
+    db.flush()
+
+
 def _puzzle(db, puzzle_id, username=USER, created_days_ago=0, swing=3.0):
+    _manual_game(db, username)
     # (username, source_game_id, ply) is uniquely indexed, so every fixture
     # puzzle needs its own ply or the second insert collides.
     db.add(
         PuzzleModel(
             id=puzzle_id,
             username=username,
-            source_game_id="__manual__",
+            source_game_id=MANUAL_GAME_ID,
             ply=next(_PLY),
             fen=FEN,
             side_to_move="white",

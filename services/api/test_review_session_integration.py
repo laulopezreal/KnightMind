@@ -12,7 +12,6 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
 
 import services.api.main as main
 from services.api.db import Base, get_db
@@ -22,21 +21,9 @@ from services.api.models import Puzzle as PuzzleModel
 
 
 @pytest.fixture
-def test_db():
-    """Create an in-memory SQLite database for testing."""
-    engine = create_engine(
-        "sqlite:///:memory:",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    Base.metadata.create_all(engine)
-    SessionLocal = sessionmaker(bind=engine)
-    session = SessionLocal()
-    try:
-        yield session
-    finally:
-        session.close()
-        Base.metadata.drop_all(bind=engine)
+def test_db(db_session):
+    """The shared test session, under this module's historical fixture name."""
+    return db_session
 
 
 @pytest.fixture

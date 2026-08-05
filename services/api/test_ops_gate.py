@@ -7,14 +7,11 @@ Tailscale identity header and succeed with one.
 
 import os
 import sys
-import uuid
 
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import NullPool
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
@@ -52,18 +49,13 @@ def test_require_operator_pins_to_configured_user(monkeypatch):
 
 
 @pytest.fixture(scope="function")
-def gated_client(monkeypatch, tmp_path):
+def gated_client(monkeypatch, db_engine):
     """A TestClient with a real (isolated) DB but the REAL operator gate wired.
 
     Only get_db is overridden — require_operator is left intact so the header
     behaviour is exercised end to end.
     """
-    db_path = tmp_path / f"test_gate_{uuid.uuid4()}.db"
-    engine = create_engine(
-        f"sqlite:///{db_path}",
-        connect_args={"check_same_thread": False},
-        poolclass=NullPool,
-    )
+    engine = db_engine
     TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
     monkeypatch.setenv("KNIGHTMIND_WORKER_DISABLED", "true")
 
@@ -73,10 +65,6 @@ def gated_client(monkeypatch, tmp_path):
     monkeypatch.setattr(db_module, "engine", engine)
     monkeypatch.setattr(db_module, "SessionLocal", TestingSessionLocal)
     monkeypatch.setattr(worker_module, "SessionLocal", TestingSessionLocal)
-
-    from services.api.models import Base
-
-    Base.metadata.create_all(bind=engine)
 
     from services.api.db import get_db
     from services.api.main import app

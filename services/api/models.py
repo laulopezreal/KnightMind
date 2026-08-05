@@ -118,7 +118,6 @@ class Job(Base):
             "type",
             unique=True,
             postgresql_where=text("status IN ('queued', 'running')"),
-            sqlite_where=text("status IN ('queued', 'running')"),
         ),
         {"extend_existing": True},
     )
@@ -273,7 +272,6 @@ class PuzzleDiagnosis(Base):
             "username",
             "opening_name",
             postgresql_where=text("opening_name IS NOT NULL"),
-            sqlite_where=text("opening_name IS NOT NULL"),
         ),
         {"extend_existing": True},
     )
@@ -607,9 +605,6 @@ class Puzzle(Base):
             "normalized_position",
             unique=True,
             postgresql_where=text(
-                "source_game_id = '__manual__' AND normalized_position IS NOT NULL"
-            ),
-            sqlite_where=text(
                 "source_game_id = '__manual__' AND normalized_position IS NOT NULL"
             ),
         ),

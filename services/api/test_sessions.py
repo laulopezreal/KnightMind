@@ -6,12 +6,9 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from sqlalchemy import create_engine, select
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
+from sqlalchemy import select
 
-from services.api.db import Base
-from services.api.models import PuzzleResult, TrainingSession
+from services.api.models import Game, Puzzle, PuzzleResult, TrainingSession
 from services.api.sessions import (
     CompleteSessionRequest,
     StartSessionRequest,
@@ -25,21 +22,46 @@ from services.api.sessions import (
 from services.api.storage.spaced_repetition import insert_puzzle_review
 
 
-@pytest.fixture
-def db_session():
-    """Create an in-memory SQLite database for testing."""
-    engine = create_engine(
-        "sqlite:///:memory:",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
+def _ensure_puzzle(db, puzzle_id, username):
+    """Create the puzzle (and parent game) a review points at.
+
+    puzzle_reviews.puzzle_id is a real foreign key; see conftest for why it can
+    no longer dangle.
+    """
+    if db.get(Puzzle, puzzle_id) is not None:
+        return
+    game_id = f"g-{puzzle_id}"
+    if db.get(Game, (game_id, username)) is None:
+        db.add(
+            Game(
+                game_id=game_id,
+                url="",
+                username=username,
+                white_username=username,
+                black_username="",
+                white_result="",
+                black_result="",
+                time_control="",
+                end_time=0,
+            )
+        )
+        db.flush()
+    db.add(
+        Puzzle(
+            id=puzzle_id,
+            username=username,
+            source_game_id=game_id,
+            ply=1,
+            fen="6k1/pp3ppp/8/3q4/8/8/PP3PPP/3Q2K1 w - - 0 1",
+            side_to_move="white",
+            played_move_uci="d1d2",
+            best_move_uci="d1d5",
+            eval_before=0.5,
+            eval_after=-3.0,
+            swing=3.0,
+        )
     )
-    Base.metadata.create_all(engine)
-    SessionLocal = sessionmaker(bind=engine)
-    session = SessionLocal()
-    try:
-        yield session
-    finally:
-        session.close()
+    db.flush()
 
 
 def test_start_session(db_session):
@@ -214,6 +236,7 @@ def test_review_with_session_increments_counters(db_session):
     db_session.commit()
 
     # Insert a passing review with session_id
+    _ensure_puzzle(db_session, "puzzle1", "testuser")
     review = insert_puzzle_review(
         db_session,
         puzzle_id="puzzle1",
@@ -232,6 +255,7 @@ def test_review_with_session_increments_counters(db_session):
 
 def test_review_without_session_backward_compatible(db_session):
     """Test that reviews without session_id still work (backward compatibility)."""
+    _ensure_puzzle(db_session, "puzzle1", "testuser")
     review = insert_puzzle_review(
         db_session,
         puzzle_id="puzzle1",
