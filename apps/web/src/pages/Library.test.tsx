@@ -387,6 +387,40 @@ describe('Library', () => {
 
     // --- Filter interactions ---
 
+    it('changing a filter after paging forward issues ONE request, at offset 0', async () => {
+        // `offset` is a dependency of the fetch, and the offset reset used to be
+        // an effect. Changing a filter therefore fired TWICE: once carrying the
+        // stale offset, then again at 0 -- so page 2 of the NEW filter set was
+        // briefly requested and could render before the correct page replaced it.
+        //
+        // Only reproduces with offset != 0: setOffset(0) when it is already 0 is
+        // a no-op React bails out of, which is why the existing debounce test
+        // above passed throughout.
+        mockGetLibraryPuzzles.mockResolvedValue({
+            ...EMPTY_RESPONSE,
+            total: 120, // 3 pages, so Next is enabled
+            stats: MOCK_STATS,
+        });
+        render(<Library />);
+        await waitFor(() => expect(mockGetLibraryPuzzles).toHaveBeenCalledTimes(1));
+
+        fireEvent.click(screen.getByText('Next'));
+        await waitFor(() =>
+            expect(mockGetLibraryPuzzles).toHaveBeenCalledWith(
+                expect.objectContaining({ offset: 50 }),
+            ),
+        );
+
+        mockGetLibraryPuzzles.mockClear();
+        fireEvent.change(screen.getByLabelText(/sort/i), { target: { value: 'newest' } });
+        await waitFor(() => expect(mockGetLibraryPuzzles).toHaveBeenCalled());
+
+        const offsets = mockGetLibraryPuzzles.mock.calls.map(
+            (call) => (call[0] as { offset: number }).offset,
+        );
+        expect(offsets).toEqual([0]);
+    });
+
     it('should debounce search input', async () => {
         vi.useFakeTimers();
         render(<Library />);
