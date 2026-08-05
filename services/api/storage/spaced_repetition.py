@@ -349,8 +349,13 @@ def get_adaptive_puzzles(
     # Two earlier attempts to state a numeric bound here were both wrong ("up to
     # two spanning tiers", then "in production that bound is two"). There isn't
     # one: it depends on the tier's game composition, which changes as the user
-    # reviews. What IS invariant is the ordering — distinct games come first
-    # within a tier — and that is what the tests assert.
+    # reviews. What holds is narrower: within the first ``n`` of a tier,
+    # distinct games come first. Beyond that the ``len(taken) >= n`` early-append
+    # stops deferring, so a repeat can precede a distinct game further down the
+    # returned list — invisible at the API boundary, which only ever sees the
+    # first ``n``, but not an invariant of this function's return value.
+    # Asserted by TestGameDiversity, not by the tests added alongside this
+    # comment.
     #
     # Sharing counters globally
     # would be tighter, but it is also the direction that risks starving a tier:
@@ -491,20 +496,6 @@ def _vary_session(
 
     # Anything held back rejoins immediately after, so the set is unchanged.
     return taken + deferred
-
-
-def get_due_puzzles(
-    db: Session, username: str, puzzle_ids: list[str], n: int = 5
-) -> tuple[list[str], dict[str, PuzzleStats]]:
-    """
-    Get puzzles for the user from the candidate list, ordered by SR priority.
-
-    Priority:
-    1. Due: next_due_at <= now
-    2. New: next_due_at IS NULL
-    3. Future: ordered by next_due_at ASC
-    """
-    return get_adaptive_puzzles(db, username, puzzle_ids, n)
 
 
 def get_trainable_puzzle_ids(

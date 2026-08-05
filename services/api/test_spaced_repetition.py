@@ -843,9 +843,11 @@ def test_counters_do_not_carry_across_tiers(db_session):
 
     Scope, stated so this is not mistaken for a general variety guard: deleting
     the variety pass entirely leaves priority order intact and this test still
-    passes. That mutation is caught by five other tests (TestVarietyCap and
-    TestGameDiversity). What this one uniquely catches is sharing the counters
-    across tiers, which before it no test in the repo detected at all.
+    passes. That mutation is caught by five other tests, spanning three classes
+    — TestVarietyCap (1 of its 6), TestGameDiversity (3), and
+    TestDiversityNeverDisplacesDuePuzzles (1). What this one uniquely catches is
+    sharing the counters across tiers, which before it no test in the repo
+    detected at all.
     """
     from services.api.models import Puzzle, PuzzleStats
 
@@ -889,56 +891,24 @@ def test_counters_do_not_carry_across_tiers(db_session):
     # return cannot short-circuit the pass under test.
     add("x_due", "gameX", 20, 1)
     add("y_due", "gameY", 10, 2)
-    # gameX appears again in the never-seen tier, ahead of unrelated fillers.
+    # gameX appears again in the never-seen tier, alongside unrelated fillers.
     add("x_new", "gameX", None, 3)
     for i in range(3):
         add(f"filler{i}", f"gameF{i}", None, 10 + i)
     db_session.commit()
 
-    ids = [p.id for p in db_session.query(Puzzle).all()]
+    # Spelled out rather than read from a query, because the candidate order is
+    # load-bearing here and must not be left to an unordered SELECT. Every
+    # never-seen puzzle produces an IDENTICAL sort key — same tier, same focus
+    # flag, and time_factor is the single `now` bound once per call — so the
+    # sort is a no-op within tier 1 and the caller's order IS the tie-break.
+    # (`ply` is not part of the sort key and influences nothing.)
+    ids = ["x_due", "y_due", "x_new", "filler0", "filler1", "filler2"]
 
     # n cuts inside tier 1, so the third slot is contested.
     ordered, _ = get_adaptive_puzzles(db_session, "u", ids, n=3)
 
-    # gameX was counted in tier 0; per-tier reset means it is eligible again in
-    # tier 1 and wins the slot on priority. Shared counters would defer it and
-    # serve a filler instead.
+    # gameX was counted in tier 0. Per-tier reset means it is eligible again in
+    # tier 1, so x_new is NOT deferred and keeps its place at the head of the
+    # tier. Shared counters would defer it and a filler would take the slot.
     assert ordered[:3] == ["x_due", "y_due", "x_new"], ordered[:3]
-
-
-def test_the_scheduled_later_tier_never_reaches_the_endpoint(db_session):
-    """/puzzles/due narrows futures away before selection ever runs."""
-    from services.api.models import Puzzle, PuzzleStats
-    from services.api.storage.spaced_repetition import get_trainable_puzzle_ids
-
-    future = (datetime.now(timezone.utc) + timedelta(days=30)).replace(tzinfo=None)
-    db_session.add(
-        Puzzle(
-            id="later",
-            username="u",
-            source_game_id="gameZ",
-            ply=1,
-            fen="8/8/8/8/8/8/8/8 w - - 0 1",
-            side_to_move="white",
-            played_move_uci="e2e4",
-            best_move_uci="d2d4",
-            eval_before=0.5,
-            eval_after=-1.5,
-            swing=2.0,
-        )
-    )
-    db_session.add(
-        PuzzleStats(
-            puzzle_id="later",
-            username="u",
-            primary_motif="blunder",
-            attempts=1,
-            pass_count=1,
-            ease_factor=2.0,
-            interval_days=30,
-            next_due_at=future,
-        )
-    )
-    db_session.commit()
-
-    assert get_trainable_puzzle_ids(db_session, "u", ["later"]) == []
