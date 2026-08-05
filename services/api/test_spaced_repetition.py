@@ -502,3 +502,172 @@ class TestVarietyCap:
         ordered, _ = get_adaptive_puzzles(db_session, "u", ids, n=4)
         forks = [p for p in ordered if p.startswith("fork")]
         assert forks == ["fork0", "fork1", "fork2"]
+
+
+class TestGameDiversity:
+    """Two positions from one game are not two problems.
+
+    Same opening, same opponent, same sitting, often a few moves apart. On the
+    live corpus the candidates average 3.19 puzzles per game, so without a cap a
+    default five-puzzle session is drawn from one or two games.
+    """
+
+    def _puzzle(self, db, pid, game, motif="Fork", days_overdue=None, ply=None):
+        from services.api.models import Puzzle, PuzzleStats
+
+        db.add(
+            Puzzle(
+                id=pid,
+                username="u",
+                source_game_id=game,
+                ply=ply if ply is not None else abs(hash(pid)) % 10_000,
+                fen="8/8/8/8/8/8/8/8 w - - 0 1",
+                side_to_move="white",
+                played_move_uci="e2e4",
+                best_move_uci="d2d4",
+                eval_before=0.5,
+                eval_after=-1.5,
+                swing=2.0,
+            )
+        )
+        due = None
+        if days_overdue is not None:
+            due = (datetime.now(timezone.utc) - timedelta(days=days_overdue)).replace(
+                tzinfo=None
+            )
+        db.add(
+            PuzzleStats(
+                puzzle_id=pid,
+                username="u",
+                primary_motif=motif,
+                attempts=1 if due else 0,
+                pass_count=1 if due else 0,
+                ease_factor=2.0,
+                interval_days=1 if due else None,
+                next_due_at=due,
+            )
+        )
+
+    def test_a_session_spreads_across_games_when_it_can(self, db_session):
+        # gameA holds the six most overdue puzzles; four other games hold one
+        # each, all less overdue. Without the cap the session is five from
+        # gameA and nothing else is ever seen.
+        # motif="blunder" is exempt from the motif cap, so this isolates the
+        # game constraint. With a real motif the two caps compose and only
+        # three of one motif fit in a five-puzzle session.
+        for i in range(6):
+            self._puzzle(
+                db_session,
+                f"a{i}",
+                "gameA",
+                motif="blunder",
+                days_overdue=30 - i,
+                ply=i,
+            )
+        for j, g in enumerate("bcde"):
+            self._puzzle(
+                db_session,
+                f"{g}0",
+                f"game{g.upper()}",
+                motif="blunder",
+                days_overdue=5 - j,
+                ply=50 + j,
+            )
+        db_session.commit()
+
+        ids = [f"a{i}" for i in range(6)] + [f"{g}0" for g in "bcde"]
+        ordered, _ = get_adaptive_puzzles(db_session, "u", ids, n=5)
+
+        session = ordered[:5]
+        assert len({p[0] for p in session}) == 5, session
+        # The most overdue puzzle still leads: the cap reorders, it does not
+        # demote priority.
+        assert session[0] == "a0"
+
+    def test_the_cap_cannot_invent_variety_that_is_not_there(self, db_session):
+        # Only two games exist, so a five-puzzle session must repeat one. What
+        # the cap guarantees is that the *distinct* game comes early rather
+        # than being buried behind every repeat.
+        for i in range(6):
+            self._puzzle(db_session, f"a{i}", "gameA", days_overdue=30 - i, ply=i)
+        self._puzzle(db_session, "b0", "gameB", days_overdue=1, ply=99)
+        db_session.commit()
+
+        ids = [f"a{i}" for i in range(6)] + ["b0"]
+        ordered, _ = get_adaptive_puzzles(db_session, "u", ids, n=5)
+
+        assert ordered[:2] == ["a0", "b0"]
+        assert len(ordered[:5]) == 5
+
+    def test_the_game_cap_holds_in_a_focused_session_too(self, db_session):
+        # A focus asks for a kind of mistake, never for five positions out of
+        # the same game — so unlike the motif cap this one stays on.
+        # motif="blunder" is exempt from the motif cap, so this isolates the
+        # game constraint. With a real motif the two caps compose and only
+        # three of one motif fit in a five-puzzle session.
+        for i in range(6):
+            self._puzzle(
+                db_session,
+                f"a{i}",
+                "gameA",
+                motif="blunder",
+                days_overdue=30 - i,
+                ply=i,
+            )
+        for j, g in enumerate("bcde"):
+            self._puzzle(
+                db_session,
+                f"{g}0",
+                f"game{g.upper()}",
+                motif="blunder",
+                days_overdue=5 - j,
+                ply=50 + j,
+            )
+        db_session.commit()
+
+        ids = [f"a{i}" for i in range(6)] + [f"{g}0" for g in "bcde"]
+        ordered, _ = get_adaptive_puzzles(
+            db_session, "u", ids, n=5, focus_puzzle_ids={"a0", "a1"}
+        )
+
+        assert len({p[0] for p in ordered[:5]}) == 5, ordered[:5]
+
+    def test_never_shortens_or_changes_the_set(self, db_session):
+        # Everything from one game: the cap cannot invent variety that is not
+        # there, and must not drop puzzles trying.
+        for i in range(6):
+            self._puzzle(db_session, f"a{i}", "gameA", days_overdue=30 - i, ply=i)
+        db_session.commit()
+
+        ids = [f"a{i}" for i in range(6)]
+        ordered, _ = get_adaptive_puzzles(db_session, "u", ids, n=5)
+        assert len(ordered) == 5
+
+        everything, _ = get_adaptive_puzzles(db_session, "u", ids, n=10)
+        assert sorted(everything) == sorted(ids)
+
+    def test_blunder_is_exempt_from_the_motif_cap(self, db_session):
+        """The exemption for an unrecorded motif never fired before.
+
+        assign_primary_motif returns "blunder" when no tactic is identified, so
+        it is the unknown sentinel — 65% of puzzle_stats. The cap exempted NULL,
+        but no row is NULL, so the population the exemption was written to
+        protect was the one being capped.
+        """
+        for i in range(6):
+            self._puzzle(
+                db_session,
+                f"g{i}",
+                f"game{i}",
+                motif="blunder",
+                days_overdue=30 - i,
+                ply=i,
+            )
+        db_session.commit()
+
+        ids = [f"g{i}" for i in range(6)]
+        ordered, _ = get_adaptive_puzzles(db_session, "u", ids, n=5)
+
+        # All six are "blunder" and each is from its own game, so nothing should
+        # be deferred: the session is the five most overdue, in order.
+        assert ordered[:5] == ["g0", "g1", "g2", "g3", "g4"]

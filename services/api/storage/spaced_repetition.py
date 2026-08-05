@@ -331,12 +331,36 @@ def get_adaptive_puzzles(
 
     sorted_pids = sorted(puzzle_ids, key=sort_key)
 
-    # A focused session is *asked* to be concentrated, so the variety cap would
-    # be fighting the user's explicit choice. Everywhere else, spread it.
-    if not focus:
-        sorted_pids = _vary_motifs(sorted_pids, all_stats, n)
+    # A focused session is *asked* to be concentrated on one cause or opening,
+    # so capping by motif would fight the user's explicit choice. Spreading
+    # across GAMES does not: a focus asks for a kind of mistake, never for five
+    # positions out of the same game, so that cap stays on in both modes.
+    sorted_pids = _vary_session(
+        sorted_pids,
+        all_stats,
+        _source_games(db, username, sorted_pids),
+        n,
+        cap_motifs=not focus,
+    )
 
     return sorted_pids[:n], all_stats
+
+
+def _source_games(db: Session, username: str, puzzle_ids: list[str]) -> dict[str, str]:
+    """Map puzzle id -> source game id for the candidates.
+
+    A separate read because the sort works on ids and stats alone, and
+    PuzzleStats does not carry the source game. One indexed query on the
+    candidate set, not per puzzle.
+    """
+    if not puzzle_ids:
+        return {}
+    rows = db.execute(
+        select(Puzzle.id, Puzzle.source_game_id).where(
+            Puzzle.username == username, Puzzle.id.in_(puzzle_ids)
+        )
+    ).all()
+    return {pid: game for pid, game in rows}
 
 
 # At most this share of a session may share one motif. Five forks in a row is a
@@ -345,38 +369,80 @@ def get_adaptive_puzzles(
 # your way through it.
 _VARIETY_SHARE = 2 / 3
 
+# Motif values that are not motifs. assign_primary_motif returns "blunder"
+# when no specific tactic is identified, and it is 65% of puzzle_stats. The
+# cap below already exempts a missing motif, for the stated reason that
+# capping "unknown" would penalise the puzzles the user has seen least — but no
+# row is actually NULL, so without this the exemption never fired and the
+# population it was written to protect was the one being capped.
+_NON_MOTIFS = frozenset({"blunder"})
 
-def _vary_motifs(
-    ordered: list[str], all_stats: dict[str, PuzzleStats], n: int
+# How many puzzles from one game may appear in a session. One, because two
+# positions from the same game are not two problems: same opening, same
+# opponent, same sitting, often a few moves apart. Measured on the live corpus
+# the candidates average 3.19 puzzles per game, so without this a default
+# five-puzzle session is drawn from one or two games.
+_GAME_CAP = 1
+
+
+def _vary_session(
+    ordered: list[str],
+    all_stats: dict[str, PuzzleStats],
+    source_games: dict[str, str],
+    n: int,
+    *,
+    cap_motifs: bool,
 ) -> list[str]:
-    """Reorder so one motif cannot monopolise a session.
+    """Reorder so one game — or one motif — cannot monopolise a session.
 
     Deferred puzzles are appended rather than dropped, so this can only change
     the *order* of what was already selectable — never the set, and never the
     length. A session with nothing else available stays as concentrated as the
-    corpus forces it to be; the cap cannot invent variety that is not there.
+    corpus forces it to be; the caps cannot invent variety that is not there.
 
-    Puzzles with no recorded motif are exempt: "unknown" is not a motif, and
-    treating it as one would cap the very puzzles the user has seen least.
+    Both constraints are applied in one pass on purpose. Run as two passes they
+    fight: whichever runs second re-defers the other's picks, and the winner is
+    decided by call order rather than by which grouping matters more.
+
+    Puzzles with no recorded motif are exempt from the motif cap: "unknown" is
+    not a motif, and treating it as one would cap the very puzzles the user has
+    seen least. A puzzle with no known source game is likewise exempt from the
+    game cap rather than being lumped into one pseudo-game.
     """
     if n <= 1 or len(ordered) <= 1:
         return ordered
 
-    cap = max(1, int(n * _VARIETY_SHARE))
+    motif_cap = max(1, int(n * _VARIETY_SHARE))
     taken: list[str] = []
     deferred: list[str] = []
-    counts: dict[str, int] = {}
+    motif_counts: dict[str, int] = {}
+    game_counts: dict[str, int] = {}
 
     for pid in ordered:
-        stats = all_stats.get(pid)
-        motif = stats.primary_motif if stats else None
-        if motif is None:
+        # Once the session is full every remaining puzzle is tail padding, so
+        # stop deferring and keep the underlying priority order intact.
+        if len(taken) >= n:
             taken.append(pid)
             continue
-        if counts.get(motif, 0) >= cap and len(taken) < n:
+
+        stats = all_stats.get(pid)
+        motif = stats.primary_motif if stats else None
+        if motif is not None and motif.strip().lower() in _NON_MOTIFS:
+            motif = None
+        game = source_games.get(pid)
+
+        over_motif = (
+            cap_motifs and motif is not None and motif_counts.get(motif, 0) >= motif_cap
+        )
+        over_game = game is not None and game_counts.get(game, 0) >= _GAME_CAP
+        if over_motif or over_game:
             deferred.append(pid)
             continue
-        counts[motif] = counts.get(motif, 0) + 1
+
+        if motif is not None:
+            motif_counts[motif] = motif_counts.get(motif, 0) + 1
+        if game is not None:
+            game_counts[game] = game_counts.get(game, 0) + 1
         taken.append(pid)
 
     # Anything held back rejoins immediately after, so the set is unchanged.
