@@ -14,6 +14,12 @@ from sqlalchemy.orm import Session
 
 from services.api.ai import config
 from services.api.models import DiagnosisAuditLog
+from services.api.usernames import canonical_username
+
+# Username convention: the ledger is read per user (``budget_last_24h``) and
+# written per user (``record``). Both fold with ``canonical_username`` so a
+# non-canonical handle cannot spend against an empty ledger and bypass the
+# per-user daily cap. See ``services.api.usernames``.
 
 
 def _utcnow_naive() -> datetime:
@@ -88,7 +94,8 @@ class AIAuditRepository:
             truncated = True
 
         row = DiagnosisAuditLog(
-            username=write.username,
+            # Folded so the row lands under the same key budget_last_24h counts.
+            username=canonical_username(write.username),
             puzzle_id=write.puzzle_id,
             status=write.status,
             reason=write.reason,
@@ -126,7 +133,7 @@ class AIAuditRepository:
                 select(func.count())
                 .select_from(DiagnosisAuditLog)
                 .where(
-                    DiagnosisAuditLog.username == username,
+                    DiagnosisAuditLog.username == canonical_username(username),
                     DiagnosisAuditLog.created_at >= since,
                     billable,
                 )

@@ -1,3 +1,13 @@
+"""Hourly housekeeping run from the app lifespan.
+
+Username note: neither sweep is user-scoped — ``cleanup_abandoned_sessions``
+predicates on ``completed_at``/``created_at`` and ``purge_expired_ai_audit`` on
+the retention window. There is deliberately no username fold here because there
+is no username: adding one would be a scope change, not a correctness fix. If a
+per-user sweep is ever added it must fold with ``canonical_username`` like every
+other storage entry point (see ``services.api.usernames``).
+"""
+
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import update

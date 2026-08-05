@@ -163,6 +163,68 @@ def _puzzle(
 # ---------------------------------------------------------------------------
 
 
+# Spellings of USER that all fold to "diaguser" under canonical_username but
+# NOT under a bare .lower(). See services.api.usernames.
+NONCANONICAL_SPELLINGS = [
+    " DiagUser ",
+    "ＤＩＡＧＵＳＥＲ",
+    "DIAGUSER\xa0",
+    " Ｄiaguser\xa0",
+]
+
+
+class TestUsernameFold:
+    """The diagnosis repository used to do no username folding at all.
+
+    It trusted its caller, which held for HTTP traffic (the ``Username``
+    annotation folds at the request boundary) and was unverifiable for
+    everything else — jobs, scripts, and any future request model that forgets
+    the annotation. These pin the fold at the repository itself, so the
+    guarantee is local and greppable instead of an enumeration of entry points
+    that has to be redone on every new caller.
+    """
+
+    @pytest.mark.parametrize("handle", NONCANONICAL_SPELLINGS)
+    def test_reads_find_canonically_stored_rows(self, db_session, handle):
+        _puzzle(db_session)
+        repo = DiagnosisRepository(db_session)
+        assert repo.pending_puzzle_ids(handle) == ["p1"]
+        assert repo.pending_count(handle) == 1
+
+        repo.upsert(DiagnosisWrite(puzzle_id="p1", username=USER, primary_cause="c"))
+        db_session.commit()
+
+        assert repo.get(handle, "p1") is not None
+        assert repo.puzzle_ids_for_cause(handle, "c") == {"p1"}
+        assert repo.cause_counts(handle) == [("c", 1)]
+        assert repo.pending_puzzle_ids(handle) == []
+
+    @pytest.mark.parametrize("handle", NONCANONICAL_SPELLINGS)
+    def test_upsert_updates_in_place_instead_of_forking(self, db_session, handle):
+        """The write path must fold too, or the upsert stops being an upsert.
+
+        ``upsert`` probes with ``get`` and then inserts. If either side folds
+        differently the probe misses its own previous row and INSERTs again —
+        so a nightly diagnosis job would accumulate a duplicate diagnosis per
+        run rather than updating one. (SQLite is happy to hold both; the
+        composite PK is (puzzle_id, username), and the two usernames differ.)
+        """
+        _puzzle(db_session)
+        repo = DiagnosisRepository(db_session)
+
+        repo.upsert(DiagnosisWrite(puzzle_id="p1", username=USER, primary_cause="a"))
+        db_session.commit()
+        _, changed = repo.upsert(
+            DiagnosisWrite(puzzle_id="p1", username=handle, primary_cause="a")
+        )
+        db_session.commit()
+
+        assert not changed, f"{handle!r} did not resolve to the existing row"
+        rows = db_session.query(PuzzleDiagnosis).filter_by(puzzle_id="p1").all()
+        assert len(rows) == 1, f"{handle!r} forked a second diagnosis row"
+        assert rows[0].username == USER
+
+
 class TestRepository:
     def test_a_puzzle_with_no_diagnosis_is_pending(self, db_session):
         _puzzle(db_session)

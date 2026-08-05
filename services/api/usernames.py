@@ -17,6 +17,32 @@ Safety note: production data is already stored under lowercase ASCII handles
 (``lauureal``, ``alfi3sr``, ``hikaru``), which are fixed points of this fold —
 canonicalizing existing rows changes nothing. This only makes *entry points*
 canonical and rejects invalid input.
+
+The storage-boundary rule
+-------------------------
+``canonical_username`` is the ONLY username fold allowed anywhere that derives a
+storage key. A bare ``.lower()`` is not a weaker version of it — it is a
+*different* function that disagrees on real input::
+
+    ' Bob '   ->  .lower() = ' bob '    canonical = 'bob'
+    'Ｂｏｂ'  ->  .lower() = 'ｂｏｂ'    canonical = 'bob'
+    'BOB\xa0' ->  .lower() = 'bob\xa0'  canonical = 'bob'
+
+So a defensive ``.lower()`` in a repository provides *false assurance*: it reads
+as protection against a non-canonical handle, and for whitespace or
+compatibility forms it silently produces a key that matches no row. An empty
+result is the dangerous outcome, not a loud one — ``spaced_repetition`` treats
+missing stats as "never seen", so a fold that half-works serves due puzzles as
+new and re-anchors their intervals.
+
+The rule is therefore: **every public function in ``services/api/storage`` that
+accepts a username folds it once, at the top, with ``canonical_username``.**
+Private helpers below that line receive an already-folded value and must not
+re-fold (a second fold would be harmless but would hide where the boundary is).
+This is deliberately belt-and-braces with the ``Username`` annotation above —
+the annotation protects HTTP callers, the storage fold protects everyone else
+(jobs, scripts, tests, future request models that forget the annotation). Both
+use this one function, so they cannot disagree.
 """
 
 import unicodedata

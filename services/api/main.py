@@ -731,7 +731,16 @@ class RevealResponse(BaseModel):
 
 
 class ManualPuzzleRequest(BaseModel):
-    username: str
+    # ``Username``, not ``str``: this was the one request model that still typed
+    # the handle as a bare string, so "Save as puzzle" was the single live HTTP
+    # path that could reach storage with a non-canonical key. It compensated
+    # with a ``.lower()`` at the top of the handler, which is a DIFFERENT fold —
+    # ``' Bob '`` lowercases to ``' bob '`` and writes a puzzle (plus its
+    # PuzzleStats and its synthetic Game row) under a key no canonical read ever
+    # matches. Annotating it puts this route on the same boundary as every other
+    # one; the trade is that a whitespace-only handle now 422s instead of
+    # writing a row under ``''``.
+    username: Username
     fen: str
     title: str
     motif: str
@@ -1208,7 +1217,10 @@ async def create_manual_puzzle(
 ):
     """Create a puzzle from an arbitrary position (Engine Analysis → Save as puzzle)."""
     assert_owns_username(account, request.username, db)
-    username_lower = request.username.lower()
+    # Already canonical (``ManualPuzzleRequest.username`` is ``Username``); the
+    # alias is kept because the manual-puzzle flow threads it through a dozen
+    # statements and renaming them all would bury the actual change.
+    username_lower = request.username
 
     # Validate FEN
     try:
@@ -3787,7 +3799,12 @@ async def explain_rating_changes(
         if not pgn:
             continue
 
-        user_is_white = meta.white_username.lower() == username.lower()
+        # A comparison, not a storage key: ``white_username`` is whatever
+        # Chess.com put in the game record, so it is folded rather than trusted.
+        # Both sides must use the SAME fold or the match silently fails —
+        # ``username`` is already canonical (folded at the request boundary), so
+        # folding the header with anything else would reintroduce the mismatch.
+        user_is_white = canonical_username(meta.white_username) == username
 
         result_score = 0.0
         if user_is_white:
