@@ -487,6 +487,18 @@ def test_manual_puzzle_username_is_canonicalised_at_the_boundary(
     assert stats is not None and stats.username == "testuser"
     assert PuzzleRepository(db_session).get_puzzle("testuser", puzzle_id) is not None
 
+    # The synthetic games row, asserted directly. Everything above routes
+    # through PuzzleRepository and therefore observes its fold — none of it can
+    # see this row, which the handler writes itself, outside storage/. Without
+    # this line the test passes even when the game row forks to ' TestUser ',
+    # orphaning the FK anchor of the puzzle it exists to support while
+    # GameRepository's counts silently never see it.
+    from services.api.models import Game as GameModel
+
+    assert (
+        db_session.get(GameModel, (MANUAL_GAME_ID, "testuser")) is not None
+    ), "synthetic game row forked from the puzzle it anchors"
+
     # And the canonical spelling must find it through the ordinary library read.
     listed = client.get("/puzzles/list?username=testuser")
     assert listed.status_code == 200, listed.text

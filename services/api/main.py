@@ -1217,10 +1217,15 @@ async def create_manual_puzzle(
 ):
     """Create a puzzle from an arbitrary position (Engine Analysis → Save as puzzle)."""
     assert_owns_username(account, request.username, db)
-    # Already canonical (``ManualPuzzleRequest.username`` is ``Username``); the
-    # alias is kept because the manual-puzzle flow threads it through a dozen
-    # statements and renaming them all would bury the actual change.
-    username_lower = request.username
+    # Folded, not merely aliased. The annotation makes this canonical today, but
+    # this handler writes the synthetic ``games`` row itself (below) instead of
+    # going through ``services/api/storage/`` — so the storage-boundary fold
+    # that protects every other write does not reach it, and the annotation is
+    # the ONLY thing standing between a non-canonical handle and a forked game
+    # row. ``dev`` folded here; replacing that with a comment asserting
+    # canonicality is the exact substitution this PR exists to undo.
+    # Idempotent on annotated input, so no behaviour change today.
+    username_lower = canonical_username(request.username)
 
     # Validate FEN
     try:
