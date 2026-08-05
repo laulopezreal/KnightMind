@@ -25,12 +25,11 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        # 3.13 only, because that is what the production image runs (see
-        # Dockerfile). This job used to test 3.11 exclusively -- a version
-        # nothing deploys and no developer here uses, while production's own
-        # interpreter went unverified. NB pyproject still declares
-        # requires-python = ">=3.11"; that floor is now unverified, and should
-        # either be raised to match or re-added to this matrix deliberately.
+        # 3.13 only, matching the production image (python:3.13-slim, see
+        # Dockerfile) and requires-python in pyproject. This job used to test
+        # 3.11 exclusively -- a version nothing deploys and no developer here
+        # uses -- while production's own interpreter went unverified. Keep this
+        # list, requires-python, and the Dockerfile base image in step.
         python-version: ["3.13"]
 
     steps:
