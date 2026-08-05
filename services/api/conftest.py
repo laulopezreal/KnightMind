@@ -2,58 +2,42 @@
 
 Database fixtures
 -----------------
-Thirty test modules each built their own engine, session and TestClient from a
-near-identical twelve-line block. They had already drifted -- some dropped
-tables on teardown, some did not -- and the duplication was what kept the suite
-pinned to SQLite: repointing it meant thirty edits.
+One backend: Postgres, the database production runs. The suite used to default
+to in-memory SQLite because the application offered a SQLite escape hatch and
+it needed no setup -- and so it validated a database production does not use.
+SQLite does not enforce foreign keys unless asked, which is how 38 tests
+accumulated that inserted puzzles with no game and reviews with no puzzle,
+passing while asserting against rows the schema forbids.
 
-The backend is chosen by ``KNIGHTMIND_TEST_DATABASE_URL``:
-
-  unset (default)  in-memory SQLite, a fresh schema per test. Identical to what
-                   every module did by hand, so the default path is unchanged.
-  a Postgres URL   one schema for the session, truncated between tests. This is
-                   what production runs, and where SQLite quietly differs:
-                   aggregate typing, partial indexes, naive-vs-aware datetime
-                   comparison, integer division.
-
-A test that passes on only one backend is describing a real portability bug,
-not a fixture problem.
+``KNIGHTMIND_TEST_DATABASE_URL`` selects the scratch database (see the root
+conftest, which validates it before anything imports the app). The schema is
+built once for the session and the rows are cleared between tests, because
+create_all per test is ruinous over a real connection.
 """
 
 import os
 from unittest.mock import AsyncMock
 
 import pytest
-from sqlalchemy import create_engine, event, text
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
 
+# Importing models is what registers the 14 tables on Base.metadata -- `db` only
+# defines the empty declarative Base. Without it create_all() silently creates
+# nothing and the first TRUNCATE fails on a table that was never made. The same
+# omission in alembic/env.py made `alembic check` report every table as removed.
+import services.api.models  # noqa: F401
 from services.api.db import Base
-
-TEST_DB_URL_ENV = "KNIGHTMIND_TEST_DATABASE_URL"
-DEFAULT_TEST_DB_URL = "sqlite:///:memory:"
-
-
-def _is_sqlite(url: str) -> bool:
-    return url.startswith("sqlite")
 
 
 @pytest.fixture(scope="session")
 def db_url() -> str:
-    return os.getenv(TEST_DB_URL_ENV, DEFAULT_TEST_DB_URL)
+    return os.environ["KNIGHTMIND_TEST_DATABASE_URL"]
 
 
 @pytest.fixture(scope="session")
-def _postgres_engine(db_url):
-    """One engine and one schema for the whole session (Postgres only).
-
-    Creating and dropping 14 tables per test is trivial on in-memory SQLite and
-    ruinous over a real connection, so the schema is built once and the *rows*
-    are cleared between tests instead.
-    """
-    if _is_sqlite(db_url):
-        yield None
-        return
+def _schema_engine(db_url):
+    """One engine and one schema for the whole session."""
     engine = create_engine(db_url)
     # Drop first: an aborted earlier run may have left tables behind, and
     # create_all would accept a stale schema rather than rebuild it.
@@ -65,46 +49,17 @@ def _postgres_engine(db_url):
 
 
 @pytest.fixture
-def db_engine(db_url, _postgres_engine):
-    """An engine whose schema is empty at the start of every test."""
-    if not _is_sqlite(db_url):
-        # One TRUNCATE so CASCADE resolves the FK graph for us; RESTART IDENTITY
-        # stops sequence values leaking between tests the way a fresh SQLite
-        # database never would.
-        tables = ", ".join(f'"{t.name}"' for t in Base.metadata.sorted_tables)
-        if tables:
-            with _postgres_engine.begin() as conn:
-                conn.execute(text(f"TRUNCATE {tables} RESTART IDENTITY CASCADE"))
-        yield _postgres_engine
-        return
+def db_engine(_schema_engine):
+    """An engine whose tables are empty at the start of every test.
 
-    # StaticPool keeps every connection pointed at the same in-memory database;
-    # without it each connection gets its own empty one.
-    engine = create_engine(
-        db_url,
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-
-    # SQLite ignores foreign keys unless asked, per connection, every time.
-    # Left off, fixtures can insert a puzzle with no parent game or a review
-    # with no parent puzzle -- states the production schema forbids and
-    # Postgres rejects outright. Tests built on them look like coverage while
-    # asserting against rows that cannot exist. Turning it on here is what
-    # keeps the fast default run honest, instead of deferring the whole class
-    # of defect to whoever next runs the suite against Postgres.
-    @event.listens_for(engine, "connect")
-    def _enforce_sqlite_foreign_keys(dbapi_connection, _connection_record):
-        cursor = dbapi_connection.cursor()
-        cursor.execute("PRAGMA foreign_keys=ON")
-        cursor.close()
-
-    Base.metadata.create_all(bind=engine)
-    try:
-        yield engine
-    finally:
-        Base.metadata.drop_all(bind=engine)
-        engine.dispose()
+    One TRUNCATE so CASCADE resolves the FK graph for us; RESTART IDENTITY stops
+    sequence values leaking between tests.
+    """
+    tables = ", ".join(f'"{t.name}"' for t in Base.metadata.sorted_tables)
+    if tables:
+        with _schema_engine.begin() as conn:
+            conn.execute(text(f"TRUNCATE {tables} RESTART IDENTITY CASCADE"))
+    return _schema_engine
 
 
 @pytest.fixture

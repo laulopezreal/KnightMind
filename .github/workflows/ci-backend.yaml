@@ -32,6 +32,27 @@ jobs:
         # list, requires-python, and the Dockerfile base image in step.
         python-version: ["3.13"]
 
+    # The application is Postgres-only and so is the suite. There is no SQLite
+    # fallback to fall back to any more, which is the point: the tests run on
+    # the database production runs, or they do not run.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: knightmind
+          POSTGRES_PASSWORD: knightmind
+          POSTGRES_DB: knightmind_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U knightmind"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      KNIGHTMIND_TEST_DATABASE_URL: postgresql+psycopg://knightmind:knightmind@localhost:5432/knightmind_test
+
     steps:
     - uses: actions/checkout@v5
 
@@ -57,10 +78,11 @@ jobs:
       working-directory: ./services/api
       run: uv run pytest
 
-  # Targeted Postgres integration job: proves the migration chain applies on a
-  # real Postgres from zero and runs the PG-only concurrency/migration tests
-  # that the default SQLite job skips. Deliberately NOT the whole suite — the
-  # rest of the tests build their own SQLite engines and assume SQLite.
+  # Migration job: proves the chain applies on a real Postgres from zero, that
+  # the migrated schema still matches the models, and runs the PG-only
+  # concurrency tests. The `test` job above already runs the whole suite on
+  # Postgres, so this one is deliberately narrow -- it exists for the migration
+  # checks, which need a database the suite has NOT rebuilt from the models.
   #
   # Selection is by MARKER (`-m postgres`), never by filename: this job used to
   # run `test_jobs.py -k postgres`, so the four review/session concurrency tests
@@ -74,7 +96,7 @@ jobs:
         env:
           POSTGRES_USER: knightmind
           POSTGRES_PASSWORD: knightmind
-          POSTGRES_DB: knightmind
+          POSTGRES_DB: knightmind_test
         ports:
           - 5432:5432
         options: >-
@@ -84,8 +106,9 @@ jobs:
           --health-retries 5
 
     env:
-      DATABASE_URL: postgresql+psycopg://knightmind:knightmind@localhost:5432/knightmind
-      KNIGHTMIND_TEST_POSTGRES_URL: postgresql+psycopg://knightmind:knightmind@localhost:5432/knightmind
+      DATABASE_URL: postgresql+psycopg://knightmind:knightmind@localhost:5432/knightmind_test
+      KNIGHTMIND_TEST_DATABASE_URL: postgresql+psycopg://knightmind:knightmind@localhost:5432/knightmind_test
+      KNIGHTMIND_TEST_POSTGRES_URL: postgresql+psycopg://knightmind:knightmind@localhost:5432/knightmind_test
 
     steps:
     - uses: actions/checkout@v5
@@ -119,22 +142,3 @@ jobs:
       working-directory: ./services/api
       run: |
         uv run pytest -m postgres -v
-
-    # The whole behavioural suite against the database production actually
-    # runs. Everything above this point still proves things about SQLite, which
-    # differs from Postgres in ways that reach the query layer: aggregate
-    # typing, partial indexes, naive-vs-aware datetime comparison, integer
-    # division -- and, until this landed, foreign keys, which SQLite ignores
-    # unless asked. That last one alone was hiding 38 tests built on rows the
-    # production schema forbids.
-    #
-    # Runs last on purpose: the fixture builds its schema from
-    # Base.metadata.create_all, so it drops and recreates what the migration
-    # steps above put there. Migration correctness is `alembic check`'s job,
-    # not this step's.
-    - name: Run the full suite against Postgres
-      working-directory: ./services/api
-      env:
-        KNIGHTMIND_TEST_DATABASE_URL: postgresql+psycopg://knightmind:knightmind@localhost:5432/knightmind
-      run: |
-        uv run pytest

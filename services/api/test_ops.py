@@ -1,68 +1,47 @@
 import os
 import sys
-import uuid
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import NullPool
 
 # Add project root to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
 
 @pytest.fixture(scope="function")
-def test_db_instance(monkeypatch, tmp_path):
-    """
-    Creates a completely isolated file-based database for each test function.
-    This avoids all issues with SQLite in-memory sharing, threading, and state leakage.
-    The DB file lives in pytest's tmp_path so no artifacts land in the repo.
-    """
-    db_path = tmp_path / f"test_ops_{uuid.uuid4()}.db"
-    db_url = f"sqlite:///{db_path}"
+def test_db_instance(monkeypatch, db_engine, db_url):
+    """Point the app's engine and session factory at the shared test database.
 
-    # Create engine for this specific test
-    # Use NullPool to ensure connections are closed promptly, avoiding file locks
-    engine = create_engine(
-        db_url, connect_args={"check_same_thread": False}, poolclass=NullPool
-    )
-    TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    This used to build its own throwaway SQLite file per test, for the reasons
+    the old docstring gave: in-memory sharing, threading and state leakage. The
+    shared Postgres fixture handles all three (its schema is truncated between
+    tests), and using it means /ops/health and /ops/ready are exercised against
+    the database production actually runs.
+    """
+    session_local = sessionmaker(autocommit=False, autoflush=False, bind=db_engine)
 
     # Disable worker for tests (so health check doesn't fail)
     monkeypatch.setenv("KNIGHTMIND_WORKER_DISABLED", "true")
 
-    # CRITICAL: Monkeypatch EVERYTHING to use this specific engine/session
+    # The ops probes read the module-level engine and SessionLocal directly
+    # rather than through the request dependency, so both have to be redirected.
     from services.api import db as db_module
     from services.api import worker as worker_module
 
     monkeypatch.setattr(db_module, "SQLALCHEMY_DATABASE_URL", db_url)
-    monkeypatch.setattr(db_module, "engine", engine)
-    monkeypatch.setattr(db_module, "SessionLocal", TestingSessionLocal)
-    monkeypatch.setattr(worker_module, "SessionLocal", TestingSessionLocal)
+    monkeypatch.setattr(db_module, "engine", db_engine)
+    monkeypatch.setattr(db_module, "SessionLocal", session_local)
+    monkeypatch.setattr(worker_module, "SessionLocal", session_local)
 
     try:
         from services.api import main as main_module
 
-        monkeypatch.setattr(main_module, "SessionLocal", TestingSessionLocal)
+        monkeypatch.setattr(main_module, "SessionLocal", session_local)
     except (ImportError, AttributeError):
         pass
 
-    # Create tables
-    # Ensure models are imported so they are registered in Base
-    from services.api.models import Base
-
-    Base.metadata.create_all(bind=engine)
-
-    yield TestingSessionLocal
-
-    # Teardown (tmp_path itself is cleaned up by pytest)
-    engine.dispose()
-    if db_path.exists():
-        try:
-            db_path.unlink()
-        except PermissionError:
-            pass
+    yield session_local
 
 
 @pytest.fixture(scope="function")

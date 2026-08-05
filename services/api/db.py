@@ -1,3 +1,20 @@
+"""Engine and session factory. Postgres only.
+
+This module used to offer a SQLite fallback behind ``KNIGHTMIND_DEV_SQLITE``,
+left over from before production moved to Postgres. It was never free: because
+the application supported two databases, the test suite took the one that
+needed no setup, and then validated a database production does not run.
+
+SQLite does not enforce foreign keys unless asked, so 38 tests accumulated that
+inserted puzzles with no game and reviews with no puzzle -- passing while
+asserting against rows the production schema forbids. The schema also had to be
+authored twice, with ``sqlite_where`` variants shadowing every partial index,
+and nothing checked that the two agreed.
+
+One backend, one truth. Local development uses the Postgres in
+docker-compose.yml.
+"""
+
 import os
 
 from sqlalchemy import create_engine
@@ -5,30 +22,28 @@ from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 from services.api.envutil import env_int
 
-DEFAULT_SQLITE_URL = "sqlite:///./knightmind.db"
-
 
 def _resolve_database_url() -> str:
     url = (os.getenv("DATABASE_URL") or "").strip()
-    if url:
-        return url
-    # Local-dev escape hatch: opt in explicitly instead of silently falling
-    # back to an ephemeral SQLite file (which loses data on redeploy in prod).
-    if os.getenv("KNIGHTMIND_DEV_SQLITE", "").strip().lower() in {"1", "true", "yes"}:
-        return DEFAULT_SQLITE_URL
-    raise RuntimeError(
-        "DATABASE_URL is not set. Set DATABASE_URL to your Postgres connection "
-        "string (e.g. postgresql+psycopg://user:pass@host:5432/knightmind). "
-        "For local development only, set KNIGHTMIND_DEV_SQLITE=1 to use the "
-        f"local SQLite database ({DEFAULT_SQLITE_URL})."
-    )
+    if not url:
+        raise RuntimeError(
+            "DATABASE_URL is not set. Set it to your Postgres connection string, "
+            "e.g. postgresql+psycopg://user:pass@host:5432/knightmind. "
+            "For local development, `make docker-up` starts one."
+        )
+    if url.startswith("sqlite"):
+        raise RuntimeError(
+            "DATABASE_URL points at SQLite. This application is Postgres-only: "
+            "SQLite does not enforce foreign keys and does not share Postgres's "
+            "aggregate, partial-index or datetime semantics, so running on it "
+            "proves nothing about production. Use the Postgres in "
+            "docker-compose.yml (`make docker-up`)."
+        )
+    return url
 
 
 SQLALCHEMY_DATABASE_URL = _resolve_database_url()
 
-_is_sqlite = SQLALCHEMY_DATABASE_URL.startswith("sqlite")
-
-connect_args = {"check_same_thread": False} if _is_sqlite else {}
 
 # Sized against the request threadpool, not guessed. The route handlers that do
 # blocking DB work are plain `def`, so Starlette runs them on anyio's threadpool
@@ -51,22 +66,13 @@ connect_args = {"check_same_thread": False} if _is_sqlite else {}
 POOL_SIZE = env_int("KNIGHTMIND_DB_POOL_SIZE", 10, min_value=1)
 MAX_OVERFLOW = env_int("KNIGHTMIND_DB_MAX_OVERFLOW", 40, min_value=0)
 
-# pre-ping guards against stale pooled Postgres connections (e.g. Supabase /
-# pgbouncer); local SQLite connections can't go stale, so skip the overhead.
-#
-# The pool arguments are Postgres-only. A `sqlite:///:memory:` URL resolves to
-# SingletonThreadPool, which rejects pool_size/max_overflow outright; and the
-# SQLite engine is a local dev/test throwaway, never the contended resource this
-# sizing exists to manage.
-pool_kwargs = (
-    {} if _is_sqlite else {"pool_size": POOL_SIZE, "max_overflow": MAX_OVERFLOW}
-)
-
+# pre-ping guards against stale pooled connections (e.g. a proxy or pgbouncer
+# recycling one underneath us).
 engine = create_engine(
     SQLALCHEMY_DATABASE_URL,
-    connect_args=connect_args,
-    pool_pre_ping=not _is_sqlite,
-    **pool_kwargs,
+    pool_pre_ping=True,
+    pool_size=POOL_SIZE,
+    max_overflow=MAX_OVERFLOW,
 )
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
