@@ -88,13 +88,19 @@ Known live database contents at restoration time:
 
 ## Outbound dependencies
 
-The API makes egress calls to exactly two third parties. Both are best-effort:
+The API makes egress calls to exactly three third parties. All are best-effort:
 a failure degrades one feature and never takes the API down.
 
 | Host | Used by | On failure |
 | --- | --- | --- |
 | `api.chess.com` | game import, rating snapshots | the import or snapshot fails and is reported to the caller |
 | `explorer.lichess.ovh` | `/openings/baseline` | serves a stale cached row if one exists, else 503; the Openings page simply omits the comparison |
+| `api.anthropic.com` | AI diagnosis prose | diagnosis falls back to the rules-based cause; the written explanation is simply absent |
+
+This table must stay in step with `ALLOWED_HOST_SUFFIXES` in
+`deploy/egress-proxy/connect_proxy.py`, currently
+`("chess.com", "anthropic.com", "lichess.ovh")`. A host missing from that
+allowlist is unreachable from the container regardless of what the app expects.
 
 Notes for the lichess explorer:
 
@@ -107,6 +113,23 @@ Notes for the lichess explorer:
 - **Blocking egress to it is a supported configuration.** The Openings page
   drops the "vs expected" line and stays fully usable.
 - Per-principal rate limit: `RATE_LIMIT_OPENINGS_BASELINE` (default 60/min).
+
+Notes for the Anthropic API:
+
+- **Chess data does leave the box here**, unlike the explorer: the prompt carries
+  position and game context so the model can explain the mistake. No account
+  credentials are sent.
+- **Kill switch**: `KNIGHTMIND_AI_DIAGNOSIS=0` stops the model call entirely — no
+  request, no audit row, diagnosis falls back to rules.
+- **Absent key is safe.** `ANTHROPIC_API_KEY` is read at call time, never at
+  startup, so an unset key degrades to rules-only instead of blocking boot.
+- **Spend ceilings** are counted from `diagnosis_audit_log`:
+  `KNIGHTMIND_AI_DAILY_CAP_USER` (bounds one backfill) and
+  `KNIGHTMIND_AI_DAILY_CAP_GLOBAL` (backstop against a runaway loop).
+- **Prompts and responses are retained** in `diagnosis_audit_log` for incident
+  review and swept by the session-cleanup loop.
+- **Blocking egress to it is a supported configuration**, same as the explorer:
+  diagnoses keep working, just without the written explanation.
 
 ## Environment file
 

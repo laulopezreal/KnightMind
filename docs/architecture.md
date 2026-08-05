@@ -70,9 +70,8 @@ No user data goes to the Lichess explorer — the request carries a position and
 band, no username or game. Its cached rows have a 30-day TTL and are still served when
 the explorer is unreachable, so blocking egress to it is a supported configuration.
 
-> `OPERATIONS.md` is the source of truth here, but its outbound table currently lists
-> only the first two: it predates the AI-enrichment restore that added the Anthropic
-> egress path.
+`OPERATIONS.md` is the source of truth for these, including the egress-proxy allowlist
+that has to name each host for it to be reachable at all.
 
 ## Directory Structure
 
