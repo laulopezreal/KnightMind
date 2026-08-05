@@ -276,7 +276,11 @@ describe('Home', () => {
         resolveFirst({ username: 'alice', games_count: 999, puzzles_count: 999 });
       });
 
-      expect(screen.queryByText(/999/)).not.toBeInTheDocument();
+      // queryAllByText, not queryByText: the stale payload renders 999 in two
+      // places (games and puzzles counts), and queryByText THROWS on multiple
+      // matches rather than failing the assertion. Same outcome, but the message
+      // says "expected 2 to be 0" instead of a DOM dump.
+      expect(screen.queryAllByText(/999/)).toHaveLength(0);
     });
   });
 });
