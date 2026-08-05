@@ -103,9 +103,10 @@ venv package is installed:
 sudo apt install python3-venv   # or python3.12-venv, matching your Python
 ```
 
-> **Note:** the repo contains a `uv.lock`, but it has drifted from `pyproject.toml` and
-> nothing builds from it — CI and the Dockerfile both install with pip. Use the pip flow
-> above until the lockfile is either refreshed or removed.
+> **Note:** a `uv.lock` is also committed, but nothing builds from it — CI and the
+> Dockerfile both install with pip, so the pip flow above is the canonical one. If you
+> use `uv`, run `uv lock --check` first to confirm the lockfile is still in step with
+> `pyproject.toml`.
 
 ### Frontend (apps/web)
 
