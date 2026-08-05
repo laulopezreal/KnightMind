@@ -3,6 +3,8 @@ import os
 from sqlalchemy import create_engine
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
+from services.api.envutil import env_int
+
 DEFAULT_SQLITE_URL = "sqlite:///./knightmind.db"
 
 
@@ -28,10 +30,39 @@ _is_sqlite = SQLALCHEMY_DATABASE_URL.startswith("sqlite")
 
 connect_args = {"check_same_thread": False} if _is_sqlite else {}
 
+# Sized against the request threadpool, not guessed. The route handlers that do
+# blocking DB work are plain `def`, so Starlette runs them on anyio's threadpool
+# (default limiter: 40 tokens) and up to that many can hold a Session at once.
+# The in-process job worker and the hourly cleanup task draw from this same
+# engine, so the ceiling is set a little above the threadpool limit rather than
+# exactly at it.
+#
+# Getting this wrong is not subtle: SQLAlchemy's defaults (pool_size=5,
+# max_overflow=10) cap the pool at 15, and a 16th concurrent handler blocks for
+# pool_timeout (30s) before raising. That was invisible while every handler ran
+# on the event loop and only one query could be in flight at a time.
+#
+# Overridable so a multi-replica deploy can divide the Postgres connection
+# budget (default max_connections is 100) without a code change.
+POOL_SIZE = env_int("KNIGHTMIND_DB_POOL_SIZE", 10, min_value=1)
+MAX_OVERFLOW = env_int("KNIGHTMIND_DB_MAX_OVERFLOW", 40, min_value=0)
+
 # pre-ping guards against stale pooled Postgres connections (e.g. Supabase /
 # pgbouncer); local SQLite connections can't go stale, so skip the overhead.
+#
+# The pool arguments are Postgres-only. A `sqlite:///:memory:` URL resolves to
+# SingletonThreadPool, which rejects pool_size/max_overflow outright; and the
+# SQLite engine is a local dev/test throwaway, never the contended resource this
+# sizing exists to manage.
+pool_kwargs = (
+    {} if _is_sqlite else {"pool_size": POOL_SIZE, "max_overflow": MAX_OVERFLOW}
+)
+
 engine = create_engine(
-    SQLALCHEMY_DATABASE_URL, connect_args=connect_args, pool_pre_ping=not _is_sqlite
+    SQLALCHEMY_DATABASE_URL,
+    connect_args=connect_args,
+    pool_pre_ping=not _is_sqlite,
+    **pool_kwargs,
 )
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
