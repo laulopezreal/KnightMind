@@ -1,5 +1,5 @@
 ---
-last_edited_at: 2026-08-06T00:43:15+02:00
+last_edited_at: 2026-08-06T00:49:34+02:00
 ---
 # KnightMind Operations
 
@@ -178,6 +178,14 @@ The floors matter because backups here are manual: without them a quiet fortnigh
 **Label a dump when you take it before something risky**, and say what it precedes — `pre-release-pr343`, `pre-strip-flag`, `pre-hardening`. That is what buys it the longer horizon. Rename an existing dump to promote it, and rewrite its `.sha256` to match: the checksum records a bare filename, so a rename without it makes `sha256sum -c` fail on an intact file.
 
 **Labelled does not mean immortal.** Until 2026-08-06 they were exempt entirely, and the directory accumulated four dumps of a single schema revision, each kept forever because it had a nice name. A dump's restore value decays as the schema moves past it: recovering to a revision several migrations back means replaying all of them onto data that old. When several labelled dumps share a revision, prune by hand — the script cannot tell which label matters.
+
+**Before deleting a dump by hand, grep for it in BOTH doc trees**, because a dump cited somewhere is a dump someone expects to find:
+
+```bash
+grep -rl "<dump-filename>" ~/git/knightmind/ ~/projects/knightmind/
+```
+
+The repo alone is not enough. On 2026-08-06 a pruned dump turned out to be cited in `~/projects/knightmind/handoffs/` as a session's verified-restorable backup, and the reference was left dangling. If a citation exists and the dump is going anyway, annotate the citing document with a substitute — and verify the substitute restores before naming it, rather than assuming a neighbouring dump is equivalent.
 
 To see what a dump would restore to:
 
