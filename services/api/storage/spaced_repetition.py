@@ -359,15 +359,37 @@ def get_adaptive_puzzles(
 
     sorted_pids = sorted(puzzle_ids, key=sort_key)
 
-    # Counters reset per tier, so one game contributes at most one puzzle PER
-    # TIER. In production that bound is two: ``/puzzles/due`` narrows the
-    # scheduled-later tier away before this runs (``get_trainable_puzzle_ids``),
-    # leaving only due and never-seen. The function itself permits three — one
-    # game supplying a due, a never-seen and a scheduled-later puzzle — reachable
-    # through the unnarrowed ``get_due_puzzles`` helper, which currently has no
-    # production caller. Pinned by
-    # ``test_one_game_can_reach_a_session_once_per_tier`` rather than asserted
-    # here, because the previous wording said "up to two" and was wrong.
+    # Counters reset per tier, so within a tier one puzzle per game is
+    # *preferred* — but that is a preference, not a bound on the session. The
+    # rest are deferred, not dropped, and ``varied[:n]`` reaches straight into
+    # them whenever a tier holds fewer distinct games than the session has slots
+    # — which the live due tier did when this was written (3 distinct games
+    # against a default n=5), so a default session necessarily repeats a game.
+    # ``_vary_session``'s own docstring says it: the caps cannot invent variety
+    # that is not there.
+    #
+    # No ordering invariant is stated here, because three attempts to state one
+    # were all wrong: "up to two spanning tiers", then "in production that bound
+    # is two", then "within the first n of a tier, distinct games come first".
+    # The last fails because the two caps COMPOSE. With only the game cap active
+    # every deferred puzzle is by definition a repeat, so distinct-first does
+    # hold — asserted by
+    # TestGameDiversity::test_the_cap_cannot_invent_variety_that_is_not_there.
+    # Turn the motif cap on and a distinct-GAME puzzle can be deferred for
+    # motif reasons and land behind a game repeat inside the first ``n``:
+    # games A, B, A, C all sharing one motif, n=3, serves A twice and never C.
+    # Pinned by ``test_the_two_caps_compose_and_neither_orders_alone``.
+    #
+    # Three of TestGameDiversity's five tests set motif="blunder" to neutralise
+    # the motif cap; the other two take the helper default "Fork", where at
+    # _GAME_CAP=1 the motif cap never binds. So the class does not assert the
+    # composition at the current constants — not that it could not: raise
+    # _GAME_CAP to 3 and one of them becomes composition-sensitive.
+    #
+    # The lesson these three attempts share: a measured count rots (the due tier
+    # went 9 -> 12 in a day) and an ordering rule stated over one cap is falsified
+    # by the other. Assert structure here, put behaviour in tests.
+    #
     # Sharing counters globally
     # would be tighter, but it is also the direction that risks starving a tier:
     # once the due tier consumes its games, every new puzzle from those games
@@ -511,20 +533,6 @@ def _vary_session(
 
     # Anything held back rejoins immediately after, so the set is unchanged.
     return taken + deferred
-
-
-def get_due_puzzles(
-    db: Session, username: str, puzzle_ids: list[str], n: int = 5
-) -> tuple[list[str], dict[str, PuzzleStats]]:
-    """
-    Get puzzles for the user from the candidate list, ordered by SR priority.
-
-    Priority:
-    1. Due: next_due_at <= now
-    2. New: next_due_at IS NULL
-    3. Future: ordered by next_due_at ASC
-    """
-    return get_adaptive_puzzles(db, username, puzzle_ids, n)
 
 
 def get_trainable_puzzle_ids(

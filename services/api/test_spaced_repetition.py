@@ -963,22 +963,29 @@ class TestDiversityNeverDisplacesDuePuzzles:
         assert len(set(games)) == 4, games
 
 
-def test_one_game_can_reach_a_session_once_per_tier(db_session):
-    """Pins the real per-game bound: three through this helper, two in production.
+def test_counters_do_not_carry_across_tiers(db_session):
+    """A game used in the due tier can still be picked in the never-seen tier.
 
-    Counters reset per tier, so one game may supply a due puzzle, a never-seen
-    one, and a scheduled-later one. `/puzzles/due` narrows the scheduled-later
-    tier away first, so the shipped bound is two; the third is reachable only
-    via get_due_puzzles, which has no production caller today.
+    Asserts ORDER, not a count. The previous version of this test counted how
+    many puzzles from one game appeared in the session, with n equal to the
+    whole corpus — so the slice was everything and the count was a tautology.
+    It passed with every line of variety logic deleted.
 
-    Asserted rather than described, because the comment that said "up to two"
-    read as verified and was not.
+    The count is unobservable in principle here: for the scheduled-later puzzle
+    to be in the slice at all, n must exceed the due and never-seen tiers
+    combined, which forces those tiers in whole. So the observable difference is
+    where the tier-1 puzzle from an already-used game ranks — behind the
+    fillers if counters were shared, ahead of them if they reset per tier.
+
+    Scope, stated so this is not mistaken for a general variety guard: deleting
+    the variety pass entirely leaves priority order intact and this test still
+    passes. That mutation is caught by five other tests, spanning three classes
+    — TestVarietyCap (1 of its 6), TestGameDiversity (3), and
+    TestDiversityNeverDisplacesDuePuzzles (1). What this one uniquely catches is
+    sharing the counters across tiers, which before it no test in the repo
+    detected at all.
     """
     from services.api.models import Puzzle, PuzzleStats
-    from services.api.storage.spaced_repetition import (
-        get_due_puzzles,
-        get_trainable_puzzle_ids,
-    )
 
     now = datetime.now(timezone.utc)
 
@@ -1017,20 +1024,110 @@ def test_one_game_can_reach_a_session_once_per_tier(db_session):
             )
         )
 
-    add("x_due", "gameX", 10, 1)
-    add("x_new", "gameX", None, 2)
-    add("x_future", "gameX", -30, 3)
-    for i in range(4):
+    # Two due puzzles from two games — two, so the len(ordered) <= 1 early
+    # return cannot short-circuit the pass under test.
+    add("x_due", "gameX", 20, 1)
+    add("y_due", "gameY", 10, 2)
+    # gameX appears again in the never-seen tier, alongside unrelated fillers.
+    add("x_new", "gameX", None, 3)
+    for i in range(3):
         add(f"filler{i}", f"gameF{i}", None, 10 + i)
     db_session.commit()
 
-    ids = [p.id for p in db_session.query(Puzzle).all()]
+    # Spelled out rather than read from a query, because the candidate order is
+    # load-bearing here and must not be left to an unordered SELECT. Every
+    # never-seen puzzle produces an IDENTICAL sort key — same tier, same focus
+    # flag, and time_factor is the single `now` bound once per call — so the
+    # sort is a no-op within tier 1 and the caller's order IS the tie-break.
+    # (`ply` is not part of the sort key and influences nothing.)
+    ids = ["x_due", "y_due", "x_new", "filler0", "filler1", "filler2"]
 
-    session, _ = get_due_puzzles(db_session, "u", ids, n=7)
-    from_one_game = [
-        pid for pid in session if db_session.get(Puzzle, pid).source_game_id == "gameX"
-    ]
-    assert len(from_one_game) == 3, from_one_game
+    # n cuts inside tier 1, so the third slot is contested.
+    ordered, _ = get_adaptive_puzzles(db_session, "u", ids, n=3)
 
-    # The endpoint path never sees the third: futures are dropped upstream.
-    assert "x_future" not in get_trainable_puzzle_ids(db_session, "u", ids)
+    # gameX was counted in tier 0. Per-tier reset means it is eligible again in
+    # tier 1, so x_new is NOT deferred and keeps its place at the head of the
+    # tier. Shared counters would defer it and a filler would take the slot.
+    assert ordered[:3] == ["x_due", "y_due", "x_new"], ordered[:3]
+
+
+def test_the_two_caps_compose_and_neither_orders_alone(db_session):
+    """A distinct game can be deferred by the MOTIF cap and land behind a repeat.
+
+    Each existing class isolates ONE cap, from opposite directions:
+
+    - Three of TestGameDiversity's five tests set motif="blunder", which
+      _NON_MOTIFS exempts, so they isolate the game cap. (Not "the
+      multi-game tests" — four of the five are multi-game.)
+    - TestVarietyCap goes the other way: its _stats helper creates PuzzleStats
+      but no Puzzle rows, so _source_games returns {} and `game` is None for
+      every id — the game cap is exempt for all six of its tests, and what they
+      exercise is the motif cap.
+
+    So neither class has both caps binding at once, which is what falsified
+    three successive attempts to write an ordering invariant into the call site.
+
+    Games A, B, A, C, all sharing one real motif. With n=3 the motif cap
+    (int(3 * 2/3) = 2) is reached after p1 and p2, so p4 — the only puzzle from
+    game C — is deferred and never promoted. p3 lands in slot 3 from the head of
+    the deferred tail, and a distinct game that was available is never served.
+
+    Note the expected order here is also the INPUT order, so a mutation that
+    made the whole variety pass a no-op would not fail this test. That one is
+    caught by the five tests listed in test_counters_do_not_carry_across_tiers.
+    What it pins: that the motif cap BINDS at n=3 — loosen it and p4 is
+    promoted, failing this test — and the order of the deferred tail, which it
+    catches alone (reversing the tail kills only this test).
+
+    What it does NOT pin: the cap's exact value. Tighten _VARIETY_SHARE to 1/3
+    and the cap becomes 1; p2, p3 and p4 are all deferred and the served order
+    is identical, so this test cannot tell cap 1 from cap 2. It detects
+    loosening only.
+
+    That is a limit of THIS test, not of the suite: the tightening is caught,
+    by TestGameDiversity::test_the_cap_cannot_invent_variety_that_is_not_there,
+    which is one of the two in its class that does not set motif="blunder" and
+    so has the motif cap live. Both directions verified by mutation.
+    """
+    from services.api.models import Puzzle, PuzzleStats
+
+    for i, (pid, game) in enumerate(
+        [("p1", "gameA"), ("p2", "gameB"), ("p3", "gameA"), ("p4", "gameC")]
+    ):
+        # puzzles(source_game_id, username) is a real composite FK, so the game
+        # has to exist before the puzzle that names it.
+        ensure_game(db_session, game, "u")
+        db_session.add(
+            Puzzle(
+                id=pid,
+                username="u",
+                source_game_id=game,
+                ply=i + 1,
+                fen="8/8/8/8/8/8/8/8 w - - 0 1",
+                side_to_move="white",
+                played_move_uci="e2e4",
+                best_move_uci="d2d4",
+                eval_before=0.5,
+                eval_after=-1.5,
+                swing=2.0,
+            )
+        )
+        db_session.add(
+            PuzzleStats(
+                puzzle_id=pid,
+                username="u",
+                # A REAL motif, not the exempt "blunder" — that is the point.
+                primary_motif="fork",
+                attempts=0,
+                pass_count=0,
+                ease_factor=2.0,
+                next_due_at=None,
+            )
+        )
+    db_session.commit()
+
+    ordered, _ = get_adaptive_puzzles(db_session, "u", ["p1", "p2", "p3", "p4"], n=3)
+    games = [db_session.get(Puzzle, pid).source_game_id for pid in ordered[:3]]
+
+    assert games == ["gameA", "gameB", "gameA"], games
+    assert "gameC" not in games
