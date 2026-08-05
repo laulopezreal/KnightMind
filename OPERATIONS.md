@@ -181,6 +181,32 @@ Applied on 2026-07-20 after taking and verifying the backup above:
 - API and DB are healthy after recreation; public `https://api.guessme.world/ops/ping` returns `200 {"status":"pong"}`.
 - Multi-user auth remains intentionally disabled until Lau provisions the account and flips `KNIGHTMIND_REQUIRE_AUTH=true` in `.env.docker`.
 
+Applied on 2026-08-05, after taking backup `knightmind-db-20260805T103703+0200.dump`:
+
+- **`KNIGHTMIND_STRIP_PUZZLE_SOLUTIONS=1` is now set** in `.env.docker`. Before this,
+  the flag defaulted OFF and `/puzzles/due` shipped `best_move_uci`,
+  `accept_moves_uci`, `played_move_uci` and `solution_pv` straight to the browser —
+  the answer arrived with the question.
+- The flag was OFF by design, not by oversight: it let the API deploy before the
+  grading frontend, in either order. It was safe to flip once the deployed frontend
+  stopped reading solutions from the training payload. Confirmed against the **live**
+  Cloudflare Pages bundle (`assets/puzzles-*.js` contains `/puzzles/{id}/check`,
+  `/puzzles/{id}/reveal`, and `reveal:"true"`), not just the repo source — the two can
+  differ, and only the deployed bundle decides whether flipping breaks users.
+- Verified after the flip: `/puzzles/due` omits all four fields; `/puzzles/list` and
+  `/puzzles/{id}` return them as null; `/puzzles/{id}?reveal=true` still populates them
+  (the Library detail page depends on this); `POST /reveal` returns the solution (the
+  training board depends on this); `POST /check` still grades correctly.
+- **To roll back**, set `KNIGHTMIND_STRIP_PUZZLE_SOLUTIONS=0` (or remove the line) and
+  run `docker compose --env-file .env.docker up -d`. No rebuild or migration needed —
+  the flag is read at request time.
+- Server-side verification (`/check`, `/reveal`, `/review`) is unaffected by this flag
+  in either position. Flipping it closed an information leak; it never was the thing
+  preventing forged pass/fail results.
+- `README.md` states that puzzle solutions are not sent with the training payload.
+  That statement was false while the flag was OFF and is true now — if the flag is ever
+  turned back off, correct the README in the same change.
+
 ## Health checks
 
 Internal container health currently passes:
