@@ -28,7 +28,7 @@ A platform for analyzing chess games, tracking progress, and gaining insights us
 
 ### Current State
 - **Database**: Self-hosted Postgres (`postgres:16-alpine`) running under Docker Compose alongside the API on the production VPS (claw-home). Supabase was an earlier migration step and has been retired — it is no longer part of the running stack.
-- **API**: FastAPI connects to Postgres via `DATABASE_URL` (direct connection string). The API fails fast at startup when `DATABASE_URL` is unset; `KNIGHTMIND_DEV_SQLITE=1` is a local-dev-only opt-in for a throwaway SQLite file.
+- **API**: FastAPI connects to Postgres via `DATABASE_URL` (direct connection string). The API fails fast at startup when `DATABASE_URL` is unset, and refuses a SQLite URL outright — Postgres is the only supported backend, for the app and for the test suite alike.
 - **Stockfish**: Local binary (`STOCKFISH_PATH`), not a separate service.
 - **Auth / multi-tenancy**: Multi-user auth (JWT bearer + per-username ownership checks) lives behind `KNIGHTMIND_REQUIRE_AUTH` (default OFF — single-user behaviour). See `services/api/identity.py`.
 - **Abuse resistance**: Per-principal rate limits + payload size caps on expensive routes (`/engine/eval`, `/puzzles/generate`, `/import/chesscom`, `/ratings/snapshot`). See `services/api/ratelimit.py`.

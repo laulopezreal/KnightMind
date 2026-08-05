@@ -137,10 +137,10 @@ def warm() -> None:
     """
     Build the table up front.
 
-    ~370 ms of python-chess replay. The endpoint is an ``async def`` handler, so
-    FastAPI runs it on the event loop rather than the threadpool, and the image
-    runs a single worker — leaving this to the first request would stall every
-    other in-flight request behind it once per deploy.
+    ~370 ms of python-chess replay, paid once per process at startup instead of
+    by whichever user happens to arrive first after a deploy. ``lru_cache``
+    makes the *result* shared, not the work, so without this several concurrent
+    first-requests would each replay the table before one of them won the race.
     """
     eco_table()
     max_book_ply()

@@ -12,10 +12,7 @@ never gained ownership.
 """
 
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
 
-from services.api.db import Base
 from services.api.storage.game_repository import GameRepository
 
 SHARED_URL = "https://chess.com/game/shared-between-two-players"
@@ -38,14 +35,8 @@ def _store_for(repository, username, *, url=SHARED_URL):
 
 
 @pytest.fixture
-def repository(tmp_path):
-    engine = create_engine(f"sqlite:///{tmp_path / 'test.db'}")
-    Base.metadata.create_all(engine)
-    session = sessionmaker(bind=engine)()
-    try:
-        yield GameRepository(session)
-    finally:
-        session.close()
+def repository(db_session):
+    return GameRepository(db_session)
 
 
 def test_both_participants_own_the_same_game(repository):

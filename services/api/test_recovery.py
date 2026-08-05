@@ -1,38 +1,25 @@
-import os
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from services.api.models import Base, Job, JobStatus
+from services.api.models import Job, JobStatus
 from services.api.worker import JobWorker
 
-# Use a temporary file for tests
-TEST_DB_PATH = "test_jobs.db"
-TEST_DATABASE_URL = f"sqlite:///./{TEST_DB_PATH}"
-test_engine = create_engine(
-    TEST_DATABASE_URL, connect_args={"check_same_thread": False}
-)
-TestSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=test_engine)
+
+@pytest.fixture
+def TestSessionLocal(db_engine):
+    """Session factory on the shared test database.
+
+    This module used to keep a SQLite file (``test_jobs.db``) next to the repo
+    and delete it around every test, with a comment about pooled connections
+    holding the removed inode. None of that is needed once the database is a
+    real server the fixture truncates between tests.
+    """
+    return sessionmaker(autocommit=False, autoflush=False, bind=db_engine)
 
 
-@pytest.fixture(autouse=True)
-def setup_db():
-    # Dispose first so no pooled connection from a prior test still references
-    # the (about-to-be-removed) DB file inode, which otherwise surfaces as
-    # "attempt to write a readonly database" on the freshly recreated file.
-    test_engine.dispose()
-    if os.path.exists(TEST_DB_PATH):
-        os.remove(TEST_DB_PATH)
-    Base.metadata.create_all(bind=test_engine)
-    yield
-    test_engine.dispose()
-    if os.path.exists(TEST_DB_PATH):
-        os.remove(TEST_DB_PATH)
-
-
-def test_startup_recovery(monkeypatch):
+def test_startup_recovery(monkeypatch, TestSessionLocal):
     # Mock SessionLocal in worker and db modules
     monkeypatch.setattr("services.api.worker.SessionLocal", TestSessionLocal)
 
@@ -82,7 +69,7 @@ def test_startup_recovery(monkeypatch):
     db.close()
 
 
-def test_heartbeat_advances_lease_not_updated_at(monkeypatch):
+def test_heartbeat_advances_lease_not_updated_at(monkeypatch, TestSessionLocal):
     """The generator's progress callback bumps the heartbeat_at lease and
     returns False for a still-running job. Liveness must stay decoupled from
     status writes, so updated_at MUST NOT move.
@@ -117,7 +104,7 @@ def test_heartbeat_advances_lease_not_updated_at(monkeypatch):
     db.close()
 
 
-def test_heartbeat_reports_cancellation(monkeypatch):
+def test_heartbeat_reports_cancellation(monkeypatch, TestSessionLocal):
     """A canceled job makes the callback return True so the generator stops."""
     monkeypatch.setattr("services.api.worker.SessionLocal", TestSessionLocal)
 
@@ -139,7 +126,7 @@ def test_heartbeat_reports_cancellation(monkeypatch):
     db.close()
 
 
-def test_live_long_job_not_reset_but_crashed_one_is(monkeypatch):
+def test_live_long_job_not_reset_but_crashed_one_is(monkeypatch, TestSessionLocal):
     """Crash recovery must NOT reset a legitimately long-running job that is
     still making progress, but MUST reset a job that has genuinely stalled.
 
@@ -196,7 +183,7 @@ def test_live_long_job_not_reset_but_crashed_one_is(monkeypatch):
     db.close()
 
 
-def test_null_heartbeat_falls_back_to_updated_at(monkeypatch):
+def test_null_heartbeat_falls_back_to_updated_at(monkeypatch, TestSessionLocal):
     """Pre-migration rows have heartbeat_at = NULL. Recovery must COALESCE to
     updated_at (then created_at) so those rows aren't stranded: a NULL-lease row
     with a fresh updated_at survives, one with a stale updated_at is recovered.
@@ -252,7 +239,9 @@ _LONG_GAME_PGN = """[Event "Test Long Game"]
 14. Ng3 g6 15. a4 c5"""
 
 
-def test_long_single_game_keeps_lease_fresh_and_not_reset(monkeypatch):
+def test_long_single_game_keeps_lease_fresh_and_not_reset(
+    monkeypatch, TestSessionLocal
+):
     """End-to-end: a legitimately long SINGLE-game run keeps heartbeat_at fresh
     (the generator heartbeats within the game) so crash recovery does NOT reset
     it, even though it was claimed long ago.

@@ -15,38 +15,19 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
 
 from services.api.day_boundary import day_key, utc_today
 from services.api.db import get_db
 from services.api.main import app
 from services.api.models import (
-    Base,
     Game,
+    Puzzle,
     PuzzleReview,
     PuzzleStats,
     RatingSnapshot,
     TrainingSession,
 )
-
-
-@pytest.fixture
-def db_session():
-    engine = create_engine(
-        "sqlite:///:memory:",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    Base.metadata.create_all(bind=engine)
-    SessionLocal = sessionmaker(bind=engine)
-    session = SessionLocal()
-    try:
-        yield session
-    finally:
-        session.close()
-        Base.metadata.drop_all(bind=engine)
 
 
 @pytest.fixture
@@ -162,12 +143,58 @@ def test_streak_counts_cross_midnight_utc_days(client_with_db, db_session):
     assert resp.json()["training_streak_days"] == 2
 
 
+_PZ_PLY = iter(range(1, 100_000))
+
+
+def _ensure_puzzle(db, puzzle_id, username):
+    """Create the puzzle (and parent game) a review or stats row points at.
+
+    puzzle_reviews.puzzle_id and puzzle_stats.puzzle_id are real foreign keys.
+    See conftest for why they can no longer be left dangling.
+    """
+    if db.get(Puzzle, puzzle_id) is not None:
+        return
+    game_id = f"g-{puzzle_id}"
+    if db.get(Game, (game_id, username)) is None:
+        db.add(
+            Game(
+                game_id=game_id,
+                url="",
+                username=username,
+                white_username=username,
+                black_username="",
+                white_result="",
+                black_result="",
+                time_control="",
+                end_time=0,
+            )
+        )
+        db.flush()
+    db.add(
+        Puzzle(
+            id=puzzle_id,
+            username=username,
+            source_game_id=game_id,
+            ply=next(_PZ_PLY),
+            fen="6k1/pp3ppp/8/3q4/8/8/PP3PPP/3Q2K1 w - - 0 1",
+            side_to_move="white",
+            played_move_uci="d1d2",
+            best_move_uci="d1d5",
+            eval_before=0.5,
+            eval_after=-3.0,
+            swing=3.0,
+        )
+    )
+    db.flush()
+
+
 def test_recent_form_small_sample_flagged(client_with_db, db_session):
     """<8 reviews: report insufficient_data and a neutral (steady) trend."""
     base = datetime.now(timezone.utc) - timedelta(hours=5)
     # 4 reviews, alternating — old code would call this a directional trend.
     results = ["fail", "fail", "pass", "pass"]
     for i, r in enumerate(results):
+        _ensure_puzzle(db_session, f"pz-{i}", "formuser")
         db_session.add(
             PuzzleReview(
                 id=f"rev-{i}",
@@ -191,9 +218,10 @@ def test_recent_form_small_sample_flagged(client_with_db, db_session):
 # (c) A tiny-sample motif "trend" must carry an uncertainty flag.
 # ---------------------------------------------------------------------------
 def _seed_motif_reviews(db_session, username, motif, day_result_pairs):
-    """Seed stats+reviews so /trends has motif data (FK off in SQLite)."""
+    """Seed stats+reviews so /trends has motif data."""
     for idx, (dt, result) in enumerate(day_result_pairs):
         pid = f"{motif}-{idx}"
+        _ensure_puzzle(db_session, pid, username)
         db_session.add(
             PuzzleStats(
                 puzzle_id=pid,
@@ -238,6 +266,7 @@ def test_motif_trend_tiny_sample_flagged(client_with_db, db_session):
 
 def test_motif_performance_low_attempts_not_called_weakness(client_with_db, db_session):
     """A 1-attempt failed motif must not be surfaced as a weakness."""
+    _ensure_puzzle(db_session, "wp1", "perfuser")
     db_session.add(
         PuzzleStats(
             puzzle_id="wp1",

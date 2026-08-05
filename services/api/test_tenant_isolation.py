@@ -16,9 +16,7 @@ from datetime import datetime, timezone
 import jwt
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import NullPool
 
 from services.api import security
 from services.api.security import create_access_token, hash_password
@@ -140,17 +138,12 @@ def _seed(session):
 
 
 @pytest.fixture
-def iso(monkeypatch, tmp_path):
+def iso(monkeypatch, db_engine):
     monkeypatch.setenv("KNIGHTMIND_WORKER_DISABLED", "true")
     monkeypatch.setenv("KNIGHTMIND_REQUIRE_AUTH", "true")
     monkeypatch.setenv("KNIGHTMIND_JWT_SECRET", SECRET)
 
-    db_path = tmp_path / f"iso_{uuid.uuid4()}.db"
-    engine = create_engine(
-        f"sqlite:///{db_path}",
-        connect_args={"check_same_thread": False},
-        poolclass=NullPool,
-    )
+    engine = db_engine
     TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
     from services.api import db as db_module
@@ -159,10 +152,6 @@ def iso(monkeypatch, tmp_path):
     monkeypatch.setattr(db_module, "engine", engine)
     monkeypatch.setattr(db_module, "SessionLocal", TestingSessionLocal)
     monkeypatch.setattr(worker_module, "SessionLocal", TestingSessionLocal)
-
-    from services.api.models import Base
-
-    Base.metadata.create_all(bind=engine)
 
     session = TestingSessionLocal()
     ctx = _seed(session)

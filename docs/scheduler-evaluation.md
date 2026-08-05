@@ -25,7 +25,7 @@ A deterministic, offline harness:
 production state. Run it with:
 
 ```bash
-KNIGHTMIND_DEV_SQLITE=1 python -m services.api.analysis.scheduler_eval
+DATABASE_URL=postgresql+psycopg://knightmind:knightmind@localhost:5432/knightmind python -m services.api.analysis.scheduler_eval
 ```
 
 ### Method

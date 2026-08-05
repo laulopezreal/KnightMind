@@ -6,35 +6,16 @@ os.environ["KNIGHTMIND_WORKER_DISABLED"] = "true"
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, func, select
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
+from sqlalchemy import func, select
 
 from services.api.main import app, get_db
-from services.api.models import Base, PuzzleStats
 from services.api.models import Puzzle as PuzzleModel
+from services.api.models import PuzzleStats
 from services.api.storage.game_repository import MANUAL_GAME_ID
 from services.api.storage.puzzle_repository import PuzzleRepository
 
 VALID_FEN = "r1bqkbnr/pppp1ppp/2n5/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R b KQkq - 3 3"
 TERMINAL_FEN = "8/8/8/8/8/8/8/k6K w - - 0 1"  # stalemate / no legal moves
-
-
-@pytest.fixture
-def db_session():
-    engine = create_engine(
-        "sqlite:///:memory:",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    Base.metadata.create_all(bind=engine)
-    SessionLocal = sessionmaker(bind=engine)
-    session = SessionLocal()
-    try:
-        yield session
-    finally:
-        session.close()
-        Base.metadata.drop_all(bind=engine)
 
 
 @pytest.fixture

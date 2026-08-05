@@ -24,7 +24,7 @@ Usage:
         --email you@example.com --claim lauureal,alfi3sr,hikaru
 
 Requires:
-    - DATABASE_URL set (or KNIGHTMIND_DEV_SQLITE=1 for local dev).
+    - DATABASE_URL set (Postgres; `make docker-up` starts one locally).
     - The accounts / account_chess_usernames tables to exist (alembic upgrade head).
 """
 

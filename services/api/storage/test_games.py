@@ -3,24 +3,10 @@
 from unittest.mock import patch
 
 import pytest
-from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from scripts.backfill_storage import validate_game_metadata
-from services.api.db import Base
 from services.api.storage.game_repository import GameRepository
-
-
-@pytest.fixture
-def db_session(tmp_path):
-    engine = create_engine(f"sqlite:///{tmp_path / 'test.db'}")
-    Base.metadata.create_all(engine)
-    session_local = sessionmaker(bind=engine)
-    session = session_local()
-    try:
-        yield session
-    finally:
-        session.close()
 
 
 @pytest.fixture
