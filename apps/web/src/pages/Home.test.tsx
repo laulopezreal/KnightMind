@@ -246,4 +246,37 @@ describe('Home', () => {
       expect(screen.getByRole('button', { name: /Connect Chess\.com Account/i })).toBeInTheDocument();
     });
   });
+
+  describe('stale-response race', () => {
+    it('ignores a superseded load whose response arrives last', async () => {
+      // loadPageData runs on mount AND on every window focus, and the username
+      // can change in place via the global editor without remounting. Before the
+      // guard, the previous username's slower response could resolve last and
+      // repopulate the page under the new name.
+      const api = await import('../api');
+      const getUserStatus = vi.mocked(api.getUserStatus);
+
+      let resolveFirst!: (v: unknown) => void;
+      const first = new Promise((r) => { resolveFirst = r; });
+      getUserStatus.mockReset();
+      getUserStatus
+        .mockReturnValueOnce(first as never)
+        .mockResolvedValueOnce({ username: 'bob', games_count: 2, puzzles_count: 2 } as never);
+
+      mockUsername = 'alice';
+      const { rerender } = render(<Home />);
+      await waitFor(() => expect(getUserStatus).toHaveBeenCalledTimes(1));
+
+      mockUsername = 'bob';
+      rerender(<Home />);
+      await waitFor(() => expect(getUserStatus).toHaveBeenCalledTimes(2));
+
+      // alice's response lands after bob's
+      await act(async () => {
+        resolveFirst({ username: 'alice', games_count: 999, puzzles_count: 999 });
+      });
+
+      expect(screen.queryByText(/999/)).not.toBeInTheDocument();
+    });
+  });
 });
