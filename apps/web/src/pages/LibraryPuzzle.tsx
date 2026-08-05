@@ -4,8 +4,9 @@ import { Link, useParams } from 'react-router-dom';
 import { AccessibleChessboard } from '../components/AccessibleChessboard';
 import { Chess } from 'chess.js';
 import { useChessUsername } from '../context/ChessUsernameContext';
-import { getLibraryPuzzle, getPuzzleDiagnosis, reviewPuzzle, type LibraryPuzzle as LibraryPuzzleType, type PuzzleDiagnosis } from '../api/puzzles';
+import { getLibraryPuzzle, getPuzzleDiagnosis, getSimilarPuzzles, reviewPuzzle, type LibraryPuzzle as LibraryPuzzleType, type PuzzleDiagnosis, type SimilarPuzzlesResponse } from '../api/puzzles';
 import { MistakeDiagnosisCard } from '../components/MistakeDiagnosisCard';
+import { SimilarWeaknessCard } from '../components/SimilarWeaknessCard';
 import { ApiError } from '../api/core';
 import { DataStateError, DataStateOffline } from '../components/DataState';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
@@ -50,6 +51,9 @@ export default function LibraryPuzzle() {
     // the evidence names the solution move.
     const [diagnosis, setDiagnosis] = useState<PuzzleDiagnosis | null>(null);
     const [diagnosisLoading, setDiagnosisLoading] = useState(false);
+    // Siblings are post-mortem content for the same reason the diagnosis is:
+    // naming the shared motif before the attempt would hand over the tactic.
+    const [similar, setSimilar] = useState<SimilarPuzzlesResponse | null>(null);
 
     const online = useOnlineStatus();
     const request = useLatestRequest();
@@ -67,6 +71,7 @@ export default function LibraryPuzzle() {
             setPuzzle(found);
             setGame(new Chess(found.fen));
             setDiagnosis(null);
+            setSimilar(null);
             solveStartRef.current = Date.now();
         } catch (err) {
             if (token.isStale()) return;
@@ -108,6 +113,21 @@ export default function LibraryPuzzle() {
             stale = true;
         };
     }, [resolved, username, puzzleId, diagnosis]);
+
+    useEffect(() => {
+        if (!resolved || !username || !puzzleId || similar) return;
+        let stale = false;
+        getSimilarPuzzles(puzzleId, username)
+            .then((result) => {
+                if (!stale) setSimilar(result);
+            })
+            // Supplementary, like the diagnosis: a failure leaves the section
+            // unrendered rather than failing a solved puzzle.
+            .catch(() => undefined);
+        return () => {
+            stale = true;
+        };
+    }, [resolved, username, puzzleId, similar]);
 
     const handleRecordResult = async (result: 'pass' | 'fail') => {
         if (!puzzle || !username || isRecording) return;
@@ -461,6 +481,12 @@ export default function LibraryPuzzle() {
                         revealed={resolved}
                         loading={diagnosisLoading}
                     />
+
+                    {/* Sits below the diagnosis on purpose: it only means
+                        something once the user knows what went wrong here. */}
+                    {resolved && puzzle && (
+                        <SimilarWeaknessCard data={similar} currentPuzzleId={puzzle.id} />
+                    )}
                 </div>
             </section>
         </div>

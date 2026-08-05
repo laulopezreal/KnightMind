@@ -257,6 +257,44 @@ export async function getLibraryPuzzle(
     return await request<LibraryPuzzle>(`/puzzles/${encodeURIComponent(puzzleId)}?${params}`);
 }
 
+/** How closely a sibling puzzle matches, widest last. */
+export type SimilarMatch = 'exact' | 'cause_and_motif' | 'cause_only';
+
+export interface SimilarPuzzle {
+    id: string;
+    title?: string | null;
+    primary_motif?: string | null;
+    difficulty: PuzzleDifficulty;
+    swing: number;
+    fen: string;
+    side_to_move: string;
+    created_at?: string | null;
+    attempts: number;
+    fail_count: number;
+}
+
+export interface SimilarPuzzlesResponse {
+    cause?: string | null;
+    cause_label?: string | null;
+    match?: SimilarMatch | null;
+    reason?: string | null;
+    puzzles: SimilarPuzzle[];
+}
+
+export async function getSimilarPuzzles(
+    puzzleId: string,
+    username: string,
+    n = 5
+): Promise<SimilarPuzzlesResponse> {
+    // No reveal parameter by design: this surface never carries solutions, so
+    // there is nothing to opt into. Following a card lands on the detail page,
+    // which owns that decision.
+    const params = new URLSearchParams({ username, n: String(n) });
+    return await request<SimilarPuzzlesResponse>(
+        `/puzzles/${encodeURIComponent(puzzleId)}/similar?${params}`
+    );
+}
+
 export async function getLibraryPuzzles(
     params: LibraryListParams
 ): Promise<LibraryListResponse> {

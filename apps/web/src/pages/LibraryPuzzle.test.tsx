@@ -16,7 +16,7 @@ vi.mock('../context/ChessUsernameContext', () => ({
     useChessUsername: () => ({ username: mockUsername }),
 }));
 
-const { MockApiError, mockGetLibraryPuzzle, mockReviewPuzzle, mockGetPuzzleDiagnosis } = vi.hoisted(() => {
+const { MockApiError, mockGetLibraryPuzzle, mockReviewPuzzle, mockGetPuzzleDiagnosis, mockGetSimilarPuzzles } = vi.hoisted(() => {
     class MockApiError extends Error {
         statusCode: number;
         detail?: string;
@@ -32,6 +32,7 @@ const { MockApiError, mockGetLibraryPuzzle, mockReviewPuzzle, mockGetPuzzleDiagn
         mockGetLibraryPuzzle: vi.fn(),
         mockReviewPuzzle: vi.fn(),
         mockGetPuzzleDiagnosis: vi.fn(),
+        mockGetSimilarPuzzles: vi.fn(),
     };
 });
 
@@ -43,6 +44,7 @@ vi.mock('../api/puzzles', () => ({
     getLibraryPuzzle: (...args: unknown[]) => mockGetLibraryPuzzle(...args),
     reviewPuzzle: (...args: unknown[]) => mockReviewPuzzle(...args),
     getPuzzleDiagnosis: (...args: unknown[]) => mockGetPuzzleDiagnosis(...args),
+    getSimilarPuzzles: (...args: unknown[]) => mockGetSimilarPuzzles(...args),
 }));
 
 vi.mock('react-chessboard', () => ({
@@ -104,6 +106,9 @@ describe('LibraryPuzzle', () => {
         mockPuzzleId = 'puzzle-abc';
         mockGetLibraryPuzzle.mockResolvedValue(MOCK_PUZZLE);
         mockGetPuzzleDiagnosis.mockResolvedValue(MOCK_DIAGNOSIS);
+        // Default to no siblings: these tests are about the diagnosis surface,
+        // and an unstubbed promise would fail them for the wrong reason.
+        mockGetSimilarPuzzles.mockResolvedValue({ puzzles: [] });
         mockReviewPuzzle.mockResolvedValue({
             next_due_at: '2026-02-10T12:00:00Z',
             interval_days: 7,
@@ -389,6 +394,60 @@ describe('LibraryPuzzle', () => {
 
             await waitFor(() => expect(mockGetPuzzleDiagnosis).toHaveBeenCalled());
             expect(screen.queryByText(/boom/i)).not.toBeInTheDocument();
+            expect(screen.getByText('Deadly Fork')).toBeInTheDocument();
+        });
+    });
+
+    describe('similar weaknesses', () => {
+        it('is not requested while the puzzle is unsolved', async () => {
+            // Siblings name the shared motif, so asking for them mid-solve
+            // would hand over the tactic before the attempt.
+            render(<LibraryPuzzle />);
+            await waitFor(() => expect(screen.getByText('Deadly Fork')).toBeInTheDocument());
+
+            expect(screen.queryByRole('heading', { name: /more like this weakness/i })).not.toBeInTheDocument();
+            expect(mockGetSimilarPuzzles).not.toHaveBeenCalled();
+        });
+
+        it('appears once the solution has been revealed', async () => {
+            mockGetSimilarPuzzles.mockResolvedValue({
+                cause: 'calculation_stopped_early',
+                cause_label: 'calculation stopped early',
+                match: 'exact',
+                reason: 'Same mistake — calculation stopped early — on a Fork in the middlegame.',
+                puzzles: [
+                    {
+                        id: 'sibling-1',
+                        title: 'Another fork missed',
+                        primary_motif: 'Fork',
+                        difficulty: 'medium',
+                        swing: 3.1,
+                        fen: '8/8/8/8/8/8/8/8 w - - 0 1',
+                        side_to_move: 'white',
+                        created_at: null,
+                        attempts: 1,
+                        fail_count: 1,
+                    },
+                ],
+            });
+            render(<LibraryPuzzle />);
+            await waitFor(() => expect(screen.getByText('Deadly Fork')).toBeInTheDocument());
+            fireEvent.click(screen.getByRole('button', { name: /reveal/i }));
+
+            await waitFor(() =>
+                expect(screen.getByRole('heading', { name: /more like this weakness/i })).toBeInTheDocument()
+            );
+            expect(screen.getByText('Another fork missed')).toBeInTheDocument();
+        });
+
+        it('stays silent when the siblings fetch fails', async () => {
+            mockGetSimilarPuzzles.mockRejectedValue(new Error('kaboom'));
+            render(<LibraryPuzzle />);
+            await waitFor(() => expect(screen.getByText('Deadly Fork')).toBeInTheDocument());
+            fireEvent.click(screen.getByRole('button', { name: /reveal/i }));
+
+            await waitFor(() => expect(mockGetSimilarPuzzles).toHaveBeenCalled());
+            expect(screen.queryByText(/kaboom/i)).not.toBeInTheDocument();
             expect(screen.getByText('Deadly Fork')).toBeInTheDocument();
         });
     });
