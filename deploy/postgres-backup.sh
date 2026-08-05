@@ -75,7 +75,14 @@ mv "${TMP_DUMP_FILE}" "${DUMP_FILE}"
 # mechanism was the only one whose output could not be checked for bit rot or a
 # truncated copy. Written after the atomic move, so a .sha256 existing implies a
 # complete dump.
-sha256sum "${DUMP_FILE}" > "${DUMP_FILE}.sha256"
+#
+# Recorded as a BARE FILENAME, not the absolute path: sha256sum -c resolves the
+# name relative to the working directory, so a checksum holding an absolute path
+# breaks the moment the file is moved. That is not hypothetical -- two dumps
+# relocated on 2026-08-06 carried their old directory and failed `sha256sum -c`
+# while being perfectly intact. A bare name verifies from inside the backup
+# directory wherever that directory happens to live.
+( cd "${BACKUP_DIR}" && sha256sum "$(basename "${DUMP_FILE}")" > "$(basename "${DUMP_FILE}").sha256" )
 
 # Read it straight back. gzip -t catches a truncated or corrupt stream that
 # pg_dump exited 0 on, which is the failure this file exists to detect --
@@ -89,28 +96,80 @@ fi
 FILESIZE=$(du -h "${DUMP_FILE}" | cut -f1)
 echo "[$(date -Iseconds)] Backup complete: ${DUMP_FILE} (${FILESIZE}), gzip verified"
 
-# Prune old backups
-DELETED=$(find "${BACKUP_DIR}" -name "${POSTGRES_DB}_*.sql.gz" -mtime +"${RETENTION_DAYS}" -delete -print | wc -l)
+# --- Retention -------------------------------------------------------------
+#
+# Two rules, because "delete anything older than N days" was both too narrow and
+# too broad.
+#
+# Too narrow: it matched only ${POSTGRES_DB}_*.sql.gz, so the 14 hand-taken
+# `knightmind-db-<ISO>.dump` files were never eligible and sat there forever.
+# Stating a 14-day retention that silently applies to 4 of 18 files is worse
+# than stating none, because it reads as a guarantee that old copies are gone.
+#
+# Too broad: applied to everything it would delete the LABELLED dumps -- the
+# `-pre-merge-`, `-pre-alembic-stamp-`, `-pre-pr217-merge-` ones taken
+# deliberately before a risky change. Those are the copies you want years later;
+# age is exactly the wrong criterion for them. They are kept indefinitely and
+# pruned by hand.
+#
+# So: routine dumps are the two auto-generated shapes, and only they age out.
+# MIN_KEEP is a floor beneath the age rule, because backups here are manual and
+# irregular -- without it a quiet fortnight would age out every routine copy and
+# leave only whichever dump this run just wrote.
+MIN_KEEP="${MIN_KEEP:-3}"
+
+is_routine() {
+    # knightmind_20260806_000531.sql.gz  (this script)
+    # knightmind-db-20260805T144157+0200.dump  (legacy hand-taken -Fc)
+    # A label after the prefix (`knightmind-db-pre-...`) fails both patterns and
+    # is therefore never pruned.
+    case "${1##*/}" in
+        "${POSTGRES_DB}"_[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]_[0-9][0-9][0-9][0-9][0-9][0-9].sql.gz) return 0 ;;
+        "${POSTGRES_DB}"-db-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9]*.dump) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# Newest first, so the MIN_KEEP floor keeps the most recent rather than whatever
+# the directory order happened to be.
+DELETED=0
+INDEX=0
+while IFS= read -r dump; do
+    [ -n "${dump}" ] || continue
+    is_routine "${dump}" || continue
+    INDEX=$((INDEX + 1))
+    [ "${INDEX}" -le "${MIN_KEEP}" ] && continue
+    # -mtime +N is "strictly older than N days", matching the documented rule.
+    if [ -n "$(find "${dump}" -maxdepth 0 -mtime +"${RETENTION_DAYS}" -print 2>/dev/null)" ]; then
+        rm -f "${dump}"
+        DELETED=$((DELETED + 1))
+    fi
+done <<EOF
+$(find "${BACKUP_DIR}" -maxdepth 1 -type f \( -name '*.dump' -o -name '*.sql.gz' \) -printf '%T@ %p\n' 2>/dev/null | sort -rn | cut -d' ' -f2-)
+EOF
+
 if [ "${DELETED}" -gt 0 ]; then
-    echo "[$(date -Iseconds)] Pruned ${DELETED} backup(s) older than ${RETENTION_DAYS} days."
+    echo "[$(date -Iseconds)] Pruned ${DELETED} routine backup(s) older than ${RETENTION_DAYS} days (keeping the newest ${MIN_KEEP})."
 fi
 
-# Then drop any .sha256 whose dump is gone. Deliberately keyed to the dump's
-# absence rather than to the checksum's own age: the prune above matches only
-# *.sql.gz, so without this every retention cycle would leave its checksums
-# behind and the directory would fill with references to files that no longer
-# exist. Self-healing, so it also clears orphans left by a manual delete.
+# Then drop any .sha256 whose dump is gone, plus the legacy .meta.txt sidecars.
+# Keyed to the dump's absence rather than to the sidecar's own age, so it also
+# clears orphans left by a manual delete and cannot itself leave litter.
 ORPHANS=0
-for checksum in "${BACKUP_DIR}"/${POSTGRES_DB}_*.sql.gz.sha256; do
+for sidecar in "${BACKUP_DIR}"/*.sha256 "${BACKUP_DIR}"/*.meta.txt; do
     # The glob matching nothing yields the literal pattern; -e rejects it.
-    [ -e "${checksum}" ] || continue
-    if [ ! -e "${checksum%.sha256}" ]; then
-        rm -f "${checksum}"
+    [ -e "${sidecar}" ] || continue
+    case "${sidecar}" in
+        *.sha256)   dump="${sidecar%.sha256}" ;;
+        *.meta.txt) dump="${sidecar%.meta.txt}.dump" ;;
+    esac
+    if [ ! -e "${dump}" ]; then
+        rm -f "${sidecar}"
         ORPHANS=$((ORPHANS + 1))
     fi
 done
 if [ "${ORPHANS}" -gt 0 ]; then
-    echo "[$(date -Iseconds)] Removed ${ORPHANS} orphaned checksum(s)."
+    echo "[$(date -Iseconds)] Removed ${ORPHANS} orphaned sidecar file(s)."
 fi
 
 echo "[$(date -Iseconds)] Done."

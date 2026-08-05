@@ -1,5 +1,5 @@
 ---
-last_edited_at: 2026-08-01T19:32:26+02:00
+last_edited_at: 2026-08-06T00:33:40+02:00
 ---
 # KnightMind Operations
 
@@ -196,13 +196,13 @@ Counting `COPY` blocks in the gzipped dump is not a substitute; it over-counts a
 
 Most recent restoration safety backup:
 
-- `/home/lauureal/backups/knightmind/knightmind-db-20260710T113350+0200.dump`
+- `/home/lauureal/backups/knightmind/knightmind-pre-restoration-20260710T113350+0200.dump`
 - SHA256: `80797430297a808f54f97ba364f818f65c676350f4a5470c86772fb4e26660d6`
 
 Most recent hardening safety backup before the 2026-07-20 DB/API recreation:
 
-- `/home/lauureal/backups/knightmind/knightmind-db-20260720T145709+0200.dump`
-- SHA256 recorded in `/home/lauureal/backups/knightmind/knightmind-db-20260720T145709+0200.dump.sha256` and verified with `sha256sum -c` before Compose changes.
+- `/home/lauureal/backups/knightmind/knightmind-pre-hardening-20260720T145709+0200.dump`
+- SHA256 recorded in `/home/lauureal/backups/knightmind/knightmind-pre-hardening-20260720T145709+0200.dump.sha256` and verified with `sha256sum -c` before Compose changes.
 
 ## Security hardening status
 
