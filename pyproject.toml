@@ -61,6 +61,43 @@ markers = [
     "postgres: requires a disposable Postgres instance",
 ]
 
+[tool.mypy]
+python_version = "3.13"
+# Third-party stubs are inconsistent across this dependency set (chess, stockfish,
+# anthropic); missing ones would drown the signal we actually want.
+ignore_missing_imports = true
+# Migrations are immutable history. Their alembic op signatures drift between
+# versions and re-typing an applied migration is never worth it.
+exclude = ["services/api/alembic/versions/"]
+
+# Modules carrying pre-existing type debt, checked when this was turned on.
+# This is a to-fix list, not an exemption list: 138 of 151 files pass today, and
+# every one of them is protected from regression from the first CI run.
+#
+# The debt is concentrated and mostly not bugs. ratings.py alone accounts for 75
+# of the 122 errors, all from one heterogeneous `game_details` dict that should
+# be a dataclass -- correct at runtime, weak as a type. puzzles/generator.py has
+# the most interesting entries: `str | None` reaching parameters typed `str`,
+# which is safe today only because an upstream invariant (the position before a
+# played move is never terminal, so the engine always returns a best move) is
+# implicit and unchecked.
+[[tool.mypy.overrides]]
+module = [
+    "services.api.ai.client",
+    "services.api.analysis.scheduler_eval",
+    "services.api.benchmarks.fixtures",
+    "services.api.benchmarks.runner",
+    "services.api.dashboard",
+    "services.api.diagnosis.job",
+    "services.api.main",
+    "services.api.openings.tree_builder",
+    "services.api.ops",
+    "services.api.puzzles.generator",
+    "services.api.puzzles_routes",
+    "services.api.ratings",
+]
+ignore_errors = true
+
 [tool.ruff]
 # Exclude a variety of commonly ignored directories.
 exclude = [

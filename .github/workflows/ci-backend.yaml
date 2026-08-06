@@ -82,6 +82,14 @@ jobs:
         uv run ruff check .
         uv run black --check .
 
+    # 138 of 151 modules type-check today; this keeps them that way. The dozen
+    # with pre-existing debt are listed in pyproject with the reason, and that
+    # list is meant to shrink. Verified non-vacuous when added: an injected
+    # return-type error in a checked module fails this step, and the same error
+    # in a listed module does not.
+    - name: Type check
+      run: uv run mypy services/api
+
     - name: Run Tests
       working-directory: ./services/api
       run: uv run pytest
