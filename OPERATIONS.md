@@ -162,7 +162,11 @@ Backups live in **`/home/lauureal/backups/knightmind/`** and nowhere else. Take 
 cd /home/lauureal/apps/knightmind && ./deploy/postgres-backup.sh
 ```
 
-That is the only sanctioned mechanism. It writes `knightmind_<YYYYMMDD>_<HHMMSS>.sql.gz` plus a matching `.sha256`, verifies the gzip stream before reporting success, and applies the retention policy below.
+That is the only sanctioned mechanism. It writes `knightmind_<YYYYMMDD>_<HHMMSS>.sql.gz`, reads it back with `gzip -t`, and only then writes the matching `.sha256`, so a `.sha256` existing means the dump was readable when written. It then applies the retention policy below.
+
+**A dump that fails `gzip -t` is renamed to `<name>.sql.gz.corrupt` and no checksum is written for it.** `.corrupt` matches no retention glob, so it stays for inspection and is never counted as a backup — delete it by hand once you know why it happened. The script exits non-zero; if you see that, you have no fresh backup, whatever the directory looks like.
+
+`deploy/test-postgres-backup.sh` covers classification, both age rules, the citation guard, the orphan sweep, and the corrupt-dump path against temporary fixture directories. It touches no database and no real backup. Run it before changing the backup script; nothing runs it automatically, because `deploy/**` is in no workflow path filter.
 
 ### Retention
 
@@ -179,10 +183,16 @@ The floors matter because backups here are manual: without them a quiet fortnigh
 
 **Labelled does not mean immortal.** Until 2026-08-06 they were exempt entirely, and the directory accumulated four dumps of a single schema revision, each kept forever because it had a nice name. A dump's restore value decays as the schema moves past it: recovering to a revision several migrations back means replaying all of them onto data that old. When several labelled dumps share a revision, prune by hand — the script cannot tell which label matters.
 
-**Before deleting a dump by hand, grep for it in BOTH doc trees**, because a dump cited somewhere is a dump someone expects to find:
+**A dump cited in a document is never deleted automatically, whatever its age.** Before removing anything, the script greps the doc trees in `CITATION_PATHS` (default: the repo it lives in, plus `~/projects/knightmind`) for the dump's filename, and skips it if there is a hit, logging `Keeping <name>: past its N-day horizon but cited in a project document.`
+
+The floors do not cover this on their own. This document names three labelled dumps while `MILESTONE_MIN_KEEP` keeps two, so without the guard the oldest cited one is deleted the day it turns 90 — with its filename and SHA256 still printed a few sections down. That is the same dangling-citation failure as below, arriving on a timer instead of by hand.
+
+The consequence to accept: **a cited dump is kept until its citation is removed.** To let one go, edit the citing document first. Every retained citation is logged so the directory cannot quietly grow without anyone noticing.
+
+**The same rule binds you when deleting by hand**, because the script only guards its own deletions:
 
 ```bash
-grep -rl "<dump-filename>" ~/git/knightmind/ ~/projects/knightmind/
+grep -rl "<dump-filename>" ~/git/knightmind/ ~/apps/knightmind/ ~/projects/knightmind/
 ```
 
 The repo alone is not enough. On 2026-08-06 a pruned dump turned out to be cited in `~/projects/knightmind/handoffs/` as a session's verified-restorable backup, and the reference was left dangling. If a citation exists and the dump is going anyway, annotate the citing document with a substitute — and verify the substitute restores before naming it, rather than assuming a neighbouring dump is equivalent.
