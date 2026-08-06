@@ -40,9 +40,12 @@ kill-backends = "scripts.kill_backends:main"
 dev = [
     "black~=26.5",
     "flake8",
-    # Pinned like black and ruff: mypy's checks tighten across releases, so an
-    # unpinned upgrade can change the baseline with no diff here to review.
-    "mypy~=1.19",
+    # Three components on purpose, like ruff~=0.15.20: `~=1.19` would still
+    # admit 1.20 and 1.30. mypy does not use SemVer -- new checks land in minor
+    # releases by upstream policy (1.20's better narrowing can even mark code
+    # unreachable and stop checking it), so a minor bump can move this baseline
+    # with only a one-line lock diff to review. Patch-only.
+    "mypy~=1.19.1",
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
     "ruff~=0.15.20",
@@ -75,19 +78,26 @@ exclude = ["services/api/alembic/versions/"]
 # Modules carrying pre-existing type debt, checked when this was turned on.
 # This is a to-fix list, not an exemption list.
 #
-# What the gate actually covers, measured rather than estimated: mypy reads 119
-# files (the 32 migrations under alembic/versions are excluded above and never
-# opened). The 12 listed below are silenced *entirely* -- `ignore_errors` is a
+# What the gate actually covers, measured rather than estimated. mypy prints
+# "checked 119 source files": that is the services/api crawl, with the 32
+# migrations under alembic/versions excluded above and genuinely never parsed
+# (a syntax error in one does not fail the run). But it ALSO follows imports
+# and enforces 7 repo files that count never mentions -- root conftest.py,
+# three under scripts/, and services/ingest/chesscom.py. 126 repo files are
+# read in total.
+#
+# The 12 listed below are silenced *entirely* -- `ignore_errors` is a
 # per-module blackout, not a per-error suppression, so a new bug written into
-# one of these is as invisible as the old ones. 107 files are enforced.
+# one of these is as invisible as the old ones. 114 files are enforced.
 #
 # Two limits worth stating, because "no issues found in 119 source files" reads
 # stronger than it is:
 #   - `check_untyped_defs` is off (mypy's default), so the body of any function
 #     with no annotations at all is skipped wholesale. Production code is 92%
 #     annotated, so little is lost there; test files are 2.5%, so most test
-#     bodies are not checked. Turning it on costs ~7 production errors and ~185
-#     in tests -- worth doing, as its own change.
+#     bodies are not checked. Flipping it today costs 1 production error and
+#     185 in tests; 127 production errors once this debt list comes off. Worth
+#     doing, as its own change.
 #   - `ignore_missing_imports` above also hides typo'd or undeclared imports.
 #
 # The debt is concentrated. ratings.py alone accounts for 75 of the 120 errors:
@@ -98,8 +108,9 @@ exclude = ["services/api/alembic/versions/"]
 #
 # puzzles/generator.py is the entry that is NOT cosmetic. Its `str | None`
 # reaching a `str` parameter is a live crash path: chess.Board.is_game_over()
-# is true for insufficient material and the 75-move rule while legal moves
-# remain, so the position before a played move CAN be terminal and
+# is true for insufficient material, the 75-move rule AND fivefold repetition
+# while legal moves remain -- fivefold being the likeliest of the three in
+# imported games -- so the position before a played move CAN be terminal and
 # best_move_uci CAN be None. What prevents it today is a swing==0 filter and
 # Chess.com auto-drawing those games -- neither a guarantee this repo owns.
 # That one is to-fix-now, not to-fix-eventually.

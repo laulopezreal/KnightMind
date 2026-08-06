@@ -16,6 +16,9 @@ on:
       - 'pyproject.toml'
       - 'uv.lock'
       - 'Dockerfile'
+      # .dockerignore decides what lands in the image as much as the Dockerfile
+      # does, and this workflow builds and boots that image.
+      - '.dockerignore'
       - '.github/workflows/ci-backend.yaml'
   pull_request:
     branches: [ main, dev ]
@@ -28,6 +31,9 @@ on:
       - 'pyproject.toml'
       - 'uv.lock'
       - 'Dockerfile'
+      # .dockerignore decides what lands in the image as much as the Dockerfile
+      # does, and this workflow builds and boots that image.
+      - '.dockerignore'
       - '.github/workflows/ci-backend.yaml'
 
 jobs:
@@ -84,13 +90,18 @@ jobs:
         uv run ruff check .
         uv run black --check .
 
-    # mypy reads 119 files here (32 migrations are excluded); 107 are enforced
-    # and 12 carry listed debt. See the comment in pyproject.toml for what that
-    # does and does not cover -- notably that unannotated function bodies are
-    # skipped, which is most test bodies. Verified non-vacuous when added: an
-    # injected return-type error in a checked module fails this step, the same
-    # error in a listed module does not, and -- the case worth knowing -- the
-    # same error inside an *unannotated* body does not either.
+    # mypy prints "checked 119 source files" (the services/api crawl, with 32
+    # migrations excluded); it also follows imports and enforces 7 more repo
+    # files, so 126 are read and 114 enforced, 12 carrying listed debt. See
+    # pyproject.toml for what this does and does not cover -- notably that
+    # unannotated function bodies are skipped, which is most test bodies.
+    #
+    # Verified non-vacuous when added: an injected return-type error in a
+    # checked module fails this step, and the same error in a listed module
+    # does not. A return-type error cannot demonstrate the third case at all --
+    # declaring a return type IS an annotation, so such a function is always
+    # checked. That one needs a different probe: `def f(): return 1 + "x"` in a
+    # checked module passes silently.
     - name: Type check
       run: uv run mypy services/api
 
