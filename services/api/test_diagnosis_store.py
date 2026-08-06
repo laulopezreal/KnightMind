@@ -754,14 +754,14 @@ class TestNoScoreEscapesToTheClient:
     FORBIDDEN = {"confidence", "primary_strength", "score", "strength", "certainty"}
 
     def test_no_scoring_field_is_declared(self):
-        from services.api.main import DiagnosisResponse
+        from services.api.puzzles_routes import DiagnosisResponse
 
         assert not self.FORBIDDEN & set(DiagnosisResponse.model_fields)
 
     def test_no_numeric_field_is_declared_at_all(self):
         """A float on this model has no honest meaning today, so the absence of
         one is the invariant worth pinning rather than a denylist of names."""
-        from services.api.main import DiagnosisResponse
+        from services.api.puzzles_routes import DiagnosisResponse
 
         for name, field in DiagnosisResponse.model_fields.items():
             annotation = str(field.annotation)
