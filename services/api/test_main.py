@@ -1633,7 +1633,7 @@ def test_check_pv_accepts_equivalent_first_move(client_with_db, db_session):
 # --- Engine tests ---
 
 
-@patch("services.api.main.is_engine_available")
+@patch("services.api.engine_routes.is_engine_available")
 def test_engine_status_available(mock_available):
     mock_available.return_value = (True, "Stockfish is ready")
     response = client.get("/engine/status")
@@ -1641,7 +1641,7 @@ def test_engine_status_available(mock_available):
     assert response.json() == {"available": True, "message": "Stockfish is ready"}
 
 
-@patch("services.api.main.get_or_compute_eval")
+@patch("services.api.engine_routes.get_or_compute_eval")
 def test_engine_eval_invalid_fen(mock_eval):
     from services.api.engine import InvalidFenError
 
@@ -1651,7 +1651,7 @@ def test_engine_eval_invalid_fen(mock_eval):
     assert "Invalid FEN" in response.json()["detail"]
 
 
-@patch("services.api.main.get_or_compute_eval")
+@patch("services.api.engine_routes.get_or_compute_eval")
 def test_engine_eval_unavailable(mock_eval):
     from services.api.engine import EngineNotAvailableError
 
@@ -1661,7 +1661,7 @@ def test_engine_eval_unavailable(mock_eval):
     assert "Engine not available" in response.json()["detail"]
 
 
-@patch("services.api.main._ENGINE_EVAL_MAX_INFLIGHT", 0)
+@patch("services.api.engine_routes._ENGINE_EVAL_MAX_INFLIGHT", 0)
 def test_engine_eval_rejects_when_at_capacity():
     """The unauthenticated /engine/eval guard returns 429 when saturated."""
     response = client.post("/engine/eval", json={"fen": "any"})
@@ -1669,7 +1669,7 @@ def test_engine_eval_rejects_when_at_capacity():
     assert "capacity" in response.json()["detail"].lower()
 
 
-@patch("services.api.main.get_or_compute_eval")
+@patch("services.api.engine_routes.get_or_compute_eval")
 def test_engine_eval_terminal_position_is_not_500(mock_eval):
     """A terminal FEN yields an EvalResult with best_move_uci=None. The
     response model must accept that (200 terminal shape) rather than raising a
