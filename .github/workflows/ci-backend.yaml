@@ -8,8 +8,9 @@ on:
   push:
     branches: [ main, dev ]
     paths:
-      - 'services/api/**'
-      - 'services/ingest/**'
+      # services/** not services/api/** + services/ingest/**: services/__init__.py
+      # matched neither, and mypy follows imports outside services/api anyway.
+      - 'services/**'
       - 'scripts/**'
       - 'conftest.py'
       - 'pyproject.toml'
@@ -19,8 +20,9 @@ on:
   pull_request:
     branches: [ main, dev ]
     paths:
-      - 'services/api/**'
-      - 'services/ingest/**'
+      # services/** not services/api/** + services/ingest/**: services/__init__.py
+      # matched neither, and mypy follows imports outside services/api anyway.
+      - 'services/**'
       - 'scripts/**'
       - 'conftest.py'
       - 'pyproject.toml'
@@ -82,11 +84,13 @@ jobs:
         uv run ruff check .
         uv run black --check .
 
-    # 138 of 151 modules type-check today; this keeps them that way. The dozen
-    # with pre-existing debt are listed in pyproject with the reason, and that
-    # list is meant to shrink. Verified non-vacuous when added: an injected
-    # return-type error in a checked module fails this step, and the same error
-    # in a listed module does not.
+    # mypy reads 119 files here (32 migrations are excluded); 107 are enforced
+    # and 12 carry listed debt. See the comment in pyproject.toml for what that
+    # does and does not cover -- notably that unannotated function bodies are
+    # skipped, which is most test bodies. Verified non-vacuous when added: an
+    # injected return-type error in a checked module fails this step, the same
+    # error in a listed module does not, and -- the case worth knowing -- the
+    # same error inside an *unannotated* body does not either.
     - name: Type check
       run: uv run mypy services/api
 

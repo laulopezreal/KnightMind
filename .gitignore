@@ -27,6 +27,11 @@ build/
 .coverage
 htmlcov/
 
+# Tooling caches. mypy writes its own .mypy_cache/.gitignore, but that file is
+# tool-generated -- declare the intent here rather than relying on it.
+.mypy_cache/
+.ruff_cache/
+
 # OS
 .DS_Store
 Thumbs.db
