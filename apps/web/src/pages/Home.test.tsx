@@ -246,4 +246,125 @@ describe('Home', () => {
       expect(screen.getByRole('button', { name: /Connect Chess\.com Account/i })).toBeInTheDocument();
     });
   });
+
+  describe('stale-response race', () => {
+    it('discards the in-flight response when the account is disconnected', async () => {
+      // The username clearing bails out of loadPageData before it begins a new
+      // request, so isStale() stays false unless the early return invalidates
+      // explicitly. Without that, a user disconnecting mid-load gets the old
+      // account's numbers rendered under a page that no longer has an account.
+      const api = await import('../api');
+      const getUserStatus = vi.mocked(api.getUserStatus);
+      let resolveFirst!: (v: unknown) => void;
+      getUserStatus.mockReset();
+      getUserStatus.mockReturnValueOnce(
+        new Promise((r) => {
+          resolveFirst = r;
+        }) as never,
+      );
+
+      mockUsername = 'alice';
+      const { rerender } = render(<Home />);
+      await waitFor(() => expect(getUserStatus).toHaveBeenCalledTimes(1));
+
+      mockUsername = '';
+      rerender(<Home />);
+      await act(async () => {
+        resolveFirst({ username: 'alice', games_count: 777, puzzles_count: 777 });
+      });
+
+      expect(screen.queryAllByText(/777/)).toHaveLength(0);
+    });
+
+
+    it('ignores a superseded load whose response arrives last', async () => {
+      // loadPageData runs on mount AND on every window focus, and the username
+      // can change in place via the global editor without remounting. Before the
+      // guard, the previous username's slower response could resolve last and
+      // repopulate the page under the new name.
+      const api = await import('../api');
+      const getUserStatus = vi.mocked(api.getUserStatus);
+
+      let resolveFirst!: (v: unknown) => void;
+      const first = new Promise((r) => { resolveFirst = r; });
+      getUserStatus.mockReset();
+      getUserStatus
+        .mockReturnValueOnce(first as never)
+        .mockResolvedValueOnce({ username: 'bob', games_count: 2, puzzles_count: 2 } as never);
+
+      mockUsername = 'alice';
+      const { rerender } = render(<Home />);
+      await waitFor(() => expect(getUserStatus).toHaveBeenCalledTimes(1));
+
+      mockUsername = 'bob';
+      rerender(<Home />);
+      await waitFor(() => expect(getUserStatus).toHaveBeenCalledTimes(2));
+
+      // alice's response lands after bob's
+      await act(async () => {
+        resolveFirst({ username: 'alice', games_count: 999, puzzles_count: 999 });
+      });
+
+      // queryAllByText, not queryByText: the stale payload renders 999 in two
+      // places (games and puzzles counts), and queryByText THROWS on multiple
+      // matches rather than failing the assertion. Same outcome, but the message
+      // says "expected 2 to be 0" instead of a DOM dump.
+      expect(screen.queryAllByText(/999/)).toHaveLength(0);
+    });
+
+    it('leaves the spinner up when a superseded load finishes first', async () => {
+      // The guard on the `finally` block, which the other tests do not reach:
+      // they assert the stale DATA is dropped, and dropping it via the early
+      // `return` still runs `finally`. A superseded request clearing
+      // `pageLoading` would show the page as loaded while the newer fetch is
+      // genuinely still in flight -- an empty page presented as a finished one.
+      const api = await import('../api');
+      const getUserStatus = vi.mocked(api.getUserStatus);
+
+      let resolveFirst!: (v: unknown) => void;
+      const first = new Promise((r) => { resolveFirst = r; });
+      getUserStatus.mockReset();
+      getUserStatus
+        .mockReturnValueOnce(first as never)
+        // bob's load never settles, so the spinner is still correct at the end.
+        .mockReturnValueOnce(new Promise(() => {}) as never);
+
+      mockUsername = 'alice';
+      const { rerender } = render(<Home />);
+      await waitFor(() => expect(getUserStatus).toHaveBeenCalledTimes(1));
+
+      mockUsername = 'bob';
+      rerender(<Home />);
+      await waitFor(() => expect(getUserStatus).toHaveBeenCalledTimes(2));
+
+      await act(async () => {
+        resolveFirst({ username: 'alice', games_count: 1, puzzles_count: 1 });
+      });
+
+      // The loading state is the skeleton at the top of the render, not the
+      // mocked LoadingSpinner -- assert on its live-region label.
+      expect(screen.getByText(/Loading your chess data/i)).toBeInTheDocument();
+    });
+
+    it('still reports an error when the API throws synchronously', async () => {
+      // Pins the reachable half of the `catch` guard, and documents why the
+      // other half cannot be tested: `Promise.allSettled` never rejects, so the
+      // only way into `catch` is a synchronous throw while building its
+      // argument array -- which happens in the same tick as `request.begin()`,
+      // before any newer request can start. `token.isStale()` is therefore
+      // always false there. The guard is belt-and-braces; what matters is that
+      // it never swallows a real failure.
+      const api = await import('../api');
+      vi.mocked(api.getUserStatus).mockImplementation(() => {
+        throw new Error('network stack blew up before returning a promise');
+      });
+
+      mockUsername = 'alice';
+      render(<Home />);
+
+      expect(
+        await screen.findByText(/couldn't load your data right now/i),
+      ).toBeInTheDocument();
+    });
+  });
 });
