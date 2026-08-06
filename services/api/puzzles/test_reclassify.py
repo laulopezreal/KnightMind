@@ -25,6 +25,14 @@ BACK_RANK_BEST = "e1e8"  # Re8# -> "back_rank"
 QUIET_FEN = "8/8/8/8/8/5k2/8/6K1 w - - 0 1"
 QUIET_BEST = "g1f1"
 
+# What the current namer produces for each of the fixtures above. Titles are
+# composed from the position now, not looked up from the motif, so they are
+# spelled out here rather than derived — a template change should fail a test,
+# not silently agree with itself.
+FORK_TITLE = "The f7 Knight Fork"
+BACK_RANK_TITLE = "Back Rank on e8"
+QUIET_TITLE = "The King to f1"
+
 
 def _ensure_game(db, game_id, username):
     """The games row a puzzle's composite FK points at."""
@@ -119,8 +127,8 @@ def test_reclassify_updates_stale_rows(db_session):
 
     assert summary["total"] == 2
     assert summary["reclassified"] == 2
-    assert _motif_of(db_session, "p_fork") == ("fork", "The Fork")
-    assert _motif_of(db_session, "p_backrank") == ("back_rank", "Back Rank Panic")
+    assert _motif_of(db_session, "p_fork") == ("fork", FORK_TITLE)
+    assert _motif_of(db_session, "p_backrank") == ("back_rank", BACK_RANK_TITLE)
     # before was all fallback, after is the two real motifs
     assert summary["before"]["blunder"] == 2
     assert summary["after"]["fork"] == 1
@@ -169,7 +177,7 @@ def test_reclassify_creates_missing_stats_row(db_session):
     stats = db_session.get(PuzzleStats, "p_missing_stats")
     assert stats is not None
     assert stats.username == "lauureal"
-    assert (stats.primary_motif, stats.title) == ("fork", "The Fork")
+    assert (stats.primary_motif, stats.title) == ("fork", FORK_TITLE)
 
 
 def test_dry_run_reports_missing_stats_create_without_writing(db_session):
@@ -211,7 +219,7 @@ def test_reclassify_is_idempotent(db_session):
 
     second = reclassify_motifs(db_session)
     assert second["reclassified"] == 0
-    assert _motif_of(db_session, "p_fork") == ("fork", "The Fork")
+    assert _motif_of(db_session, "p_fork") == ("fork", FORK_TITLE)
 
 
 def test_reclassify_is_idempotent_after_creating_missing_stats(db_session):
@@ -235,7 +243,7 @@ def test_reclassify_is_idempotent_after_creating_missing_stats(db_session):
     assert second["changed_existing"] == 0
     assert second["affected"] == 0
     assert second["reclassified"] == 0
-    assert _motif_of(db_session, "p_missing_stats") == ("fork", "The Fork")
+    assert _motif_of(db_session, "p_missing_stats") == ("fork", FORK_TITLE)
 
 
 def test_existing_unclassified_stats_row_is_updated_not_created(db_session):
@@ -258,11 +266,16 @@ def test_existing_unclassified_stats_row_is_updated_not_created(db_session):
     assert summary["affected"] == 1
     assert summary["reclassified"] == 1
     assert summary["before"]["<unclassified>"] == 1
-    assert _motif_of(db_session, "p_unclassified") == ("fork", "The Fork")
+    assert _motif_of(db_session, "p_unclassified") == ("fork", FORK_TITLE)
 
 
 def test_already_correct_row_is_untouched(db_session):
-    """A quiet puzzle already labelled 'blunder' stays 'blunder' (no churn)."""
+    """A row already carrying the current motif AND title sees no churn.
+
+    Seeded with the position-derived title rather than the legacy motif one:
+    the point of this test is "nothing differs, so nothing is written", and a
+    legacy title now genuinely does differ.
+    """
     _seed_puzzle(
         db_session,
         puzzle_id="p_quiet",
@@ -270,13 +283,65 @@ def test_already_correct_row_is_untouched(db_session):
         fen=QUIET_FEN,
         best_move=QUIET_BEST,
         motif="blunder",
-        title="The Missed Win",
+        title=QUIET_TITLE,
     )
 
     summary = reclassify_motifs(db_session)
 
     assert summary["reclassified"] == 0
-    assert _motif_of(db_session, "p_quiet") == ("blunder", "The Missed Win")
+    assert _motif_of(db_session, "p_quiet") == ("blunder", QUIET_TITLE)
+
+
+def test_ai_and_user_titles_survive_a_reclassify(db_session):
+    """Reclassify may fix the motif; it may not undo a naming pass.
+
+    Without the title_source guard this script would silently revert an entire
+    AI naming run — and a name the user typed — back to a computed title, and
+    nothing would report that it had happened.
+    """
+    for puzzle_id, source, title in (
+        ("p_ai", "ai", "Knight Takes the Scenic Route"),
+        ("p_user", "user", "My Nemesis"),
+    ):
+        _seed_puzzle(
+            db_session,
+            puzzle_id=puzzle_id,
+            username="lauureal",
+            fen=FORK_FEN,
+            best_move=FORK_BEST,
+            motif="blunder",
+            title=title,
+        )
+        db_session.get(PuzzleStats, puzzle_id).title_source = source
+    db_session.commit()
+
+    reclassify_motifs(db_session)
+
+    # The stale motif is corrected on both...
+    assert db_session.get(PuzzleStats, "p_ai").primary_motif == "fork"
+    assert db_session.get(PuzzleStats, "p_user").primary_motif == "fork"
+    # ...but neither name is touched.
+    assert db_session.get(PuzzleStats, "p_ai").title == "Knight Takes the Scenic Route"
+    assert db_session.get(PuzzleStats, "p_user").title == "My Nemesis"
+
+
+def test_a_position_sourced_title_is_still_rewritten(db_session):
+    """The guard must not freeze everything: computed titles still update."""
+    _seed_puzzle(
+        db_session,
+        puzzle_id="p_pos",
+        username="lauureal",
+        fen=FORK_FEN,
+        best_move=FORK_BEST,
+        motif="blunder",
+        title="The Missed Win",
+    )
+    db_session.get(PuzzleStats, "p_pos").title_source = "position"
+    db_session.commit()
+
+    reclassify_motifs(db_session)
+
+    assert _motif_of(db_session, "p_pos") == ("fork", FORK_TITLE)
 
 
 def test_existing_spaced_repetition_state_is_preserved(db_session):
@@ -308,7 +373,7 @@ def test_existing_spaced_repetition_state_is_preserved(db_session):
     assert summary["created"] == 0
     assert summary["changed_existing"] == 1
     stats = db_session.get(PuzzleStats, "p_fork")
-    assert (stats.primary_motif, stats.title) == ("fork", "The Fork")
+    assert (stats.primary_motif, stats.title) == ("fork", FORK_TITLE)
     assert stats.attempts == 7
     assert stats.pass_count == 5
     assert stats.fail_count == 2
@@ -342,7 +407,7 @@ def test_username_filter_is_canonicalized(db_session):
 
     assert summary["total"] == 1
     assert summary["reclassified"] == 1
-    assert _motif_of(db_session, "p_fork") == ("fork", "The Fork")
+    assert _motif_of(db_session, "p_fork") == ("fork", FORK_TITLE)
 
 
 def test_username_filter_scopes_updates(db_session):
@@ -370,7 +435,7 @@ def test_username_filter_scopes_updates(db_session):
 
     assert summary["total"] == 1
     assert summary["reclassified"] == 1
-    assert _motif_of(db_session, "p_fork_a") == ("fork", "The Fork")
+    assert _motif_of(db_session, "p_fork_a") == ("fork", FORK_TITLE)
     # The other user's row is left alone.
     assert _motif_of(db_session, "p_fork_b") == ("blunder", "The Missed Win")
 
@@ -399,5 +464,5 @@ def test_username_filter_scopes_missing_stats_creation(db_session):
     assert summary["total"] == 1
     assert summary["created"] == 1
     assert summary["affected"] == 1
-    assert _motif_of(db_session, "p_fork_a") == ("fork", "The Fork")
+    assert _motif_of(db_session, "p_fork_a") == ("fork", FORK_TITLE)
     assert db_session.get(PuzzleStats, "p_fork_b") is None

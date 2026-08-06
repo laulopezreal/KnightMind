@@ -202,6 +202,13 @@ def backfill_puzzle_identity(db: Session):
     count = 0
     puzzle_repository = PuzzleRepository(db)
 
+    # Imported here, not at module scope: position_names reads MOTIF_TITLES
+    # from this module, so a top-level import would close the cycle.
+    from services.api.puzzles.position_names import (
+        PositionFacts,
+        compose_position_name,
+    )
+
     for stats in stats_to_update:
         # Load puzzle data to (potentially) determine motif
         puzzle = puzzle_repository.get_puzzle(stats.username, stats.puzzle_id)
@@ -209,12 +216,22 @@ def backfill_puzzle_identity(db: Session):
         # Determine motif
         motif = assign_primary_motif(puzzle)
 
-        # Generate title
-        title = generate_puzzle_title(motif)
+        # Name from the position rather than from the motif alone. The motif
+        # table has seven strings in it, so naming from it gave every puzzle
+        # that fell through to the default motif the same title.
+        title = compose_position_name(
+            PositionFacts(
+                fen=getattr(puzzle, "fen", "") or "",
+                best_move_uci=getattr(puzzle, "best_move_uci", "") or "",
+                primary_motif=motif,
+                move_number=(getattr(puzzle, "ply", 0) or 0) // 2 + 1,
+            )
+        )
 
         # Update DB
         stats.primary_motif = motif
         stats.title = title
+        stats.title_source = "position"
         count += 1
 
     db.commit()

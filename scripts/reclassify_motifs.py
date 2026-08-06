@@ -50,10 +50,8 @@ from sqlalchemy.orm import Session
 
 from services.api.db import SessionLocal
 from services.api.models import Puzzle, PuzzleStats
-from services.api.puzzles.identity import (
-    assign_primary_motif,
-    generate_puzzle_title,
-)
+from services.api.puzzles.identity import assign_primary_motif
+from services.api.puzzles.position_names import PositionFacts, compose_position_name
 from services.api.usernames import canonical_username
 
 logger = logging.getLogger("reclassify_motifs")
@@ -91,7 +89,12 @@ def reclassify_motifs(
         ``"<missing_stats>"`` in ``before``.
     """
     stmt = select(Puzzle, PuzzleStats).outerjoin(
-        PuzzleStats, PuzzleStats.puzzle_id == Puzzle.id
+        PuzzleStats,
+        # Both halves of the key. puzzle_id alone would fan out the moment two
+        # users own stats for the same puzzle id, inflating every count in the
+        # report and reclassifying another user's row.
+        (PuzzleStats.puzzle_id == Puzzle.id)
+        & (PuzzleStats.username == Puzzle.username),
     )
     if username:
         # Fold to the same canonical storage key every API entry point uses, so a
@@ -109,7 +112,18 @@ def reclassify_motifs(
     for puzzle, stats in rows:
         # assign_primary_motif reads .fen / .best_move_uci off the ORM row.
         new_motif = assign_primary_motif(puzzle)
-        new_title = generate_puzzle_title(new_motif)
+        new_title = compose_position_name(
+            PositionFacts(
+                fen=puzzle.fen or "",
+                best_move_uci=puzzle.best_move_uci or "",
+                primary_motif=new_motif,
+                move_number=(puzzle.ply or 0) // 2 + 1,
+            )
+        )
+        # A name the user typed, or one the model wrote, is not this script's
+        # to replace. Without this guard a single reclassify run would undo an
+        # entire AI naming pass and put the seven motif strings back.
+        keep_title = stats is not None and stats.title_source in ("ai", "user")
 
         if stats is None:
             before["<missing_stats>"] += 1
@@ -132,13 +146,18 @@ def reclassify_motifs(
                         username=puzzle.username,
                         primary_motif=new_motif,
                         title=new_title,
+                        title_source="position",
                     )
                 )
-        elif new_motif != stats.primary_motif or new_title != stats.title:
+        elif new_motif != stats.primary_motif or (
+            not keep_title and new_title != stats.title
+        ):
             changed_existing += 1
             if not dry_run:
                 stats.primary_motif = new_motif
-                stats.title = new_title
+                if not keep_title:
+                    stats.title = new_title
+                    stats.title_source = "position"
 
     if dry_run:
         db.rollback()

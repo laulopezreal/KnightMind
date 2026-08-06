@@ -9,7 +9,8 @@ from sqlalchemy.orm import Session
 from services.api.day_boundary import utc_today
 from services.api.models import Puzzle as PuzzleModel
 from services.api.models import PuzzleStats
-from services.api.puzzles.identity import assign_primary_motif, generate_puzzle_title
+from services.api.puzzles.identity import assign_primary_motif
+from services.api.puzzles.position_names import PositionFacts, compose_position_name
 from services.api.usernames import canonical_username
 
 
@@ -153,12 +154,31 @@ class PuzzleRepository:
         self.db.add(puzzle)
         # Use the caller's explicit motif/title when provided (the analysis-save
         # path already knows them); otherwise derive them from the position (the
-        # generation path). Title falls back to the motif's canonical name only
-        # when the caller does not supply one.
+        # generation path).
         motif = (
             primary_motif if primary_motif is not None else assign_primary_motif(puzzle)
         )
-        stats_title = title if title is not None else generate_puzzle_title(motif)
+        # An explicit title reaches here only from the manual-save route, where
+        # it is the string the user typed — so it is recorded as theirs and
+        # nothing may overwrite it later.
+        #
+        # Otherwise the name is composed from the position, NOT from the model.
+        # Naming is a bulk pass run by scripts/ai_name_puzzles.py; making the
+        # write path wait on an API call would put provider latency (and
+        # provider outages) inside puzzle generation, which imports whole games
+        # at a time.
+        if title is not None:
+            stats_title, title_source = title, "user"
+        else:
+            stats_title = compose_position_name(
+                PositionFacts(
+                    fen=fen,
+                    best_move_uci=best_move_uci,
+                    primary_motif=motif,
+                    move_number=ply // 2 + 1,
+                )
+            )
+            title_source = "position"
         self.db.add(
             PuzzleStats(
                 puzzle_id=puzzle_id,
@@ -169,6 +189,7 @@ class PuzzleRepository:
                 ease_factor=2.0,
                 primary_motif=motif,
                 title=stats_title,
+                title_source=title_source,
             )
         )
         try:
