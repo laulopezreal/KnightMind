@@ -153,7 +153,15 @@ def test_a_name_landing_on_the_answer_square_is_rejected(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "spoiler", ["Missed Fork Again", "Pinned and Sorry", "Mate Was Available"]
+    "spoiler",
+    [
+        "Missed Fork Again",
+        "Pinned and Sorry",
+        "Mate Was Available",
+        # Both of these reached real output before the word list covered them.
+        "Six Seconds of Free Knight",
+        "Check With Interest",
+    ],
 )
 def test_a_name_that_says_the_tactic_is_rejected(monkeypatch, spoiler):
     _respond_with(monkeypatch, _Response(text=json.dumps({"name": spoiler})))
@@ -166,18 +174,30 @@ def test_a_square_that_is_not_the_answer_is_fine(monkeypatch):
     assert ai_naming.name_puzzle(facts()).usable
 
 
-def test_the_winning_move_never_reaches_the_prompt():
-    """A prompt that does not contain the answer cannot leak it. This is the
-    structural half of the no-spoilers rule; the gate is the backstop."""
+def test_the_answer_is_in_the_prompt_and_labelled_as_off_limits():
+    """The model IS told the solution — withholding it made names worse without
+    making them safer (see naming_prompts' docstring). The gate, not the
+    prompt's contents, is what keeps the answer out of the name."""
     from services.api.puzzles.naming_prompts import build_user_prompt
 
-    assert "best_move_san" not in ai_naming.NameFacts.__dataclass_fields__
-    assert "primary_motif" not in ai_naming.NameFacts.__dataclass_fields__
+    prompt = build_user_prompt(facts(best_move_san="Nxg4", primary_motif="fork"))
+    assert "Nxg4" in prompt
+    assert "DO NOT NAME THIS" in prompt
+    assert "h3" in prompt  # the played move travels too
 
-    prompt = build_user_prompt(facts())
-    # answer_square rides on NameFacts for the gate; it must never be rendered.
-    assert "g4" not in prompt
-    assert "h3" in prompt  # the played move does travel
+
+@pytest.mark.parametrize(
+    "seconds,expected",
+    [(1.5, True), (3.0, False), (30.0, False), (61.0, True)],
+    ids=["snap", "boundary-fast", "unremarkable", "long-think"],
+)
+def test_the_clock_is_only_sent_when_it_is_notable(seconds, expected):
+    """Offering the clock every time made it the default hook: 13 of 40 names
+    in one batch were 'N Seconds of ...'."""
+    from services.api.puzzles.naming_prompts import build_user_prompt
+
+    prompt = build_user_prompt(facts(move_time_seconds=seconds))
+    assert ("Time spent" in prompt) is expected
 
 
 def test_rejection_keeps_the_raw_response_for_debugging(monkeypatch):

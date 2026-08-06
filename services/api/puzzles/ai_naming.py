@@ -48,20 +48,24 @@ class NameFacts:
     """
 
     fen: str
-    # The move they played — the mistake, not the solution. The winning move
-    # is deliberately absent: the name sits beside a board the user is about
-    # to solve, and a prompt that does not contain the answer cannot leak it.
+    # The mistake.
     played_move_san: str
+    # The solution. Deliberately given to the model — withholding it made the
+    # names measurably worse without making them safer, because the model just
+    # latched onto whichever fact was left. See naming_prompts' docstring for
+    # the three measured attempts. ``_validate`` is what keeps it out of the
+    # name, which is why the gate's rules are tested one by one.
+    best_move_san: str | None = None
+    primary_motif: str | None = None
     move_number: int | None = None
     phase: str | None = None
     opening_name: str | None = None
     move_time_seconds: float | None = None
     user_won: bool | None = None
 
-    # NEVER RENDERED. The winning move's destination square, carried only so
-    # the gate can reject a name that arrives at it anyway — the model can see
-    # the FEN and could still work the tactic out. ``build_user_prompt`` must
-    # not touch this; there is a test asserting it never reaches the prompt.
+    # Gate input: the square the winning move lands on, so a name that arrives
+    # at it is rejected. Not a secret — ``best_move_san`` already names it —
+    # just the parsed form the check needs.
     answer_square: str | None = None
 
 
@@ -234,6 +238,13 @@ _SPOILER_WORDS = frozenset(
         "hangs",
         "hung",
         "loose",
+        # "free" and "check" reached the output before these were added:
+        # "Six Seconds of Free Knight", "Check With Interest". Both point
+        # straight at the move.
+        "free",
+        "check",
+        "checks",
+        "checked",
     }
 )
 

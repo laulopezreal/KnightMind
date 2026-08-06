@@ -152,9 +152,7 @@ def _compute_solution_pv(
             result = get_or_compute_eval(
                 board.fen(), engine=engine, cache_stats=cache_stats, depth=depth
             )
-        except (
-            Exception
-        ) as e:  # noqa: BLE001 - best-effort, must never break generation
+        except Exception as e:  # noqa: BLE001 - best-effort, must never break generation
             logger.debug("PV walk eval failed for %s: %s", board.fen()[:40], e)
             break
         next_uci = result.best_move_uci

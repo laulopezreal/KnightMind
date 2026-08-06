@@ -115,7 +115,9 @@ def _answer_square(puzzle) -> str | None:
     return None
 
 
-def build_facts(puzzle, diagnosis, game) -> ai_naming.NameFacts:
+def build_facts(
+    puzzle, diagnosis, game, motif: str | None = None
+) -> ai_naming.NameFacts:
     """Assemble what the model may see. No handle goes in here — by design.
 
     ``NameFacts`` has no field for a username or an opponent, so this function
@@ -126,13 +128,16 @@ def build_facts(puzzle, diagnosis, game) -> ai_naming.NameFacts:
     return ai_naming.NameFacts(
         fen=puzzle.fen or "",
         played_move_san=ai_naming.san_or_uci(puzzle.fen, puzzle.played_move_uci or ""),
+        best_move_san=ai_naming.san_or_uci(puzzle.fen, puzzle.best_move_uci or ""),
+        primary_motif=motif,
         move_number=(puzzle.ply or 0) // 2 + 1,
         phase=diagnosis.phase if diagnosis else None,
         opening_name=diagnosis.opening_name if diagnosis else None,
         move_time_seconds=_move_time_seconds(evidence),
         user_won=_user_won(game, puzzle.username),
-        # Gate input only, never rendered: the square the winning move lands
-        # on, so a name that arrives at it anyway is rejected as a spoiler.
+        # Gate input: the square the winning move lands on, so a name that
+        # arrives at it is rejected. Not withheld from the model — the move
+        # itself is in the prompt — just parsed into the form the check needs.
         answer_square=_answer_square(puzzle),
     )
 
@@ -239,9 +244,7 @@ def name_puzzles(
                 )
             )
         else:
-            # The motif is deliberately NOT passed on: "fork" is most of the
-            # answer, and the name sits beside a board the user must solve.
-            facts = build_facts(puzzle, diagnosis, game)
+            facts = build_facts(puzzle, diagnosis, game, motif=motif)
             outcome = ai_naming.name_puzzle(facts, avoid=recent[-AVOID_WINDOW:])
 
             if outcome.status in (ai_naming.ACCEPTED, ai_naming.REJECTED):
