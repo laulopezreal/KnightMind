@@ -59,6 +59,7 @@ ROUTER_SENTINELS = {
     "explain_rating_changes": "ratings.py router",
     "get_openings": "openings_routes.py router",
     "evaluate_fen": "engine_routes.py router",
+    "get_job_status": "jobs_routes.py router",
 }
 
 
