@@ -509,7 +509,42 @@ This is also the cheapest possible way to read a few hundred generated names and
 find out whether they are actually funny — which is not a property any test can
 assert.
 
-## 9. Test obligations
+## 9. What building PR 2 changed
+
+Four things the desk design got wrong, found by writing it:
+
+**F6 is reversed — naming depends on the diagnosis *more* than the review
+claimed, not less.** F6 argued only opening and phase come from
+`puzzle_diagnoses`, so the diagnosis job might be the wrong writer. But
+`move_time_seconds` — which both clock rules and therefore the whole F2
+mitigation depend on — is only persisted inside `evidence_json` as
+`clock.move_time` (`evidence.py:to_evidence_items`). It is diagnosis-derived
+too. **The diagnosis job is the right writer after all**; F6's storage concern
+is withdrawn. Its NULL-before-diagnosis half still stands.
+
+**`user_castled` is not persisted anywhere.** It is computed during the PGN
+replay and survives only as an input to the cause rules. The `uncastled` rung
+therefore cannot fire from stored data. The rule is kept (it works when facts
+are supplied) but `scripts/name_puzzles.py` reports it as `n/a` rather than
+`0%` — reporting zero for a fact never looked up is a lie that reads like a
+measurement. Persisting it is a decision for PR 3.
+
+**Two of the original `ABSURD_OPENINGS` entries could never have matched.**
+"Fried Liver" and "Monkey's Bum" are ECO *sub-lines*, not families — they live
+under "Italian Game" and "Spanish Game", and `opening_family` is
+`opening_name.split(":")[0]`. The list is now verified against the shipped
+`eco.tsv` by a test, and grew to 19 real families (Bongcloud Attack, English
+Orangutan, Creepy Crawly Formation, Sodium Attack, …). This is F2 in miniature:
+a curated list that looks fine and matches nothing.
+
+**The disambiguation ladder was dropped.** §3.3 originally resolved collisions
+by appending opponent, then date, then an id suffix — all of which need corpus
+knowledge a pure function does not have. Instead **every template carries the
+move number**, which makes the §3.2 uniqueness property hold unconditionally
+with no query. It costs punchiness ("Bongcloud Attack Incident, move 12" rather
+than "Bongcloud Incident") and buys the property the old titles lacked.
+
+## 10. Test obligations
 
 - `naming.py` is pure — table-driven tests over every salience rule, the
   tie-break, both registers, missing-opening / missing-game / missing-clock
