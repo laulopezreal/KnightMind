@@ -114,3 +114,30 @@ class TestDisambiguate:
 
     def test_works_without_a_move_number(self):
         assert disambiguate("A", {"A"}, None) == "A (2)"
+
+    def test_never_exceeds_the_card_budget(self):
+        """An AI name may sit exactly at the cap; a suffix must not push past."""
+        from services.api.puzzles.position_names import MAX_NAME_CHARS
+
+        at_cap = "N" * MAX_NAME_CHARS
+        assert len(disambiguate(at_cap, set(), 199)) <= MAX_NAME_CHARS
+        assert len(disambiguate(at_cap, {at_cap}, 199)) <= MAX_NAME_CHARS
+        used = {at_cap, disambiguate(at_cap, {at_cap}, 199)}
+        assert len(disambiguate(at_cap, used, 199)) <= MAX_NAME_CHARS
+
+    def test_an_over_long_name_is_clamped_even_without_a_collision(self):
+        from services.api.puzzles.position_names import MAX_NAME_CHARS
+
+        assert len(disambiguate("N" * 100, set(), 4)) == MAX_NAME_CHARS
+
+    def test_suffixed_names_stay_distinct_after_clamping(self):
+        """Trimming the base must not collapse two names back into one."""
+        from services.api.puzzles.position_names import MAX_NAME_CHARS
+
+        at_cap = "N" * MAX_NAME_CHARS
+        used: set[str] = set()
+        for move in (11, 12, 13):
+            name = disambiguate(at_cap, used, move)
+            assert name not in used
+            used.add(name)
+        assert len(used) == 3

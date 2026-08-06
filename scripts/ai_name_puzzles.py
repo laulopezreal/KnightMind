@@ -156,9 +156,19 @@ def name_puzzles(
     rows = db.execute(stmt).all()
 
     audit = AIAuditRepository(db)
-    # One budget read up front, decremented locally. Re-reading per puzzle
-    # would cost a query per call for a number that only this loop moves.
-    budget = audit.budget_last_24h(username or "", call_type=ai_naming.CALL_TYPE)
+    # One budget per user, read on first sight and decremented locally
+    # thereafter: re-reading per puzzle would cost a query for a number only
+    # this loop moves. Keyed by user rather than read once, because without
+    # --username the rows span users and a single budget would be charged
+    # against whichever handle happened to be asked for — leaving the per-user
+    # cap unenforced for everyone else.
+    budgets: dict[str, object] = {}
+
+    def budget_for(handle: str):
+        key = canonical_username(handle)
+        if key not in budgets:
+            budgets[key] = audit.budget_last_24h(key, call_type=ai_naming.CALL_TYPE)
+        return budgets[key]
 
     outcomes: Counter = Counter()
     used: set[str] = set()
@@ -201,7 +211,7 @@ def name_puzzles(
             # case for any puzzle.
             name, title_source = fallback, "position"
             outcomes["dry_run"] += 1
-        elif budget.exhausted:
+        elif budget_for(puzzle.username).exhausted:
             name, title_source = fallback, "position"
             outcomes["budget_exhausted"] += 1
             audit.record(
@@ -220,7 +230,8 @@ def name_puzzles(
             outcome = ai_naming.name_puzzle(facts, avoid=recent[-AVOID_WINDOW:])
 
             if outcome.status in (ai_naming.ACCEPTED, ai_naming.REJECTED):
-                budget = budget.spend(1)
+                key = canonical_username(puzzle.username)
+                budgets[key] = budgets[key].spend(1)
             audit.record(
                 AuditWrite(
                     username=puzzle.username,
@@ -284,7 +295,11 @@ def name_puzzles(
         "outcomes": outcomes,
         "distinct": len(used),
         "samples": samples,
-        "budget_remaining": budget.remaining,
+        # The tightest remaining allowance across the users actually touched;
+        # None when nothing was ever charged (a dry run, or an empty scope).
+        "budget_remaining": (
+            min(b.remaining for b in budgets.values()) if budgets else None
+        ),
     }
 
 
@@ -339,7 +354,11 @@ def main(argv: list[str] | None = None) -> int:
     logger.info("Puzzles in scope: %d", summary["total"])
     logger.info("Named this run:   %d", summary["named"])
     logger.info("Distinct names:   %d", summary["distinct"])
-    logger.info("Naming budget left: %d", summary["budget_remaining"])
+    remaining = summary["budget_remaining"]
+    logger.info(
+        "Naming budget left: %s",
+        "n/a (nothing charged)" if remaining is None else remaining,
+    )
     logger.info("")
     logger.info("Outcomes:")
     for outcome, count in summary["outcomes"].most_common():

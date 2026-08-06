@@ -112,6 +112,16 @@ def compose_position_name(facts: PositionFacts) -> str:
     return f"The Move to {square}"
 
 
+def _with_suffix(base: str, suffix: str) -> str:
+    """``base + suffix``, trimming the base so the whole thing fits the card.
+
+    The suffix is the part that carries the meaning here (it is what makes the
+    name unique), so the base is what gives way.
+    """
+    room = MAX_NAME_CHARS - len(suffix)
+    return base[:room].rstrip(" ,") + suffix
+
+
 def disambiguate(name: str, used: set[str], move_number: int | None) -> str:
     """Make ``name`` unique against ``used``, cheapest suffix first.
 
@@ -119,16 +129,21 @@ def disambiguate(name: str, used: set[str], move_number: int | None) -> str:
     in two different games. Rather than let the library show a duplicate, add
     the move number, then a counter. The caller owns ``used`` and is expected to
     add the returned value to it.
+
+    The result never exceeds ``MAX_NAME_CHARS``. An accepted AI name may be
+    exactly at the cap, and appending ", move 199" to it would otherwise push
+    the card past the budget both namers are written to.
     """
+    name = name[:MAX_NAME_CHARS].rstrip(" ,")
     if name not in used:
         return name
 
     if move_number is not None:
-        candidate = f"{name}, move {move_number}"
+        candidate = _with_suffix(name, f", move {move_number}")
         if candidate not in used:
             return candidate
 
     n = 2
-    while f"{name} ({n})" in used:
+    while _with_suffix(name, f" ({n})") in used:
         n += 1
-    return f"{name} ({n})"
+    return _with_suffix(name, f" ({n})")
