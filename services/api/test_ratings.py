@@ -10,12 +10,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 
 from services.api.db import get_db
-from services.api.main import (
-    app,
+from services.api.main import app
+from services.api.models import Game, RatingSnapshot
+from services.api.ratings import (
     calculate_expected_score,
     get_opponent_rating_from_pgn,
 )
-from services.api.models import Game, RatingSnapshot
 from services.api.time_control import classify_time_control
 
 client = TestClient(app)
@@ -114,7 +114,7 @@ def client_with_db(db_session, monkeypatch):
     app.dependency_overrides.clear()
 
 
-@patch("services.api.main.get_player_stats")
+@patch("services.api.ratings.get_player_stats")
 def test_create_rating_snapshot_success(mock_get_stats, client_with_db, db_session):
     mock_get_stats.return_value = {"chess_rapid": {"last": {"rating": 1500}}}
 
@@ -132,7 +132,7 @@ def test_create_rating_snapshot_success(mock_get_stats, client_with_db, db_sessi
     assert snapshot.rating == 1500
 
 
-@patch("services.api.main.get_player_stats")
+@patch("services.api.ratings.get_player_stats")
 def test_create_rating_snapshot_hides_internal_error(mock_get_stats, client_with_db):
     """dim 23: an unexpected exception must not leak its raw text to the caller.
 
@@ -154,7 +154,7 @@ def test_create_rating_snapshot_hides_internal_error(mock_get_stats, client_with
     assert detail == "Internal server error"
 
 
-@patch("services.api.main.get_player_stats")
+@patch("services.api.ratings.get_player_stats")
 def test_create_rating_snapshot_missing_rating(mock_get_stats, client_with_db):
     mock_get_stats.return_value = {"chess_rapid": {"last": {}}}
 

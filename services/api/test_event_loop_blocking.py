@@ -55,6 +55,7 @@ ROUTER_SENTINELS = {
     "get_dashboard_summary": "dashboard.py router",
     "get_health": "ops.py router",
     "login": "auth_routes.py router",
+    "explain_rating_changes": "ratings.py router",
 }
 
 
