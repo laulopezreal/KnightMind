@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from services.api.db import SessionLocal
 from services.api.diagnosis.job import DIAGNOSIS_BATCH_MAX, run_diagnosis
 from services.api.models import Job, JobStatus, JobType
+from services.api.puzzles import naming_pass
 from services.api.puzzles.generator import generate_puzzles
 from services.api.storage.diagnosis_repository import DiagnosisRepository
 from services.api.usernames import canonical_username
@@ -365,6 +366,12 @@ class JobWorker:
         try:
             with SessionLocal() as db:
                 pending = DiagnosisRepository(db).pending_count(username)
+                # Naming rides on this job and is bounded per run, so a corpus
+                # can be fully diagnosed while most of it is still unnamed.
+                # Without this term the chain would stop there and the rest
+                # would keep their deterministic names until someone ran the
+                # CLI. Returns 0 when naming is disabled.
+                pending += naming_pass.pending_count(db, username)
         except Exception as exc:  # noqa: BLE001 - enrichment must stay best-effort
             logger.warning("Could not check remaining diagnosis work: %s", exc)
             return

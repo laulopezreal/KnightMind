@@ -553,6 +553,8 @@ class TestJob:
             "unchanged": 0,
             "unavailable": 0,
             "enriched": 0,
+            # Naming rides on this job now; 0 because it ships off.
+            "named": 0,
             "remaining": 0,
             "canceled": False,
         }
