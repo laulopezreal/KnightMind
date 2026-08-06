@@ -160,10 +160,12 @@ loaded its fact is *for this puzzle*; the highest score wins; ties break on
 | Salience | Fact | Condition | Template | Example |
 |---|---|---|---|---|
 | 5 | opening | `opening_family` in `ABSURD_OPENINGS` | `{Opening} Incident` | `Bongcloud Incident` |
-| 5 | swing | `swing >= 7.0` | `The {word(n)}-Pawn Donation` | `The Nine-Pawn Donation` |
-| 4 | clock | game ended 00:00–04:59 local | `The {h} A.M. Opinion` | `The 2 A.M. Opinion` |
+| 5 | move time | `move_time_seconds <= 3` on a non-bullet game | `{n} Seconds of Thought` | `Two Seconds of Thought` |
+| 4 | move time | `move_time_seconds >= 120` | `{m} Minutes, For This` | `Four Minutes, For This` |
 | 4 | ply | move `>= 50` | `Move {n} Meltdown` | `Move 61 Meltdown` |
 | 4 | ply | move `<= 8` | `Already? Move {n}` | `Already? Move 6` |
+| 4 | result | blunder in a game the user **won** | `Won Anyway` (+ move) | `Won Anyway — move 24` |
+| 3 | castling | `not user_castled` and move `>= 20` | `King Still At Home` | `King Still At Home` |
 | 3 | time control | `classify_time_control() == "bullet"` | `Bullet, Obviously` (+ move) | `Bullet, Obviously — move 22` |
 | 2 | phase | `phase == "endgame"` | `Endgame {Epithet}` | `Endgame Wobble` |
 | 1 | — | always available | `The Move {n} {Epithet}` | `The Move 24 Shrug` |
@@ -175,9 +177,18 @@ Notes:
   Halloween Gambit, Latvian. A short curated set — everything not in it falls
   through to the next rule rather than being forced into a joke.
 - **`EPITHETS`** is the seeded fallback vocabulary: *Shrug, Wobble, Faceplant,
-  Detour, Daydream, Mirage, Hiccup, Lapse, Sigh, Brainfog, …* Seeded on
-  `puzzle_id`, so it is stable across renders and sessions — never
-  `random`/`Math.random()`.
+  Detour, Daydream, Mirage, Hiccup, Lapse, Sigh, Brainfog, …*
+- **Seeding must use `zlib.crc32(puzzle_id.encode())`, never `hash()`.** Python
+  salts `str` hashing per process (`PYTHONHASHSEED`), so `hash()` gives a
+  different answer in every worker and after every restart — verified, two
+  subprocesses disagree. This applies to the salience tie-break too. See F1.
+- **Clock facts come from the PGN, not from `Game.end_time`.** `pgn_context.py`
+  already extracts `move_time_seconds`, `clock_before_move_seconds` and
+  `clock_after_move_seconds` per move. "Two seconds of thought" is true *of this
+  puzzle*; a game's end timestamp is not. See F3.
+- **Correspondence games are excluded** from every clock rule —
+  `classify_time_control()` returns `None` for `"daily"`, and a two-day move time
+  is not a punchline.
 - Rule 1 is the floor and it still carries the move number, so **it is unique by
   3.2 and funny at the same time.** "Puzzle" never renders again.
 - Manual puzzles keep the user's own title (3.5); `source_game_id ==
@@ -370,6 +381,7 @@ the cause clustering:
 |---|---|---|---|
 | 1 | Session + detail: gate motif behind resolution, mount `MistakeDiagnosisCard` in the session | **Problem 2**, end to end | none |
 | 2 | `puzzles/naming.py` (pure, both registers) + its tests | — | yes, no wiring |
+| 2a | `scripts/name_puzzles.py --dry-run` — name distribution over the real corpus (§8) | **gates PR 3** | yes, read-only |
 | 3 | `display_name` + `name_version` column, diagnosis job writes it, `?q=` matches it | **Problem 1** | yes, **migration** |
 | 4 | Web: render `display_name`, earned-nickname suffix, `knightmind:puzzle_names` toggle | **Problem 1** visible | none |
 | 5 | Motif detectors + `usable_motif()` at every render; operator runs reclassify | name/insight quality | yes, no migration |
@@ -386,13 +398,125 @@ it inside a migration.
 Rehearse PR 3's migration against a restored replica from prod's real revision,
 downgrade included, per `docs/` migration practice.
 
-## 7. Test obligations
+## 7. Adversarial review
+
+Findings from attacking this plan against the code. Claims were checked, not
+assumed.
+
+### F1 — `hash(puzzle_id)` is not deterministic. **Critical, fixed above.**
+
+The plan specified `hash(puzzle_id)` as both the epithet seed and the salience
+tie-break. Python salts `str` hashing per process; two subprocesses printing
+`hash("p_abc123")` return different integers. Every API worker would name the
+same puzzle differently, and every restart would rename the corpus. The plan's
+own determinism test would have failed against the plan's own spec.
+
+Fixed in 3.3: `zlib.crc32`.
+
+### F2 — The salience ladder probably collapses to the floor. **Highest risk, open.**
+
+`ABSURD_OPENINGS` is a curated set of ~8 names checked against
+`services/api/openings/eco.tsv` — **3,808 rows**. The share of a real corpus
+played in the Bongcloud is approximately zero, so salience 5 essentially never
+fires. The original draft's `swing >= 7.0` rule had the same problem
+(`SWING_THRESHOLD` defaults to 2.0, so the mass sits at 2–4) and has been
+replaced.
+
+If most puzzles land on rule 1, the Library reads *"The Move 24 Shrug / The Move
+31 Wobble / The Move 17 Shrug"* — **samey in exactly the way the original
+complaint was about**, just wordier. This is the first bug wearing a costume,
+and it is the finding most likely to sink the feature.
+
+Mitigations applied: the ladder now draws on `move_time_seconds`,
+`user_castled`, and game result — all present on most rows, all independent of
+the diagnosis. Mitigation still required: **measure before shipping**, see §8.
+
+### F3 — The clock rule used the wrong clock. **Fixed above.**
+
+The plan used `Game.end_time` (when the *game* ended) for a time-of-day joke,
+while `pgn_context.py` was already extracting per-move clock data that is
+strictly better material and actually about the puzzle.
+
+### F4 — Swing may be a spoiler. **Open, rule removed as a precaution.**
+
+The plan asserted swing is safe "because difficulty already shows it". That is
+not sound: `difficulty` is bucketed (easy/medium/hard) whereas *"The Nine-Pawn
+Donation"* gives the exact magnitude, and a nine-pawn swing is a hanging queen
+or a mate. That narrows the solution more than the bucket does — so the plan's
+own Rule 2 was violated by the plan's own salience-5 rule. Dropped from 3.3
+pending a decision.
+
+### F5 — The toggle contradicts the storage decision. **Open.**
+
+3.9 stores the playful string; 3.7 says `plain` recomposes from facts on the
+client. That requires shipping every naming fact to the client anyway — at which
+point storage buys nothing and the two registers can drift. Pick one: ship facts
+and derive both, or store both strings. Storing both is probably right, since
+F2's mitigation makes the fact set wide.
+
+### F6 — `display_name` is NULL before diagnosis, and the plan never says what renders.
+
+`DiagnosisResponse.state` treats `pending` as a real state, so undiagnosed
+puzzles are normal, not exceptional. They would have no name, and `?q=` would
+silently miss them.
+
+Note this also weakens 3.9's premise: **only 2 of the 10 salience rules need the
+diagnosis at all** (opening, phase). Ply, swing, result, castling and clock come
+from `puzzles` + `games` + PGN. Naming could largely be computed at generation
+time. Worth revisiting whether the diagnosis job is the right writer.
+
+### F7 — Earned nicknames break search. **Open, small.**
+
+3.4 appends `(nemesis)` at render time, but 3.9 stores and searches
+`display_name`. Searching "nemesis" finds nothing. Either store the decoration
+or accept it is not searchable — and say which.
+
+### F8 — Name length will break Library row layout. **Open, small.**
+
+`Bullet, Obviously — move 22 (arch-nemesis)` is 41 characters in a row that also
+carries status, difficulty, cause and colour. Needs a hard character cap **in
+the generator**, not CSS truncation — a name that ends in `…` is not a name.
+
+### F9 — Uniqueness argument: **survives.**
+
+Checked, not assumed. `_is_user_move` (`generator.py:497`, gated at `:661`)
+confirms puzzles are generated only from the user's own moves, so ply parity is
+fixed within a game and two puzzles from one game cannot share a move number.
+3.2 holds.
+
+### F10 — "The diagnosis job can write `puzzle_stats`": **survives.**
+
+Suspected a cross-table violation. It is not one — `job.py:248` already does
+`db.get(PuzzleStats, puzzle_id)`. The job reads that table today; writing one
+more column to it is a small step, not an architectural break.
+
+## 8. Measure before building (new PR 2a)
+
+F2 cannot be argued away from a desk; it is a distribution question. Before any
+naming ships, add an operator CLI in the shape the repo already uses
+(`scripts/reclassify_motifs.py --dry-run`):
+
+```bash
+python -m scripts.name_puzzles --dry-run --username lauureal
+```
+
+It runs `naming.py` over the real corpus and prints **the share of puzzles
+landing on each salience rung, the count of distinct names, and the twenty most
+repeated names**. If the floor takes more than ~40% of rows, the vocabulary
+needs widening before the migration in PR 3, not after.
+
+This is also the cheapest possible way to read a few hundred generated names and
+find out whether they are actually funny — which is not a property any test can
+assert.
+
+## 9. Test obligations
 
 - `naming.py` is pure — table-driven tests over every salience rule, the
   tie-break, both registers, missing-opening / missing-game / missing-clock
   rows, and the manual puzzle case.
-- **Determinism test**: the same puzzle id yields the same epithet across
-  processes. Guards against anyone reaching for `random` to add variety.
+- **Determinism test**: the same puzzle id yields the same epithet **in a fresh
+  subprocess**. An in-process assertion passes against the broken `hash()` spec
+  (F1) — the test must cross a process boundary to have caught it.
 - **Uniqueness property test**: over a generated corpus, no two puzzles from one
   game share a name — including at the salience-1 fallback, which is where
   collisions would actually show up.
