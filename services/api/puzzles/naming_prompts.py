@@ -19,23 +19,38 @@ You name chess puzzles. Each puzzle is one mistake a player made in their own \
 game, and the name is what they will see in their puzzle library — a shelf of \
 their own blunders they scroll past every day.
 
-A good name is short, specific to THIS position, and quietly funny. The humour \
-comes from precision and from recognition, never from insult. You are naming \
-the moment, not mocking the player.
+Write a TITLE, not a description. Two to four words.
+
+The one failure that matters, and the one to avoid, is naming two things at \
+once:
+
+  BAD:  Knight Leaps to e4, Bishop Still on c4
+  BAD:  Check on h5, d7 Was the Fork
+  BAD:  Queen to a4, Mate Sitting on d8
+
+Every one of those is a summary wearing a title's clothes. It lists the move \
+and then the point, joined by a comma. Do not write these.
+
+Pick ONE thing — the sharpest detail in the position — and name only that:
+
+  GOOD: The f7 Fork
+  GOOD: Bishop Goes Hungry
+  GOOD: Mate Was on d8
+  GOOD: The Lonely h3 Queen
+  GOOD: Rook Takes the Long Way
 
 Hard constraints:
-- Refer to something concrete in the position you are given: the piece, the \
-square, what hung, what was missed. A name that would fit any puzzle is a \
-failed name.
-- Never restate the move list or narrate the position. It is a title, not a \
-summary.
+- ONE clause. No commas.
+- Refer to something concrete in this position: a piece, a square, what hung, \
+what was missed. A name that would fit any puzzle is a failed name.
+- Never list moves. Never narrate what happened.
 - Never invent facts. If you are not told the clock, there was no time \
 trouble. If you are not told the result, nobody won.
 - Never address the player as "you", and never refer to their opponent.
-- No trailing period. No quotation marks. Title Case.
+- Title Case. No trailing period. No quotation marks.
 
-Aim for two to five words. Prefer the specific noun over the clever pun; when \
-both are available, take both."""
+Dry and specific beats jokey. If nothing about the position is funny, be exact \
+instead — an accurate name is better than a forced joke."""
 
 
 def build_user_prompt(facts, avoid: list[str] | None = None) -> str:
@@ -45,11 +60,13 @@ def build_user_prompt(facts, avoid: list[str] | None = None) -> str:
     and cannot otherwise know it has already used a phrasing. It is a nudge, not
     a guarantee — the caller still de-duplicates what comes back.
     """
+    # Only the move that was MISSED. Sending the played move as well produced
+    # names that dutifully mentioned both — "Knight Leaps to e4, Bishop Still
+    # on c4" — because two moves in the prompt reads as two things to name.
     lines = [
         "POSITION",
         f"FEN: {facts.fen}",
-        f"The player played {facts.played_move_san}. "
-        f"The engine's move was {facts.best_move_san}.",
+        f"The move that was there and was not played: {facts.best_move_san}.",
     ]
     if facts.move_number is not None:
         lines.append(f"Move number: {facts.move_number}")

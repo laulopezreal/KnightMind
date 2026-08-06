@@ -111,7 +111,6 @@ def build_facts(puzzle, diagnosis, game) -> ai_naming.NameFacts:
     evidence = diagnosis.evidence_json if diagnosis else None
     return ai_naming.NameFacts(
         fen=puzzle.fen or "",
-        played_move_san=ai_naming.san_or_uci(puzzle.fen, puzzle.played_move_uci or ""),
         best_move_san=ai_naming.san_or_uci(puzzle.fen, puzzle.best_move_uci or ""),
         move_number=(puzzle.ply or 0) // 2 + 1,
         phase=diagnosis.phase if diagnosis else None,

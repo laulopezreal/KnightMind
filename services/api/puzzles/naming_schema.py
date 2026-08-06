@@ -13,10 +13,12 @@ length, one line, actually contains letters. Porting the diagnosis gate's
 
 from pydantic import BaseModel, Field, field_validator
 
-# Rendered in a library card beside a board thumbnail. Same budget the
-# deterministic namer works to, so the two cannot produce visually different
-# card layouts depending on which one ran.
-MAX_NAME_CHARS = 48
+# Tighter than the card can physically fit (position_names.MAX_NAME_CHARS, 48).
+# This is a writing constraint, not a layout one: at 48 the model had room for
+# two clauses and used it every single time, producing "Rook to f5, Pawn to g4"
+# rather than a title. Taking the room away is what forces compression —
+# asking for brevity in the prompt did not.
+MAX_NAME_CHARS = 30
 MIN_NAME_CHARS = 3
 
 

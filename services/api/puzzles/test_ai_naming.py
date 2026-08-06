@@ -20,7 +20,6 @@ FEN = "rnbqkb1r/pppppppp/8/8/6n1/5N2/PPPPPPPP/RNBQKB1R w KQkq - 0 3"
 def facts(**kw) -> ai_naming.NameFacts:
     base = {
         "fen": FEN,
-        "played_move_san": "h3",
         "best_move_san": "Nxg5",
         "move_number": 12,
         "primary_motif": "fork",
@@ -137,6 +136,23 @@ def test_move_list_is_rejected(monkeypatch):
     """A model that narrates instead of naming still satisfies the schema."""
     _respond_with(monkeypatch, _Response(text=json.dumps({"name": "1. e4 Nf6 d4"})))
     assert ai_naming.name_puzzle(facts()).reason == "name_is_move_list"
+
+
+def test_two_clause_name_is_rejected(monkeypatch):
+    """The real failure from the first trial run: a move and its point, joined
+    by a comma. Every one passed the rest of the gate."""
+    _respond_with(monkeypatch, _Response(text=json.dumps({"name": "Rf5, Pawn g4"})))
+    assert ai_naming.name_puzzle(facts()).reason == "name_has_two_clauses"
+
+
+def test_the_played_move_never_reaches_the_prompt(monkeypatch):
+    """Two moves in the prompt produced names for both. Only one is sent."""
+    from services.api.puzzles.naming_prompts import build_user_prompt
+
+    assert "played_move_san" not in ai_naming.NameFacts.__dataclass_fields__
+    prompt = build_user_prompt(facts())
+    assert "Nxg5" in prompt
+    assert prompt.count("was not played") == 1
 
 
 def test_rejection_keeps_the_raw_response_for_debugging(monkeypatch):

@@ -48,7 +48,8 @@ class NameFacts:
     """
 
     fen: str
-    played_move_san: str
+    # Only the move that was missed. The played move is deliberately absent:
+    # with both in the prompt the model named both. See naming_prompts.
     best_move_san: str
     move_number: int | None = None
     phase: str | None = None
@@ -226,5 +227,12 @@ def _validate(parsed: PuzzleName) -> str | None:
     # satisfies every other rule and is not a title.
     if any(token in name for token in ("1.", "2.", "...")):
         return "name_is_move_list"
+
+    # The failure the first trial run actually produced: 20 of 20 names were a
+    # move and its point joined by a comma ("Check on h5, d7 Was the Fork").
+    # Every one passed the rest of this gate, which is why 100% acceptance was
+    # not the good news it looked like. A title has one clause.
+    if "," in name:
+        return "name_has_two_clauses"
 
     return None
