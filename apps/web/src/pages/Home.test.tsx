@@ -248,6 +248,35 @@ describe('Home', () => {
   });
 
   describe('stale-response race', () => {
+    it('discards the in-flight response when the account is disconnected', async () => {
+      // The username clearing bails out of loadPageData before it begins a new
+      // request, so isStale() stays false unless the early return invalidates
+      // explicitly. Without that, a user disconnecting mid-load gets the old
+      // account's numbers rendered under a page that no longer has an account.
+      const api = await import('../api');
+      const getUserStatus = vi.mocked(api.getUserStatus);
+      let resolveFirst!: (v: unknown) => void;
+      getUserStatus.mockReset();
+      getUserStatus.mockReturnValueOnce(
+        new Promise((r) => {
+          resolveFirst = r;
+        }) as never,
+      );
+
+      mockUsername = 'alice';
+      const { rerender } = render(<Home />);
+      await waitFor(() => expect(getUserStatus).toHaveBeenCalledTimes(1));
+
+      mockUsername = '';
+      rerender(<Home />);
+      await act(async () => {
+        resolveFirst({ username: 'alice', games_count: 777, puzzles_count: 777 });
+      });
+
+      expect(screen.queryAllByText(/777/)).toHaveLength(0);
+    });
+
+
     it('ignores a superseded load whose response arrives last', async () => {
       // loadPageData runs on mount AND on every window focus, and the username
       // can change in place via the global editor without remounting. Before the

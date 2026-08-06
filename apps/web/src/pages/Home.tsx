@@ -104,6 +104,11 @@ export default function Home() {
   // Fetch all page data on mount
   const loadPageData = useCallback(async () => {
     if (!username) {
+      // Invalidate anything already in flight. isStale() only turns true when a
+      // NEWER request begins, and bailing out here begins none -- so without
+      // this, disconnecting the account mid-load lets the old username's
+      // response land and render as though it were still theirs.
+      request.begin();
       setPageLoading(false);
       return;
     }
