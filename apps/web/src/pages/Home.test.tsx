@@ -311,5 +311,60 @@ describe('Home', () => {
       // says "expected 2 to be 0" instead of a DOM dump.
       expect(screen.queryAllByText(/999/)).toHaveLength(0);
     });
+
+    it('leaves the spinner up when a superseded load finishes first', async () => {
+      // The guard on the `finally` block, which the other tests do not reach:
+      // they assert the stale DATA is dropped, and dropping it via the early
+      // `return` still runs `finally`. A superseded request clearing
+      // `pageLoading` would show the page as loaded while the newer fetch is
+      // genuinely still in flight -- an empty page presented as a finished one.
+      const api = await import('../api');
+      const getUserStatus = vi.mocked(api.getUserStatus);
+
+      let resolveFirst!: (v: unknown) => void;
+      const first = new Promise((r) => { resolveFirst = r; });
+      getUserStatus.mockReset();
+      getUserStatus
+        .mockReturnValueOnce(first as never)
+        // bob's load never settles, so the spinner is still correct at the end.
+        .mockReturnValueOnce(new Promise(() => {}) as never);
+
+      mockUsername = 'alice';
+      const { rerender } = render(<Home />);
+      await waitFor(() => expect(getUserStatus).toHaveBeenCalledTimes(1));
+
+      mockUsername = 'bob';
+      rerender(<Home />);
+      await waitFor(() => expect(getUserStatus).toHaveBeenCalledTimes(2));
+
+      await act(async () => {
+        resolveFirst({ username: 'alice', games_count: 1, puzzles_count: 1 });
+      });
+
+      // The loading state is the skeleton at the top of the render, not the
+      // mocked LoadingSpinner -- assert on its live-region label.
+      expect(screen.getByText(/Loading your chess data/i)).toBeInTheDocument();
+    });
+
+    it('still reports an error when the API throws synchronously', async () => {
+      // Pins the reachable half of the `catch` guard, and documents why the
+      // other half cannot be tested: `Promise.allSettled` never rejects, so the
+      // only way into `catch` is a synchronous throw while building its
+      // argument array -- which happens in the same tick as `request.begin()`,
+      // before any newer request can start. `token.isStale()` is therefore
+      // always false there. The guard is belt-and-braces; what matters is that
+      // it never swallows a real failure.
+      const api = await import('../api');
+      vi.mocked(api.getUserStatus).mockImplementation(() => {
+        throw new Error('network stack blew up before returning a promise');
+      });
+
+      mockUsername = 'alice';
+      render(<Home />);
+
+      expect(
+        await screen.findByText(/couldn't load your data right now/i),
+      ).toBeInTheDocument();
+    });
   });
 });
