@@ -102,20 +102,36 @@ The similar-puzzles panel obeys that rule. The puzzle's own title does not.
 
 ### 3.1 Two names, one identity
 
-Every puzzle gets two derived strings and never a stored generated title.
+Every puzzle gets two derived strings.
 
-| | Shown | Answers | Example |
-|---|---|---|---|
-| **Provenance name** | always, incl. pre-attempt | *where is this from?* | `Sicilian Najdorf · move 18` |
-| **Insight phrase** | post-resolution only | *what did I miss?* | `Missed fork on the loose rook` |
+| | Shown | Answers | Register | Example |
+|---|---|---|---|---|
+| **Comic name** | always, incl. pre-attempt | *where is this from?* | funny | `The 2 A.M. Opinion` |
+| **Insight phrase** | post-resolution only | *what did I miss?* | factual | `Missed fork on the loose rook` |
 
-The provenance name is the puzzle's identity: what appears in the Library list,
-the session heading, the detail `<h1>`, the browser title. It is spoiler-free by
-construction because it is composed only from facts about the *game*, never
-about the *solution*.
+The comic name is the puzzle's identity: Library row, session heading, detail
+`<h1>`, browser title. The insight phrase replaces today's title in its only
+legitimate role — telling you what the tactic was — and moves to where saying it
+is not cheating.
 
-The insight phrase replaces today's title in its only legitimate role — telling
-you what the tactic was — and moves to where that is not cheating.
+**Two rules make the humour work rather than break things.**
+
+**Rule 1 — the joke has to be true.** The name is not a canned gag attached to a
+puzzle; it is *the most absurd real fact about that puzzle, stated plainly*.
+A generator that invents a joke produces noise, and noise repeats as badly as
+seven canned titles do. Section 3.3 is therefore a salience picker over facts,
+not a joke list.
+
+**Rule 2 — never joke about the tactic.** "The Fork Fiasco" is funnier than "The
+Fork" and leaks exactly as much. Every humour source in 3.3 is drawn from
+provenance and damage — move number, opening, clock, time of day, eval swing —
+all of which are spoiler-free. The motif stays behind the resolution gate where
+§2 put it. Comedy about the *mistake* is allowed in the insight phrase, after
+the attempt, where it costs nothing.
+
+Together these give the funny names the same uniqueness guarantee as the dry
+ones: they are still composed from the (game, ply) key the schema already
+enforces as unique (3.2), just in a different register.
 
 ### 3.2 Uniqueness argument
 
@@ -135,36 +151,71 @@ and resolved by the disambiguation ladder below. This is the crux of the design 
 **we are not inventing uniqueness, we are finally spending the uniqueness the
 schema already enforces.**
 
-### 3.3 Provenance grammar
+### 3.3 Comic grammar — a salience picker, not a joke list
 
-New pure module `services/api/puzzles/naming.py`. First template whose facts are
-all present wins:
+New pure module `services/api/puzzles/naming.py`. Each rule scores how comically
+loaded its fact is *for this puzzle*; the highest score wins; ties break on
+`hash(puzzle_id)` so the choice is deterministic.
 
-| # | Template | Example | Requires |
-|---|---|---|---|
-| 1 | `{opening_name} · move {n}` | `Sicilian Najdorf · move 18` | `PuzzleDiagnosis.opening_name` |
-| 2 | `{opening_family} · move {n}` | `Sicilian Defence · move 18` | `opening_family` |
-| 3 | `{Phase} vs {opponent} · move {n}` | `Middlegame vs hikaru · move 24` | `phase` + `Game` |
-| 4 | `Move {n} vs {opponent}` | `Move 24 vs hikaru` | `Game` |
-| 5 | `Move {n} · {date}` | `Move 24 · 12 Mar 2026` | `Game.end_time` |
-| 6 | `Position {id[:8]}` | `Position 7677df23` | always |
+| Salience | Fact | Condition | Template | Example |
+|---|---|---|---|---|
+| 5 | opening | `opening_family` in `ABSURD_OPENINGS` | `{Opening} Incident` | `Bongcloud Incident` |
+| 5 | swing | `swing >= 7.0` | `The {word(n)}-Pawn Donation` | `The Nine-Pawn Donation` |
+| 4 | clock | game ended 00:00–04:59 local | `The {h} A.M. Opinion` | `The 2 A.M. Opinion` |
+| 4 | ply | move `>= 50` | `Move {n} Meltdown` | `Move 61 Meltdown` |
+| 4 | ply | move `<= 8` | `Already? Move {n}` | `Already? Move 6` |
+| 3 | time control | `classify_time_control() == "bullet"` | `Bullet, Obviously` (+ move) | `Bullet, Obviously — move 22` |
+| 2 | phase | `phase == "endgame"` | `Endgame {Epithet}` | `Endgame Wobble` |
+| 1 | — | always available | `The Move {n} {Epithet}` | `The Move 24 Shrug` |
 
-Disambiguation ladder, applied only when the chosen template collides inside the
-user's corpus: append `vs {opponent}` → append `{date}` → append `{id[:6]}`.
-Template 6 is the terminal fallback and is still unique, so **"Puzzle" never
-renders again**.
+Notes:
 
-Rules:
+- **`ABSURD_OPENINGS`** is where chess does the work for us: Bongcloud,
+  Orangutan, Fried Liver, Monkey's Bum, Hippopotamus, Elephant Gambit,
+  Halloween Gambit, Latvian. A short curated set — everything not in it falls
+  through to the next rule rather than being forced into a joke.
+- **`EPITHETS`** is the seeded fallback vocabulary: *Shrug, Wobble, Faceplant,
+  Detour, Daydream, Mirage, Hiccup, Lapse, Sigh, Brainfog, …* Seeded on
+  `puzzle_id`, so it is stable across renders and sessions — never
+  `random`/`Math.random()`.
+- Rule 1 is the floor and it still carries the move number, so **it is unique by
+  3.2 and funny at the same time.** "Puzzle" never renders again.
+- Manual puzzles keep the user's own title (3.5); `source_game_id ==
+  '__manual__'` has no game to be funny about.
+- Opponent, where a template uses it, is `white_username`/`black_username`
+  whichever is not `username`, compared through `canonical_username`.
+- Local time for the clock rule comes from `Game.end_time` (epoch int) rendered
+  through the shared `LOCALE` constant (`utils/locale.ts`).
 
-- Manual puzzles keep the user's title (see 3.5). Provenance is not computed
-  for them — `source_game_id == '__manual__'` has no game to cite.
-- Opponent is `white_username`/`black_username` whichever is not `username`,
-  compared through `canonical_username`.
-- Dates use the shared `LOCALE` constant (`utils/locale.ts`) on the web side.
-- No opening data → the name degrades to template 3/4, it does not become
-  "Puzzle". Every rung is a real name.
+### 3.4 Earned nicknames
 
-### 3.4 Insight grammar
+`PuzzleStats.fail_count` is the best comic material in the schema, because it is
+about persistence rather than stupidity — a puzzle you have failed four times
+has *earned* a name.
+
+But a name that changes as you fail is a broken identity. So: **stable root,
+earned decoration.** The 3.3 name never changes; a suffix is appended by the
+render layer at thresholds:
+
+| fail_count | Suffix |
+|---|---|
+| 3 | ` (nemesis)` |
+| 6 | ` (arch-nemesis)` |
+
+The root stays searchable and stable; the decoration is a badge the puzzle wins.
+
+### 3.5 Tone
+
+One rule: **punch at the position, not the player.** These are names for the
+user's own blunders, shown at the moment they have just failed the same puzzle
+for the fourth time. Self-deprecating is right; mocking is not.
+
+Concretely — no second person anywhere in a name ("The Move 24 Shrug", never
+"Your Move 24 Shrug"), and nothing in `EPITHETS` that rates the person rather
+than the moment. *Wobble, Daydream, Mirage* are in. *Idiotic, Clueless,
+Embarrassing* are out.
+
+### 3.6 Insight grammar stays factual
 
 ```python
 compose_insight_phrase(motif: str | None, cause: str | None, evidence) -> str | None
@@ -176,7 +227,23 @@ the motif *and* there is no cause, rather than fabricating "The Missed Win".
 Reuses `humanise_motif` / `humanise_cause` from `diagnosis/clusters.py` and the
 target squares already in `evidence_json`.
 
-### 3.5 `PuzzleStats.title` is redefined, not dropped
+This one stays deadpan on purpose. It is the teaching surface, and it is read
+right after a failure — the name already carried the joke. If a quip is wanted
+here, it goes on its own line *beneath* the phrase, never replacing it.
+
+### 3.7 A toggle, because humour is not universal
+
+`knightmind:puzzle_names` — `playful` (default) | `plain` — persisted with the
+existing `useLocalStorage` hook behind a context provider, exactly as
+`PuzzleModeContext` does for session type.
+
+`plain` renders the same facts in the dry register: `Sicilian Najdorf · move
+18`, `Middlegame vs hikaru · move 24`, `Move 24 · 12 Mar 2026`. **One module,
+one fact-extraction pass, two output registers** — not two naming systems. That
+also gives non-English users a sane fallback, since the humour is English-only
+and does not translate.
+
+### 3.8 `PuzzleStats.title` is redefined, not dropped
 
 The column stays. Its meaning becomes **"name the user chose, NULL otherwise"** —
 which is what it should always have meant. `POST /puzzles/manual` already accepts
@@ -187,31 +254,39 @@ No migration. No backfill. Existing generated titles become inert once the read
 paths prefer the derived name; a one-line operator script can NULL them out
 later if the search change (below) makes them noise.
 
-**Cost to acknowledge:** `GET /puzzles?q=` currently matches title or puzzle id
-(`puzzles_routes.py:1080`). Searching a derived string is not a column
-comparison. Fix by searching the *components* instead: puzzle id, user title,
-`Game` opponent, `PuzzleDiagnosis.opening_name`. This is strictly better than
-today — searching "fork" currently returns every fork puzzle, which is a filter
-the Library already offers properly, not an identity lookup.
+### 3.9 Store the comic name — the funny requirement flips this
 
-### 3.6 Derive at read time — do not store
+An earlier draft of this plan recommended deriving names at read time and never
+storing them. **Funny names change that call, because of search.**
 
-Recommended, for three reasons:
+A dry name is looked up by its facts, so component search over (puzzle id, user
+title, opponent, `opening_name`) covers it. A funny name is looked up *by
+itself* — that is the whole point of it being memorable. The user who wants "the
+2 A.M. one" or "the meltdown one" types `meltdown`, and no component search will
+ever find it, because "meltdown" exists only in the rendered string.
 
-1. The best facts (`opening_name`, `phase`) live on `puzzle_diagnoses`, written
-   **asynchronously and versioned** by the diagnosis job. A name stored at
-   generation time is computed before those facts exist and is permanently worse
-   than one computed after.
-2. Storing means a backfill, and a backfill means a staleness class. See
-   `scripts/reclassify_motifs.py` — we have already paid this bill once.
-3. Cost is nil. The list query already outer-joins `puzzle_diagnoses`
-   (`:1239`); it needs one added join to `games` for the opponent. The detail
-   read is already a single indexed row.
+So: **new nullable column `puzzle_stats.display_name`**, written by the
+diagnosis job, plus `name_version: int` folded into the job's existing staleness
+predicate.
 
-If name search on large corpora later proves too slow, denormalise into a
-`puzzle_stats.display_name` column recomputed by the diagnosis job, whose
-`extraction_version` / `rule_version` staleness predicate already solves the
-problem the old backfill got wrong. Not now.
+This does **not** re-create the `backfill_puzzle_identity` bug from §1. That bug
+was *"skip any row whose title is non-NULL"* — a permanent skip with no way back.
+The diagnosis job's staleness is a **predicate over version columns**
+(`extraction_version` / `rule_version`, `models.py:PuzzleDiagnosis` docstring), so
+bumping `name_version` re-runs every affected row automatically. Tuning the
+`EPITHETS` list or adding an entry to `ABSURD_OPENINGS` becomes a version bump,
+not an operator script. That is the pattern the repo already chose, and it is the
+right one to join.
+
+Consequences:
+
+- `GET /puzzles?q=` keeps working as a plain column match, now against a name
+  worth searching. Extend it to `display_name OR title OR id`.
+- The job already runs and already recomputes; naming rides along at no extra
+  query cost.
+- The comic/plain toggle (3.7) is a **render-time** choice, so `display_name`
+  stores the playful string and `plain` recomposes from facts client-side or via
+  the same pure module. Store one, derive the other.
 
 ---
 
@@ -294,20 +369,38 @@ the cause clustering:
 | PR | Scope | Fixes | Backend? |
 |---|---|---|---|
 | 1 | Session + detail: gate motif behind resolution, mount `MistakeDiagnosisCard` in the session | **Problem 2**, end to end | none |
-| 2 | `puzzles/naming.py`, wire into list/detail/session, redefine `title`, component search | **Problem 1** | yes, no migration |
-| 3 | Motif detectors + `usable_motif()` at every render; operator runs reclassify | name/insight quality | yes, no migration |
-| 4 | Library row redesign | polish | none |
+| 2 | `puzzles/naming.py` (pure, both registers) + its tests | — | yes, no wiring |
+| 3 | `display_name` + `name_version` column, diagnosis job writes it, `?q=` matches it | **Problem 1** | yes, **migration** |
+| 4 | Web: render `display_name`, earned-nickname suffix, `knightmind:puzzle_names` toggle | **Problem 1** visible | none |
+| 5 | Motif detectors + `usable_motif()` at every render; operator runs reclassify | name/insight quality | yes, no migration |
+| 6 | Library row redesign | polish | none |
 
 PR 1 first on purpose: it is web-only, needs no schema or endpoint change, and
-closes the pre-exposure leak that PR 2 would otherwise carry forward.
+closes the pre-exposure leak the rest would otherwise carry forward.
+
+PR 2 lands `naming.py` alone and unwired. The comic vocabulary is the part most
+likely to want a second opinion, and a pure module with a table-driven test file
+is the cheapest possible thing to argue about — much cheaper than arguing about
+it inside a migration.
+
+Rehearse PR 3's migration against a restored replica from prod's real revision,
+downgrade included, per `docs/` migration practice.
 
 ## 7. Test obligations
 
-- `naming.py` is pure — table-driven tests over the six templates, each
-  disambiguation rung, missing-opening and missing-game rows, and the manual
-  puzzle case.
-- Uniqueness property test: over a generated corpus, no two puzzles from one
-  game share a name.
+- `naming.py` is pure — table-driven tests over every salience rule, the
+  tie-break, both registers, missing-opening / missing-game / missing-clock
+  rows, and the manual puzzle case.
+- **Determinism test**: the same puzzle id yields the same epithet across
+  processes. Guards against anyone reaching for `random` to add variety.
+- **Uniqueness property test**: over a generated corpus, no two puzzles from one
+  game share a name — including at the salience-1 fallback, which is where
+  collisions would actually show up.
+- **Tone test** (cheap and worth it): assert no `EPITHETS` entry and no template
+  contains a second-person pronoun. §3.5 is a rule the vocabulary can drift out
+  of silently otherwise.
+- Earned-nickname suffix: assert the *root* is unchanged at `fail_count` 0/3/6,
+  so the badge never becomes part of the identity.
 - **Spoiler regression test** (the one that matters): assert no motif, title or
   cause string is in the session DOM while `status === 'solving'`, and that all
   three appear once resolved. Parameterise across `Puzzles.tsx` and
