@@ -26,6 +26,13 @@ weaker canonicalization but a *different* one — it does not NFKC-fold, so
 Cross-script homoglyphs are still NOT folded (``аlice`` with a Cyrillic а stays
 distinct from ``alice``); NFKC folds compatibility forms, not scripts, so that
 deliberate property survives unchanged.
+
+No backfill ships with this change, deliberately: ``account_chess_usernames`` is
+empty in production (auth has never been switched on), so there is nothing to
+canonicalize. Should a non-canonical row ever exist, it is stranded rather than
+corrupting anything — ``/auth/me`` reports it verbatim and ``assert_owns_username``
+declines to match it. If this table is ever populated before this code ships, a
+one-off ``UPDATE`` folding the existing rows has to come first.
 """
 
 import os
@@ -123,7 +130,13 @@ def require_authenticated_account(
 
 
 def get_owned_usernames(account: Account, db: Session) -> list[str]:
-    """All Chess.com usernames claimed by an account (lowercased)."""
+    """All Chess.com usernames claimed by an account, exactly as stored.
+
+    Canonical by construction, not by anything this function does: every write
+    to ``account_chess_usernames`` folds with ``canonical_username`` first. The
+    rows are returned verbatim — ``/auth/me`` hands them straight to the caller,
+    so re-folding here would report a handle the ownership check then refuses.
+    """
     rows = db.scalars(
         select(AccountChessUsername.username).where(
             AccountChessUsername.account_id == account.id

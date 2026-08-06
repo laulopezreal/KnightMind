@@ -127,17 +127,25 @@ def test_auth_required_falsy(monkeypatch, value):
     assert auth_required() is False
 
 
-def test_identity_has_no_username_fold_of_its_own():
+def test_identity_uses_the_shared_fold_and_defines_none_of_its_own():
     """Guards against a second fold being reintroduced next to the storage one.
 
     ``account_chess_usernames.username`` is a storage key, so ``usernames.py``'s
     storage-boundary rule applies: ``canonical_username`` is the only fold. The
     round-trip tests below prove identity *behaves* canonically; this pins the
-    structural reason, so a re-added ``normalize_username`` fails here loudly
-    rather than only on the compatibility-form cases.
+    structural reason, so a re-added local fold fails here loudly rather than
+    only on the compatibility-form cases.
+
+    Identity checks, not a name check. An earlier version of this test asserted
+    only ``not hasattr(identity, "normalize_username")``, which a local
+    ``def canonical_username(u): return u.strip().lower()`` sails straight
+    through — the fold comes back under the sanctioned name and the guard says
+    nothing. What matters is that the symbol identity calls IS the shared one.
     """
     import services.api.identity as identity
+    import services.api.usernames as usernames
 
+    assert identity.canonical_username is usernames.canonical_username
     assert not hasattr(identity, "normalize_username")
 
 

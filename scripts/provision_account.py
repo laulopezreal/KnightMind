@@ -37,23 +37,34 @@ from sqlalchemy import select
 from services.api.db import SessionLocal
 from services.api.models import Account, AccountChessUsername
 from services.api.security import hash_password
-from services.api.usernames import canonical_username
+from services.api.usernames import canonical_username, validate_username
 
 
 def _parse_handles(raw: str | None) -> list[str]:
     """Split ``--claim`` into canonical handles, preserving order, deduplicated.
 
     This is the one entry point that writes ``account_chess_usernames`` without
-    passing through the ``Username`` annotation, so it must fold with
-    ``canonical_username`` itself or it can persist a row no HTTP lookup can
-    ever reach (``--claim Ｂｏｂ`` used to write ``ｂｏｂ``).
+    passing through the ``Username`` annotation, so it has to do the annotation's
+    whole job itself, not half of it.
+
+    ``validate_username``, not ``canonical_username``: the fold alone stops
+    ``--claim Ｂｏｂ`` writing ``ｂｏｂ``, but it accepts handles the HTTP boundary
+    rejects outright — a Cyrillic ``аlice`` or anything over 64 characters folds
+    to itself and persists a row that every request 422s before an ownership
+    check can ever see it. Unreachable by a different route is still unreachable.
+
+    Raises ``ValueError`` on an invalid handle so ``main`` can fail the run
+    before anything is written. Empty segments are skipped rather than rejected,
+    so a trailing or doubled comma stays a typo instead of an error.
     """
     if not raw:
         return []
     seen: list[str] = []
     for part in raw.split(","):
-        handle = canonical_username(part)
-        if handle and handle not in seen:
+        if not canonical_username(part):
+            continue
+        handle = validate_username(part)
+        if handle not in seen:
             seen.append(handle)
     return seen
 
@@ -146,7 +157,14 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    handles = _parse_handles(args.claim)
+    try:
+        handles = _parse_handles(args.claim)
+    except ValueError as exc:
+        # Same rejection the Username annotation applies to HTTP callers, so the
+        # CLI cannot create ownership rows a request could never address.
+        print(f"error: invalid --claim handle: {exc}", file=sys.stderr)
+        sys.exit(2)
+
     code = provision(
         args.email,
         args.password,
