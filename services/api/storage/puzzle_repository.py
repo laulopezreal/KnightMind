@@ -1,8 +1,9 @@
 import uuid
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
+from typing import cast
 
-from sqlalchemy import func, select, update
+from sqlalchemy import CursorResult, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -271,7 +272,7 @@ class PuzzleRepository:
         )
         result = self.db.execute(stmt)
         self.db.commit()
-        return result.rowcount or 0
+        return cast(CursorResult, result).rowcount or 0
 
     def get_puzzle_count(self, username: str) -> int:
         username_lower = canonical_username(username)
