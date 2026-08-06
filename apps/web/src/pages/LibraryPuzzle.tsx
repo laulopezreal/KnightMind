@@ -82,10 +82,14 @@ export default function LibraryPuzzle() {
     }, []);
 
     const fetchPuzzle = useCallback(async () => {
-        if (!username || !puzzleId) return;
         // Guard against stale-response races: if the username (or puzzle) changes
         // mid-flight, an older, slower response must not clobber the newer one.
+        //
+        // begin() precedes the bail-out deliberately: isStale() only turns true
+        // once a newer request starts, so returning before it would leave an
+        // in-flight fetch for the previous puzzle free to land.
         const token = request.begin();
+        if (!username || !puzzleId) return;
         setIsLoading(true);
         setError(null);
         try {
