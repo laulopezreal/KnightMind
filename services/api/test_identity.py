@@ -16,7 +16,6 @@ from services.api.identity import (
     assert_owns_username,
     auth_required,
     claim_username_if_unowned,
-    normalize_username,
     require_account,
     require_authenticated_account,
 )
@@ -28,6 +27,7 @@ from services.api.security import (
     hash_password,
     verify_password,
 )
+from services.api.usernames import canonical_username
 
 SECRET = "test-secret-please-ignore-0123456789-abcdef"
 
@@ -126,11 +126,26 @@ def test_auth_required_falsy(monkeypatch, value):
     assert auth_required() is False
 
 
-def test_normalize_username():
-    assert normalize_username("  Alice ") == "alice"
-    assert normalize_username("HIKARU") == "hikaru"
-    # Cyrillic 'а' is NOT folded into Latin 'a'.
-    assert normalize_username("аlice") != "alice"
+def test_identity_folds_usernames_with_canonical_username():
+    """identity.py has no fold of its own — it delegates to the storage fold."""
+    import services.api.identity as identity
+
+    assert not hasattr(identity, "normalize_username")
+    assert canonical_username("  Alice ") == "alice"
+    assert canonical_username("HIKARU") == "hikaru"
+
+
+def test_canonical_username_preserves_cross_script_distinction():
+    """Cyrillic 'а' is NOT folded into Latin 'a'.
+
+    This is the property the deleted ``normalize_username`` docstring called
+    deliberate: homoglyphs across scripts are different handles and must resolve
+    to different ownership rows. NFKC folds compatibility forms, not scripts, so
+    ``canonical_username`` keeps it. Pinned here so a future change to the fold
+    cannot quietly merge two distinct users' ownership.
+    """
+    assert canonical_username("аlice") != canonical_username("alice")
+    assert canonical_username("аlice") != "alice"
 
 
 # --- require_account (flag-aware) --------------------------------------------
@@ -249,6 +264,71 @@ def test_claim_owned_by_other_403(monkeypatch, db):
     _claim(db, a, "alice")
     with pytest.raises(HTTPException) as exc:
         claim_username_if_unowned(b, "alice", db)
+    assert exc.value.status_code == 403
+
+
+def test_claim_then_assert_round_trips_a_noncanonical_handle(monkeypatch, db):
+    """A handle claimed in a non-canonical form must still resolve on lookup.
+
+    Regression for the second username fold that lived in ``identity.py``. Its
+    ``.strip().lower()`` is not a weaker ``canonical_username`` but a different
+    function: it does not NFKC-fold, so a fullwidth ``Ｂｏｂ`` was written to
+    ``account_chess_usernames`` as ``ｂｏｂ`` — a key ``canonical_username`` can
+    never produce. The row existed, the owner was right, and the ownership check
+    raised 403 anyway.
+
+    Mixed case + surrounding whitespace + a compatibility form together, because
+    only the third one distinguishes the two folds.
+    """
+    monkeypatch.setenv("KNIGHTMIND_REQUIRE_AUTH", "true")
+    account = _make_account(db)
+
+    claim_username_if_unowned(account, "  Ｂｏｂ  ", db)
+
+    # The row lands under the canonical key, not a fullwidth variant of it.
+    row = (
+        db.query(AccountChessUsername)
+        .filter(AccountChessUsername.account_id == account.id)
+        .one()
+    )
+    assert row.username == "bob"
+
+    # And every spelling of the same handle resolves to it.
+    for spelling in ("bob", "BOB", "  Bob  ", "Ｂｏｂ", "  Ｂｏｂ  ", "BOB\xa0"):
+        assert_owns_username(account, spelling, db)
+
+
+def test_assert_owns_username_matches_canonical_row_from_compat_form(monkeypatch, db):
+    """A canonically-stored row is reachable when the *query* is non-canonical.
+
+    The mirror of the test above: writes were already canonical for rows created
+    by any ``Username``-annotated route, but the lookup fold still had to agree
+    with them or an owner would be denied their own data.
+    """
+    monkeypatch.setenv("KNIGHTMIND_REQUIRE_AUTH", "true")
+    account = _make_account(db)
+    _claim(db, account, "bob")
+
+    assert_owns_username(account, "  Ｂｏｂ  ", db)
+
+
+def test_claim_compat_form_is_not_a_second_claim(monkeypatch, db):
+    """``Ｂｏｂ`` and ``bob`` are the same handle, so the second claim is a no-op.
+
+    Under the old fold these produced two different keys, so first-importer-wins
+    did not hold: the same person could claim one handle twice, and a *different*
+    account could claim the fullwidth spelling of a handle someone already owned.
+    """
+    monkeypatch.setenv("KNIGHTMIND_REQUIRE_AUTH", "true")
+    a = _make_account(db, email="a@x.com")
+    b = _make_account(db, email="b@x.com")
+
+    claim_username_if_unowned(a, "bob", db)
+    claim_username_if_unowned(a, "Ｂｏｂ", db)  # same handle, no second row
+    assert db.query(AccountChessUsername).count() == 1
+
+    with pytest.raises(HTTPException) as exc:
+        claim_username_if_unowned(b, "  Ｂｏｂ  ", db)
     assert exc.value.status_code == 403
 
 

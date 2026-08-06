@@ -35,17 +35,24 @@ import sys
 from sqlalchemy import select
 
 from services.api.db import SessionLocal
-from services.api.identity import normalize_username
 from services.api.models import Account, AccountChessUsername
 from services.api.security import hash_password
+from services.api.usernames import canonical_username
 
 
 def _parse_handles(raw: str | None) -> list[str]:
+    """Split ``--claim`` into canonical handles, preserving order, deduplicated.
+
+    This is the one entry point that writes ``account_chess_usernames`` without
+    passing through the ``Username`` annotation, so it must fold with
+    ``canonical_username`` itself or it can persist a row no HTTP lookup can
+    ever reach (``--claim Ｂｏｂ`` used to write ``ｂｏｂ``).
+    """
     if not raw:
         return []
     seen: list[str] = []
     for part in raw.split(","):
-        handle = normalize_username(part)
+        handle = canonical_username(part)
         if handle and handle not in seen:
             seen.append(handle)
     return seen
