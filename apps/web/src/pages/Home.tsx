@@ -6,6 +6,7 @@ import { generatePuzzles } from '../api/puzzles';
 import { useChessUsername } from '../context/ChessUsernameContext';
 import { formatRelativeTime } from '../utils/time';
 import { useJobPolling } from '../hooks/useJobPolling';
+import { useLatestRequest } from '../hooks/useLatestRequest';
 import { Modal } from '../components/Modal';
 import { JobStatusCard } from '../components/JobStatusCard';
 import { LoadingSpinner } from '../components/LoadingSpinner';
@@ -39,6 +40,7 @@ function HomeHero({ children }: { children: ReactNode }) {
 export default function Home() {
   const { username, setUsername } = useChessUsername();
   const navigate = useNavigate();
+  const request = useLatestRequest();
 
   // Page data
   const [userStatus, setUserStatus] = useState<UserStatus | null>(null);
@@ -102,10 +104,20 @@ export default function Home() {
   // Fetch all page data on mount
   const loadPageData = useCallback(async () => {
     if (!username) {
+      // Invalidate anything already in flight. isStale() only turns true when a
+      // NEWER request begins, and bailing out here begins none -- so without
+      // this, disconnecting the account mid-load lets the old username's
+      // response land and render as though it were still theirs.
+      request.begin();
       setPageLoading(false);
       return;
     }
 
+    // Guard against stale-response races. This runs on mount AND on every window
+    // focus, and the username can change in place via the global editor without
+    // remounting -- so a slow response for the previous username could resolve
+    // after a newer one and repopulate the page under the new name.
+    const token = request.begin();
     setPageLoading(true);
     setPageError(null);
 
@@ -114,6 +126,8 @@ export default function Home() {
         getUserStatus(username),
         getImportStatus(username),
       ]);
+
+      if (token.isStale()) return;
 
       if (statusResult.status === 'fulfilled') {
         setUserStatus(statusResult.value);
@@ -131,11 +145,14 @@ export default function Home() {
         setPageError("We couldn't load your data right now. Please try again.");
       }
     } catch {
+      if (token.isStale()) return;
       setPageError("We couldn't load your data right now. Please try again.");
     } finally {
-      setPageLoading(false);
+      // The newer request owns the spinner; a superseded one clearing it would
+      // show the page as loaded while the real fetch is still running.
+      if (!token.isStale()) setPageLoading(false);
     }
-  }, [username]);
+  }, [username, request]);
 
   useEffect(() => {
     loadPageData();
