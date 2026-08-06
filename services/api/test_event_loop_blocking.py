@@ -31,10 +31,11 @@ from services.api.main import app
 # Every route handler that is allowed to be `async def`, and what it awaits.
 # Anything not listed here must be a plain `def` so Starlette runs it off-loop.
 #
-# NB: several of these still run synchronous DB work on the loop *between* their
-# awaits -- explain_rating_changes most of all, with ~490 lines after its single
-# await. Splitting those out is tracked separately; this records where the line
-# sits today, not that these handlers are blameless.
+# NB: several of these still run some synchronous DB work on the loop *between*
+# their awaits. That used to be led by explain_rating_changes with ~450 lines
+# after its single await; its body now runs on a worker thread, so what remains
+# is tens of lines apiece rather than hundreds. This records where the line sits
+# today, not that these handlers are blameless.
 ASYNC_ROUTES = {
     "complete_session": "awaits auto_snapshot (outbound Chess.com call)",
     "create_rating_snapshot": "awaits the Chess.com stats fetch",
@@ -55,6 +56,9 @@ ROUTER_SENTINELS = {
     "get_dashboard_summary": "dashboard.py router",
     "get_health": "ops.py router",
     "login": "auth_routes.py router",
+    "explain_rating_changes": "ratings.py router",
+    "get_openings": "openings_routes.py router",
+    "evaluate_fen": "engine_routes.py router",
 }
 
 
