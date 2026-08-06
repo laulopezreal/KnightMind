@@ -166,7 +166,7 @@ That is the only sanctioned mechanism. It writes `knightmind_<YYYYMMDD>_<HHMMSS>
 
 **A dump that fails `gzip -t` is renamed to `<name>.sql.gz.corrupt` and no checksum is written for it.** `.corrupt` matches no retention glob, so it stays for inspection and is never counted as a backup — delete it by hand once you know why it happened. The script exits non-zero; if you see that, you have no fresh backup, whatever the directory looks like.
 
-`deploy/test-postgres-backup.sh` covers classification, both age rules, the citation guard, the orphan sweep, and the corrupt-dump path against temporary fixture directories. It touches no database and no real backup. Run it before changing the backup script; nothing runs it automatically, because `deploy/**` is in no workflow path filter.
+`deploy/test-postgres-backup.sh` covers classification, both age rules, the citation guard, the orphan sweep, and the corrupt-dump path against temporary fixture directories. It touches no database and no real backup. `Ops CI` (`.github/workflows/ci-ops.yaml`) runs it, plus `bash -n` over every script in `deploy/`, on any change under `deploy/`. Run it by hand too when you are changing the backup script; it takes a second and needs nothing installed.
 
 ### Retention
 

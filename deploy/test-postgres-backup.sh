@@ -12,8 +12,9 @@
 #
 #   ./deploy/test-postgres-backup.sh
 #
-# `deploy/**` is in no workflow path filter, so nothing runs this automatically
-# yet. Run it by hand before touching the backup script.
+# `Ops CI` (.github/workflows/ci-ops.yaml) runs this on any change under
+# `deploy/`. Run it by hand as well while you are editing the backup script --
+# it needs nothing installed and finishes in about a second.
 # ============================================================================
 
 set -uo pipefail
