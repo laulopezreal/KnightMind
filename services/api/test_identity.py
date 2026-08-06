@@ -12,6 +12,7 @@ import pytest
 from fastapi import HTTPException
 
 from services.api import security
+from services.api.auth_routes import me
 from services.api.identity import (
     assert_owns_username,
     auth_required,
@@ -126,13 +127,18 @@ def test_auth_required_falsy(monkeypatch, value):
     assert auth_required() is False
 
 
-def test_identity_folds_usernames_with_canonical_username():
-    """identity.py has no fold of its own — it delegates to the storage fold."""
+def test_identity_has_no_username_fold_of_its_own():
+    """Guards against a second fold being reintroduced next to the storage one.
+
+    ``account_chess_usernames.username`` is a storage key, so ``usernames.py``'s
+    storage-boundary rule applies: ``canonical_username`` is the only fold. The
+    round-trip tests below prove identity *behaves* canonically; this pins the
+    structural reason, so a re-added ``normalize_username`` fails here loudly
+    rather than only on the compatibility-form cases.
+    """
     import services.api.identity as identity
 
     assert not hasattr(identity, "normalize_username")
-    assert canonical_username("  Alice ") == "alice"
-    assert canonical_username("HIKARU") == "hikaru"
 
 
 def test_canonical_username_preserves_cross_script_distinction():
@@ -329,6 +335,35 @@ def test_claim_compat_form_is_not_a_second_claim(monkeypatch, db):
 
     with pytest.raises(HTTPException) as exc:
         claim_username_if_unowned(b, "  Ｂｏｂ  ", db)
+    assert exc.value.status_code == 403
+
+
+def test_me_returns_stored_usernames_verbatim(monkeypatch, db):
+    """``/auth/me`` reports what is stored, without re-folding it on read.
+
+    The route used to fold every row through ``normalize_username`` on the way
+    out. That is the "false assurance" pattern: for a row that is already
+    canonical it is a no-op, and for one that is not, folding on read reports a
+    handle whose ownership check would then refuse to match — so the response
+    would name a username the caller cannot actually use.
+
+    A legacy non-canonical row (the kind the old claim path could write) is used
+    here precisely because it is the case where folding and not folding differ.
+    """
+    account = _make_account(db)
+    _claim(db, account, "ｂｏｂ")  # what the old fold would have persisted
+
+    body = me(account=account, db=db)
+
+    assert body.usernames == ["ｂｏｂ"]
+
+    # The honesty check. Re-folding on read would have reported "bob" instead —
+    # and "bob" is a handle this account does NOT own, as the ownership check
+    # itself confirms. Reporting the raw row is the truthful answer.
+    assert canonical_username("ｂｏｂ") == "bob"
+    monkeypatch.setenv("KNIGHTMIND_REQUIRE_AUTH", "true")
+    with pytest.raises(HTTPException) as exc:
+        assert_owns_username(account, "bob", db)
     assert exc.value.status_code == 403
 
 
