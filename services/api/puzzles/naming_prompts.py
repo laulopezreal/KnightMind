@@ -15,42 +15,56 @@ same trick the diagnosis prompt relies on.
 from services.api.puzzles.naming_schema import MAX_NAME_CHARS
 
 SYSTEM_PROMPT = """\
-You name chess puzzles. Each puzzle is one mistake a player made in their own \
-game, and the name is what they will see in their puzzle library — a shelf of \
-their own blunders they scroll past every day.
+You name chess puzzles. Each puzzle is one position where a player missed \
+something in their own game. The name sits in their library beside a board \
+they are about to try to solve.
 
-Write a TITLE, not a description. Two to four words.
+Because they are about to solve it, THE NAME MUST NOT GIVE AWAY THE ANSWER.
 
-The one failure that matters, and the one to avoid, is naming two things at \
-once:
+You are not told the winning move, and you must not work it out and hint at \
+it. Never name the tactic. Never name the square the winning move lands on. \
+Never use the words fork, pin, skewer, mate, hanging, or loose. If someone \
+could read your name and find the move without studying the board, the name \
+has failed.
 
-  BAD:  Knight Leaps to e4, Bishop Still on c4
-  BAD:  Check on h5, d7 Was the Fork
-  BAD:  Queen to a4, Mate Sitting on d8
+Name the moment instead — everything around the mistake is fair game:
 
-Every one of those is a summary wearing a title's clothes. It lists the move \
-and then the point, joined by a comma. Do not write these.
+- the move they played instead
+- how long they spent on it
+- where in the game it happened
+- the opening they were in
+- whether they somehow won anyway
 
-Pick ONE thing — the sharpest detail in the position — and name only that:
+Write a TITLE. Two to four words. ONE clause — no commas.
 
-  GOOD: The f7 Fork
-  GOOD: Bishop Goes Hungry
-  GOOD: Mate Was on d8
-  GOOD: The Lonely h3 Queen
-  GOOD: Rook Takes the Long Way
+Do NOT begin with "The". Open with a verb, a number, a square, a noun, a \
+preposition, anything but that article.
 
-Hard constraints:
-- ONE clause. No commas.
-- Refer to something concrete in this position: a piece, a square, what hung, \
-what was missed. A name that would fit any puzzle is a failed name.
-- Never list moves. Never narrate what happened.
+GOOD:
+  Blitzed Past It
+  h6 Seemed Reasonable
+  Confidence in the Sicilian
+  Won It Anyway
+  Move 31 Optimism
+  Four Seconds of Certainty
+  Nobody's Finest Rook Move
+
+BAD — gives the answer away:
+  The e5 Fork Never Came
+  Mate Was on d8
+  The g5 Knight Was Free
+
+BAD — dull, or opens with "The":
+  The Bishop Sat on c3
+  The Knight Skipped f3
+
+Other constraints:
 - Never invent facts. If you are not told the clock, there was no time \
 trouble. If you are not told the result, nobody won.
 - Never address the player as "you", and never refer to their opponent.
 - Title Case. No trailing period. No quotation marks.
 
-Dry and specific beats jokey. If nothing about the position is funny, be exact \
-instead — an accurate name is better than a forced joke."""
+Dry wit, not jokes. Aim at the feeling of the mistake, never its solution."""
 
 
 def build_user_prompt(facts, avoid: list[str] | None = None) -> str:
@@ -60,20 +74,19 @@ def build_user_prompt(facts, avoid: list[str] | None = None) -> str:
     and cannot otherwise know it has already used a phrasing. It is a nudge, not
     a guarantee — the caller still de-duplicates what comes back.
     """
-    # Only the move that was MISSED. Sending the played move as well produced
-    # names that dutifully mentioned both — "Knight Leaps to e4, Bishop Still
-    # on c4" — because two moves in the prompt reads as two things to name.
+    # The played move, NOT the winning one. The name goes beside a board the
+    # user is about to solve, so the solution must not be in this prompt at
+    # all: a rule saying "don't reveal it" is weaker than not knowing it.
+    # The motif is withheld for the same reason — "fork" is most of the answer.
     lines = [
         "POSITION",
         f"FEN: {facts.fen}",
-        f"The move that was there and was not played: {facts.best_move_san}.",
+        f"The move they actually played: {facts.played_move_san}.",
     ]
     if facts.move_number is not None:
         lines.append(f"Move number: {facts.move_number}")
     if facts.phase:
         lines.append(f"Phase: {facts.phase}")
-    if facts.primary_motif:
-        lines.append(f"Tactical motif the analyser found: {facts.primary_motif}")
     if facts.opening_name:
         lines.append(f"Opening: {facts.opening_name}")
     if facts.move_time_seconds is not None:

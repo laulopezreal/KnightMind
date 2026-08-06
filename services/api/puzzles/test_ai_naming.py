@@ -20,9 +20,9 @@ FEN = "rnbqkb1r/pppppppp/8/8/6n1/5N2/PPPPPPPP/RNBQKB1R w KQkq - 0 3"
 def facts(**kw) -> ai_naming.NameFacts:
     base = {
         "fen": FEN,
-        "best_move_san": "Nxg5",
+        "played_move_san": "h3",
         "move_number": 12,
-        "primary_motif": "fork",
+        "answer_square": "g4",
     }
     base.update(kw)
     return ai_naming.NameFacts(**base)
@@ -145,14 +145,39 @@ def test_two_clause_name_is_rejected(monkeypatch):
     assert ai_naming.name_puzzle(facts()).reason == "name_has_two_clauses"
 
 
-def test_the_played_move_never_reaches_the_prompt(monkeypatch):
-    """Two moves in the prompt produced names for both. Only one is sent."""
+def test_a_name_landing_on_the_answer_square_is_rejected(monkeypatch):
+    """The name sits beside a board the user is about to solve."""
+    _respond_with(monkeypatch, _Response(text=json.dumps({"name": "Nothing on g4"})))
+    outcome = ai_naming.name_puzzle(facts())
+    assert outcome.reason == "name_reveals_answer_square:g4"
+
+
+@pytest.mark.parametrize(
+    "spoiler", ["Missed Fork Again", "Pinned and Sorry", "Mate Was Available"]
+)
+def test_a_name_that_says_the_tactic_is_rejected(monkeypatch, spoiler):
+    _respond_with(monkeypatch, _Response(text=json.dumps({"name": spoiler})))
+    assert ai_naming.name_puzzle(facts()).reason.startswith("name_reveals_tactic:")
+
+
+def test_a_square_that_is_not_the_answer_is_fine(monkeypatch):
+    """Only the winning move's destination is a spoiler, not any square."""
+    _respond_with(monkeypatch, _Response(text=json.dumps({"name": "h6 Looked Fine"})))
+    assert ai_naming.name_puzzle(facts()).usable
+
+
+def test_the_winning_move_never_reaches_the_prompt():
+    """A prompt that does not contain the answer cannot leak it. This is the
+    structural half of the no-spoilers rule; the gate is the backstop."""
     from services.api.puzzles.naming_prompts import build_user_prompt
 
-    assert "played_move_san" not in ai_naming.NameFacts.__dataclass_fields__
+    assert "best_move_san" not in ai_naming.NameFacts.__dataclass_fields__
+    assert "primary_motif" not in ai_naming.NameFacts.__dataclass_fields__
+
     prompt = build_user_prompt(facts())
-    assert "Nxg5" in prompt
-    assert prompt.count("was not played") == 1
+    # answer_square rides on NameFacts for the gate; it must never be rendered.
+    assert "g4" not in prompt
+    assert "h3" in prompt  # the played move does travel
 
 
 def test_rejection_keeps_the_raw_response_for_debugging(monkeypatch):

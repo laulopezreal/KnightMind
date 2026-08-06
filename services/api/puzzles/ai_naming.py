@@ -48,15 +48,21 @@ class NameFacts:
     """
 
     fen: str
-    # Only the move that was missed. The played move is deliberately absent:
-    # with both in the prompt the model named both. See naming_prompts.
-    best_move_san: str
+    # The move they played — the mistake, not the solution. The winning move
+    # is deliberately absent: the name sits beside a board the user is about
+    # to solve, and a prompt that does not contain the answer cannot leak it.
+    played_move_san: str
     move_number: int | None = None
     phase: str | None = None
-    primary_motif: str | None = None
     opening_name: str | None = None
     move_time_seconds: float | None = None
     user_won: bool | None = None
+
+    # NEVER RENDERED. The winning move's destination square, carried only so
+    # the gate can reject a name that arrives at it anyway — the model can see
+    # the FEN and could still work the tactic out. ``build_user_prompt`` must
+    # not touch this; there is a test asserting it never reaches the prompt.
+    answer_square: str | None = None
 
 
 @dataclass(frozen=True)
@@ -99,7 +105,7 @@ def name_puzzle(facts: NameFacts, avoid: list[str] | None = None) -> NameOutcome
         # deterministically instead.
         return NameOutcome(SKIPPED, reason="no_api_key")
 
-    if not facts.fen or not facts.best_move_san:
+    if not facts.fen or not facts.played_move_san:
         # Nothing concrete to name from. Asking anyway invites the model to
         # invent a position, which is the one thing the design forbids.
         return NameOutcome(SKIPPED, reason="no_position")
@@ -110,7 +116,7 @@ def name_puzzle(facts: NameFacts, avoid: list[str] | None = None) -> NameOutcome
         logger.warning("AI naming call failed: %s", exc.__class__.__name__)
         return NameOutcome(ERROR, reason=f"{exc.__class__.__name__}")
 
-    return _interpret(response)
+    return _interpret(response, facts)
 
 
 def _call(key: str, facts: NameFacts, avoid: list[str] | None):
@@ -141,7 +147,7 @@ def _call(key: str, facts: NameFacts, avoid: list[str] | None):
     )
 
 
-def _interpret(response) -> NameOutcome:
+def _interpret(response, facts: NameFacts) -> NameOutcome:
     model_version = getattr(response, "model", config.NAMING_MODEL)
     usage = getattr(response, "usage", None)
     tokens = {
@@ -179,7 +185,7 @@ def _interpret(response) -> NameOutcome:
             **tokens,
         )
 
-    violation = _validate(parsed)
+    violation = _validate(parsed, facts)
     if violation:
         logger.info("AI name rejected: %s", violation)
         return NameOutcome(
@@ -208,7 +214,31 @@ def _first_text(response) -> str | None:
     return None
 
 
-def _validate(parsed: PuzzleName) -> str | None:
+# Words that name the tactic. Any of these is most of the answer handed over
+# before the user has looked at the board.
+_SPOILER_WORDS = frozenset(
+    {
+        "fork",
+        "forks",
+        "forked",
+        "pin",
+        "pins",
+        "pinned",
+        "skewer",
+        "skewered",
+        "mate",
+        "mates",
+        "mating",
+        "checkmate",
+        "hanging",
+        "hangs",
+        "hung",
+        "loose",
+    }
+)
+
+
+def _validate(parsed: PuzzleName, facts: NameFacts) -> str | None:
     """The gate. Returns a rejection reason, or None when the name is usable.
 
     Thin by design. A name has no ground truth to check it against, so this
@@ -234,5 +264,17 @@ def _validate(parsed: PuzzleName) -> str | None:
     # not the good news it looked like. A title has one clause.
     if "," in name:
         return "name_has_two_clauses"
+
+    # The name is shown beside a board the user is about to solve. The prompt
+    # is not told the winning move, but the model can see the FEN and work it
+    # out, so refusing the answer is enforced here rather than trusted.
+    words = {w.strip(".!?'\"").lower() for w in name.split()}
+
+    if facts.answer_square and facts.answer_square.lower() in words:
+        return f"name_reveals_answer_square:{facts.answer_square}"
+
+    spoilers = words & _SPOILER_WORDS
+    if spoilers:
+        return f"name_reveals_tactic:{','.join(sorted(spoilers))}"
 
     return None

@@ -43,7 +43,6 @@ Requires:
 """
 
 import argparse
-import dataclasses
 import logging
 import sys
 from collections import Counter
@@ -101,6 +100,21 @@ def _user_won(game, username: str) -> bool | None:
     return None
 
 
+def _answer_square(puzzle) -> str | None:
+    """The square the winning move lands on, e.g. ``"f7"``.
+
+    Used only to reject a name that gives it away. An unparseable move yields
+    None, which just means the gate has one fewer thing to check.
+    """
+    uci = puzzle.best_move_uci or ""
+    if len(uci) < 4:
+        return None
+    square = uci[2:4]
+    if square[0] in "abcdefgh" and square[1] in "12345678":
+        return square
+    return None
+
+
 def build_facts(puzzle, diagnosis, game) -> ai_naming.NameFacts:
     """Assemble what the model may see. No handle goes in here — by design.
 
@@ -111,13 +125,15 @@ def build_facts(puzzle, diagnosis, game) -> ai_naming.NameFacts:
     evidence = diagnosis.evidence_json if diagnosis else None
     return ai_naming.NameFacts(
         fen=puzzle.fen or "",
-        best_move_san=ai_naming.san_or_uci(puzzle.fen, puzzle.best_move_uci or ""),
+        played_move_san=ai_naming.san_or_uci(puzzle.fen, puzzle.played_move_uci or ""),
         move_number=(puzzle.ply or 0) // 2 + 1,
         phase=diagnosis.phase if diagnosis else None,
-        primary_motif=None,  # filled by the caller, which knows the stats row
         opening_name=diagnosis.opening_name if diagnosis else None,
         move_time_seconds=_move_time_seconds(evidence),
         user_won=_user_won(game, puzzle.username),
+        # Gate input only, never rendered: the square the winning move lands
+        # on, so a name that arrives at it anyway is rejected as a spoiler.
+        answer_square=_answer_square(puzzle),
     )
 
 
@@ -223,9 +239,9 @@ def name_puzzles(
                 )
             )
         else:
-            facts = dataclasses.replace(
-                build_facts(puzzle, diagnosis, game), primary_motif=motif
-            )
+            # The motif is deliberately NOT passed on: "fork" is most of the
+            # answer, and the name sits beside a board the user must solve.
+            facts = build_facts(puzzle, diagnosis, game)
             outcome = ai_naming.name_puzzle(facts, avoid=recent[-AVOID_WINDOW:])
 
             if outcome.status in (ai_naming.ACCEPTED, ai_naming.REJECTED):
