@@ -13,7 +13,6 @@ from sqlalchemy.orm import Session
 from services.api.db import get_db
 from services.api.identity import (
     get_owned_usernames,
-    normalize_username,
     require_authenticated_account,
 )
 from services.api.models import Account
@@ -78,6 +77,15 @@ def me(
     account: Account = Depends(require_authenticated_account),
     db: Session = Depends(get_db),
 ):
-    """Return the authenticated account and the usernames it owns."""
-    usernames = [normalize_username(u) for u in get_owned_usernames(account, db)]
+    """Return the authenticated account and the usernames it owns.
+
+    The stored values are returned as-is, not re-folded on read. Every write to
+    ``account_chess_usernames`` goes through ``canonical_username`` (see
+    ``identity.claim_username_if_unowned``), so a row is canonical by
+    construction and a second fold here could only change a value that the
+    ownership check would then refuse to match — reporting a handle the caller
+    does not actually own. Folding on read is the "false assurance" the
+    storage-boundary rule in ``usernames.py`` warns about.
+    """
+    usernames = get_owned_usernames(account, db)
     return MeResponse(id=account.id, email=account.email, usernames=usernames)

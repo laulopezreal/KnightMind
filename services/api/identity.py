@@ -16,6 +16,23 @@ Rollout flag — ``KNIGHTMIND_REQUIRE_AUTH`` (default OFF):
 
 The existing tailnet ``require_operator`` gate (``auth.py``) is intentionally
 left untouched: operator endpoints stay gated to the tailnet, not to accounts.
+
+Username folding — ``account_chess_usernames.username`` is a storage key, so it
+obeys the storage-boundary rule in ``usernames.py``: ``canonical_username`` is
+the only fold, used for BOTH the lookup and the write. This module used to
+carry its own ``normalize_username`` (``.strip().lower()``), which is not a
+weaker canonicalization but a *different* one — it does not NFKC-fold, so
+``Ｂｏｂ`` claimed a row at ``ｂｏｂ`` that no canonical lookup could ever reach.
+Cross-script homoglyphs are still NOT folded (``аlice`` with a Cyrillic а stays
+distinct from ``alice``); NFKC folds compatibility forms, not scripts, so that
+deliberate property survives unchanged.
+
+No backfill ships with this change, deliberately: ``account_chess_usernames`` is
+empty in production (auth has never been switched on), so there is nothing to
+canonicalize. Should a non-canonical row ever exist, it is stranded rather than
+corrupting anything — ``/auth/me`` reports it verbatim and ``assert_owns_username``
+declines to match it. If this table is ever populated before this code ships, a
+one-off ``UPDATE`` folding the existing rows has to come first.
 """
 
 import os
@@ -29,6 +46,7 @@ from sqlalchemy.orm import Session
 from services.api.db import get_db
 from services.api.models import Account, AccountChessUsername
 from services.api.security import JWTSecretMissingError, decode_access_token
+from services.api.usernames import canonical_username
 
 _TRUTHY = {"1", "true", "yes", "on"}
 
@@ -36,17 +54,6 @@ _TRUTHY = {"1", "true", "yes", "on"}
 def auth_required() -> bool:
     """Whether enforcement is turned on (``KNIGHTMIND_REQUIRE_AUTH``)."""
     return os.environ.get("KNIGHTMIND_REQUIRE_AUTH", "").strip().lower() in _TRUTHY
-
-
-def normalize_username(username: str) -> str:
-    """Match the storage boundary: strip surrounding whitespace, lowercase.
-
-    NB: this deliberately does NOT fold Unicode homoglyphs — ``аlice`` (Cyrillic
-    a) and ``alice`` (Latin) are different handles and must resolve to different
-    ownership rows. Only ASCII case/whitespace is normalized, exactly as the game
-    repository lowercases usernames on write.
-    """
-    return (username or "").strip().lower()
 
 
 def _parse_bearer(authorization: str | None) -> str | None:
@@ -123,7 +130,13 @@ def require_authenticated_account(
 
 
 def get_owned_usernames(account: Account, db: Session) -> list[str]:
-    """All Chess.com usernames claimed by an account (lowercased)."""
+    """All Chess.com usernames claimed by an account, exactly as stored.
+
+    Canonical by construction, not by anything this function does: every write
+    to ``account_chess_usernames`` folds with ``canonical_username`` first. The
+    rows are returned verbatim — ``/auth/me`` hands them straight to the caller,
+    so re-folding here would report a handle the ownership check then refuses.
+    """
     rows = db.scalars(
         select(AccountChessUsername.username).where(
             AccountChessUsername.account_id == account.id
@@ -154,7 +167,7 @@ def assert_owns_username(
     owned = db.scalar(
         select(AccountChessUsername).where(
             AccountChessUsername.account_id == account.id,
-            AccountChessUsername.username == normalize_username(username),
+            AccountChessUsername.username == canonical_username(username),
         )
     )
     if owned is None:
@@ -186,7 +199,7 @@ def claim_username_if_unowned(
     if account is None:
         raise _unauthorized()
 
-    normalized = normalize_username(username)
+    normalized = canonical_username(username)
     existing = db.scalar(
         select(AccountChessUsername).where(AccountChessUsername.username == normalized)
     )
