@@ -49,7 +49,7 @@ def _no_network(monkeypatch):
     is loud and local.
     """
     monkeypatch.setattr(
-        "services.api.main.fetch_explorer_stats",
+        "services.api.openings_routes.fetch_explorer_stats",
         AsyncMock(side_effect=ExplorerUnavailable("network disabled in tests")),
     )
 
@@ -58,7 +58,7 @@ def _no_network(monkeypatch):
 def upstream(monkeypatch, _no_network):
     """Stub the lichess call with data. Returns the mock so calls can be counted."""
     mock = AsyncMock(return_value=ExplorerStats(white=600, draws=200, black=200))
-    monkeypatch.setattr("services.api.main.fetch_explorer_stats", mock)
+    monkeypatch.setattr("services.api.openings_routes.fetch_explorer_stats", mock)
     return mock
 
 
@@ -106,7 +106,7 @@ class TestTheAnswer:
 
     def test_says_nothing_rather_than_something_thin(self, client, monkeypatch):
         monkeypatch.setattr(
-            "services.api.main.fetch_explorer_stats",
+            "services.api.openings_routes.fetch_explorer_stats",
             AsyncMock(return_value=ExplorerStats(white=3, draws=0, black=1)),
         )
 
@@ -213,7 +213,9 @@ class TestHoldingResources:
             observed["in_transaction"] = db_session.in_transaction()
             return ExplorerStats(white=600, draws=200, black=200)
 
-        monkeypatch.setattr("services.api.main.fetch_explorer_stats", watching)
+        monkeypatch.setattr(
+            "services.api.openings_routes.fetch_explorer_stats", watching
+        )
 
         assert ask(client).status_code == 200
         assert observed["in_transaction"] is False
@@ -236,7 +238,7 @@ class TestWhenLichessIsDown:
         row.fetched_at = datetime.now(timezone.utc) - timedelta(days=400)
         db_session.commit()
         monkeypatch.setattr(
-            "services.api.main.fetch_explorer_stats",
+            "services.api.openings_routes.fetch_explorer_stats",
             AsyncMock(side_effect=ExplorerUnavailable("down")),
         )
 
