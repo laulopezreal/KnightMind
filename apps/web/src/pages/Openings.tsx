@@ -305,11 +305,13 @@ export default function Openings() {
 
   useEffect(() => {
     setPeerBaseline(null);
+    // begin() before the bail-out: deselecting a line or switching to "both"
+    // clears the baseline above, and without invalidating here the previous
+    // position's response would arrive and repopulate what was just cleared.
+    const token = baselineRequest.begin();
     // "Both" mixes games from either side of the board into one figure, so
     // there is no single expectation to compare it against.
     if (!selectedFen || colorFilter === 'both' || !username.trim()) return;
-
-    const token = baselineRequest.begin();
     getBaseline(username, selectedFen, colorFilter, { signal: token.signal })
       .then(result => {
         if (!token.isStale()) setPeerBaseline(result);
@@ -384,13 +386,15 @@ export default function Openings() {
   })();
 
   const fetchOpenings = useCallback(async (user: string, color: ColorFilter, plies: number, sinceDays: Period) => {
+    // Guard against stale-response races: a username/color change begins a newer
+    // request; the older, slower response must not clobber the newer one.
+    // begin() precedes the bail-out so that clearing the username invalidates
+    // anything already running rather than letting it land.
+    const token = request.begin();
+
     // The page renders a connect-account state when there is no username, so
     // there is nothing actionable to say here.
     if (!user.trim()) return;
-
-    // Guard against stale-response races: a username/color change begins a newer
-    // request; the older, slower response must not clobber the newer one.
-    const token = request.begin();
     setLoading(true);
     setError(null);
     setNoGamesImported(false);
