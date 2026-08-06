@@ -51,7 +51,8 @@ ASYNC_ROUTES = {
 # surfacing a sub-router's routes -- as it did on the FastAPI 0.141 upgrade --
 # these vanish and the guard below would otherwise pass while checking nothing.
 ROUTER_SENTINELS = {
-    "list_puzzles": "main.py (routes declared directly on app)",
+    "list_puzzles": "puzzles_routes.py router",
+    "get_user_status": "main.py (routes still declared directly on app)",
     "complete_session": "sessions.py router",
     "get_dashboard_summary": "dashboard.py router",
     "get_health": "ops.py router",
