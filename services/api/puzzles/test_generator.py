@@ -656,6 +656,7 @@ def test_equivalent_best_moves_are_all_accepted(
     assert stats.primary_motif == motif
     assert stats.title == generate_puzzle_title(motif)
     assert stats.attempts == 0
+    assert puzzle.accept_moves_uci is not None
     accepted = set(puzzle.accept_moves_uci.split(","))
     assert "d1d5" in accepted
     assert "d1d8" in accepted  # the equally-good alternative is accepted
@@ -1019,6 +1020,7 @@ def test_stable_blunder_is_kept_with_confirmed_provenance(
     assert puzzle.confirmed_depth == get_confirm_depth()
     assert puzzle.swing == pytest.approx(6.3)  # confirmed swing, not shallow 6.0
     assert puzzle.best_move_uci == "d2d4"
+    assert puzzle.accept_moves_uci is not None
     accepted = set(puzzle.accept_moves_uci.split(","))
     assert accepted == {"d2d4", "g1f3"}  # equally-good alternative kept
     assert "a2a3" not in accepted  # clearly-worse move excluded

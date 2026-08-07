@@ -71,6 +71,12 @@ python_version = "3.13"
 # Third-party stubs are inconsistent across this dependency set (chess, stockfish,
 # anthropic); missing ones would drown the signal we actually want.
 ignore_missing_imports = true
+# Check the bodies of unannotated functions too. Off by default, which meant
+# the gate skipped the body of any `def` with no annotations at all -- 92% of
+# production defs were annotated so little was lost there, but only 2.5% of
+# test defs were, so most test bodies were never looked at. "no issues found
+# in 119 source files" counted files it opened, not code it checked.
+check_untyped_defs = true
 # Migrations are immutable history. Their alembic op signatures drift between
 # versions and re-typing an applied migration is never worth it.
 exclude = ["services/api/alembic/versions/"]
@@ -90,19 +96,19 @@ exclude = ["services/api/alembic/versions/"]
 # per-module blackout, not a per-error suppression, so a new bug written into
 # one of these is as invisible as the old ones. 116 files are enforced.
 #
-# Two limits worth stating, because "no issues found in 119 source files" reads
-# stronger than it is:
-#   - `check_untyped_defs` is off (mypy's default), so the body of any function
-#     with no annotations at all is skipped wholesale. Production code is 92%
-#     annotated, so little is lost there; test files are 2.5%, so most test
-#     bodies are not checked. Flipping it today costs 1 production error and
-#     185 in tests; 119 production errors once this debt list comes off. Worth
-#     doing, as its own change.
+# Two limits still worth stating:
 #   - `ignore_missing_imports` above also hides typo'd or undeclared imports.
+#   - `check_untyped_defs` (now on -- it cost 186 fixes, 185 of them in test
+#     bodies nothing had ever looked at) checks BODIES, not signatures. A call
+#     to an unannotated helper still returns Any and erases everything
+#     downstream of it: 80% of defs here have no return annotation, and 97% of
+#     test defs are unannotated entirely. That is why the None-guards this
+#     needed look arbitrary -- they landed wherever Any did not intervene.
 #
 # The list is shrinking, not sitting there: it began at 12 modules and 120
 # errors. puzzles/generator.py left in #367 and ratings.py -- which alone
-# carried 75 of the errors -- leaves here, so 10 modules and 37 errors remain.
+# carried 75 of the errors -- leaves here, so 10 modules remain. They hold 43
+# errors with check_untyped_defs on (37 with it off).
 #
 # puzzles/generator.py used to head this list as the one entry that was NOT
 # cosmetic: its `str | None` reaching a `str` parameter was a live crash path.

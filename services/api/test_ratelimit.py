@@ -11,12 +11,15 @@ import os
 
 os.environ["KNIGHTMIND_WORKER_DISABLED"] = "true"
 
+from typing import cast
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
+from starlette.requests import Request
 
 from services.api.engine import EvalResult
 from services.api.main import app
+from services.api.models import Account
 from services.api.ratelimit import (
     RateLimiter,
     client_ip,
@@ -105,6 +108,14 @@ def test_reset_clears_state():
 
 
 class _FakeRequest:
+    """A structural stand-in for starlette's Request.
+
+    client_ip/principal_key only read `.headers` and `.client.host`, so a real
+    Request is unnecessary here -- but they are annotated with the real type,
+    so the call sites cast. The cast is the honest record that this is a
+    deliberate duck-type, not an accident.
+    """
+
     def __init__(self, headers=None, host="9.9.9.9"):
         self.headers = headers or {}
 
@@ -118,23 +129,26 @@ class _FakeRequest:
 def test_client_ip_prefers_rightmost_xff_entry():
     # Client-spoofed left entry must be ignored; trust the proxy-appended right.
     req = _FakeRequest(headers={"x-forwarded-for": "1.2.3.4, 5.6.7.8"})
-    assert client_ip(req) == "5.6.7.8"
+    assert client_ip(cast(Request, req)) == "5.6.7.8"
 
 
 def test_client_ip_falls_back_to_socket_peer():
-    assert client_ip(_FakeRequest(host="9.9.9.9")) == "9.9.9.9"
+    assert client_ip(cast(Request, _FakeRequest(host="9.9.9.9"))) == "9.9.9.9"
 
 
 def test_principal_key_uses_account_when_present():
     class _Acct:
         id = "acct-123"
 
-    assert principal_key(_FakeRequest(), _Acct()) == "acct:acct-123"
+    assert (
+        principal_key(cast(Request, _FakeRequest()), cast(Account, _Acct()))
+        == "acct:acct-123"
+    )
 
 
 def test_principal_key_falls_back_to_ip():
     req = _FakeRequest(headers={"x-forwarded-for": "5.6.7.8"})
-    assert principal_key(req, None) == "ip:5.6.7.8"
+    assert principal_key(cast(Request, req), None) == "ip:5.6.7.8"
 
 
 # --- Integration: /engine/eval (auth OFF -> IP-keyed) -----------------------

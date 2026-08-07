@@ -17,6 +17,7 @@ from services.api.analysis.scheduler_eval import (
     MemoryState,
     ReviewSample,
     SchedulerRun,
+    _CurrentState,
     _make_memory,
     _quantile,
     evaluate,
@@ -160,7 +161,11 @@ def test_current_wraps_real_production_rules():
     i2, state = CURRENT.step(state, True)
     assert (i1, i2) == (1, 3)
     # A fail resets interval to 1 and drops ease by 0.2.
+    # Scheduler.step is typed over an opaque `object` state by design; this
+    # test knows which scheduler it drives, so it says so.
+    assert isinstance(state, _CurrentState)
     ease_before = state.ease
     i3, state = CURRENT.step(state, False)
     assert i3 == 1
+    assert isinstance(state, _CurrentState)
     assert abs(state.ease - max(EASE_MIN, ease_before - 0.2)) < 1e-12

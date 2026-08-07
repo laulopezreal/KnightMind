@@ -456,7 +456,9 @@ def test_claim_job_concurrent_postgres():
     # Each claimed row got its liveness lease set atomically.
     with PgSession() as s:
         for jid in claimed:
-            assert s.get(Job, jid).heartbeat_at is not None
+            job = s.get(Job, jid)
+            assert job is not None
+            assert job.heartbeat_at is not None
 
 
 @pytest.mark.postgres
@@ -560,7 +562,9 @@ class TestResultPayload:
         from services.api.puzzles.generator import GenerationResult
         from services.api.worker import _result_payload
 
-        assert _result_payload(GenerationResult(5, 0, 100))["generated"] == 5
+        payload = _result_payload(GenerationResult(5, 0, 100))
+        assert payload is not None
+        assert payload["generated"] == 5
 
     def test_dict_passes_through(self):
         from services.api.worker import _result_payload

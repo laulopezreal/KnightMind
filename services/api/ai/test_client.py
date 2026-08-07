@@ -159,6 +159,7 @@ class TestHappyPath:
 
         outcome = ai_client.enrich(packet, assessment)
         assert outcome.usable
+        assert outcome.diagnosis is not None
         assert outcome.diagnosis.primary_cause == assessment.primary_cause
         assert outcome.agreed_with_rules is True
         assert outcome.input_tokens == 1500
@@ -179,6 +180,7 @@ class TestHappyPath:
         )
         outcome = ai_client.enrich(packet, assessment)
         assert outcome.usable
+        assert outcome.diagnosis is not None
         assert outcome.diagnosis.primary_cause == others[0]
         assert outcome.agreed_with_rules is False
 
@@ -249,6 +251,7 @@ class TestTheGate:
         packet, assessment = packet_and_assessment()
         patch_response(monkeypatch, fake_response("{not json at all"))
         outcome = ai_client.enrich(packet, assessment)
+        assert outcome.reason is not None
         assert outcome.reason.startswith("schema:")
         # The raw text is preserved for the audit trail even when unusable.
         assert outcome.raw_response == "{not json at all"
@@ -256,7 +259,9 @@ class TestTheGate:
     def test_a_missing_field_is_rejected(self, monkeypatch):
         packet, assessment = packet_and_assessment()
         patch_response(monkeypatch, fake_response({"primary_cause": "x"}))
-        assert ai_client.enrich(packet, assessment).reason.startswith("schema:")
+        second_outcome = ai_client.enrich(packet, assessment)
+        assert second_outcome.reason is not None
+        assert second_outcome.reason.startswith("schema:")
 
 
 class TestProviderOutcomes:

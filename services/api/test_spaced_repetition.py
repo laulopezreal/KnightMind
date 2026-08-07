@@ -52,6 +52,7 @@ def test_record_fail_review(db_session):
     db_session.commit()
     stats = get_puzzle_stats(db_session, puzzle_id, username)
 
+    assert stats is not None
     assert stats.attempts == 1
     assert stats.pass_count == 0
     assert stats.fail_count == 1

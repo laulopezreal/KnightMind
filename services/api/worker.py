@@ -3,7 +3,7 @@ import logging
 import traceback
 from dataclasses import asdict, dataclass, is_dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, cast
+from typing import Any, Callable, TypedDict, cast
 
 from sqlalchemy import CursorResult, func, select, update
 from sqlalchemy.exc import IntegrityError
@@ -89,11 +89,27 @@ def _result_payload(result: Any) -> dict | None:
     )
 
 
+class _RecoveryStats(TypedDict):
+    """Crash-recovery counters, surfaced by /ops health (see ops.py).
+
+    A TypedDict rather than a bare dict: the two values have different types,
+    so a plain literal infers as `dict[str, int | None]` and assigning the
+    ISO timestamp is then a type error. Same shape of problem as ratings.py's
+    game_details, one key smaller.
+    """
+
+    recovered_count: int
+    last_recovery_at: str | None
+
+
 class JobWorker:
     def __init__(self):
         self.is_running = False
         self._task = None
-        self.recovery_stats = {"recovered_count": 0, "last_recovery_at": None}
+        self.recovery_stats: _RecoveryStats = {
+            "recovered_count": 0,
+            "last_recovery_at": None,
+        }
 
     def start(self):
         """Start the worker background task."""
