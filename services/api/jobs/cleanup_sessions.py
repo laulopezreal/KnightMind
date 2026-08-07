@@ -9,8 +9,9 @@ other storage entry point (see ``services.api.usernames``).
 """
 
 from datetime import datetime, timedelta, timezone
+from typing import cast
 
-from sqlalchemy import update
+from sqlalchemy import CursorResult, update
 from sqlalchemy.orm import Session
 
 from services.api.models import TrainingSession
@@ -41,7 +42,7 @@ def cleanup_abandoned_sessions(db: Session, hours_threshold: int = 24) -> int:
     )
 
     result = db.execute(stmt)
-    count = result.rowcount
+    count = cast(CursorResult, result).rowcount
 
     if count > 0:
         db.commit()

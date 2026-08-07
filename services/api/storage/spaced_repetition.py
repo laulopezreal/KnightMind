@@ -261,7 +261,7 @@ def get_adaptive_puzzles(
     puzzle_ids: list[str],
     n: int = 5,
     session_type: str = "standard",
-    target_accuracy: float = None,
+    target_accuracy: float | None = None,
     focus_puzzle_ids: set[str] | None = None,
 ) -> tuple[list[str], dict[str, PuzzleStats]]:
     """

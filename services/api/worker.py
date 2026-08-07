@@ -3,9 +3,9 @@ import logging
 import traceback
 from dataclasses import asdict, dataclass, is_dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable
+from typing import Any, Callable, cast
 
-from sqlalchemy import func, select, update
+from sqlalchemy import CursorResult, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -200,11 +200,14 @@ class JobWorker:
             .where(Job.id == candidate_id, Job.status == JobStatus.QUEUED)
             .values(status=JobStatus.RUNNING, updated_at=now, heartbeat_at=now)
         )
+        # Session.execute() is typed Result[Any], but a DML statement returns a
+        # CursorResult -- which is where rowcount lives. The casts here and below
+        # record that rather than silencing the checker.
         result = db.execute(update_stmt)
         db.commit()
         # rowcount == 1: we won the claim. rowcount == 0: another worker
         # claimed it between our SELECT and UPDATE; leave it to them.
-        return candidate_id if result.rowcount == 1 else None
+        return candidate_id if cast(CursorResult, result).rowcount == 1 else None
 
     async def process_next_job(self) -> bool:
         """
@@ -450,7 +453,7 @@ class JobWorker:
                         updated_at=now,
                     )
                 )
-                rowcount = db.execute(success_stmt).rowcount
+                rowcount = cast(CursorResult, db.execute(success_stmt)).rowcount
                 db.commit()
 
             if rowcount == 0:
@@ -480,7 +483,7 @@ class JobWorker:
                         updated_at=now,
                     )
                 )
-                fail_rowcount = db.execute(failure_stmt).rowcount
+                fail_rowcount = cast(CursorResult, db.execute(failure_stmt)).rowcount
                 db.commit()
 
             if fail_rowcount == 0:

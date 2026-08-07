@@ -40,7 +40,12 @@ kill-backends = "scripts.kill_backends:main"
 dev = [
     "black~=26.5",
     "flake8",
-    "mypy",
+    # Three components on purpose, like ruff~=0.15.20: `~=1.19` would still
+    # admit 1.20 and 1.30. mypy does not use SemVer -- new checks land in minor
+    # releases by upstream policy (1.20's better narrowing can even mark code
+    # unreachable and stop checking it), so a minor bump can move this baseline
+    # with only a one-line lock diff to review. Patch-only.
+    "mypy~=1.19.1",
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
     "ruff~=0.15.20",
@@ -60,6 +65,70 @@ markers = [
     # conftest.py. CI runs these with `pytest -m postgres`.
     "postgres: requires a disposable Postgres instance",
 ]
+
+[tool.mypy]
+python_version = "3.13"
+# Third-party stubs are inconsistent across this dependency set (chess, stockfish,
+# anthropic); missing ones would drown the signal we actually want.
+ignore_missing_imports = true
+# Migrations are immutable history. Their alembic op signatures drift between
+# versions and re-typing an applied migration is never worth it.
+exclude = ["services/api/alembic/versions/"]
+
+# Modules carrying pre-existing type debt, checked when this was turned on.
+# This is a to-fix list, not an exemption list.
+#
+# What the gate actually covers, measured rather than estimated. mypy prints
+# "checked 119 source files": that is the services/api crawl, with the 32
+# migrations under alembic/versions excluded above and genuinely never parsed
+# (a syntax error in one does not fail the run). But it ALSO follows imports
+# and enforces 7 repo files that count never mentions -- root conftest.py,
+# three under scripts/, and services/ingest/chesscom.py. 126 repo files are
+# read in total.
+#
+# The 11 listed below are silenced *entirely* -- `ignore_errors` is a
+# per-module blackout, not a per-error suppression, so a new bug written into
+# one of these is as invisible as the old ones. 115 files are enforced.
+#
+# Two limits worth stating, because "no issues found in 119 source files" reads
+# stronger than it is:
+#   - `check_untyped_defs` is off (mypy's default), so the body of any function
+#     with no annotations at all is skipped wholesale. Production code is 92%
+#     annotated, so little is lost there; test files are 2.5%, so most test
+#     bodies are not checked. Flipping it today costs 1 production error and
+#     185 in tests; 119 production errors once this debt list comes off. Worth
+#     doing, as its own change.
+#   - `ignore_missing_imports` above also hides typo'd or undeclared imports.
+#
+# The debt is concentrated. ratings.py alone accounts for 75 of the 112 errors:
+# mostly one heterogeneous `game_details` dict that should be a dataclass
+# (correct at runtime, weak as a type), plus ~14 from rebinding a single `stmt`
+# local across differently-typed select()s, which is an inference artifact
+# rather than debt.
+#
+# puzzles/generator.py used to head this list as the one entry that was NOT
+# cosmetic: its `str | None` reaching a `str` parameter was a live crash path.
+# chess.Board.is_game_over() is true for insufficient material, the 75-move
+# rule AND fivefold repetition while legal moves remain, so the position before
+# a played move CAN be terminal and best_move_uci CAN be None -- and the None
+# aborted the whole generation batch via chess.Move.from_uci(None). Fixed and
+# enforced in #367 (a guard in the ply loop, plus a regression test), which is
+# why it is no longer listed. The 11 that remain are the cosmetic ones.
+[[tool.mypy.overrides]]
+module = [
+    "services.api.ai.client",
+    "services.api.analysis.scheduler_eval",
+    "services.api.benchmarks.fixtures",
+    "services.api.benchmarks.runner",
+    "services.api.dashboard",
+    "services.api.diagnosis.job",
+    "services.api.main",
+    "services.api.openings.tree_builder",
+    "services.api.ops",
+    "services.api.puzzles_routes",
+    "services.api.ratings",
+]
+ignore_errors = true
 
 [tool.ruff]
 # Exclude a variety of commonly ignored directories.
