@@ -194,6 +194,49 @@ class TestPendingCount:
 
         assert naming_pass.pending_count(db_session, USER) == 1
 
+    def test_a_persistently_rejected_puzzle_stops_counting(
+        self, db_session, monkeypatch, naming_on
+    ):
+        """The worker re-queues while this is > 0, so it MUST reach zero.
+
+        A rejected name leaves the puzzle on its deterministic title, which by
+        itself still looks like pending work — the job would be re-queued,
+        reject it again, and loop forever. The audit row is the record that the
+        model already answered for this puzzle. Same guarantee the diagnosis
+        job gets from recording UNAVAILABLE rows.
+        """
+        _seed(db_session, "p1", source="position")
+        monkeypatch.setattr(
+            ai_naming,
+            "name_puzzle",
+            lambda facts, avoid=None: ai_naming.NameOutcome(
+                ai_naming.REJECTED, reason="name_reveals_tactic:fork"
+            ),
+        )
+
+        assert naming_pass.pending_count(db_session, USER) == 1
+        naming_pass.name_puzzles(db_session, username=USER)
+        # Still on its deterministic name — but no longer pending work.
+        assert db_session.get(PuzzleStats, "p1").title_source == "position"
+        assert naming_pass.pending_count(db_session, USER) == 0
+
+    def test_an_outage_stays_eligible_for_retry(
+        self, db_session, monkeypatch, naming_on
+    ):
+        """An error is not an answer. A provider outage must not permanently
+        give up on naming a puzzle."""
+        _seed(db_session, "p1", source="position")
+        monkeypatch.setattr(
+            ai_naming,
+            "name_puzzle",
+            lambda facts, avoid=None: ai_naming.NameOutcome(
+                ai_naming.ERROR, reason="ConnectionError"
+            ),
+        )
+
+        naming_pass.name_puzzles(db_session, username=USER)
+        assert naming_pass.pending_count(db_session, USER) == 1
+
     def test_the_count_falls_as_puzzles_are_named(
         self, db_session, monkeypatch, naming_on
     ):

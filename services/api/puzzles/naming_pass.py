@@ -23,7 +23,13 @@ from collections import Counter
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from services.api.models import Game, Puzzle, PuzzleDiagnosis, PuzzleStats
+from services.api.models import (
+    DiagnosisAuditLog,
+    Game,
+    Puzzle,
+    PuzzleDiagnosis,
+    PuzzleStats,
+)
 from services.api.puzzles import ai_naming
 from services.api.puzzles.identity import assign_primary_motif
 from services.api.puzzles.position_names import (
@@ -311,12 +317,25 @@ def name_puzzles(
 
 
 def pending_count(db: Session, username: str) -> int:
-    """Puzzles for this user that do not yet carry an AI name.
+    """Puzzles for this user that still need — and could still get — an AI name.
 
-    The worker's re-queue predicate reads this. Without it, a run that
-    diagnoses 200 puzzles and names only ``NAMING_BATCH_MAX`` of them would not
-    be re-queued — diagnosis has no work left — and the rest would sit with
-    their deterministic names forever.
+    The worker's re-queue predicate reads this, so it MUST reach zero. The
+    diagnosis job keeps that property by recording a row even for puzzles it
+    cannot analyse; without one, "every future run would re-attempt this same
+    un-analysable puzzle forever".
+
+    Naming has the same trap and needs the same answer. A name the gate rejects
+    leaves the puzzle on its deterministic title, which by itself still looks
+    like pending work — so the job would be re-queued, reject it again, and
+    loop until the budget ran out, then loop for free after that. The audit log
+    is the record of the attempt: a puzzle the model has already answered for
+    (accepted or rejected) is not counted again. Errors and budget skips are
+    NOT attempts and stay eligible, so an outage or an exhausted day retries
+    later rather than permanently giving up.
+
+    Audit rows are purged after ``AUDIT_RETENTION_DAYS``, which means a
+    rejected puzzle becomes eligible again roughly monthly. That is a feature:
+    it is one cheap retry after a prompt change, not a loop.
 
     Returns 0 when naming is disabled, so a deployment that never turns naming
     on cannot queue work that will never be done.
@@ -325,6 +344,17 @@ def pending_count(db: Session, username: str) -> int:
 
     if not config.naming_is_enabled():
         return 0
+
+    answered = (
+        select(DiagnosisAuditLog.puzzle_id)
+        .where(
+            DiagnosisAuditLog.call_type == ai_naming.CALL_TYPE,
+            DiagnosisAuditLog.username == canonical_username(username),
+            DiagnosisAuditLog.status.in_(("accepted", "rejected")),
+            DiagnosisAuditLog.puzzle_id.is_not(None),
+        )
+        .scalar_subquery()
+    )
 
     return (
         db.scalar(
@@ -340,6 +370,7 @@ def pending_count(db: Session, username: str) -> int:
                 # NULL covers puzzles with no stats row at all.
                 (PuzzleStats.title_source.is_(None))
                 | (PuzzleStats.title_source.notin_(("ai", "user"))),
+                Puzzle.id.notin_(answered),
             )
         )
         or 0
