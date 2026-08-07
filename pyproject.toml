@@ -86,9 +86,9 @@ exclude = ["services/api/alembic/versions/"]
 # three under scripts/, and services/ingest/chesscom.py. 126 repo files are
 # read in total.
 #
-# The 12 listed below are silenced *entirely* -- `ignore_errors` is a
+# The 11 listed below are silenced *entirely* -- `ignore_errors` is a
 # per-module blackout, not a per-error suppression, so a new bug written into
-# one of these is as invisible as the old ones. 114 files are enforced.
+# one of these is as invisible as the old ones. 115 files are enforced.
 #
 # Two limits worth stating, because "no issues found in 119 source files" reads
 # stronger than it is:
@@ -96,24 +96,24 @@ exclude = ["services/api/alembic/versions/"]
 #     with no annotations at all is skipped wholesale. Production code is 92%
 #     annotated, so little is lost there; test files are 2.5%, so most test
 #     bodies are not checked. Flipping it today costs 1 production error and
-#     185 in tests; 127 production errors once this debt list comes off. Worth
+#     185 in tests; 119 production errors once this debt list comes off. Worth
 #     doing, as its own change.
 #   - `ignore_missing_imports` above also hides typo'd or undeclared imports.
 #
-# The debt is concentrated. ratings.py alone accounts for 75 of the 120 errors:
+# The debt is concentrated. ratings.py alone accounts for 75 of the 112 errors:
 # mostly one heterogeneous `game_details` dict that should be a dataclass
 # (correct at runtime, weak as a type), plus ~14 from rebinding a single `stmt`
 # local across differently-typed select()s, which is an inference artifact
 # rather than debt.
 #
-# puzzles/generator.py is the entry that is NOT cosmetic. Its `str | None`
-# reaching a `str` parameter is a live crash path: chess.Board.is_game_over()
-# is true for insufficient material, the 75-move rule AND fivefold repetition
-# while legal moves remain -- fivefold being the likeliest of the three in
-# imported games -- so the position before a played move CAN be terminal and
-# best_move_uci CAN be None. What prevents it today is a swing==0 filter and
-# Chess.com auto-drawing those games -- neither a guarantee this repo owns.
-# That one is to-fix-now, not to-fix-eventually.
+# puzzles/generator.py used to head this list as the one entry that was NOT
+# cosmetic: its `str | None` reaching a `str` parameter was a live crash path.
+# chess.Board.is_game_over() is true for insufficient material, the 75-move
+# rule AND fivefold repetition while legal moves remain, so the position before
+# a played move CAN be terminal and best_move_uci CAN be None -- and the None
+# aborted the whole generation batch via chess.Move.from_uci(None). Fixed and
+# enforced in #367 (a guard in the ply loop, plus a regression test), which is
+# why it is no longer listed. The 11 that remain are the cosmetic ones.
 [[tool.mypy.overrides]]
 module = [
     "services.api.ai.client",
@@ -125,7 +125,6 @@ module = [
     "services.api.main",
     "services.api.openings.tree_builder",
     "services.api.ops",
-    "services.api.puzzles.generator",
     "services.api.puzzles_routes",
     "services.api.ratings",
 ]
