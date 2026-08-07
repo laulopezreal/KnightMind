@@ -153,19 +153,23 @@ def test_a_name_landing_on_the_answer_square_is_rejected(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "spoiler",
+    "name",
     [
         "Missed Fork Again",
         "Pinned and Sorry",
-        "Mate Was Available",
-        # Both of these reached real output before the word list covered them.
         "Six Seconds of Free Knight",
         "Check With Interest",
     ],
 )
-def test_a_name_that_says_the_tactic_is_rejected(monkeypatch, spoiler):
-    _respond_with(monkeypatch, _Response(text=json.dumps({"name": spoiler})))
-    assert ai_naming.name_puzzle(facts()).reason.startswith("name_reveals_tactic:")
+def test_a_name_may_say_the_tactic(monkeypatch, name):
+    """These were rejected until the UI was actually looked at.
+
+    Puzzles.tsx renders `primary_motif` as a badge beside the title while the
+    player is solving, so refusing the word "fork" here protected nothing and
+    cost the names their best material.
+    """
+    _respond_with(monkeypatch, _Response(text=json.dumps({"name": name})))
+    assert ai_naming.name_puzzle(facts()).usable
 
 
 def test_a_square_that_is_not_the_answer_is_fine(monkeypatch):
@@ -174,15 +178,17 @@ def test_a_square_that_is_not_the_answer_is_fine(monkeypatch):
     assert ai_naming.name_puzzle(facts()).usable
 
 
-def test_the_answer_is_in_the_prompt_and_labelled_as_off_limits():
-    """The model IS told the solution — withholding it made names worse without
-    making them safer (see naming_prompts' docstring). The gate, not the
-    prompt's contents, is what keeps the answer out of the name."""
+def test_the_answer_reaches_the_prompt_with_only_the_square_off_limits():
+    """The model IS told the solution and the motif — withholding either made
+    names measurably worse without making them safer (see naming_prompts'
+    docstring). The square is the one part still fenced off, and the gate, not
+    the prompt, is what enforces it."""
     from services.api.puzzles.naming_prompts import build_user_prompt
 
     prompt = build_user_prompt(facts(best_move_san="Nxg4", primary_motif="fork"))
     assert "Nxg4" in prompt
-    assert "DO NOT NAME THIS" in prompt
+    assert "fork" in prompt
+    assert "never the square" in prompt
     assert "h3" in prompt  # the played move travels too
 
 

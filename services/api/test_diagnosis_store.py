@@ -129,7 +129,10 @@ def _puzzle(
         PuzzleStats(
             puzzle_id=puzzle_id,
             username=username,
-            title="The Hanging Queen",
+            # Per-puzzle, not a constant: titles are unique per user
+            # (uq_puzzle_stats_username_title) and these tests seed several
+            # puzzles for one user.
+            title=f"The Hanging Queen {puzzle_id}",
             primary_motif=motif,
             attempts=3,
             pass_count=1,

@@ -42,32 +42,30 @@ CLOCK_SLOW_SECONDS = 60.0
 SYSTEM_PROMPT = f"""\
 You name chess puzzles. Each puzzle is one position where a player missed \
 something in their own game. The name sits in their library beside a board \
-they are about to try to solve.
+they are about to try to solve — a shelf of their own blunders they scroll \
+past every day.
 
-You ARE told what they missed. That is so you can choose your angle \
-precisely — it is NOT permission to state it. If someone could read your name \
-and find the move without studying the board, the name has failed.
+Name the moment. The tactic, what they played instead, what a piece was doing, \
+what got overlooked, how long they took, whether they somehow won anyway — all \
+of it is fair material.
 
-So: use the tactic to decide what the moment is *about*, then name something \
-adjacent to it — what they did instead, what a piece was doing, what got \
-overlooked, how it felt.
-
-Never name the tactic. Never write fork, pin, skewer, mate, hanging, loose, \
-free, or check. Never name the square the winning move lands on.
+The ONE thing you may not do is name the square the winning move lands on. \
+The player is about to look for that move; do not point at it. Everything \
+short of the square is yours.
 
 GOOD:
   Dark Bishop Slept In
   Queen Walked Right Past It
   Nowhere Left for the Bishop
-  Wrong Piece Went First
+  Fork Season Opens Early
   Grabbed a Pawn Instead
   Knight Went Wandering
+  Pinned and Cheerful About It
   Won It Anyway
 
-BAD — hands over the answer:
-  The e5 Fork Never Came
+BAD — names the square, so it gives the move away:
   Mate Was on d8
-  Bishop Was Hanging
+  Nf7 Was Sitting There
 
 BAD — dull, templated, or opens with "The":
   The Bishop Sat on c3
@@ -77,8 +75,8 @@ BAD — dull, templated, or opens with "The":
 Write a TITLE. Two to four words. ONE clause — no commas. At most \
 {MAX_NAME_CHARS} characters.
 
-Do NOT begin with "The". Open with a verb, a number, a square, a noun, a \
-preposition — anything but that article.
+Do NOT begin with "The". Open with a verb, a number, a noun, a preposition — \
+anything but that article.
 
 Other constraints:
 - Never invent facts. If you are not told the clock, there was no time \
@@ -86,7 +84,7 @@ trouble. If you are not told the result, nobody won.
 - Never address the player as "you", and never refer to their opponent.
 - Title Case. No trailing period. No quotation marks.
 
-Dry wit, not jokes. Aim at the feeling of the mistake, never its solution."""
+Dry wit, not jokes. Specific beats clever; when you can have both, take both."""
 
 
 def build_user_prompt(facts, avoid: list[str] | None = None) -> str:
@@ -108,7 +106,10 @@ def build_user_prompt(facts, avoid: list[str] | None = None) -> str:
         missed = facts.best_move_san
         if facts.primary_motif:
             missed = f"{missed} ({facts.primary_motif})"
-        lines.append(f"What they missed — DO NOT NAME THIS: {missed}")
+        lines.append(
+            f"What they missed (name the idea if you like — never the square): "
+            f"{missed}"
+        )
 
     if facts.move_number is not None:
         lines.append(f"Move number: {facts.move_number}")

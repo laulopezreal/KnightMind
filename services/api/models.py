@@ -193,6 +193,13 @@ class FenEvalCache(Base):
     )
 
 
+# The per-user title uniqueness index, named once so the model, the code that
+# recognises its IntegrityError (services.api.puzzles.title_registry) and the
+# tests all mean the same object. The migration that creates it spells the name
+# out literally, as migrations must.
+PUZZLE_TITLE_UNIQUE_INDEX = "uq_puzzle_stats_username_title"
+
+
 class PuzzleStats(Base):
     __tablename__ = "puzzle_stats"
     __table_args__ = (
@@ -201,6 +208,25 @@ class PuzzleStats(Base):
             "username",
             "fail_count",
             "last_reviewed_at",
+        ),
+        # A title is a display name, and a library that shows the same name
+        # twice cannot be navigated: "The Missed Win" appeared 103 times for one
+        # user. Application code deduplicated within a single naming pass, which
+        # says nothing about the pass before it — so uniqueness has to be a
+        # property of the table, not of a run.
+        #
+        # Scoped to the user, not global. Two users independently reaching the
+        # same fork on f7 SHOULD both get "The f7 Knight Fork"; making that
+        # collide would let one tenant's corpus rename another's.
+        #
+        # Not partial, and that matters: Postgres treats NULLs as distinct in a
+        # unique index, so the untitled rows (a stats row written before its
+        # name was computed) stay unconstrained for free.
+        Index(
+            PUZZLE_TITLE_UNIQUE_INDEX,
+            "username",
+            "title",
+            unique=True,
         ),
         {"extend_existing": True},
     )

@@ -218,39 +218,17 @@ def _first_text(response) -> str | None:
     return None
 
 
-# Words that name the tactic. Any of these is most of the answer handed over
-# before the user has looked at the board.
-_SPOILER_WORDS = frozenset(
-    {
-        "fork",
-        "forks",
-        "forked",
-        "forking",
-        "pin",
-        "pins",
-        "pinned",
-        "pinning",
-        "skewer",
-        "skewers",
-        "skewered",
-        "mate",
-        "mates",
-        "mated",
-        "mating",
-        "checkmate",
-        "hanging",
-        "hangs",
-        "hung",
-        "loose",
-        # "free" and "check" reached the output before these were added:
-        # "Six Seconds of Free Knight", "Check With Interest". Both point
-        # straight at the move.
-        "free",
-        "check",
-        "checks",
-        "checked",
-    }
-)
+# Naming the tactic used to be rejected here. It is not any more, and the
+# reason is that the check was protecting nothing: the solving page renders
+# `primary_motif` as a badge beside the title (Puzzles.tsx, both the desktop
+# header and the mobile context bar, neither gated on solved state), and the
+# app has a whole motif-filter feature built around exposing it. Banning the
+# word "fork" from a name that sits next to a badge reading "Fork" cost real
+# quality — it is what pushed the model onto the clock, then onto the played
+# move — and bought nothing.
+#
+# The square is a different matter and is still refused: the badge names the
+# motif, never WHICH move. See _validate.
 
 
 def _validate(parsed: PuzzleName, facts: NameFacts) -> str | None:
@@ -280,16 +258,12 @@ def _validate(parsed: PuzzleName, facts: NameFacts) -> str | None:
     if "," in name:
         return "name_has_two_clauses"
 
-    # The name is shown beside a board the user is about to solve. The prompt
-    # is not told the winning move, but the model can see the FEN and work it
-    # out, so refusing the answer is enforced here rather than trusted.
+    # The one spoiler still worth refusing. The UI already tells the user the
+    # motif — a badge reading "Fork" sits beside this name while they solve —
+    # so a name that says "fork" adds nothing. It does NOT tell them the
+    # square, and "Nf7 Was There" would hand over the move itself.
     words = {w.strip(".!?'\"").lower() for w in name.split()}
-
     if facts.answer_square and facts.answer_square.lower() in words:
         return f"name_reveals_answer_square:{facts.answer_square}"
-
-    spoilers = words & _SPOILER_WORDS
-    if spoilers:
-        return f"name_reveals_tactic:{','.join(sorted(spoilers))}"
 
     return None

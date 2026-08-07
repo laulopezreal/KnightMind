@@ -80,11 +80,19 @@ def _create_puzzle(
     db.flush()
 
 
+# Sentinel: "no title was asked for", which is not the same as title=None (a
+# genuinely untitled row, which several tests want).
+_FROM_PUZZLE_ID = object()
+
+
 def _create_stats(
     db,
     puzzle_id: str,
     username: str = "testuser",
-    title: str | None = "Test Puzzle",
+    # Derived from the puzzle id, not a constant: titles are unique per user
+    # (uq_puzzle_stats_username_title), so a shared default would make any test
+    # that seeds two rows fail on the constraint rather than on its subject.
+    title: str | None = _FROM_PUZZLE_ID,
     primary_motif: str | None = None,
     attempts: int = 0,
     pass_count: int = 0,
@@ -94,6 +102,8 @@ def _create_stats(
     next_due_at: datetime | None = None,
 ):
     """Helper: create a PuzzleStats row."""
+    if title is _FROM_PUZZLE_ID:
+        title = f"Test Puzzle {puzzle_id}"
     db.add(
         PuzzleStats(
             puzzle_id=puzzle_id,

@@ -204,10 +204,23 @@ def backfill_puzzle_identity(db: Session):
 
     # Imported here, not at module scope: position_names reads MOTIF_TITLES
     # from this module, so a top-level import would close the cycle.
+    # title_registry imports position_names, so it inherits the same rule.
     from services.api.puzzles.position_names import (
         PositionFacts,
         compose_position_name,
+        disambiguate,
     )
+    from services.api.puzzles.title_registry import taken_titles
+    from services.api.usernames import canonical_username
+
+    # Titles are unique per user, and this loop is one commit for every row it
+    # touched — run from ``lifespan``, so an IntegrityError here does not fail a
+    # backfill, it fails the API's startup. The names must be free before they
+    # are written, never after.
+    #
+    # Only NULL titles are selected, so nothing here vacates a name: this set
+    # only ever grows, and no two rows can be handed the same one.
+    used: dict[str, set[str]] = {}
 
     for stats in stats_to_update:
         # Load puzzle data to (potentially) determine motif
@@ -219,14 +232,23 @@ def backfill_puzzle_identity(db: Session):
         # Name from the position rather than from the motif alone. The motif
         # table has seven strings in it, so naming from it gave every puzzle
         # that fell through to the default motif the same title.
+        move_number = (getattr(puzzle, "ply", 0) or 0) // 2 + 1
         title = compose_position_name(
             PositionFacts(
                 fen=getattr(puzzle, "fen", "") or "",
                 best_move_uci=getattr(puzzle, "best_move_uci", "") or "",
                 primary_motif=motif,
-                move_number=(getattr(puzzle, "ply", 0) or 0) // 2 + 1,
+                move_number=move_number,
             )
         )
+        # Keyed by the canonical handle, the same fold taken_titles applies —
+        # two buckets seeded from one set would each hand out names the other
+        # cannot see.
+        owner = canonical_username(stats.username)
+        if owner not in used:
+            used[owner] = taken_titles(db, owner)
+        title = disambiguate(title, used[owner], move_number)
+        used[owner].add(title)
 
         # Update DB
         stats.primary_motif = motif

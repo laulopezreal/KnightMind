@@ -120,7 +120,10 @@ def test_reclassify_updates_stale_rows(db_session):
         fen=BACK_RANK_FEN,
         best_move=BACK_RANK_BEST,
         motif="blunder",
-        title="The Missed Win",
+        # Both rows really did read "The Missed Win" before per-user title
+        # uniqueness landed; that state is now unrepresentable, and the suffix
+        # is exactly what the migration gave the second copy.
+        title="The Missed Win (2)",
     )
 
     summary = reclassify_motifs(db_session)

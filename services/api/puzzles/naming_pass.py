@@ -21,6 +21,7 @@ import logging
 from collections import Counter
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from services.api.models import (
@@ -37,6 +38,7 @@ from services.api.puzzles.position_names import (
     compose_position_name,
     disambiguate,
 )
+from services.api.puzzles.title_registry import taken_titles
 from services.api.storage.ai_audit_repository import AIAuditRepository, AuditWrite
 from services.api.usernames import canonical_username
 
@@ -179,7 +181,32 @@ def name_puzzles(
         return budgets[key]
 
     outcomes: Counter = Counter()
-    used: set[str] = set()
+
+    # The names already spoken for, per user. Two things changed here and both
+    # matter.
+    #
+    # Seeded from the DATABASE, not from this run's rows. A pass is routinely
+    # partial — ``--limit`` bounds it, the background job takes 25 at a time,
+    # ``--username`` scopes it — so the names it can see are a fraction of the
+    # names the user holds. A set built from the run alone happily hands out a
+    # name some untouched puzzle already carries, which is how duplicates
+    # survived across runs in the first place.
+    #
+    # Keyed by user, because uniqueness is per user. One shared set would rename
+    # a puzzle because a DIFFERENT tenant reached the same fork square — a real
+    # possibility on a pass with no ``--username``.
+    used: dict[str, set[str]] = {}
+
+    def titles_for(handle: str) -> set[str]:
+        key = canonical_username(handle)
+        if key not in used:
+            used[key] = taken_titles(db, key)
+        return used[key]
+
+    # Distinct (user, title) pairs this pass saw, kept separately now that
+    # ``used`` is pre-loaded with names the pass never touched. It is reported
+    # as ``distinct`` and printed by scripts/ai_name_puzzles.py.
+    seen: set[tuple[str, str]] = set()
     recent: list[str] = []
     samples: list[tuple[str, str]] = []
     named = 0
@@ -189,18 +216,21 @@ def name_puzzles(
             break
 
         source = stats.title_source if stats else None
+        owner = canonical_username(puzzle.username)
         # A name the user typed is never touched, with or without --force.
         if source == "user":
             outcomes["kept_user_title"] += 1
+            # No need to reserve it: a kept title is already in the database,
+            # so titles_for() has it the moment anyone asks.
             if stats and stats.title:
-                used.add(stats.title)
+                seen.add((owner, stats.title))
             continue
         # An existing AI name is the cache. --force is how you invalidate it
         # after changing the prompt.
         if source == "ai" and not force:
             outcomes["already_named"] += 1
             if stats and stats.title:
-                used.add(stats.title)
+                seen.add((owner, stats.title))
             continue
 
         motif = (stats.primary_motif if stats else None) or assign_primary_motif(puzzle)
@@ -265,9 +295,27 @@ def name_puzzles(
                 name, title_source = fallback, "position"
 
         # The model is asked not to repeat itself but cannot be trusted to
-        # succeed at it, so uniqueness is enforced here regardless of source.
-        name = disambiguate(name, used, (puzzle.ply or 0) // 2 + 1)
-        used.add(name)
+        # succeed at it, so uniqueness is enforced here regardless of source —
+        # and now against the whole library, not just this run.
+        titles = titles_for(puzzle.username)
+        current = stats.title if stats is not None else None
+        # A row may always keep its own name, so its current title is excluded
+        # from what it collides against — otherwise every re-run would rename
+        # each puzzle away from itself ("The f7 Knight Fork" -> "..., move 12"
+        # -> "... (2)", forever).
+        #
+        # But the title it vacates is NOT handed to anybody else in this pass:
+        # ``titles`` keeps it. Reusing it here would mean two UPDATEs in one
+        # transaction swapping a name between rows, and Postgres checks a unique
+        # index per statement — whichever UPDATE the unit of work happened to
+        # emit first would fail against the row that had not moved yet.
+        # SQLAlchemy orders UPDATEs by primary key, so that is a coin flip, and
+        # a coin flip that aborts a naming run. The freed name is simply free
+        # from the NEXT pass on.
+        against = titles - {current} if current else titles
+        name = disambiguate(name, against, (puzzle.ply or 0) // 2 + 1)
+        titles.add(name)
+        seen.add((owner, name))
         recent.append(name)
         named += 1
         if len(samples) < 40:
@@ -300,13 +348,24 @@ def name_puzzles(
     if dry_run:
         db.rollback()
     else:
-        db.commit()
+        try:
+            db.commit()
+        except IntegrityError:
+            # Someone else took one of these names between our read and our
+            # commit — a puzzle saved by an import running alongside the job.
+            # This module promises not to raise into its callers (the operator
+            # CLI and a background job), and the work is recoverable: the
+            # puzzles stay pending, so the job re-queues and the next pass reads
+            # the name that beat us. Losing one batch beats failing the job.
+            db.rollback()
+            outcomes["title_conflict"] += 1
+            logger.warning("naming pass rolled back: a title was taken concurrently")
 
     return {
         "total": len(rows),
         "named": named,
         "outcomes": outcomes,
-        "distinct": len(used),
+        "distinct": len(seen),
         "samples": samples,
         # The tightest remaining allowance across the users actually touched;
         # None when nothing was ever charged (a dry run, or an empty scope).
