@@ -66,13 +66,11 @@ def upgrade() -> None:
         "puzzle_stats",
         sa.Column("title_source", sa.String(), nullable=True),
     )
-    op.execute(
-        """
+    op.execute("""
         UPDATE puzzle_stats
         SET title_source = 'motif'
         WHERE title IS NOT NULL AND title_source IS NULL
-        """
-    )
+        """)
 
 
 def downgrade() -> None:
