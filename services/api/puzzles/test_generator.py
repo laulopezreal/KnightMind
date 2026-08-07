@@ -15,6 +15,7 @@ from services.api.engine import (
     StockfishEngineDeadError,
     StockfishError,
 )
+from services.api.engine.stockfish import _terminal_eval_result
 from services.api.models import Game, PuzzleStats
 from services.api.puzzles.generator import (
     GenerationResult,
@@ -324,6 +325,76 @@ def test_walking_into_terminal_is_captured_not_dropped(
     assert len(puzzles) == 1
     # Won game (eval_before +9) thrown away to a draw (eval_after 0).
     assert puzzles[0].swing >= 2.0
+
+
+# White to move with a halfmove clock of 150: is_game_over() is True (the
+# 75-move rule) even though FIVE legal moves remain, including exf3 winning the
+# queen. Playing e3 instead is both a blunder and an IRREVERSIBLE move, so it
+# resets the clock and the after-position is a live, non-terminal position --
+# the combination that gets a terminal before-position all the way through the
+# swing filter.
+_SEVENTYFIVE_MOVE_FEN = "4k3/8/8/8/8/5q2/4P3/4K3 w - - 150 100"
+_SEVENTYFIVE_MOVE_PGN = f"""[Event "75-move rule, moves still legal"]
+[White "testuser"]
+[Black "opponent"]
+[FEN "{_SEVENTYFIVE_MOVE_FEN}"]
+[SetUp "1"]
+
+100. e3 *"""
+
+
+@patch("services.api.puzzles.generator.get_top_moves")
+@patch("services.api.puzzles.generator.get_ply_range")
+@patch("services.api.puzzles.generator.create_engine")
+def test_terminal_before_position_without_best_move_is_skipped(
+    mock_create_engine, mock_ply, mock_top, temp_storage
+):
+    """A position that is game-over *while legal moves remain* must be skipped,
+    not crash the batch.
+
+    ``chess.Board.is_game_over()`` is True for insufficient material, the
+    75-move rule and fivefold repetition -- none of which stop the side to move
+    from having legal moves. The engine short-circuits every terminal FEN to
+    ``best_move_uci=None``, so the position before a move played from such a
+    position evaluates to a None best move. Before the guard that None flowed
+    into the acceptance set and then into ``chess.Move.from_uci(None)``, whose
+    TypeError is not caught by the PV walk's ValueError handler -- aborting the
+    WHOLE generation run, not just this ply.
+    """
+    db = temp_storage
+    mock_create_engine.return_value = Mock()
+    mock_ply.return_value = (0, 100)
+    mock_top.return_value = []
+    _store_game(db, _SEVENTYFIVE_MOVE_PGN)
+
+    def eval_side_effect(fen, engine=None, cache_stats=None, depth=None):
+        board = chess.Board(fen)
+        if board.is_game_over():
+            # Exactly what the engine returns for a terminal FEN -- built by the
+            # production helper rather than hand-written, so this test tracks
+            # the real contract instead of a copy of it.
+            return _terminal_eval_result(board)
+        # The after-position: black is now winning, so the swing clears the
+        # threshold and the candidate reaches the confirmation/PV path.
+        return EvalResult(best_move_uci="f3f1", eval=5.0)
+
+    with patch(
+        "services.api.puzzles.generator.get_or_compute_eval",
+        side_effect=eval_side_effect,
+    ):
+        result = generate_puzzles("testuser", max_games=1, max_puzzles=10)
+
+    # The ply is analyzed and then skipped: no puzzle, and nothing counted as a
+    # failure -- nothing failed, there is simply no solution move to train.
+    assert result.analyzed_positions == 1
+    assert result.generated == 0
+    assert result.candidates_found == 0
+    assert result.failed_positions == 0
+    assert result.timed_out == 0
+    assert result.status == GenerationStatus.NO_MISTAKES.value
+
+    # And no solution-less puzzle was persisted.
+    assert PuzzleRepository(db).get_all_puzzles("testuser") == []
 
 
 @patch("services.api.puzzles.generator.get_ply_range")
