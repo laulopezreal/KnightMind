@@ -2,6 +2,7 @@ import hashlib
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import TypedDict
 
 from sqlalchemy import Row, func, select
 from sqlalchemy.exc import IntegrityError
@@ -21,6 +22,20 @@ MANUAL_GAME_ID = "__manual__"
 # with much larger IN lists, but capping the batch keeps each statement small
 # and bounds memory to roughly one batch of PGN blobs at a time.
 PGN_BATCH_SIZE = 1000
+
+
+class ImportSummaryRow(TypedDict):
+    """The last-import summary, as /import/status returns it.
+
+    A TypedDict rather than `dict[str, str | int]`: the two values have
+    different types, so the union form makes both reads `str | int | None` and
+    ImportStatusResponse rejects them. Pydantic then validates on construction,
+    so a drift here would surface as a 500 on GET /import/status rather than
+    as a type error -- exactly what the gate is for.
+    """
+
+    last_imported_at: str
+    last_new_games: int
 
 
 @dataclass
@@ -256,7 +271,7 @@ class GameRepository:
             )
         self.db.commit()
 
-    def get_last_import_summary(self, username: str) -> dict[str, str | int] | None:
+    def get_last_import_summary(self, username: str) -> ImportSummaryRow | None:
         """Get the last import summary for a user from the database."""
         from services.api.models import ImportSummary
 

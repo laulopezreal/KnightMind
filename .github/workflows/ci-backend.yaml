@@ -92,15 +92,16 @@ jobs:
 
     # mypy prints "checked 119 source files" (the services/api crawl, with 32
     # migrations excluded); it also follows imports and enforces 7 more repo
-    # files, so 126 are read and 116 enforced, 10 carrying listed debt. See
-    # pyproject.toml for what this does and does not cover.
+    # files, so 126 are read and ALL are enforced -- the `ignore_errors` debt
+    # list is gone, 12 modules and 120 errors from where it started. See
+    # pyproject.toml for what this still does not cover (signatures, not just
+    # bodies).
     #
-    # Verified non-vacuous, in all three directions that matter: an injected
-    # return-type error in a checked module fails this step; the same error in
-    # a listed module does not; and -- since check_untyped_defs was turned on --
-    # `def f(): return 1 + "x"` in an UNANNOTATED body fails too. That last one
-    # silently passed until the flag went on, and needs its own probe, because
-    # declaring a return type is itself an annotation.
+    # Verified non-vacuous: an injected return-type error fails this step, and
+    # so does `def f(): return 1 + "x"` in an UNANNOTATED body -- which needs
+    # its own probe, because declaring a return type is itself an annotation,
+    # so a return-type error can never demonstrate that case. Each of the ten
+    # formerly-silenced modules was probed individually when it came off.
     - name: Type check
       run: uv run mypy services/api
 

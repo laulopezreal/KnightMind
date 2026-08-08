@@ -615,10 +615,11 @@ def create_daily_puzzle_session(
     puzzle_repository.mark_puzzles_used(username, puzzle_ids)
 
     # Reload specific puzzles to get updated used_on field
-    updated_puzzles = [
-        puzzle_repository.get_puzzle(username, pid) for pid in puzzle_ids
-    ]
-    updated_puzzles = [p for p in updated_puzzles if p is not None]
+    # A new name, not a rebind: reassigning the filtered list to the same
+    # variable keeps its declared type `list[Puzzle | None]`, so every later
+    # read still looks nullable.
+    fetched = [puzzle_repository.get_puzzle(username, pid) for pid in puzzle_ids]
+    updated_puzzles = [p for p in fetched if p is not None]
 
     # Get puzzle stats to include primary_motif
     all_stats = get_all_puzzle_stats(db, username)

@@ -81,57 +81,30 @@ check_untyped_defs = true
 # versions and re-typing an applied migration is never worth it.
 exclude = ["services/api/alembic/versions/"]
 
-# Modules carrying pre-existing type debt, checked when this was turned on.
-# This is a to-fix list, not an exemption list.
+# Every module under services/api is enforced. There is no `ignore_errors`
+# list any more: it began at 12 modules and 120 suppressed errors when the gate
+# went in, and is now empty.
 #
-# What the gate actually covers, measured rather than estimated. mypy prints
-# "checked 119 source files": that is the services/api crawl, with the 32
-# migrations under alembic/versions excluded above and genuinely never parsed
-# (a syntax error in one does not fail the run). But it ALSO follows imports
-# and enforces 7 repo files that count never mentions -- root conftest.py,
-# three under scripts/, and services/ingest/chesscom.py. 126 repo files are
-# read in total.
+# What the gate covers, measured rather than estimated. mypy prints "checked
+# 119 source files": that is the services/api crawl, with the 32 migrations
+# under alembic/versions excluded above and genuinely never parsed (a syntax
+# error in one does not fail the run). But it ALSO follows imports and enforces
+# 7 repo files that count never mentions -- root conftest.py, three under
+# scripts/, and services/ingest/chesscom.py. 126 repo files are read, all
+# enforced.
 #
-# The 10 listed below are silenced *entirely* -- `ignore_errors` is a
-# per-module blackout, not a per-error suppression, so a new bug written into
-# one of these is as invisible as the old ones. 116 files are enforced.
-#
-# Two limits still worth stating:
+# Two limits remain:
 #   - `ignore_missing_imports` above also hides typo'd or undeclared imports.
-#   - `check_untyped_defs` (now on -- it cost 186 fixes, 185 of them in test
-#     bodies nothing had ever looked at) checks BODIES, not signatures. A call
-#     to an unannotated helper still returns Any and erases everything
-#     downstream of it: 80% of defs here have no return annotation, and 97% of
-#     test defs are unannotated entirely. That is why the None-guards this
-#     needed look arbitrary -- they landed wherever Any did not intervene.
+#   - `check_untyped_defs` checks BODIES, not signatures. A call to an
+#     unannotated helper still returns Any and erases everything downstream of
+#     it: 80% of defs here have no return annotation, and 97% of test defs are
+#     unannotated entirely. "Every module is enforced" is a claim about
+#     modules, not about every expression inside them.
 #
-# The list is shrinking, not sitting there: it began at 12 modules and 120
-# errors. puzzles/generator.py left in #367 and ratings.py -- which alone
-# carried 75 of the errors -- leaves here, so 10 modules remain. They hold 43
-# errors with check_untyped_defs on (37 with it off).
-#
-# puzzles/generator.py used to head this list as the one entry that was NOT
-# cosmetic: its `str | None` reaching a `str` parameter was a live crash path.
-# chess.Board.is_game_over() is true for insufficient material, the 75-move
-# rule AND fivefold repetition while legal moves remain, so the position before
-# a played move CAN be terminal and best_move_uci CAN be None -- and the None
-# aborted the whole generation batch via chess.Move.from_uci(None). Fixed and
-# enforced in #367 (a guard in the ply loop, plus a regression test), which is
-# why it is no longer listed. The 10 that remain are the cosmetic ones.
-[[tool.mypy.overrides]]
-module = [
-    "services.api.ai.client",
-    "services.api.analysis.scheduler_eval",
-    "services.api.benchmarks.fixtures",
-    "services.api.benchmarks.runner",
-    "services.api.dashboard",
-    "services.api.diagnosis.job",
-    "services.api.main",
-    "services.api.openings.tree_builder",
-    "services.api.ops",
-    "services.api.puzzles_routes",
-]
-ignore_errors = true
+# If a future change cannot be typed cleanly, add a narrow `# type: ignore[code]`
+# at the line with a reason, rather than reinstating a per-module blackout --
+# `ignore_errors` silences NEW bugs in a module as completely as old ones,
+# which is what made the original list worth deleting rather than living with.
 
 [tool.ruff]
 # Exclude a variety of commonly ignored directories.

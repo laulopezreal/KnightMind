@@ -9,7 +9,7 @@ Provides comprehensive dashboard data including:
 """
 
 from datetime import datetime, timedelta, timezone
-from typing import Literal
+from typing import Literal, cast
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
@@ -151,7 +151,13 @@ def calculate_recent_form(db: Session, username: str) -> RecentFormData:
         )
 
     # Extract results
-    results = [r.result for r in reversed(reviews)]  # Oldest first
+    # PuzzleResult is a `str, Enum` whose only members are "pass" and "fail",
+    # so these ARE the literals the response model declares -- mypy just sees
+    # the enum type. Correct at runtime; the cast records why.
+    results = cast(
+        list[Literal["pass", "fail"]],
+        [r.result for r in reversed(reviews)],  # Oldest first
+    )
 
     # Calculate accuracy
     pass_count = sum(1 for r in results if r == "pass")
@@ -160,6 +166,7 @@ def calculate_recent_form(db: Session, username: str) -> RecentFormData:
     # Trend is directional only with enough reviews; below the threshold the
     # honest signal is "steady" + insufficient_data (a 2/2 split is not a trend).
     insufficient_data = len(results) < MIN_REVIEWS_FOR_FORM_TREND
+    trend: Literal["up", "down", "steady"]
     if insufficient_data:
         trend = "steady"
     else:
@@ -409,14 +416,15 @@ def get_motif_trends(
         # Direction is descriptive and only reported once the sample is big
         # enough; otherwise a two-attempt swing would read as a "trend".
         insufficient_data = total_reviews < MIN_REVIEWS_FOR_MOTIF_TREND
+        motif_trend: Literal["up", "down", "steady"]
         if insufficient_data:
-            trend = "steady"
+            motif_trend = "steady"
         elif change > 0.05:
-            trend = "up"
+            motif_trend = "up"
         elif change < -0.05:
-            trend = "down"
+            motif_trend = "down"
         else:
-            trend = "steady"
+            motif_trend = "steady"
 
         formatted_points = [
             TrendDataPoint(date=day, accuracy=round(accuracy, 3))
@@ -429,7 +437,7 @@ def get_motif_trends(
                 start_accuracy=round(start_accuracy, 3),
                 end_accuracy=round(end_accuracy, 3),
                 change=round(change, 3),
-                trend=trend,
+                trend=motif_trend,
                 total_reviews=total_reviews,
                 insufficient_data=insufficient_data,
                 data_points=formatted_points,
