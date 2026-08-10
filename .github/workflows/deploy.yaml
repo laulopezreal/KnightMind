@@ -1,8 +1,14 @@
 # ============================================================================
 # KnightMind – Deploy to Hetzner VPS
 # ============================================================================
-# Triggers on push to main (after CI passes).
-# SSHs into the server, pulls latest code, rebuilds, and restarts.
+# Triggers on push to main. SSHs into the server, pulls latest code, rebuilds,
+# and restarts.
+#
+# CI is gated by the `ci-gate` job below, which waits for this commit's checks
+# and refuses to deploy over a red one. It used to say "enforced by branch
+# protection" -- which was false: neither main nor dev is protected and there
+# are no rulesets, so every check was advisory while this workflow deployed
+# regardless.
 #
 # Required GitHub Secrets:
 #   DEPLOY_HOST       – Server tailnet IP or MagicDNS name (reached over the tailnet)
@@ -19,6 +25,11 @@ on:
   push:
     branches: [ main ]
   workflow_dispatch:  # Allow manual trigger
+    inputs:
+      skip_ci_gate:
+        description: "Break-glass: deploy without waiting for CI. Say why in the run notes."
+        type: boolean
+        default: false
 
 # Prevent concurrent deployments
 concurrency:
@@ -26,15 +37,82 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Gate: only deploy if CI passes
-  ci-check:
+  # The real gate. Waits for every other check run on this commit to finish,
+  # then refuses to deploy if any of them failed.
+  #
+  # Branch protection would be the stronger control -- it stops the merge rather
+  # than the deploy -- and this job does not replace it. It exists because the
+  # repo has none, so without it a red `test (3.13)` reached production
+  # unimpeded.
+  ci-gate:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - name: Check CI status
-        run: echo "Deploy triggered — CI checks enforced by branch protection."
+      - name: Wait for this commit's checks, and refuse a red one
+        if: github.event.inputs.skip_ci_gate != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.sha }}
+          REPO: ${{ github.repository }}
+          # This job is itself a check run on this commit. Without excluding it
+          # the gate waits on its own completion and times out every time.
+          SELF: ci-gate
+        run: |
+          set -euo pipefail
+          deadline=$(( SECONDS + 25 * 60 ))
+          # A commit can legitimately have no checks at all: every workflow here
+          # is paths-filtered, so a docs-only push to main runs none of them.
+          # Waiting the full deadline for checks that will never register would
+          # turn that into a 25-minute red deploy, so give registration a short
+          # grace period and treat a genuinely empty set as nothing to verify.
+          grace=$(( SECONDS + 3 * 60 ))
+          while :; do
+            runs=$(gh api "repos/${REPO}/commits/${SHA}/check-runs" \
+                     --jq ".check_runs[] | select(.name != \"${SELF}\") |
+                           [.name, .status, (.conclusion // \"-\")] | @tsv")
+
+            if [ -z "${runs}" ]; then
+              if [ "${SECONDS}" -ge "${grace}" ]; then
+                echo "::warning::No checks registered on ${SHA} after 3 minutes."
+                echo "Nothing to verify -- every workflow is paths-filtered and none matched."
+                exit 0
+              fi
+              echo "No other check runs are registered on ${SHA} yet; waiting."
+            else
+              printf '%s\n' "${runs}" | awk -F'\t' '{printf "  %-24s %-12s %s\n", $1, $2, $3}'
+            fi
+
+            pending=$(printf '%s\n' "${runs}" | awk -F'\t' '$2 != "completed"' | wc -l | tr -d ' ')
+            if [ "${pending}" -eq 0 ] && [ -n "${runs}" ]; then
+              break
+            fi
+            if [ "${SECONDS}" -ge "${deadline}" ]; then
+              echo "::error::Timed out waiting for checks on ${SHA}. Not deploying."
+              exit 1
+            fi
+            sleep 20
+          done
+
+          # Anything that is not a pass blocks: `failure`, `cancelled`,
+          # `timed_out`, and `action_required` all mean nobody confirmed this
+          # commit is good. `skipped` and `neutral` are fine -- a paths filter
+          # legitimately skips backend CI for a frontend-only change.
+          bad=$(printf '%s\n' "${runs}" |
+                awk -F'\t' '$3 != "success" && $3 != "skipped" && $3 != "neutral"')
+          if [ -n "${bad}" ]; then
+            echo "::error::Refusing to deploy ${SHA}; these checks did not pass:"
+            printf '%s\n' "${bad}" | awk -F'\t' '{printf "  %s: %s\n", $1, $3}'
+            exit 1
+          fi
+          echo "All checks on ${SHA} passed. Proceeding."
+
+      - name: Record a break-glass deploy
+        if: github.event.inputs.skip_ci_gate == 'true'
+        run: |
+          echo "::warning::CI gate SKIPPED by manual dispatch. Deploying ${{ github.sha }} unverified."
 
   deploy:
-    needs: ci-check
+    needs: ci-gate
     runs-on: ubuntu-latest
     environment: production
     timeout-minutes: 10
