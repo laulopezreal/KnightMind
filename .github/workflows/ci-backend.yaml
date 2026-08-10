@@ -92,16 +92,15 @@ jobs:
 
     # mypy prints "checked 119 source files" (the services/api crawl, with 32
     # migrations excluded); it also follows imports and enforces 7 more repo
-    # files, so 126 are read and 114 enforced, 12 carrying listed debt. See
-    # pyproject.toml for what this does and does not cover -- notably that
-    # unannotated function bodies are skipped, which is most test bodies.
+    # files, so 126 are read and 116 enforced, 10 carrying listed debt. See
+    # pyproject.toml for what this does and does not cover.
     #
-    # Verified non-vacuous when added: an injected return-type error in a
-    # checked module fails this step, and the same error in a listed module
-    # does not. A return-type error cannot demonstrate the third case at all --
-    # declaring a return type IS an annotation, so such a function is always
-    # checked. That one needs a different probe: `def f(): return 1 + "x"` in a
-    # checked module passes silently.
+    # Verified non-vacuous, in all three directions that matter: an injected
+    # return-type error in a checked module fails this step; the same error in
+    # a listed module does not; and -- since check_untyped_defs was turned on --
+    # `def f(): return 1 + "x"` in an UNANNOTATED body fails too. That last one
+    # silently passed until the flag went on, and needs its own probe, because
+    # declaring a return type is itself an annotation.
     - name: Type check
       run: uv run mypy services/api
 

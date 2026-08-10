@@ -12,6 +12,7 @@ import os
 os.environ["KNIGHTMIND_WORKER_DISABLED"] = "true"
 
 from datetime import datetime, timedelta, timezone
+from typing import TypedDict
 
 import pytest
 from fastapi.testclient import TestClient
@@ -161,9 +162,24 @@ class TestNothingLately:
         assert response.status_code == 404
 
 
+class _KeyArgs(TypedDict):
+    """The make_key kwargs these tests hold fixed while varying `since`.
+
+    Annotated because a bare `dict(...)` infers as `dict[str, object]`, and
+    `make_key(**common, ...)` then reports every parameter as mistyped -- 18
+    of the errors check_untyped_defs surfaced came from these three literals.
+    """
+
+    username: str
+    color: str
+    max_ply: int
+    game_count: int
+    latest_game_time: datetime | None
+
+
 class TestCaching:
     def test_two_windows_do_not_share_an_entry(self):
-        common = dict(
+        common: _KeyArgs = dict(
             username="alice",
             color="white",
             max_ply=12,
@@ -183,7 +199,7 @@ class TestCaching:
         overnight, so without the resolved date, yesterday's "last 90 days"
         would be served today.
         """
-        common = dict(
+        common: _KeyArgs = dict(
             username="alice",
             color="white",
             max_ply=12,
@@ -196,7 +212,7 @@ class TestCaching:
         )
 
     def test_the_same_window_on_the_same_day_hits(self):
-        common = dict(
+        common: _KeyArgs = dict(
             username="alice",
             color="white",
             max_ply=12,

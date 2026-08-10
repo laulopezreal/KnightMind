@@ -259,6 +259,7 @@ def test_pgn_replay_feeds_recapture_and_clock_evidence():
     )
     # Black recaptures on c6 after White's Bxc6.
     fen = context.fen_before_move
+    assert fen is not None
     puzzle = PuzzleFacts(
         fen=fen,
         played_move_uci="d7c6",

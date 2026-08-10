@@ -82,10 +82,12 @@ class TestEnrichmentReachesTheRow:
         assert result["enriched"] == 1
 
         row = DiagnosisRepository(db_session).get(USER, "p1")
+        assert row is not None
         assert row.source == "llm"
         assert row.model_version == "claude-opus-5"
         assert row.model_confidence == 0.82
         assert row.agreed_with_rules is True
+        assert row.explanation is not None
         assert row.explanation.startswith("You left two pieces")
         assert row.training_recommendation
 
@@ -100,6 +102,7 @@ class TestEnrichmentReachesTheRow:
 
         run_diagnosis(FakeContext())
         row = DiagnosisRepository(db_session).get(USER, "p1")
+        assert row is not None
         assert row.primary_cause == "forcing_move_blindness"
         assert row.agreed_with_rules is False
 
@@ -123,6 +126,7 @@ class TestEnrichmentReachesTheRow:
 
         run_diagnosis(FakeContext())
         row = DiagnosisRepository(db_session).get(USER, "p1")
+        assert row is not None
         assert row.source == "rules"
         assert row.primary_cause == "loose_piece_awareness"  # from the rules
         assert row.explanation is None
@@ -146,7 +150,9 @@ class TestKillSwitch:
         assert result["diagnosed"] == 1
         assert result["enriched"] == 0
         assert db_session.query(DiagnosisAuditLog).count() == 0
-        assert DiagnosisRepository(db_session).get(USER, "p1").source == "rules"
+        row = DiagnosisRepository(db_session).get(USER, "p1")
+        assert row is not None
+        assert row.source == "rules"
 
 
 class TestBudget:
@@ -209,7 +215,9 @@ class TestBudget:
 
         rows = db_session.query(DiagnosisAuditLog).all()
         assert [r.reason for r in rows] == ["budget_exhausted"]
-        assert DiagnosisRepository(db_session).get(USER, "p1").source == "rules"
+        row = DiagnosisRepository(db_session).get(USER, "p1")
+        assert row is not None
+        assert row.source == "rules"
 
 
 class TestAuditTrail:
@@ -373,6 +381,7 @@ class TestRowStaysInternallyConsistent:
                 GameFacts(user_is_white=True),
             )
         )
+        assert row is not None
         expected = next(
             c.strength for c in assessment.candidates if c.cause == row.primary_cause
         )
@@ -443,7 +452,9 @@ class TestKeylessDeploymentLeavesNoTrace:
         assert result["diagnosed"] == 3
         assert result["enriched"] == 0
         assert db_session.query(DiagnosisAuditLog).count() == 0
-        assert DiagnosisRepository(db_session).get(USER, "p0").source == "rules"
+        row = DiagnosisRepository(db_session).get(USER, "p0")
+        assert row is not None
+        assert row.source == "rules"
 
 
 class TestBudgetWindowIsRolling:
@@ -492,7 +503,9 @@ class TestReenrichRun:
 
         result = run_diagnosis(FakeContext())
         assert result["enriched"] == 0
-        assert DiagnosisRepository(db_session).get(USER, "p1").explanation is None
+        row = DiagnosisRepository(db_session).get(USER, "p1")
+        assert row is not None
+        assert row.explanation is None
 
     def test_the_reenrich_scope_fills_in_the_prose(self, db_session, monkeypatch):
         _puzzle(db_session)
@@ -511,6 +524,7 @@ class TestReenrichRun:
         assert result["enriched"] == 1
 
         row = DiagnosisRepository(db_session).get(USER, "p1")
+        assert row is not None
         assert row.explanation
         assert row.model_version
 

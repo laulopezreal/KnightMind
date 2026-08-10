@@ -181,8 +181,11 @@ def test_blunder_is_treated_as_no_motif_recorded():
 
     # Case-insensitive on the check, but a real motif keeps its stored spelling
     # because it is used verbatim as a SQL equality predicate.
-    assert key_for("c", "BLUNDER", "middlegame").motif is None
-    assert key_for("c", "Fork", "middlegame").motif == "Fork"
+    blunder_key = key_for("c", "BLUNDER", "middlegame")
+    fork_key = key_for("c", "Fork", "middlegame")
+    assert blunder_key is not None and fork_key is not None
+    assert blunder_key.motif is None
+    assert fork_key.motif == "Fork"
 
 
 def test_describe_uses_the_house_cause_label_not_its_own():
@@ -232,6 +235,7 @@ def test_exact_match_preferred_over_looser_ones(db_session):
 
     repo = DiagnosisRepository(db_session)
     key = repo.cluster_key_for(USER, "p1")
+    assert key is not None
     ids, tier = repo.similar_puzzle_ids(USER, "p1", key, 5)
 
     assert tier is MatchTier.EXACT
@@ -246,6 +250,7 @@ def test_widens_to_cause_only_when_nothing_tighter_exists(db_session):
 
     repo = DiagnosisRepository(db_session)
     key = repo.cluster_key_for(USER, "p1")
+    assert key is not None
     ids, tier = repo.similar_puzzle_ids(USER, "p1", key, 5)
 
     assert tier is MatchTier.CAUSE_ONLY
@@ -266,6 +271,7 @@ def test_a_user_correction_moves_the_puzzle_between_clusters(db_session):
 
     repo = DiagnosisRepository(db_session)
     key = repo.cluster_key_for(USER, "p1")
+    assert key is not None
     ids, _ = repo.similar_puzzle_ids(USER, "p1", key, 5)
     assert ids == []
 
@@ -285,6 +291,7 @@ def test_other_users_puzzles_are_never_siblings(db_session):
 
     repo = DiagnosisRepository(db_session)
     key = repo.cluster_key_for(USER, "p1")
+    assert key is not None
     ids, _ = repo.similar_puzzle_ids(USER, "p1", key, 5)
     assert ids == []
 
@@ -297,6 +304,7 @@ def test_unanalysable_diagnoses_are_not_grouped(db_session):
 
     repo = DiagnosisRepository(db_session)
     key = repo.cluster_key_for(USER, "p1")
+    assert key is not None
     ids, _ = repo.similar_puzzle_ids(USER, "p1", key, 5)
     assert ids == []
 
@@ -377,6 +385,7 @@ def test_cause_and_phase_tier_groups_puzzles_with_no_usable_motif(db_session):
 
     repo = DiagnosisRepository(db_session)
     key = repo.cluster_key_for(USER, "p1")
+    assert key is not None
     assert key.motif is None  # "blunder" is not a motif
 
     ids, tier = repo.similar_puzzle_ids(USER, "p1", key, 5)
@@ -414,6 +423,7 @@ def test_siblings_are_ordered_by_puzzle_recency_not_diagnosis_time(db_session):
 
     repo = DiagnosisRepository(db_session)
     key = repo.cluster_key_for(USER, "anchor")
+    assert key is not None
     ids, _ = repo.similar_puzzle_ids(USER, "anchor", key, 5)
 
     assert ids == ["recent", "old"]

@@ -763,6 +763,7 @@ def _pg_review_harness():
     onto one connection and defeat the point; here two threads genuinely race on
     two connections.
     """
+    assert POSTGRES_URL is not None  # guarded by the `postgres` marker
     engine = create_engine(POSTGRES_URL)
     Base.metadata.create_all(engine)
     PgSession = sessionmaker(bind=engine)
