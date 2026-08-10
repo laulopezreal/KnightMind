@@ -86,9 +86,9 @@ exclude = ["services/api/alembic/versions/"]
 # three under scripts/, and services/ingest/chesscom.py. 126 repo files are
 # read in total.
 #
-# The 11 listed below are silenced *entirely* -- `ignore_errors` is a
+# The 10 listed below are silenced *entirely* -- `ignore_errors` is a
 # per-module blackout, not a per-error suppression, so a new bug written into
-# one of these is as invisible as the old ones. 115 files are enforced.
+# one of these is as invisible as the old ones. 116 files are enforced.
 #
 # Two limits worth stating, because "no issues found in 119 source files" reads
 # stronger than it is:
@@ -100,11 +100,9 @@ exclude = ["services/api/alembic/versions/"]
 #     doing, as its own change.
 #   - `ignore_missing_imports` above also hides typo'd or undeclared imports.
 #
-# The debt is concentrated. ratings.py alone accounts for 75 of the 112 errors:
-# mostly one heterogeneous `game_details` dict that should be a dataclass
-# (correct at runtime, weak as a type), plus ~14 from rebinding a single `stmt`
-# local across differently-typed select()s, which is an inference artifact
-# rather than debt.
+# The list is shrinking, not sitting there: it began at 12 modules and 120
+# errors. puzzles/generator.py left in #367 and ratings.py -- which alone
+# carried 75 of the errors -- leaves here, so 10 modules and 37 errors remain.
 #
 # puzzles/generator.py used to head this list as the one entry that was NOT
 # cosmetic: its `str | None` reaching a `str` parameter was a live crash path.
@@ -113,7 +111,7 @@ exclude = ["services/api/alembic/versions/"]
 # a played move CAN be terminal and best_move_uci CAN be None -- and the None
 # aborted the whole generation batch via chess.Move.from_uci(None). Fixed and
 # enforced in #367 (a guard in the ply loop, plus a regression test), which is
-# why it is no longer listed. The 11 that remain are the cosmetic ones.
+# why it is no longer listed. The 10 that remain are the cosmetic ones.
 [[tool.mypy.overrides]]
 module = [
     "services.api.ai.client",
@@ -126,7 +124,6 @@ module = [
     "services.api.openings.tree_builder",
     "services.api.ops",
     "services.api.puzzles_routes",
-    "services.api.ratings",
 ]
 ignore_errors = true
 
