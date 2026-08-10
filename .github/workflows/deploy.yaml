@@ -47,6 +47,12 @@ jobs:
   ci-gate:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # Explicit: the repo is public today so an unauthenticated read works, but
+    # the default workflow permission here is `read` and this would 403 on the
+    # day the repo goes private.
+    permissions:
+      checks: read
+      contents: read
     steps:
       - name: Wait for this commit's checks, and refuse a red one
         if: github.event.inputs.skip_ci_gate != 'true'
@@ -54,9 +60,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           SHA: ${{ github.sha }}
           REPO: ${{ github.repository }}
-          # This job is itself a check run on this commit. Without excluding it
-          # the gate waits on its own completion and times out every time.
-          SELF: ci-gate
+          # Every job in THIS workflow is a check run on this commit, so all of
+          # them must be excluded. `ci-gate` is obvious -- without it the gate
+          # waits on its own completion. `deploy` is the one that bites: a
+          # previous attempt's `deploy: failure` is still attached to the SHA,
+          # so "Re-run all jobs" after a transient SSH failure would find it and
+          # refuse forever, leaving break-glass as the only way out. That turns
+          # a false block into routinely deploying with the gate switched off.
+          SELF_JOBS: "ci-gate|deploy"
         run: |
           set -euo pipefail
           deadline=$(( SECONDS + 25 * 60 ))
@@ -67,9 +78,38 @@ jobs:
           # grace period and treat a genuinely empty set as nothing to verify.
           grace=$(( SECONDS + 3 * 60 ))
           while :; do
-            runs=$(gh api "repos/${REPO}/commits/${SHA}/check-runs" \
-                     --jq ".check_runs[] | select(.name != \"${SELF}\") |
-                           [.name, .status, (.conclusion // \"-\")] | @tsv")
+            # A single transient 5xx must not kill a 25-minute gate -- during a
+            # GitHub incident, which is exactly when this matters, `set -e`
+            # would abort on the first blip of ~75 calls. Retry, and only give
+            # up if the API is unreachable three times running.
+            #
+            # per_page=100 because the default is 30 and the script would
+            # silently evaluate a subset; total_count is asserted against what
+            # was actually returned rather than assumed.
+            payload=""
+            for attempt in 1 2 3; do
+              if payload=$(gh api "repos/${REPO}/commits/${SHA}/check-runs?per_page=100" 2>/dev/null); then
+                break
+              fi
+              echo "check-runs query failed (attempt ${attempt}); retrying in 10s."
+              payload=""
+              sleep 10
+            done
+            if [ -z "${payload}" ]; then
+              echo "::error::Could not read check runs for ${SHA} after 3 attempts."
+              exit 1
+            fi
+
+            total=$(printf '%s' "${payload}" | jq -r '.total_count')
+            runs=$(printf '%s' "${payload}" |
+                   jq -r --arg self "${SELF_JOBS}" '
+                     .check_runs[] | select(.name | test("^(" + $self + ")$") | not) |
+                     [.name, .status, (.conclusion // "-")] | @tsv')
+            returned=$(printf '%s' "${payload}" | jq -r '.check_runs | length')
+            if [ "${total}" -gt "${returned}" ]; then
+              echo "::error::${total} check runs exist but only ${returned} were read; refusing to judge a subset."
+              exit 1
+            fi
 
             if [ -z "${runs}" ]; then
               if [ "${SECONDS}" -ge "${grace}" ]; then
@@ -145,9 +185,26 @@ jobs:
             # so every compose invocation must pass --env-file explicitly.
             COMPOSE="docker compose --env-file ${APP_DIR}/.env.docker"
 
-            echo "--- Pulling latest code ---"
+            echo "--- Checking out the exact commit CI verified ---"
+            # NOT `reset --hard origin/main`. The gate verifies ${{ github.sha }};
+            # resetting to whatever origin/main points at by the time the deploy
+            # runs can ship a DIFFERENT, unverified commit. The old 4-second
+            # echo made the two effectively identical, but a gate that waits up
+            # to 25 minutes opens a real window: merge X, gate waits on X, merge
+            # Y (red) lands meanwhile, and this line would deploy Y with X's
+            # green checks. Deploy exactly what was gated.
+            SHA="${{ github.sha }}"
             git fetch origin main
-            git reset --hard origin/main
+            # Refuse a SHA that is not on main. workflow_dispatch has no branch
+            # restriction, so dispatching from `dev` would otherwise gate dev's
+            # checks and then deploy main's code.
+            if ! git merge-base --is-ancestor "${SHA}" origin/main; then
+              echo "Refusing to deploy ${SHA}: it is not an ancestor of origin/main."
+              exit 1
+            fi
+            git fetch origin "${SHA}"
+            git reset --hard "${SHA}"
+            echo "Deploying ${SHA} ($(git log -1 --format=%s))"
 
             echo "--- Building new image ---"
             ${COMPOSE} build api
