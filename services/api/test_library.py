@@ -1,6 +1,7 @@
 """Tests for the GET /puzzles/list (Library) endpoint."""
 
 import os
+from typing import Any
 
 os.environ["KNIGHTMIND_WORKER_DISABLED"] = "true"
 
@@ -82,7 +83,10 @@ def _create_puzzle(
 
 # Sentinel: "no title was asked for", which is not the same as title=None (a
 # genuinely untitled row, which several tests want).
-_FROM_PUZZLE_ID = object()
+# Sentinel distinguishing "caller said nothing" from an explicit
+# title=None. Typed Any so it can sit in a `str | None` parameter
+# default without mypy rejecting the assignment.
+_FROM_PUZZLE_ID: Any = object()
 
 
 def _create_stats(

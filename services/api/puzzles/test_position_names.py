@@ -5,6 +5,8 @@ not vary" — 150 puzzles called ``The Missed Win``. So the load-bearing test he
 is the distinctness one, not the per-template ones.
 """
 
+from typing import Any
+
 import chess
 import pytest
 
@@ -21,7 +23,9 @@ CAPTURE_FEN = "rnbqkb1r/pppppppp/8/8/6n1/5N2/PPPPPPPP/RNBQKB1R w KQkq - 0 3"
 
 
 def facts(**kw) -> PositionFacts:
-    base = {
+    # Annotated dict[str, Any]: a bare literal infers dict[str, object],
+    # and splatting that into the dataclass is a mypy arg-type error.
+    base: dict[str, Any] = {
         "fen": CAPTURE_FEN,
         "best_move_uci": "f3g5",
         "primary_motif": "blunder",

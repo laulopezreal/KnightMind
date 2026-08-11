@@ -154,28 +154,42 @@ def _call(key: str, facts: NameFacts, avoid: list[str] | None):
 def _interpret(response, facts: NameFacts) -> NameOutcome:
     model_version = getattr(response, "model", config.NAMING_MODEL)
     usage = getattr(response, "usage", None)
-    tokens = {
-        "input_tokens": getattr(usage, "input_tokens", 0) or 0,
-        "output_tokens": getattr(usage, "output_tokens", 0) or 0,
-    }
+    # Passed explicitly at every call site below rather than splatted as
+    # **tokens: mypy maps a splatted dict onto parameters positionally and
+    # cannot see that these two land on the int fields, so it reports each
+    # construction as an arg-type error.
+    in_tok = int(getattr(usage, "input_tokens", 0) or 0)
+    out_tok = int(getattr(usage, "output_tokens", 0) or 0)
 
     stop = getattr(response, "stop_reason", None)
     if stop == "refusal":
         # Checked before reading content: a refused response has none.
         return NameOutcome(
-            REJECTED, reason="refusal", model_version=model_version, **tokens
+            REJECTED,
+            reason="refusal",
+            model_version=model_version,
+            input_tokens=in_tok,
+            output_tokens=out_tok,
         )
     if stop == "max_tokens":
         # Truncated JSON is not partially usable, and a truncated *name* would
         # be worse than none — it reads as a bug, not a joke.
         return NameOutcome(
-            REJECTED, reason="truncated", model_version=model_version, **tokens
+            REJECTED,
+            reason="truncated",
+            model_version=model_version,
+            input_tokens=in_tok,
+            output_tokens=out_tok,
         )
 
     raw = _first_text(response)
     if not raw:
         return NameOutcome(
-            REJECTED, reason="empty_response", model_version=model_version, **tokens
+            REJECTED,
+            reason="empty_response",
+            model_version=model_version,
+            input_tokens=in_tok,
+            output_tokens=out_tok,
         )
 
     try:
@@ -186,7 +200,8 @@ def _interpret(response, facts: NameFacts) -> NameOutcome:
             reason=f"schema:{exc.__class__.__name__}",
             raw_response=raw,
             model_version=model_version,
-            **tokens,
+            input_tokens=in_tok,
+            output_tokens=out_tok,
         )
 
     violation = _validate(parsed, facts)
@@ -197,7 +212,8 @@ def _interpret(response, facts: NameFacts) -> NameOutcome:
             reason=violation,
             raw_response=raw,
             model_version=model_version,
-            **tokens,
+            input_tokens=in_tok,
+            output_tokens=out_tok,
         )
 
     return NameOutcome(
@@ -205,7 +221,8 @@ def _interpret(response, facts: NameFacts) -> NameOutcome:
         name=parsed.name,
         raw_response=raw,
         model_version=model_version,
-        **tokens,
+        input_tokens=in_tok,
+        output_tokens=out_tok,
     )
 
 

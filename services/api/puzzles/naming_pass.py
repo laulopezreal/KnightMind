@@ -39,7 +39,11 @@ from services.api.puzzles.position_names import (
     disambiguate,
 )
 from services.api.puzzles.title_registry import taken_titles
-from services.api.storage.ai_audit_repository import AIAuditRepository, AuditWrite
+from services.api.storage.ai_audit_repository import (
+    AIAuditRepository,
+    AuditWrite,
+    Budget,
+)
 from services.api.usernames import canonical_username
 
 logger = logging.getLogger(__name__)
@@ -172,9 +176,9 @@ def name_puzzles(
     # --username the rows span users and a single budget would be charged
     # against whichever handle happened to be asked for — leaving the per-user
     # cap unenforced for everyone else.
-    budgets: dict[str, object] = {}
+    budgets: dict[str, Budget] = {}
 
-    def budget_for(handle: str):
+    def budget_for(handle: str) -> Budget:
         key = canonical_username(handle)
         if key not in budgets:
             budgets[key] = audit.budget_last_24h(key, call_type=ai_naming.CALL_TYPE)
@@ -289,7 +293,7 @@ def name_puzzles(
                 )
             )
             outcomes[outcome.status] += 1
-            if outcome.usable:
+            if outcome.usable and outcome.name:
                 name, title_source = outcome.name, "ai"
             else:
                 name, title_source = fallback, "position"

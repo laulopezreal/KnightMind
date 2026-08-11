@@ -7,6 +7,7 @@ isolation, and these are those tests.
 
 import json
 from dataclasses import dataclass
+from typing import Any
 
 import pytest
 from pydantic import ValidationError
@@ -18,7 +19,9 @@ FEN = "rnbqkb1r/pppppppp/8/8/6n1/5N2/PPPPPPPP/RNBQKB1R w KQkq - 0 3"
 
 
 def facts(**kw) -> ai_naming.NameFacts:
-    base = {
+    # Annotated dict[str, Any]: a bare literal infers dict[str, object],
+    # and splatting that into the dataclass is a mypy arg-type error.
+    base: dict[str, Any] = {
         "fen": FEN,
         "played_move_san": "h3",
         "move_number": 12,
