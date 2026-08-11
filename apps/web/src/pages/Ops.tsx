@@ -3,15 +3,11 @@ import { useState, useEffect, useCallback } from 'react';
 import { getHealth, getOpsStatus, getStorageReport, getUsers, ApiError, API_TARGET } from '../api';
 import type { HealthResponse, OpsStatusResponse, RecentJob, StorageReportResponse } from '../api';
 import { useChessUsername } from '../context/ChessUsernameContext';
+import { useAsyncData } from '../hooks/useAsyncData';
 
 export default function Ops() {
     const [health, setHealth] = useState<HealthResponse | null>(null);
     const [opsStatus, setOpsStatus] = useState<OpsStatusResponse | null>(null);
-    const [storageReport, setStorageReport] = useState<StorageReportResponse | null>(null);
-    const [storageLoading, setStorageLoading] = useState(false);
-    const [storageError, setStorageError] = useState<string | null>(null);
-    const [users, setUsers] = useState<string[]>([]);
-    const [usersError, setUsersError] = useState<string | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const { username, setUsername } = useChessUsername();
@@ -42,41 +38,54 @@ export default function Ops() {
         }
     }, []);
 
-    const fetchUsers = useCallback(async () => {
-        try {
-            const list = await getUsers();
-            setUsers(list);
-            setUsersError(null);
-        } catch (err) {
-            console.error('Failed to fetch users:', err);
-            setUsersError(getErrorMessage(err, 'Unable to load users.'));
-        }
-    }, []);
+    const { data: usersData, error: usersError, reload: reloadUsers } = useAsyncData<string[]>(
+        async () => {
+            try {
+                return await getUsers();
+            } catch (err) {
+                console.error('Failed to fetch users:', err);
+                throw new Error(getErrorMessage(err, 'Unable to load users.'));
+            }
+        },
+        [],
+    );
+    const users = usersData ?? [];
 
-    const fetchStorageReport = useCallback(async (filterUser?: string) => {
-        try {
-            setStorageLoading(true);
-            const report = await getStorageReport(filterUser);
-            setStorageReport(report);
-            setStorageError(null);
-        } catch (err) {
-            console.error('Failed to fetch storage report:', err);
-            setStorageError(getErrorMessage(err, 'Unable to load report.'));
-        } finally {
-            setStorageLoading(false);
-        }
-    }, []);
+    // This one gains a guarantee it did not have: the report is keyed on
+    // `selectedUser`, and nothing stopped an earlier, slower response from
+    // landing after a later one and showing another user's report under the
+    // current name. The hook's staleness guard closes that.
+    const {
+        data: storageReport,
+        error: storageError,
+        loading: storageLoading,
+        reload: reloadStorageReport,
+    } = useAsyncData<StorageReportResponse>(
+        async () => {
+            try {
+                return await getStorageReport(selectedUser || undefined);
+            } catch (err) {
+                console.error('Failed to fetch storage report:', err);
+                throw new Error(getErrorMessage(err, 'Unable to load report.'));
+            }
+        },
+        [selectedUser],
+    );
 
+    // fetchData stays hand-rolled, deliberately.
+    //
+    // useAsyncData clears `error` when a fetch STARTS; this page clears it only
+    // on success. That difference does not matter for a one-shot load, but this
+    // fetch polls every five seconds: against a down API the banner would blank
+    // and reappear on every tick, turning a steady "API unreachable" into a
+    // flicker. Converting it wants an opt-in on the hook (clear-on-success), and
+    // that is a change to a hook four other pages use -- worth doing on its own
+    // terms, not smuggled in here.
     useEffect(() => {
         fetchData();
         const interval = setInterval(fetchData, 5000);
-        fetchUsers();
         return () => clearInterval(interval);
-    }, [fetchData, fetchUsers]);
-
-    useEffect(() => {
-        fetchStorageReport(selectedUser || undefined);
-    }, [selectedUser, fetchStorageReport]);
+    }, [fetchData]);
 
     useEffect(() => {
         setSelectedUser(username);
@@ -147,7 +156,7 @@ export default function Ops() {
                         </div>
                         <button
                             type="button"
-                            onClick={() => fetchUsers()}
+                            onClick={reloadUsers}
                             className="text-[10px] uppercase tracking-widest border border-primary/20 px-3 py-1 rounded-sm km-interactive km-focus-visible"
                         >
                             Refresh
@@ -194,7 +203,7 @@ export default function Ops() {
                         </div>
                         <button
                             type="button"
-                            onClick={() => fetchStorageReport(selectedUser || undefined)}
+                            onClick={reloadStorageReport}
                             className="text-[10px] uppercase tracking-widest border border-primary/20 px-3 py-1 rounded-sm km-interactive km-focus-visible"
                         >
                             Refresh

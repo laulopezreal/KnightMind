@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import Ops from './Ops';
 
 let mockUsername = 'admin';
@@ -143,5 +143,36 @@ describe('Ops', () => {
       expect(screen.getByText('DOWN')).toBeInTheDocument();
       expect(screen.getByText('ERROR')).toBeInTheDocument();
     });
+  });
+
+  it('shows the newly selected user\'s storage report, not a slower earlier one', async () => {
+    // The report is keyed on the selected user, and nothing used to stop an
+    // earlier, slower response from landing after a later one -- putting one
+    // user's row counts on screen under another user's name. Deliberately
+    // resolves the FIRST request last.
+    let releaseFirst: (v: unknown) => void = () => {};
+    mockGetStorageReport
+      .mockImplementationOnce(
+        () => new Promise((resolve) => { releaseFirst = resolve; }),
+      )
+      .mockResolvedValueOnce({
+        report: { player2: { missing_games_count: 42, missing_puzzles_count: 0 } },
+      });
+
+    render(<Ops />);
+    await waitFor(() => expect(mockGetStorageReport).toHaveBeenCalledTimes(1));
+
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'player2' } });
+    await waitFor(() => expect(mockGetStorageReport).toHaveBeenCalledTimes(2));
+    await screen.findAllByText(/42/);
+
+    // The stale first response lands now. It must be ignored.
+    releaseFirst({
+      report: { admin: { missing_games_count: 999, missing_puzzles_count: 0 } },
+    });
+    // Give the stale response a chance to land before asserting it did not.
+    await waitFor(() => expect(mockGetStorageReport).toHaveBeenCalledTimes(2));
+    expect(screen.queryAllByText(/999/)).toHaveLength(0);
+    expect(screen.queryAllByText(/42/).length).toBeGreaterThan(0);
   });
 });
