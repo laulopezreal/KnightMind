@@ -8,24 +8,32 @@ on:
   push:
     branches: [ main, dev ]
     paths:
-      - 'services/api/**'
-      - 'services/ingest/**'
+      # services/** not services/api/** + services/ingest/**: services/__init__.py
+      # matched neither, and mypy follows imports outside services/api anyway.
+      - 'services/**'
       - 'scripts/**'
       - 'conftest.py'
       - 'pyproject.toml'
       - 'uv.lock'
       - 'Dockerfile'
+      # .dockerignore decides what lands in the image as much as the Dockerfile
+      # does, and this workflow builds and boots that image.
+      - '.dockerignore'
       - '.github/workflows/ci-backend.yaml'
   pull_request:
     branches: [ main, dev ]
     paths:
-      - 'services/api/**'
-      - 'services/ingest/**'
+      # services/** not services/api/** + services/ingest/**: services/__init__.py
+      # matched neither, and mypy follows imports outside services/api anyway.
+      - 'services/**'
       - 'scripts/**'
       - 'conftest.py'
       - 'pyproject.toml'
       - 'uv.lock'
       - 'Dockerfile'
+      # .dockerignore decides what lands in the image as much as the Dockerfile
+      # does, and this workflow builds and boots that image.
+      - '.dockerignore'
       - '.github/workflows/ci-backend.yaml'
 
 jobs:
@@ -81,6 +89,21 @@ jobs:
       run: |
         uv run ruff check .
         uv run black --check .
+
+    # mypy prints "checked 119 source files" (the services/api crawl, with 32
+    # migrations excluded); it also follows imports and enforces 7 more repo
+    # files, so 126 are read and ALL are enforced -- the `ignore_errors` debt
+    # list is gone, 12 modules and 120 errors from where it started. See
+    # pyproject.toml for what this still does not cover (signatures, not just
+    # bodies).
+    #
+    # Verified non-vacuous: an injected return-type error fails this step, and
+    # so does `def f(): return 1 + "x"` in an UNANNOTATED body -- which needs
+    # its own probe, because declaring a return type is itself an annotation,
+    # so a return-type error can never demonstrate that case. Each of the ten
+    # formerly-silenced modules was probed individually when it came off.
+    - name: Type check
+      run: uv run mypy services/api
 
     - name: Run Tests
       working-directory: ./services/api

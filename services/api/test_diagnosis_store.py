@@ -390,6 +390,7 @@ class TestRepository:
         )
         db_session.commit()
         row = repo.get(USER, "p1")
+        assert row is not None
         assert row.primary_cause == "quiet_move_blindness"
         assert row.user_confirmed_cause == "king_safety_blindness"
 
@@ -447,6 +448,7 @@ class TestJob:
         assert result["remaining"] == 0
         row = DiagnosisRepository(db_session).get(USER, "p1")
         # An undefended queen the solution simply takes.
+        assert row is not None
         assert row.primary_cause == "loose_piece_awareness"
         assert row.status == DiagnosisStatus.OK
         assert row.source == "rules"
@@ -463,6 +465,7 @@ class TestJob:
         )
         run_diagnosis(FakeContext())
         row = DiagnosisRepository(db_session).get(USER, "p1")
+        assert row is not None
         ids = {item["id"] for item in row.evidence_json}
         assert {"position.phase", "best.move", "eval.swing"} <= ids
         assert all({"id", "label", "value"} == set(i) for i in row.evidence_json)
@@ -475,13 +478,23 @@ class TestJob:
             "services.api.diagnosis.job.SessionLocal", lambda: _NoClose(db_session)
         )
         run_diagnosis(FakeContext())
-        before = DiagnosisRepository(db_session).get(USER, "p1").updated_at
+        first_row = DiagnosisRepository(db_session).get(USER, "p1")
+        assert first_row is not None
+        before = first_row.updated_at
+        # Binding the row keeps it in SQLAlchemy's (weak) identity map, and
+        # Session.get answers from there WITHOUT a query while the instance is
+        # alive -- so the re-read below would be a cache hit that cannot
+        # observe a rewrite. Before this was bound for the None-check, the
+        # object was collected and the second get really did go to the DB.
+        db_session.expire(first_row)
 
         second = run_diagnosis(FakeContext())
         assert second["diagnosed"] == 0
         # Nothing was pending, so nothing was even re-examined.
         assert second["unchanged"] == 0
-        assert DiagnosisRepository(db_session).get(USER, "p1").updated_at == before
+        after_row = DiagnosisRepository(db_session).get(USER, "p1")
+        assert after_row is not None
+        assert after_row.updated_at == before
 
     def test_an_unanalysable_puzzle_is_recorded_not_retried_forever(
         self, db_session, monkeypatch
@@ -497,9 +510,10 @@ class TestJob:
         assert result["unavailable"] == 1
         assert result["remaining"] == 0
         row = DiagnosisRepository(db_session).get(USER, "p1")
+        assert row is not None
         assert row.status == DiagnosisStatus.UNAVAILABLE
         assert row.insufficient_evidence
-        assert "illegal" in row.error
+        assert row.error is not None and "illegal" in row.error
 
     def test_a_manual_puzzle_without_pgn_degrades_rather_than_failing(
         self, db_session, monkeypatch
@@ -522,7 +536,8 @@ class TestJob:
         )
         result = run_diagnosis(FakeContext())
         assert result["diagnosed"] == 1
-        assert DiagnosisRepository(db_session).get(USER, "p1").primary_cause
+        stored = DiagnosisRepository(db_session).get(USER, "p1")
+        assert stored is not None and stored.primary_cause
 
     def test_respects_the_limit_and_reports_what_is_left(self, db_session, monkeypatch):
         for i in range(3):
@@ -719,10 +734,9 @@ class TestConfirm:
         assert body["user_confirmed_cause"] == "king_safety_blindness"
         assert body["primary_cause"] == "king_safety_blindness"
         # The computed cause survives underneath for accuracy measurement.
-        assert (
-            DiagnosisRepository(db_session).get(USER, "p1").primary_cause
-            == "loose_piece_awareness"
-        )
+        stored = DiagnosisRepository(db_session).get(USER, "p1")
+        assert stored is not None
+        assert stored.primary_cause == "loose_piece_awareness"
 
     def test_an_unknown_cause_is_rejected(self, client, db_session, monkeypatch):
         self._diagnose(db_session, monkeypatch)
@@ -780,7 +794,8 @@ class TestNoScoreEscapesToTheClient:
             "services.api.diagnosis.job.SessionLocal", lambda: _NoClose(db_session)
         )
         run_diagnosis(FakeContext())
-        assert DiagnosisRepository(db_session).get(USER, "p1").primary_strength
+        stored = DiagnosisRepository(db_session).get(USER, "p1")
+        assert stored is not None and stored.primary_strength
 
         body = client.get(f"/puzzles/p1/diagnosis?username={USER}").json()
         assert not self.FORBIDDEN & set(body)
@@ -814,7 +829,9 @@ class TestUnanalysablePuzzlesSettle:
         )
         run_diagnosis(FakeContext())
 
-        stored = DiagnosisRepository(db_session).get(USER, "p1").error
+        stored_row = DiagnosisRepository(db_session).get(USER, "p1")
+        assert stored_row is not None
+        stored = stored_row.error
         assert stored  # kept for debugging
         body = client.get(f"/puzzles/p1/diagnosis?username={USER}").json()
         assert body["state"] == "unavailable"
@@ -1022,6 +1039,7 @@ class TestEvidenceIsNotASolutionSideChannel:
         being true the gate can be revisited, but not before."""
         self._diagnose(db_session, monkeypatch)
         row = DiagnosisRepository(db_session).get(USER, "p1")
+        assert row is not None
         values = " ".join(item["value"] for item in row.evidence_json)
         assert "Qxd5" in values
 
@@ -1164,6 +1182,7 @@ class TestUserColourComesFromThePosition:
         run_diagnosis(FakeContext())
 
         row = DiagnosisRepository(db_session).get(USER, "p1")
+        assert row is not None
         assert row.status == DiagnosisStatus.OK
         # The evidence must not contradict its own FEN.
         colours = {

@@ -79,12 +79,13 @@ def bind_benchmark_db(db_path: str | None = None):
     Base.metadata.create_all(engine)
     session_factory = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-    saved = {
-        "db.SessionLocal": db_mod.SessionLocal,
-        "db.engine": db_mod.engine,
-        "sf.SessionLocal": sf_mod.SessionLocal,
-        "gen.SessionLocal": gen_mod.SessionLocal,
-    }
+    # Four locals rather than one dict: a dict literal over a sessionmaker and
+    # an Engine infers as dict[str, object], so restoring from it assigns
+    # `object` back onto attributes that are typed.
+    saved_db_session_local = db_mod.SessionLocal
+    saved_db_engine = db_mod.engine
+    saved_sf_session_local = sf_mod.SessionLocal
+    saved_gen_session_local = gen_mod.SessionLocal
     db_mod.SessionLocal = session_factory
     db_mod.engine = engine
     sf_mod.SessionLocal = session_factory
@@ -92,10 +93,10 @@ def bind_benchmark_db(db_path: str | None = None):
     try:
         yield engine, session_factory
     finally:
-        db_mod.SessionLocal = saved["db.SessionLocal"]
-        db_mod.engine = saved["db.engine"]
-        sf_mod.SessionLocal = saved["sf.SessionLocal"]
-        gen_mod.SessionLocal = saved["gen.SessionLocal"]
+        db_mod.SessionLocal = saved_db_session_local
+        db_mod.engine = saved_db_engine
+        sf_mod.SessionLocal = saved_sf_session_local
+        gen_mod.SessionLocal = saved_gen_session_local
         engine.dispose()
         if tmp is not None:
             Path(tmp.name).unlink(missing_ok=True)
@@ -464,7 +465,7 @@ def _bench_ratings_aggregation(
     """
     import re
 
-    from services.api.storage import GameRepository
+    from services.api.storage import GameMetadata, GameRepository
     from services.api.time_control import classify_time_control
 
     elo_re = re.compile(r'\[(?:White|Black)Elo "(\d+)"\]')
@@ -478,7 +479,7 @@ def _bench_ratings_aggregation(
         with session_factory() as s:
             repo = GameRepository(s)
             metadata = repo.get_all_metadata(data.username)
-            relevant = []
+            relevant: list[GameMetadata] = []
             for meta in metadata:
                 if len(relevant) >= limit_games:
                     break

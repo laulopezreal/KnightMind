@@ -99,6 +99,7 @@ def test_heartbeat_advances_lease_not_updated_at(monkeypatch, TestSessionLocal):
 
     assert canceled is False
     db.refresh(job)
+    assert job.heartbeat_at is not None and heartbeat_before is not None
     assert job.heartbeat_at > heartbeat_before  # lease advanced
     assert job.updated_at == updated_before  # status-write ts untouched
     db.close()
@@ -309,6 +310,7 @@ def test_long_single_game_keeps_lease_fresh_and_not_reset(
 
     # The single game's intra-game heartbeats advanced the lease.
     db.refresh(job)
+    assert job.heartbeat_at is not None and heartbeat_before is not None
     assert job.heartbeat_at > heartbeat_before
 
     # Crash recovery must leave the still-live long job alone.

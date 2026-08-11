@@ -13,6 +13,7 @@ reporting as a driver, and the three /ratings routes.
 
 import logging
 import re
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Literal
 
@@ -31,7 +32,7 @@ from services.api.identity import assert_owns_username, require_account
 from services.api.models import Account, RatingSnapshot, TrainingSession
 from services.api.ratelimit import rate_limit
 from services.api.ratings_auto import auto_snapshot_throttled
-from services.api.storage import GameRepository
+from services.api.storage import GameMetadata, GameRepository
 from services.api.time_control import classify_time_control
 from services.api.usernames import Username, canonical_username
 from services.ingest import NetworkError, UserNotFoundError, get_player_stats
@@ -281,6 +282,39 @@ class Driver(BaseModel):
     direction: Literal["up", "down", "neutral"]
 
 
+@dataclass
+class _GameDetail:
+    """One game in the explainer window, after PGN Elo extraction.
+
+    Internal to ``_build_rating_explanation``: not serialised, so a dataclass
+    rather than a Pydantic model. This was a bare dict whose value type widened
+    to ``float | str | GameMetadata | int | None``, which made every read of it
+    unresolvable -- 57 of the 75 type errors this module carried came from that
+    one dict, and none of them were runtime bugs. (The other 18: 14 from a
+    rebound ``stmt`` local, 2 severity Literals, 2 ``avg_opp``.)
+    """
+
+    meta: GameMetadata
+    # None when the PGN carried no Elo header for that side.
+    opp_rating: int | None
+    player_rating: int | None
+    # Not Optional: both GameMetadata.white_username and .black_username are
+    # `str`, so the ternary that fills this cannot yield None.
+    opponent_username: str
+    # 1.0 win / 0.5 draw / 0.0 loss, from the player's perspective.
+    actual: float
+
+    def r_self(self, reference_rating: int) -> int:
+        """The player's own rating for this game, falling back to the window's.
+
+        Was a sixth key assigned in a second pass over the list, because it
+        depends on ``reference_rating``, which is not known until every game has
+        been read. A method keeps the fallback in one place without giving the
+        object a field that is wrong for part of its life.
+        """
+        return self.player_rating or reference_rating
+
+
 class ExplainResponse(BaseModel):
     time_control: str
     window: RatingWindow
@@ -384,12 +418,12 @@ def _build_rating_explanation(
         source_type = "since"
     else:
         # Fallback: Last session or 7 days
-        stmt = (
+        last_session_stmt = (
             select(TrainingSession)
             .where(TrainingSession.username == username)
             .order_by(TrainingSession.created_at.desc())
         )
-        last_session = db.scalars(stmt).first()
+        last_session = db.scalars(last_session_stmt).first()
         if last_session:
             window_start = last_session.created_at.replace(tzinfo=timezone.utc)
             source_type = "last_session"
@@ -435,11 +469,11 @@ def _build_rating_explanation(
     opp_rating_count = 0
     missing_ratings = 0
 
-    game_details = []
+    game_details: list[_GameDetail] = []
     opp_ratings = []
 
     # Snapshot closest to (but before or at) window start — best reference anchor
-    stmt = (
+    pre_window_stmt = (
         select(RatingSnapshot)
         .where(
             RatingSnapshot.username == username,
@@ -448,10 +482,10 @@ def _build_rating_explanation(
         )
         .order_by(RatingSnapshot.recorded_at.desc())
     )
-    pre_window_snapshot = db.scalars(stmt).first()
+    pre_window_snapshot = db.scalars(pre_window_stmt).first()
 
     # Earliest snapshot inside the window
-    stmt = (
+    earliest_stmt = (
         select(RatingSnapshot)
         .where(
             RatingSnapshot.username == username,
@@ -460,7 +494,7 @@ def _build_rating_explanation(
         )
         .order_by(RatingSnapshot.recorded_at.asc())
     )
-    earliest_snapshot = db.scalars(stmt).first()
+    earliest_snapshot = db.scalars(earliest_stmt).first()
 
     reference_rating = 0
     reference_is_approx = False
@@ -518,21 +552,21 @@ def _build_rating_explanation(
             opp_ratings.append(opp_rating)
 
         game_details.append(
-            {
-                "meta": meta,
-                "opp_rating": opp_rating,
+            _GameDetail(
+                meta=meta,
+                opp_rating=opp_rating,
                 # Player's own post-game Elo from the PGN — the most accurate
                 # per-game reference for expected-score math.
-                "player_rating": player_rating,
-                "opponent_username": (
+                player_rating=player_rating,
+                opponent_username=(
                     meta.black_username if user_is_white else meta.white_username
                 ),
-                "actual": result_score,
-            }
+                actual=result_score,
+            )
         )
 
     player_ratings = [
-        g["player_rating"] for g in game_details if g["player_rating"] is not None
+        g.player_rating for g in game_details if g.player_rating is not None
     ]
 
     if reference_rating == 0:
@@ -547,12 +581,8 @@ def _build_rating_explanation(
             reference_rating = 1200
         reference_is_approx = True
 
-    # One owner for the per-game self-rating fallback: the player's own Elo at
-    # that game when the PGN has it, else the window reference. Used by the
-    # expected-score math and both vs-higher/vs-lower driver counts.
-    for g in game_details:
-        g["r_self"] = g["player_rating"] or reference_rating
-
+    # reference_rating is final from here on, which is what lets
+    # _GameDetail.r_self take it as an argument instead of being a stored field.
     expected_total = 0.0
     actual_total_rated = 0.0
     # (surprise value, game) pairs — ranked on the unrounded value so ties
@@ -560,35 +590,35 @@ def _build_rating_explanation(
     surprises: list[tuple[float, HighlightGame]] = []
 
     for item in game_details:
-        if item["opp_rating"] is not None:
-            r_opp = item["opp_rating"]
+        if item.opp_rating is not None:
+            r_opp = item.opp_rating
             # Prefer the player's own Elo at that game over the single
             # window-wide reference: expected score then reflects the actual
             # matchup, not an anchor that may be days stale.
-            r_self = item["r_self"]
+            r_self = item.r_self(reference_rating)
             expected = calculate_expected_score(r_self, r_opp)
 
             expected_total += expected
-            actual_total_rated += item["actual"]
+            actual_total_rated += item.actual
 
             surprises.append(
                 (
-                    item["actual"] - expected,
+                    item.actual - expected,
                     HighlightGame(
                         opponent_rating=r_opp,
-                        opponent_username=item["opponent_username"],
+                        opponent_username=item.opponent_username,
                         result=(
                             "Win"
-                            if item["actual"] == 1.0
-                            else "Draw" if item["actual"] == 0.5 else "Loss"
+                            if item.actual == 1.0
+                            else "Draw" if item.actual == 0.5 else "Loss"
                         ),
                         expected_score=round(expected, 2),
                         rating_diff=r_opp - r_self,
-                        game_id=item["meta"].game_id,
+                        game_id=item.meta.game_id,
                         played_at=datetime.fromtimestamp(
-                            item["meta"].end_time, tz=timezone.utc
+                            item.meta.end_time, tz=timezone.utc
                         ),
-                        url=item["meta"].url,
+                        url=item.meta.url,
                     ),
                 )
             )
@@ -619,7 +649,7 @@ def _build_rating_explanation(
                 )
             )
     elif diff > PERFORMANCE_DIFF_THRESHOLD:
-        severity = (
+        severity: Literal["major", "moderate", "minor"] = (
             "major" if abs(diff) > 2.0 else "moderate" if abs(diff) > 1.0 else "minor"
         )
         drivers.append(
@@ -652,9 +682,9 @@ def _build_rating_explanation(
         wins_vs_higher = sum(
             1
             for g in game_details
-            if g["opp_rating"]
-            and g["opp_rating"] >= g["r_self"] + RATING_DIFFERENCE_THRESHOLD
-            and g["actual"] == 1.0
+            if g.opp_rating
+            and g.opp_rating >= g.r_self(reference_rating) + RATING_DIFFERENCE_THRESHOLD
+            and g.actual == 1.0
         )
         if wins_vs_higher >= SIGNIFICANT_WINS_VS_HIGHER_THRESHOLD:
             drivers.append(
@@ -668,9 +698,9 @@ def _build_rating_explanation(
         losses_vs_lower = sum(
             1
             for g in game_details
-            if g["opp_rating"]
-            and g["opp_rating"] <= g["r_self"] - RATING_DIFFERENCE_THRESHOLD
-            and g["actual"] == 0.0
+            if g.opp_rating
+            and g.opp_rating <= g.r_self(reference_rating) - RATING_DIFFERENCE_THRESHOLD
+            and g.actual == 0.0
         )
         if losses_vs_lower >= SIGNIFICANT_LOSSES_VS_LOWER_THRESHOLD:
             drivers.append(
@@ -681,7 +711,12 @@ def _build_rating_explanation(
                 )
             )
 
-        if len(opp_ratings) >= 5:
+        # avg_opp is None exactly when opp_rating_count == 0, and opp_ratings is
+        # appended in the same branch that increments that counter -- so the
+        # length check already implies non-None. Stating it directly instead:
+        # splitting those two branches would otherwise turn this into a
+        # TypeError at runtime with nothing to catch it.
+        if avg_opp is not None and len(opp_ratings) >= 5:
             variance = sum((x - avg_opp) ** 2 for x in opp_ratings) / len(opp_ratings)
             std_dev = variance**0.5
             if std_dev > OPPONENT_RATING_STD_DEV_THRESHOLD:
@@ -706,11 +741,11 @@ def _build_rating_explanation(
     # chronological). Powers the chart + start/end estimates below.
     trajectory = [
         TrajectoryPoint(
-            played_at=datetime.fromtimestamp(g["meta"].end_time, tz=timezone.utc),
-            rating=g["player_rating"],
+            played_at=datetime.fromtimestamp(g.meta.end_time, tz=timezone.utc),
+            rating=g.player_rating,
         )
         for g in game_details
-        if g["player_rating"] is not None
+        if g.player_rating is not None
     ]
 
     def _snapshot_at(snapshot: RatingSnapshot) -> datetime:
@@ -731,6 +766,10 @@ def _build_rating_explanation(
     ):
         start_anchor_snapshot = earliest_snapshot
 
+    # Annotated because the last branch yields None and mypy would otherwise
+    # pin the type to `int` from the first assignment. Callers below already
+    # treat it as optional (`start_rating_val is not None`).
+    start_rating_val: int | None
     if start_anchor_snapshot is not None:
         start_rating_val = start_anchor_snapshot.rating
     elif trajectory:
@@ -742,7 +781,7 @@ def _build_rating_explanation(
         )
 
     # End: latest snapshot within the window period
-    stmt = (
+    latest_in_window_stmt = (
         select(RatingSnapshot)
         .where(
             RatingSnapshot.username == username,
@@ -751,7 +790,7 @@ def _build_rating_explanation(
         )
         .order_by(RatingSnapshot.recorded_at.desc())
     )
-    latest_in_window = db.scalars(stmt).first()
+    latest_in_window = db.scalars(latest_in_window_stmt).first()
 
     # Use whichever evidence is fresher: an in-window snapshot or the last
     # game's own Elo. A snapshot recorded before the last game is stale.

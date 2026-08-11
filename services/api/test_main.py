@@ -3,6 +3,7 @@ import os
 
 os.environ["KNIGHTMIND_WORKER_DISABLED"] = "true"
 from datetime import date, datetime, timedelta, timezone
+from typing import TypedDict
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -560,7 +561,31 @@ def test_get_player_profile_invalid_json_returns_network_error(monkeypatch):
 
 MOCK_ARCHIVES = ["https://api.chess.com/pub/player/testuser/games/2024/01"]
 
-MOCK_GAMES = [
+
+class _MockSide(TypedDict):
+    username: str
+    result: str
+
+
+class _MockGame(TypedDict):
+    """The Chess.com game payload shape these tests stand in for.
+
+    Annotated because a bare list of these literals infers as
+    ``list[dict[str, object]]``: every ``game["url"]`` is then ``object`` and
+    every ``game["white"]["username"]`` is un-indexable, which accounted for
+    72 of the errors that surfaced when check_untyped_defs was turned on.
+    """
+
+    url: str
+    pgn: str
+    time_control: str
+    end_time: int
+    rated: bool
+    white: _MockSide
+    black: _MockSide
+
+
+MOCK_GAMES: list[_MockGame] = [
     {
         "url": "https://www.chess.com/game/live/12345",
         "pgn": '[Event "Live Chess"]\n[Site "Chess.com"]\n[White "testuser"]\n[Black "opponent1"]\n[Result "1-0"]\n\n1. e4 e5 2. Nf3 Nc6 1-0',
@@ -622,7 +647,7 @@ def test_import_chesscom_skips_malformed_game(mock_import_games, client_with_db)
         from services.ingest import ChessGame
 
         # A malformed game with an empty url between two valid ones.
-        payloads = [MOCK_GAMES[0], {**MOCK_GAMES[1], "url": ""}]
+        payloads: list[_MockGame] = [MOCK_GAMES[0], {**MOCK_GAMES[1], "url": ""}]
         for game_data in payloads:
             yield ChessGame(
                 url=game_data["url"],

@@ -68,7 +68,9 @@ class TestFreshness:
         db, _ = sessions
         self.stale_row(db, CACHE_TTL_DAYS + 1)
 
-        assert ExplorerRepository(db).get("k").stats == STATS
+        cached = ExplorerRepository(db).get("k")
+        assert cached is not None
+        assert cached.stats == STATS
 
     def test_a_row_inside_the_ttl_is_fresh(self, sessions):
         db, _ = sessions

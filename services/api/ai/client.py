@@ -13,7 +13,7 @@ recorded with its reason.
 import json
 import logging
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, TypedDict
 
 from pydantic import ValidationError
 
@@ -145,12 +145,25 @@ def _call(key: str, packet: EvidencePacket, assessment: CauseAssessment):
     )
 
 
+class _Tokens(TypedDict):
+    """The two usage counters, passed to EnrichmentOutcome as ``**tokens``.
+
+    A bare literal infers as ``dict[str, Any | int]``, and unpacking that into
+    a call makes every keyword parameter a candidate -- mypy then reports the
+    dict as incompatible with ``diagnosis``, ``reason`` and ``agreed_with_rules``
+    at all six construction sites. Naming the keys maps the unpack correctly.
+    """
+
+    input_tokens: int
+    output_tokens: int
+
+
 def _interpret(
     response, packet: EvidencePacket, assessment: CauseAssessment
 ) -> EnrichmentOutcome:
     model_version = getattr(response, "model", config.MODEL)
     usage = getattr(response, "usage", None)
-    tokens = {
+    tokens: _Tokens = {
         "input_tokens": getattr(usage, "input_tokens", 0) or 0,
         "output_tokens": getattr(usage, "output_tokens", 0) or 0,
     }

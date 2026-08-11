@@ -101,7 +101,7 @@ def _random_pgn(
     game.headers["BlackElo"] = str(black_elo)
     game.headers["TimeControl"] = "600"
 
-    node = game
+    node: chess.pgn.GameNode = game
     for _ in range(plies):
         legal = list(board.legal_moves)
         if not legal:

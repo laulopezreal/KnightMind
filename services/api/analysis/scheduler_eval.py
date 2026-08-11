@@ -33,7 +33,7 @@ from __future__ import annotations
 import math
 import random
 from dataclasses import dataclass, field, replace
-from typing import Callable
+from typing import Callable, Generic, TypeVar
 
 from services.api.storage.spaced_repetition import calculate_next_interval
 
@@ -118,11 +118,20 @@ def _make_memory(rng: random.Random) -> MemoryState:
 # ``interval_days`` is the number of days until the item is next due.
 
 
+# Generic in the state type. Declaring it as `object` made every concrete
+# step function an invalid argument: a Callable[[_CurrentState, bool], ...] is
+# NOT a Callable[[object, bool], ...], because parameters are contravariant --
+# the concrete function cannot accept the arbitrary states the wider type
+# promises. A type variable says what was actually meant: each scheduler is
+# internally consistent about its own opaque state.
+S = TypeVar("S")
+
+
 @dataclass(frozen=True)
-class Scheduler:
+class Scheduler(Generic[S]):
     name: str
-    init: Callable[[], object]
-    step: Callable[[object, bool], tuple[int, object]]
+    init: Callable[[], S]
+    step: Callable[[S, bool], tuple[int, S]]
 
 
 # --- (a) CURRENT production scheduler (SM2-ish) --------------------------
@@ -274,7 +283,11 @@ class SchedulerRun:
 def simulate_one(
     scheduler: Scheduler,
     memory: MemoryState,
-    outcomes: list[bool],
+    # Uniform draws in [0, 1), NOT pass/fail booleans: the loop thresholds
+    # each against the true recall probability. The old `list[bool]`
+    # annotation was wrong, and coercing the deck to bool to satisfy it
+    # would have destroyed the thresholding this simulation depends on.
+    outcomes: list[float],
     horizon_days: int,
 ) -> tuple[list[ReviewSample], float, int]:
     """Replay a single item through one scheduler.

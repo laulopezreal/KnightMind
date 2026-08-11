@@ -52,6 +52,7 @@ from services.api.puzzles import naming_pass
 from services.api.storage.ai_audit_repository import (
     AIAuditRepository,
     AuditWrite,
+    Budget,
     prompt_hash,
 )
 from services.api.storage.diagnosis_repository import (
@@ -282,9 +283,12 @@ def _diagnose_one(
     audit: AIAuditRepository,
     username: str,
     puzzle_id: str,
-    motif_rates: dict[str, tuple[float, int]],
-    budget,
-) -> tuple[str, object, bool]:
+    # `float | None`: _motif_fail_rates returns None for a motif with no
+    # attempts, and _history_facts below takes `float | None`. The narrower
+    # annotation was simply wrong -- nothing ever relied on it.
+    motif_rates: dict[str, tuple[float | None, int]],
+    budget: Budget,
+) -> tuple[str, Budget, bool]:
     """Diagnose one puzzle. Returns (outcome, budget, used_ai)."""
     # Puzzle and PuzzleStats are keyed on puzzle_id alone (a puzzle id belongs
     # to exactly one user by construction); Game is keyed on (game_id, username)
@@ -444,7 +448,10 @@ def _enrich(db, audit, username, puzzle_id, packet, assessment, digest, budget):
         # leave the rules diagnosis exactly as it was.
         return _Enrichment(attempted=outcome.status != ai_client.SKIPPED)
 
+    # `usable` is `status == ACCEPTED and diagnosis is not None`, so this
+    # holds by construction -- mypy just cannot narrow through a property.
     d = outcome.diagnosis
+    assert d is not None
     return _Enrichment(
         attempted=True,
         source="llm",
@@ -533,7 +540,7 @@ def _game_context(game: Game | None, puzzle: Puzzle):
 def _history_facts(
     stats: PuzzleStats | None,
     motif: str | None,
-    motif_rates: dict[str, tuple[float, int]],
+    motif_rates: dict[str, tuple[float | None, int]],
 ) -> HistoryFacts:
     rate, sample = motif_rates.get(motif, (None, 0)) if motif else (None, 0)
     return HistoryFacts(

@@ -8,6 +8,7 @@ Uses bounded compute to work on Render and similar platforms.
 import io
 import logging
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
 
@@ -129,10 +130,17 @@ def _compute_solution_pv(
 
     Best-effort by contract (mirrors ``_deep_top_moves``): ANY failure while
     walking — engine error, a mocked engine running out of scripted evals, an
-    illegal move — simply stops the walk and returns the line built so far. It
-    never raises, so PV enrichment can never break generation. Returns a list of
-    at least one move (the solution); the caller stores it only when it is a real
-    multi-ply line.
+    illegal move — simply stops the walk and returns the line built so far, so
+    PV enrichment can never break generation. Returns a list of at least one
+    move (the solution); the caller stores it only when it is a real multi-ply
+    line.
+
+    That no-raise guarantee covers the *walk*, given the declared signature:
+    ``first_move_uci`` must be a real ``str``. Passing None is a caller bug, not
+    a walk failure — ``chess.Move.from_uci(None)`` raises TypeError, which is
+    deliberately not caught here so the bug surfaces instead of silently
+    yielding a solution-less puzzle. The caller guarantees a non-None move by
+    skipping plies whose eval returned no best move.
     """
     board = chess.Board(fen)
     try:
@@ -520,8 +528,8 @@ def generate_puzzles(
     username: str,
     max_games: int = 30,
     max_puzzles: int = 30,
-    cancellation_check: callable = None,
-    progress_callback: callable = None,
+    cancellation_check: Callable[[], bool] | None = None,
+    progress_callback: Callable[[int, int], None] | None = None,
 ) -> GenerationResult:
     """
     Generate puzzles from a user's imported games by detecting blunders.
@@ -703,6 +711,20 @@ def generate_puzzles(
 
                     eval_before = eval_result_before.eval
                     best_move_uci = eval_result_before.best_move_uci
+
+                    # No best move means the position before the played move was
+                    # terminal. That is not a contradiction: is_game_over() is
+                    # also true for insufficient material, the 75-move rule and
+                    # fivefold repetition, all of which STILL HAVE LEGAL MOVES --
+                    # so a PGN can contain a move played from such a position and
+                    # the eval comes back with best_move_uci=None (the engine is
+                    # short-circuited on terminal FENs). A puzzle needs a solution
+                    # move, and None would otherwise poison the acceptance set and
+                    # crash the PV walk, so skip the ply. Not counted as a
+                    # failure: nothing failed, there is just nothing to train.
+                    if best_move_uci is None:
+                        board.push(move)
+                        continue
 
                     # Make the user's move (board now advanced for the rest of
                     # the game).

@@ -9,20 +9,23 @@ from services.api.diagnosis.patterns import _PATTERNS, identify, priority_score
 class TestNaming:
     def test_names_a_known_cause(self):
         identity = identify("loose_piece_awareness")
+        assert identity is not None
         assert identity.name == "Loose Piece Syndrome"
         assert "undefended" in identity.description
 
     def test_a_phase_specific_name_wins_where_one_exists(self):
         general = identify("king_safety_blindness", "middlegame")
         endgame = identify("king_safety_blindness", "endgame")
+        assert general is not None
         assert general.name == "King Safety Blind Spot"
+        assert endgame is not None
         assert endgame.name == "Back Rank Neglect"
 
     def test_an_unknown_phase_falls_back_to_the_general_name(self):
         """A phase the table has no entry for must not leave a cause unnamed."""
-        assert identify("loose_piece_awareness", "zugzwang").name == (
-            "Loose Piece Syndrome"
-        )
+        general = identify("loose_piece_awareness", "zugzwang")
+        assert general is not None
+        assert general.name == "Loose Piece Syndrome"
 
     def test_unclassified_is_never_given_a_name(self):
         """ "We could not work out why" is an honest state, not a habit with a
