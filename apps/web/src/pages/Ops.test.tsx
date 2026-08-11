@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
 import Ops from './Ops';
 
 let mockUsername = 'admin';
@@ -174,5 +174,37 @@ describe('Ops', () => {
     await waitFor(() => expect(mockGetStorageReport).toHaveBeenCalledTimes(2));
     expect(screen.queryAllByText(/999/)).toHaveLength(0);
     expect(screen.queryAllByText(/42/).length).toBeGreaterThan(0);
+  });
+
+  it('keeps the outage banner up across a poll tick', async () => {
+    // This page polls every five seconds. useAsyncData's default clears the
+    // error slot when a fetch STARTS, which would blank the banner on every
+    // tick and flash it back -- so the page opts into clearErrorOn: 'success'.
+    // The second poll is left hanging deliberately: under the default the
+    // banner would be gone and stay gone, so this fails without the opt-in.
+    // Phase-flag rather than mockRejectedValueOnce: mounting fires more than one
+    // request, so ordered one-shot mocks get consumed before the poll and the
+    // hanging one lands on the initial load instead.
+    mockGetHealth.mockRejectedValue(new Error('Connection refused'));
+    mockGetOpsStatus.mockRejectedValue(new Error('Connection refused'));
+
+    render(<Ops />);
+    await waitFor(() =>
+      expect(screen.getByText('Backend Unavailable')).toBeInTheDocument(),
+    );
+
+    // The poll now hangs. Under the default (clear-on-start) the banner would
+    // be gone and STAY gone, because nothing settles to put it back.
+    const before = mockGetHealth.mock.calls.length;
+    mockGetHealth.mockImplementation(() => new Promise(() => {}));
+    mockGetOpsStatus.mockImplementation(() => new Promise(() => {}));
+    await act(async () => {
+      vi.advanceTimersByTime(5000);
+    });
+    await waitFor(() =>
+      expect(mockGetHealth.mock.calls.length).toBeGreaterThan(before),
+    );
+
+    expect(screen.getByText('Backend Unavailable')).toBeInTheDocument();
   });
 });

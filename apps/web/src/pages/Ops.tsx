@@ -1,15 +1,11 @@
 import { LOCALE } from '../utils/locale';
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import { getHealth, getOpsStatus, getStorageReport, getUsers, ApiError, API_TARGET } from '../api';
 import type { HealthResponse, OpsStatusResponse, RecentJob, StorageReportResponse } from '../api';
 import { useChessUsername } from '../context/ChessUsernameContext';
 import { useAsyncData } from '../hooks/useAsyncData';
 
 export default function Ops() {
-    const [health, setHealth] = useState<HealthResponse | null>(null);
-    const [opsStatus, setOpsStatus] = useState<OpsStatusResponse | null>(null);
-    const [loading, setLoading] = useState(true);
-    const [error, setError] = useState<string | null>(null);
     const { username, setUsername } = useChessUsername();
     const [selectedUser, setSelectedUser] = useState(username);
 
@@ -23,20 +19,32 @@ export default function Ops() {
         return fallback;
     };
 
-    const fetchData = useCallback(async () => {
-        try {
-            const [h, s] = await Promise.all([getHealth(), getOpsStatus()]);
-            setHealth(h);
-            setOpsStatus(s);
-            setError(null);
-        } catch (err) {
-            console.error('Failed to fetch ops data:', err);
-            const msg = getErrorMessage(err, 'Check if API is running and proxy is correctly configured.');
-            setError(`Failed to load operational data: ${msg}`);
-        } finally {
-            setLoading(false);
-        }
-    }, []);
+    // clearErrorOn: 'success' is the whole reason this one can use the hook.
+    // The default clears the error slot when a fetch STARTS, which is right for
+    // a user-triggered retry -- but this polls every five seconds, so against a
+    // down API the banner would blank and reappear on every tick, turning a
+    // steady "API unreachable" into a flicker. Keeping the message until
+    // something actually succeeds is the behaviour this page always had.
+    const {
+        data: opsData,
+        error,
+        loading,
+        reload: reloadOps,
+    } = useAsyncData<[HealthResponse, OpsStatusResponse]>(
+        async () => {
+            try {
+                return await Promise.all([getHealth(), getOpsStatus()]);
+            } catch (err) {
+                console.error('Failed to fetch ops data:', err);
+                const msg = getErrorMessage(err, 'Check if API is running and proxy is correctly configured.');
+                throw new Error(`Failed to load operational data: ${msg}`);
+            }
+        },
+        [],
+        { clearErrorOn: 'success' },
+    );
+    const health = opsData?.[0] ?? null;
+    const opsStatus = opsData?.[1] ?? null;
 
     const { data: usersData, error: usersError, reload: reloadUsers } = useAsyncData<string[]>(
         async () => {
@@ -72,26 +80,23 @@ export default function Ops() {
         [selectedUser],
     );
 
-    // fetchData stays hand-rolled, deliberately.
-    //
-    // useAsyncData clears `error` when a fetch STARTS; this page clears it only
-    // on success. That difference does not matter for a one-shot load, but this
-    // fetch polls every five seconds: against a down API the banner would blank
-    // and reappear on every tick, turning a steady "API unreachable" into a
-    // flicker. Converting it wants an opt-in on the hook (clear-on-success), and
-    // that is a change to a hook four other pages use -- worth doing on its own
-    // terms, not smuggled in here.
+    // The hook has no polling of its own; `reload` on an interval is the whole
+    // of it. The first load is the hook's, so this only drives the refreshes.
     useEffect(() => {
-        fetchData();
-        const interval = setInterval(fetchData, 5000);
+        const interval = setInterval(reloadOps, 5000);
         return () => clearInterval(interval);
-    }, [fetchData]);
+    }, [reloadOps]);
 
     useEffect(() => {
         setSelectedUser(username);
     }, [username]);
 
-    if (loading && !opsStatus) {
+    // `&& !error` matters once this fetch polls through an outage. The hook
+    // counts a load as "first" until one SUCCEEDS, so with the API down every
+    // retry sets `loading` again -- and without this the page would drop back to
+    // the skeleton on every tick, hiding the very banner that explains why.
+    // The skeleton means "nothing to show yet"; an error is something to show.
+    if (loading && !opsStatus && !error) {
         return (
             <div className="w-full animate-pulse space-y-8">
                 <div className="h-10 w-64 bg-primary/10 rounded" />
@@ -139,7 +144,7 @@ export default function Ops() {
                     )}
                     <button
                         type="button"
-                        onClick={() => { setLoading(true); fetchData(); }}
+                        onClick={reloadOps}
                         className="km-interactive km-focus-visible w-fit mt-2 text-[10px] uppercase border border-red-500/30 px-3 py-1 rounded-sm transition-colors hover:bg-red-500/10"
                     >
                         Retry Connection
