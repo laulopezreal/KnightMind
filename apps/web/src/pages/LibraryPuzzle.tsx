@@ -10,7 +10,8 @@ import { SimilarWeaknessCard } from '../components/SimilarWeaknessCard';
 import { ApiError } from '../api/core';
 import { DataStateError, DataStateOffline } from '../components/DataState';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
-import { useLatestRequest } from '../hooks/useLatestRequest';
+import { useAsyncData } from '../hooks/useAsyncData';
+import { ConnectAccountEmpty } from '../components/ConnectAccountEmpty';
 
 type SolveStatus = 'solving' | 'correct' | 'incorrect' | 'revealed';
 
@@ -26,10 +27,6 @@ function formatSolveTime(ms: number): string {
 export default function LibraryPuzzle() {
     const { puzzleId } = useParams<{ puzzleId: string }>();
     const { username } = useChessUsername();
-
-    const [puzzle, setPuzzle] = useState<LibraryPuzzleType | null>(null);
-    const [isLoading, setIsLoading] = useState(true);
-    const [error, setError] = useState<string | null>(null);
 
     const [game, setGame] = useState(new Chess());
     const [status, setStatus] = useState<SolveStatus>('solving');
@@ -56,7 +53,6 @@ export default function LibraryPuzzle() {
     const [similar, setSimilar] = useState<SimilarPuzzlesResponse | null>(null);
 
     const online = useOnlineStatus();
-    const request = useLatestRequest();
 
     // Everything above that describes *this* puzzle rather than the page.
     //
@@ -81,39 +77,64 @@ export default function LibraryPuzzle() {
         setSimilar(null);
     }, []);
 
-    const fetchPuzzle = useCallback(async () => {
-        // Guard against stale-response races: if the username (or puzzle) changes
-        // mid-flight, an older, slower response must not clobber the newer one.
-        //
-        // begin() precedes the bail-out deliberately: isStale() only turns true
-        // once a newer request starts, so returning before it would leave an
-        // in-flight fetch for the previous puzzle free to land.
-        const token = request.begin();
-        if (!username || !puzzleId) return;
-        setIsLoading(true);
-        setError(null);
-        try {
-            const found = await getLibraryPuzzle(puzzleId, username);
-            if (token.isStale()) return;
-            setPuzzle(found);
-            setGame(new Chess(found.fen));
-            resetPuzzleState();
-            solveStartRef.current = Date.now();
-        } catch (err) {
-            if (token.isStale()) return;
-            if (err instanceof ApiError && err.statusCode === 404) {
-                setError('Puzzle not found');
-            } else {
-                setError(err instanceof Error ? err.message : 'Failed to load puzzle');
+    // The staleness guard, the loading flag and the error slot all live in
+    // useAsyncData now. What stays here is the part specific to this page: a 404
+    // has to read "Puzzle not found" rather than the transport's message,
+    // because the error branch below distinguishes the two to decide whether to
+    // offer a Retry.
+    const {
+        data: puzzle,
+        error,
+        loading: isLoading,
+        reload: fetchPuzzle,
+    } = useAsyncData<LibraryPuzzleType>(
+        async () => {
+            try {
+                return await getLibraryPuzzle(puzzleId!, username!);
+            } catch (err) {
+                if (err instanceof ApiError && err.statusCode === 404) {
+                    throw new Error('Puzzle not found');
+                }
+                throw err;
             }
-        } finally {
-            if (!token.isStale()) setIsLoading(false);
-        }
-    }, [username, puzzleId, request, resetPuzzleState]);
+        },
+        [username, puzzleId],
+        { enabled: Boolean(username && puzzleId), errorMessage: 'Failed to load puzzle' },
+    );
 
+    // Success side effects, previously inline in the fetch. Keyed on the loaded
+    // puzzle's identity, which changes on every successful load -- including a
+    // reload of the same id -- so the board and timer reset exactly when they
+    // did before.
+    // `readyFor` is the puzzle id that the per-puzzle state below describes.
+    //
+    // The reset happens DURING RENDER, not in an effect, and that is the whole
+    // point. The old code called setPuzzle and resetPuzzleState in one
+    // synchronous block, so `puzzle` was never the new puzzle while `status`
+    // still described the old one. Moving the fetch into useAsyncData splits
+    // those: the hook commits the data, and an effect would reset a render
+    // later. That extra render is not cosmetic -- `resolved` below is true
+    // inside it, which fires the sibling's diagnosis (whose evidence names the
+    // best move) with no attempt made, and it leaves the previous puzzle's
+    // resolved controls on screen for a frame.
+    //
+    // Adjusting state during render is React's documented answer to "reset
+    // state when the data changes": the update is applied before the browser
+    // sees anything, so the new puzzle and its fresh state land together. The
+    // id comparison is what makes it converge -- the second pass sees
+    // `puzzle.id === readyFor` and skips.
+    const [readyFor, setReadyFor] = useState<string | null>(null);
+    if (puzzle && puzzle.id !== readyFor) {
+        setReadyFor(puzzle.id);
+        setGame(new Chess(puzzle.fen));
+        resetPuzzleState();
+    }
+
+    // The ref write stays in an effect: render must remain pure, and the solve
+    // clock only needs to start once the puzzle is actually on screen.
     useEffect(() => {
-        fetchPuzzle();
-    }, [fetchPuzzle]);
+        if (readyFor) solveStartRef.current = Date.now();
+    }, [readyFor]);
 
     // The diagnosis is post-mortem content: its evidence names the solution, so
     // it is not even requested until the puzzle has been solved or revealed.
@@ -127,6 +148,13 @@ export default function LibraryPuzzle() {
     // below fire for the sibling — requesting its diagnosis, which names the
     // best move, with no attempt made. `puzzle` only becomes the new one once
     // its fetch succeeds, so this is false for exactly the window in question.
+    // No `readyFor === puzzleId` conjunct here on purpose. It looks like it
+    // belongs, but the render-time reset above makes it unreachable: the pass
+    // where `puzzle` is new and `status` still old is discarded by React before
+    // commit, so no effect ever observes it. Verified -- removing the conjunct
+    // changes no test, while deferring the reset to an effect fails five. A
+    // condition that cannot change an outcome is not a safety net, it is noise
+    // that makes the real guarantee harder to find.
     const resolved =
         puzzle?.id === puzzleId &&
         (status === 'correct' || status === 'incorrect' || status === 'revealed');
@@ -241,6 +269,27 @@ export default function LibraryPuzzle() {
         setGame(new Chess(puzzle.fen));
         solveStartRef.current = Date.now();
     };
+
+    // Before the loading branch, and in place rather than redirecting -- the
+    // convention Library.tsx follows for the same reason (#319).
+    //
+    // This page previously had no no-username branch at all: the fetch returned
+    // early *before* setting the loading flag, so `isLoading` kept its initial
+    // `true` and the page showed "Loading puzzle..." forever. Making the fetch
+    // conditional surfaces that state properly instead of hanging on it.
+    if (!username) {
+        return (
+            <div className="space-y-12 animate-teedin">
+                <section>
+                    <Link to="/library" className="text-primary/70 hover:text-primary mb-4 inline-block font-sans text-sm tracking-widest uppercase transition-colors">
+                        ← Back to Library
+                    </Link>
+                    <h1 className="text-3xl md:text-4xl font-serif text-primary">Puzzle</h1>
+                </section>
+                <ConnectAccountEmpty description="Puzzles are generated from your own games. Connect your Chess.com account to see this one." />
+            </div>
+        );
+    }
 
     if (isLoading) {
         // The real title isn't known until the fetch lands, so use the same
