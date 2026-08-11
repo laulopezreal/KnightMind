@@ -125,14 +125,16 @@ def test_empty_response_is_rejected(monkeypatch):
 
 def test_malformed_json_is_rejected(monkeypatch):
     _respond_with(monkeypatch, _Response(text="not json"))
-    assert ai_naming.name_puzzle(facts()).reason.startswith("schema:")
+    reason = ai_naming.name_puzzle(facts()).reason
+    assert reason and reason.startswith("schema:")
 
 
 def test_over_long_name_is_rejected(monkeypatch):
     _respond_with(
         monkeypatch, _Response(text=json.dumps({"name": "x" * (MAX_NAME_CHARS + 5)}))
     )
-    assert ai_naming.name_puzzle(facts()).reason.startswith("schema:")
+    reason = ai_naming.name_puzzle(facts()).reason
+    assert reason and reason.startswith("schema:")
 
 
 def test_move_list_is_rejected(monkeypatch):
