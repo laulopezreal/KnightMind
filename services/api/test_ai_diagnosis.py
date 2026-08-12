@@ -167,6 +167,49 @@ class TestBudget:
         budget = repo.budget_last_24h(USER)
         assert budget.user_used == 2  # accepted + rejected only
 
+    def test_naming_spend_does_not_touch_the_diagnosis_ledger(self, db_session):
+        """The two call types hold separate budgets.
+
+        This is the whole reason ``call_type`` exists: a naming backfill runs
+        hundreds of calls in a row, and it must not be able to exhaust the
+        allowance that keeps per-page diagnosis working.
+        """
+        repo = AIAuditRepository(db_session)
+        for _ in range(5):
+            repo.record(
+                AuditWrite(username=USER, status="accepted", call_type="naming")
+            )
+        repo.record(AuditWrite(username=USER, status="accepted"))
+        db_session.commit()
+
+        assert repo.budget_last_24h(USER).user_used == 1
+        assert repo.budget_last_24h(USER, call_type="naming").user_used == 5
+
+    def test_call_type_defaults_to_diagnosis(self, db_session):
+        """Every existing call site omits call_type and must keep working."""
+        repo = AIAuditRepository(db_session)
+        row = repo.record(AuditWrite(username=USER, status="accepted"))
+        db_session.commit()
+        assert row.call_type == "diagnosis"
+
+    def test_naming_rows_do_not_dilute_the_agreement_metric(self, db_session):
+        """agreed_with_rules is meaningless for a name — a name has no rules
+        ranking to agree with, so naming rows must stay out of the metric that
+        exists to detect a diagnosis regression."""
+        repo = AIAuditRepository(db_session)
+        repo.record(
+            AuditWrite(username=USER, status="accepted", agreed_with_rules=True)
+        )
+        for _ in range(9):
+            repo.record(
+                AuditWrite(username=USER, status="accepted", call_type="naming")
+            )
+        db_session.commit()
+
+        stats = repo.agreement_stats()
+        assert stats["accepted"] == 1
+        assert stats["agreement_rate"] == 1.0
+
     def test_another_users_spend_counts_globally_but_not_per_user(self, db_session):
         repo = AIAuditRepository(db_session)
         repo.record(AuditWrite(username=USER, status="accepted"))

@@ -24,7 +24,7 @@ from services.api.puzzles.generator import (
     generate_puzzles,
     get_confirm_depth,
 )
-from services.api.puzzles.identity import assign_primary_motif, generate_puzzle_title
+from services.api.puzzles.identity import assign_primary_motif
 from services.api.storage.puzzle_repository import PuzzleRepository
 
 
@@ -654,7 +654,10 @@ def test_equivalent_best_moves_are_all_accepted(
     assert stats is not None
     assert stats.username == "testuser"
     assert stats.primary_motif == motif
-    assert stats.title == generate_puzzle_title(motif)
+    # Named from the position, so the title names the move that was missed
+    # rather than repeating the motif's canonical string.
+    assert stats.title == "The Queen to d5"
+    assert stats.title_source == "position"
     assert stats.attempts == 0
     assert puzzle.accept_moves_uci is not None
     accepted = set(puzzle.accept_moves_uci.split(","))

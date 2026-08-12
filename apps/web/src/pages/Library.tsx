@@ -102,7 +102,14 @@ function PuzzleRow({ puzzle }: { puzzle: LibraryPuzzle }) {
                 {/* Left: title + badges */}
                 <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
-                        <span className="font-serif text-primary truncate">
+                        {/* min-w-0 is what makes `truncate` do anything here: a
+                            flex item's min-width defaults to auto, so without it
+                            the span refuses to shrink below its text and the
+                            badges wrap to a second line instead. Titles used to
+                            be one of seven short motif strings and never reached
+                            that limit; they are position- and model-derived now,
+                            so they can. */}
+                        <span className="font-serif text-primary truncate min-w-0">
                             {puzzle.title || puzzle.id.slice(0, 8)}
                         </span>
                         <StatusBadge status={puzzle.status} />
