@@ -335,6 +335,37 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now tailscale-docker-route-exceptions.service
 ```
 
+### "Active" does not mean the routes are still there
+
+The unit is `Type=oneshot` with `RemainAfterExit=yes`, so it reports `active`
+forever after one successful run. tailscaled rebuilds table 52 when it starts
+and deletes the throw routes — so the exceptions can be gone while
+`systemctl status` still looks healthy. **Check the routes, not the unit.**
+
+Seen on 2026-08-12: unit last ran 2026-08-01 19:40, tailscaled restarted
+2026-08-09 16:59, and table 52 held `default dev tailscale0` with no throw
+routes. Every host-to-container connection hung. The symptom is misleading —
+docker-proxy still accepts on `127.0.0.1`, so the port probes as **open** and
+only the relay to the container fails:
+
+```bash
+# looks fine — docker-proxy answers on loopback
+timeout 3 bash -c 'cat < /dev/null > /dev/tcp/127.0.0.1/5432' && echo open
+
+# the real test — this is what actually breaks
+timeout 3 bash -c 'cat < /dev/null > /dev/tcp/172.17.0.2/5432' && echo open
+
+ip route get 172.17.0.2     # must say `dev docker0`, NOT `dev tailscale0`
+```
+
+`docker exec ... psql` keeps working throughout, because it uses no networking
+at all — which is what makes this look like an application or database fault.
+
+`PartOf=tailscaled.service` plus `WantedBy=tailscaled.service` now re-run the
+helper on every tailscaled start or restart. That fix only applies once the
+unit file is reinstalled — the install block above must be re-run after
+pulling it.
+
 Manual one-shot repair is only the fallback if the service is missing or inactive:
 
 ```bash
