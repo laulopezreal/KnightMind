@@ -7,7 +7,7 @@ from dataclasses import asdict, dataclass, is_dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, TypedDict, cast
 
-from sqlalchemy import CursorResult, func, select, update
+from sqlalchemy import CursorResult, delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -190,6 +190,27 @@ class JobWorker:
             except asyncio.CancelledError:
                 pass
             self._beat_task = None
+        # Withdraw this worker's liveness on the way out. Health reads the
+        # freshest beat across all rows, and a departing worker's last beat is
+        # only seconds old -- so during a deploy, `compose up -d` stops the old
+        # worker and the gate then samples ITS beat and reports `ok` while the
+        # new container is still starting, or crash-looping. The deploy is
+        # declared successful with a dead queue, which is the one thing the gate
+        # exists to prevent. A crashed worker cannot do this and correctly ages
+        # out instead; this only covers the orderly exit.
+        await asyncio.to_thread(self._withdraw)
+
+    def _withdraw(self) -> None:
+        try:
+            with SessionLocal() as db:
+                db.execute(
+                    delete(WorkerHeartbeat).where(
+                        WorkerHeartbeat.worker_id == self.worker_id
+                    )
+                )
+                db.commit()
+        except Exception as e:  # pragma: no cover - defensive
+            logger.warning(f"Could not withdraw heartbeat: {e}")
 
     def _beat(self) -> None:
         """Record liveness where a different process can read it.

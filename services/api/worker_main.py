@@ -17,6 +17,7 @@ Run with:  python -m services.api.worker_main
 
 import asyncio
 import logging
+import os
 import signal
 
 from services.api.jobs.cleanup_sessions import run_session_cleanup
@@ -43,6 +44,15 @@ async def _run() -> None:
     loop = asyncio.get_running_loop()
     for signame in ("SIGTERM", "SIGINT"):
         loop.add_signal_handler(getattr(signal, signame), _request_stop, signame)
+
+    # The documented kill switch has to be honoured HERE too. `.env.docker` is
+    # the env_file for both services, so an operator setting it per the runbook
+    # was only telling the API to stop reporting on the worker -- which kept
+    # claiming jobs, beating and running housekeeping. The flag meant "stop
+    # looking", not "stop".
+    if os.environ.get("KNIGHTMIND_WORKER_DISABLED") == "true":
+        logger.info("KNIGHTMIND_WORKER_DISABLED=true; not starting the worker")
+        return
 
     worker.start()
     # Housekeeping belongs to whichever process runs the worker, and there is

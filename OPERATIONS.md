@@ -114,8 +114,9 @@ Live containers:
   - it also runs the hourly housekeeping loop: abandoned-session cleanup, the
     AI audit retention sweep, the rate-limit hit purge and the dead-heartbeat
     purge. That lives with whichever process runs the worker, so there is
-    exactly one of it — except when `KNIGHTMIND_WORKER_DISABLED=true`, which
-    turns the worker off entirely and takes housekeeping with it.
+    exactly one of it — except when `KNIGHTMIND_WORKER_DISABLED=true`, which is
+    honoured by both containers: the API stops judging worker health and the
+    worker process exits without claiming anything.
   - the 120s grace period covers a typical job, not every job: `max_games` goes
     to 2000, and a large generation will exceed it and be killed, leaving the
     job for the 15-minute crash-recovery lease.
@@ -139,14 +140,20 @@ Known live database contents at restoration time:
 
 ## Outbound dependencies
 
-The API makes egress calls to exactly three third parties. All are best-effort:
-a failure degrades one feature and never takes the API down.
+Three third parties, and **which container reaches them now matters**: the job
+worker runs in its own container, so everything reachable from a job handler
+egresses from `knightmind-worker-1`, not from the API. Both containers get the
+proxy env from `docker-compose.override.yml`. All are best-effort: a failure
+degrades one feature and never takes the service down.
 
-| Host | Used by | On failure |
-| --- | --- | --- |
-| `api.chess.com` | game import, rating snapshots | the import or snapshot fails and is reported to the caller |
-| `explorer.lichess.ovh` | `/openings/baseline` | serves a stale cached row if one exists, else 503; the Openings page simply omits the comparison |
-| `api.anthropic.com` | AI diagnosis prose | diagnosis falls back to the rules-based cause; the written explanation is simply absent |
+| Host | Container | Used by | On failure |
+| --- | --- | --- | --- |
+| `api.chess.com` | **api** | game import, rating snapshots | the import or snapshot fails and is reported to the caller |
+| `explorer.lichess.ovh` | **api** | `/openings/baseline` | serves a stale cached row if one exists, else 503; the Openings page simply omits the comparison |
+| `api.anthropic.com` | **worker** | AI diagnosis prose, AI puzzle naming | diagnosis falls back to the rules-based cause; naming leaves the puzzle pending and retries later |
+
+Debugging "AI stopped working" therefore means checking the **worker**'s proxy
+env, not the API's — the API no longer calls Anthropic at all.
 
 This table must stay in step with `ALLOWED_HOST_SUFFIXES` in
 `deploy/egress-proxy/connect_proxy.py`, currently
@@ -170,13 +177,17 @@ Notes for the Anthropic API:
 - **Chess data does leave the box here**, unlike the explorer: the prompt carries
   position and game context so the model can explain the mistake. No account
   credentials are sent.
-- **Kill switch**: `KNIGHTMIND_AI_DIAGNOSIS=0` stops the model call entirely — no
-  request, no audit row, diagnosis falls back to rules.
+- **Kill switches, plural**: `KNIGHTMIND_AI_DIAGNOSIS=0` stops the *diagnosis*
+  model call — no request, no audit row, diagnosis falls back to rules. It does
+  **not** stop AI puzzle naming, which has its own `KNIGHTMIND_AI_NAMING` flag.
+  Pulling only the first lever during a spend incident leaves naming calling
+  Anthropic.
 - **Absent key is safe.** `ANTHROPIC_API_KEY` is read at call time, never at
   startup, so an unset key degrades to rules-only instead of blocking boot.
 - **Spend ceilings** are counted from `diagnosis_audit_log`:
   `KNIGHTMIND_AI_DAILY_CAP_USER` (bounds one backfill) and
-  `KNIGHTMIND_AI_DAILY_CAP_GLOBAL` (backstop against a runaway loop).
+  `KNIGHTMIND_AI_DAILY_CAP_GLOBAL` (backstop against a runaway loop). Naming has
+  its own pair, `KNIGHTMIND_AI_NAMING_CAP_USER` / `_CAP_GLOBAL`.
 - **Prompts and responses are retained** in `diagnosis_audit_log` for incident
   review and swept by the session-cleanup loop.
 - **Blocking egress to it is a supported configuration**, same as the explorer:

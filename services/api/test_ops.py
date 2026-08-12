@@ -510,3 +510,41 @@ def test_the_beat_is_stored_as_naive_utc(db_session, monkeypatch):
         ).delete()
         db_session.commit()
         db_module.engine.dispose()
+
+
+@pytest.mark.postgres
+def test_a_departed_worker_does_not_keep_health_green(client, db_session, monkeypatch):
+    """The deploy-gate hole: health reads the freshest beat across ALL rows.
+
+    `compose up -d` stops the old worker before the new one is serving, and the
+    old worker's last beat is only seconds old — so the gate would sample it,
+    see `ok`, and declare a deploy successful while the new container was still
+    starting or crash-looping. A worker withdraws its row on an orderly exit for
+    exactly this reason.
+    """
+    import asyncio
+
+    from services.api import worker as worker_module
+    from services.api.models import WorkerHeartbeat
+
+    _external_worker(monkeypatch)
+
+    w = worker_module.JobWorker()
+    w.worker_id = "departing-worker"
+    w._beat()
+
+    # While it is up, health is green.
+    assert client.get("/ops/health").json()["worker"] == "ok"
+
+    asyncio.run(asyncio.to_thread(w._withdraw))
+
+    # Gone: its beat must not vouch for a worker that is no longer there.
+    assert (
+        db_session.query(WorkerHeartbeat)
+        .filter(WorkerHeartbeat.worker_id == "departing-worker")
+        .count()
+        == 0
+    )
+    response = client.get("/ops/health")
+    assert response.status_code == 503
+    assert response.json()["worker"] == "not_running"

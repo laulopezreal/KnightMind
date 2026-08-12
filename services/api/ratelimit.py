@@ -41,10 +41,11 @@ so limits are immune to NTP steps and clock changes.
 
 Multi-worker caveat
 -------------------
-This store lives in one process. It is correct for the current single-worker
-deployment (uvicorn with one worker). A multi-worker / multi-replica deploy
-would give each worker its own window, multiplying the effective limit by the
-worker count; that setup needs a shared store (e.g. Redis) instead. Per-IP DDoS
+The IN-MEMORY store below lives in one process, so a multi-worker deploy would
+give each worker its own window and multiply the effective limit by the worker
+count. ``PostgresRateLimiter`` in this module is the shared store that removes
+that constraint; ``KNIGHTMIND_RATE_LIMIT_STORE`` selects between them, and the
+deployed API sets ``postgres``. Per-IP DDoS
 absorption belongs at the ingress (Caddy), not here — this layer defends
 against a single well-behaved-TCP principal abusing an expensive endpoint.
 """
@@ -75,7 +76,9 @@ FAILURES: dict[str, Any] = {"count": 0, "last_error": None}
 
 # Every limiter name the app registers. Listed rather than discovered because
 # the housekeeping purge has to know the widest CONFIGURED window before any
-# route has been hit, and test_env_documentation asserts this matches the code.
+# route has been hit. test_known_limiters_matches_the_registered_routes keeps it
+# honest -- without that, a limiter missing from here is invisible to the purge
+# and its live hits get deleted every hour.
 DEFAULT_WINDOW_SECONDS = 60
 KNOWN_LIMITERS = (
     "diagnose",

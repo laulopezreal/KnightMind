@@ -1,7 +1,7 @@
 """add worker_heartbeats for out-of-process worker liveness
 
 Revision ID: a335ae9eeced
-Revises: a0b1c2d3e4f5
+Revises: c7d8e9f0a1b2
 Create Date: 2026-08-12 15:47:21.518790
 
 """
