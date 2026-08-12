@@ -19,6 +19,7 @@ name. Nothing here raises into a caller.
 
 import logging
 from collections import Counter
+from datetime import timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -56,6 +57,17 @@ AVOID_WINDOW = 25
 # diagnosis and must not turn into an unbounded model-call loop; the job is
 # re-queued while work remains, so the corpus still converges.
 NAMING_BATCH_MAX = 25
+
+# How many failed calls in a row mean the provider is down rather than one call
+# being unlucky. A single failure at the tail of an otherwise fine run is not
+# worth pausing for; three with no answer between them is not bad luck.
+ERROR_STREAK_LIMIT = 3
+
+# How long a tripped breaker holds the re-queue chain off. Matched to the
+# worker's stuck-job lease (worker.py) so the two timeouts that decide "is this
+# thing alive?" agree, and short enough that a blip costs one paused chain
+# rather than an afternoon of unnamed puzzles.
+ERROR_STREAK_COOLDOWN = timedelta(minutes=15)
 
 
 def _evidence_value(evidence, item_id: str) -> str | None:
@@ -438,3 +450,54 @@ def pending_count(db: Session, username: str) -> int:
         )
         or 0
     )
+
+
+def retry_is_backed_off(db: Session, username: str) -> bool:
+    """True while the provider looks down and the chain must stop re-queuing.
+
+    ``pending_count`` answers "does this work still need doing?" and keeps
+    saying yes through an outage, on purpose: an error is not an answer and a
+    blip must not mark a puzzle permanently unnamed. But the worker re-queues a
+    diagnosis job on that number and claims the new job about two seconds later,
+    so "yes, still" plus "then go again" is a spin loop — one that an
+    unreachable provider can hold open indefinitely, because an error costs no
+    budget either. It writes an audit row and a job row per turn, and since the
+    worker became its own container (#374) it burns that container whole.
+
+    This is the damping term, and it is deliberately a *separate* question
+    asked by the scheduler rather than a fudge inside ``pending_count``. The
+    work really is still pending; what has changed is that right now there is no
+    point doing it. Folding "we cannot do this at the moment" into "this does
+    not need doing" is how a transient outage would come to look like a
+    permanent decision.
+
+    Read from the audit ledger rather than a counter in the worker, for the
+    reason the daily budget is: it survives a worker restart, it is per user,
+    and it cannot drift from what actually happened. The loop writes the rows
+    that stop it.
+
+    Not a latch. The streak resets on the first call the model answers, and
+    expires on its own after ``ERROR_STREAK_COOLDOWN`` so the next natural
+    trigger — a fresh import, a diagnosis run, the operator CLI — gets a clean
+    attempt rather than inheriting yesterday's outage.
+    """
+    from services.api.ai import config
+
+    if not config.naming_is_enabled():
+        # The branch every deployment takes today. pending_count is 0 here
+        # anyway, so there is nothing to back off from and no reason to pay for
+        # the query.
+        return False
+
+    streak = AIAuditRepository(db).failing_streak(
+        username, ai_naming.CALL_TYPE, within=ERROR_STREAK_COOLDOWN
+    )
+    if streak < ERROR_STREAK_LIMIT:
+        return False
+
+    logger.warning(
+        "Naming paused for %s: %d calls failed with no answer between them",
+        username,
+        streak,
+    )
+    return True
