@@ -1,21 +1,28 @@
 import asyncio
 import logging
+import os
+import socket
 import traceback
 from dataclasses import asdict, dataclass, is_dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, TypedDict, cast
 
-from sqlalchemy import CursorResult, func, select, update
+from sqlalchemy import CursorResult, delete, func, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from services.api.db import SessionLocal
 from services.api.diagnosis.job import DIAGNOSIS_BATCH_MAX, run_diagnosis
-from services.api.models import Job, JobStatus, JobType
+from services.api.models import Job, JobStatus, JobType, WorkerHeartbeat
 from services.api.puzzles import naming_pass
 from services.api.puzzles.generator import generate_puzzles
 from services.api.storage.diagnosis_repository import DiagnosisRepository
 from services.api.usernames import canonical_username
+
+# Beat well inside ops.py's staleness threshold so a slow write or a busy
+# event loop does not read as death.
+BEAT_INTERVAL_SECONDS = 5
 
 logger = logging.getLogger(__name__)
 
@@ -105,12 +112,24 @@ class _RecoveryStats(TypedDict):
 
 class JobWorker:
     def __init__(self):
+        # Identifies this process in worker_heartbeats. The container hostname
+        # is distinct per replica, so scaling the worker gives each its own row
+        # instead of two processes overwriting one.
+        self.worker_id = os.environ.get("KNIGHTMIND_WORKER_ID") or socket.gethostname()
         self.is_running = False
         self._task = None
+        self._beat_task: asyncio.Task | None = None
+        # Notified when the job loop ends for any reason; worker_main uses this
+        # to leave its shutdown wait so the process can exit and be restarted.
+        self._on_exit: list[Callable[[], None]] = []
         self.recovery_stats: _RecoveryStats = {
             "recovered_count": 0,
             "last_recovery_at": None,
         }
+
+    def on_exit(self, callback: Callable[[], None]) -> None:
+        """Register a callback for "the job loop has ended, for any reason"."""
+        self._on_exit.append(callback)
 
     def start(self):
         """Start the worker background task."""
@@ -118,14 +137,146 @@ class JobWorker:
             return
         self.is_running = True
         self._task = asyncio.create_task(self.run_worker_loop())
+        # Its OWN task, not a step in the job loop. Beating inside the loop
+        # meant a worker stopped beating for the entire duration of a job --
+        # `process_next_job` awaits the handler in a thread -- so any job over
+        # the staleness threshold made a perfectly healthy worker report
+        # `stale`. /ops/health would 503, the API's Docker healthcheck would
+        # mark the API unhealthy after ~90s, and the deploy gate would fail:
+        # busy is not dead, and the naive version could not tell them apart.
+        self._beat_task = asyncio.create_task(self._beat_loop())
+        # The beat must not outlive the thing it attests to. Nothing linked them
+        # before, so a job loop that died on SystemExit or MemoryError left the
+        # beat task happily writing rows -- a dead worker reporting `ok`, which
+        # is worse than the in-loop beat it replaced: that one at least went
+        # stale. `is_running` also stayed True, so worker_main never exited.
+        self._task.add_done_callback(self._job_loop_finished)
         logger.info("Job worker started")
+
+    def _job_loop_finished(self, task: "asyncio.Task[None]") -> None:
+        """Stop attesting to a worker that has stopped working.
+
+        The reachable trigger is cancellation, or an error escaping
+        `run_worker_loop`'s own handler. Note what does NOT reach here:
+        MemoryError is an Exception, so that handler swallows it and the loop
+        carries on; SystemExit inside a Task is re-raised by asyncio and kills
+        the process outright. An earlier comment claimed both as the motivation
+        and was wrong on both counts.
+        """
+        if self.is_running:
+            # Still "running" means the loop exited on its own, not on request.
+            exc = task.exception() if not task.cancelled() else None
+            logger.error("Worker loop exited unexpectedly: %r", exc)
+            self.is_running = False
+        if self._beat_task:
+            self._beat_task.cancel()
+        # Tell the process. Without this the container is a zombie: the beat
+        # stops and health goes stale, but `worker_main` sits on its shutdown
+        # event forever, so the container stays Up, `restart: unless-stopped`
+        # never fires, and the queue is dead until a human notices. Nothing else
+        # reads `is_running`.
+        for callback in self._on_exit:
+            callback()
+
+    async def _beat_loop(self) -> None:
+        # Runs until CANCELLED, not until `is_running` clears. stop() clears
+        # that flag first to wind the job loop down, so keying the beat on it
+        # killed the heartbeat at t=0 of a drain -- reporting `stale` while the
+        # worker finished the job it was asked to finish. Cancellation comes
+        # from the job loop's done-callback, or from stop() once the loop has
+        # actually ended.
+        while True:
+            await asyncio.to_thread(self._beat)
+            await asyncio.sleep(BEAT_INTERVAL_SECONDS)
 
     async def stop(self):
         """Stop the worker."""
         self.is_running = False
+        # Await the job loop FIRST. Cancelling the beat here would stop it at
+        # t=0 of a drain while the job runs on -- and SIGTERM during a job is
+        # the common case, since compose sends it on every deploy. Measured
+        # before this order was fixed: /ops/health flipped to `stale` 27s in
+        # while the job finished at 50s, which fails the API's own healthcheck
+        # and the deploy gate. That is exactly the "busy is not dead" failure
+        # the beat task was introduced to remove, reintroduced on shutdown.
+        #
+        # The done-callback on _task cancels the beat once the loop actually
+        # ends, so this needs only to wait for the settle.
         if self._task:
-            await self._task
+            try:
+                await self._task
+            except Exception:
+                # A loop that died on its own re-raises here. Letting it
+                # propagate skipped everything below — the beat was never
+                # cancelled, the heartbeat row was never withdrawn (it aged out
+                # over 30s instead), and the exception escaped asyncio.run()
+                # past worker_main.main(), which catches only KeyboardInterrupt.
+                # So the "its loop died; restarting" branch this shutdown path
+                # exists to reach was unreachable.
+                #
+                # Logged, not swallowed silently: the caller still learns the
+                # loop is gone from on_exit / the non-zero exit code.
+                logger.exception("Job loop raised on the way out")
             logger.info("Job worker stopped")
+        if self._beat_task:
+            self._beat_task.cancel()
+            try:
+                await self._beat_task
+            except asyncio.CancelledError:
+                pass
+            self._beat_task = None
+        # Withdraw this worker's liveness on the way out. Health reads the
+        # freshest beat across all rows, and a departing worker's last beat is
+        # only seconds old -- so during a deploy, `compose up -d` stops the old
+        # worker and the gate then samples ITS beat and reports `ok` while the
+        # new container is still starting, or crash-looping. The deploy is
+        # declared successful with a dead queue, which is the one thing the gate
+        # exists to prevent. A crashed worker cannot do this and correctly ages
+        # out instead; this only covers the orderly exit.
+        await asyncio.to_thread(self._withdraw)
+
+    def _withdraw(self) -> None:
+        try:
+            with SessionLocal() as db:
+                db.execute(
+                    delete(WorkerHeartbeat).where(
+                        WorkerHeartbeat.worker_id == self.worker_id
+                    )
+                )
+                db.commit()
+        except Exception as e:  # pragma: no cover - defensive
+            logger.warning(f"Could not withdraw heartbeat: {e}")
+
+    def _beat(self) -> None:
+        """Record liveness where a different process can read it.
+
+        The API used to answer "is the worker up?" from ``self.is_running``. Once
+        the worker runs in its own container that flag is unreachable, so the
+        only honest signal is one written to shared storage. Failure here is
+        logged and swallowed: a database blip must not take down a worker that
+        is otherwise able to run jobs, and a missed beat already reads as
+        staleness rather than as death.
+        """
+        try:
+            with SessionLocal() as db:
+                # Naive UTC, matching the column. Passing an AWARE datetime lets
+                # psycopg send a timestamptz that Postgres casts through the
+                # session TimeZone -- so a PGTZ of America/New_York stores every
+                # beat 4h in the past (permanent `stale`, 503, failed deploys)
+                # and Europe/Madrid stores it 2h in the future (a worker dead for
+                # an hour reads as healthy). ops.py compares against a naive now.
+                now = datetime.now(timezone.utc).replace(tzinfo=None)
+                stmt = (
+                    pg_insert(WorkerHeartbeat)
+                    .values(worker_id=self.worker_id, started_at=now, beat_at=now)
+                    .on_conflict_do_update(
+                        index_elements=["worker_id"], set_={"beat_at": now}
+                    )
+                )
+                db.execute(stmt)
+                db.commit()
+        except Exception as e:  # pragma: no cover - defensive
+            logger.warning(f"Heartbeat write failed: {e}")
 
     async def run_worker_loop(self):
         """Main worker loop trying to fetch and process jobs."""

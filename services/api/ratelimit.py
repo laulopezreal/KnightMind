@@ -41,26 +41,56 @@ so limits are immune to NTP steps and clock changes.
 
 Multi-worker caveat
 -------------------
-This store lives in one process. It is correct for the current single-worker
-deployment (uvicorn with one worker). A multi-worker / multi-replica deploy
-would give each worker its own window, multiplying the effective limit by the
-worker count; that setup needs a shared store (e.g. Redis) instead. Per-IP DDoS
+The IN-MEMORY store below lives in one process, so a multi-worker deploy would
+give each worker its own window and multiply the effective limit by the worker
+count. ``PostgresRateLimiter`` in this module is the shared store that removes
+that constraint; ``KNIGHTMIND_RATE_LIMIT_STORE`` selects between them, and the
+deployed API sets ``postgres``. Per-IP DDoS
 absorption belongs at the ingress (Caddy), not here — this layer defends
 against a single well-behaved-TCP principal abusing an expensive endpoint.
 """
 
+import logging
 import math
+import os
 import threading
 import time
 from collections import deque
 from dataclasses import dataclass
-from typing import Callable
+from typing import Any, Callable, Union
 
 from fastapi import Depends, HTTPException, Request
+from sqlalchemy import delete, text
+from sqlalchemy.orm import Session
 
+from services.api.db import SessionLocal
 from services.api.envutil import env_int
 from services.api.identity import require_account
-from services.api.models import Account
+from services.api.models import Account, RateLimitHit
+
+logger = logging.getLogger("knightmind.ratelimit")
+
+# Fail-open is deliberate; SILENT fail-open is not. Surfaced on /ops/status so
+# a limiter that has been off since the last deploy is answerable, not guessed.
+FAILURES: dict[str, Any] = {"count": 0, "last_error": None}
+
+# Every limiter name the app registers. Listed rather than discovered because
+# the housekeeping purge has to know the widest CONFIGURED window before any
+# route has been hit. test_known_limiters_matches_the_registered_routes keeps it
+# honest -- without that, a limiter missing from here is invisible to the purge
+# and its live hits get deleted every hour.
+DEFAULT_WINDOW_SECONDS = 60
+KNOWN_LIMITERS = (
+    "diagnose",
+    "engine_eval",
+    "import_chesscom",
+    "openings_baseline",
+    "puzzles_generate",
+    "ratings_snapshot",
+)
+
+# Both stores answer `check(key) -> RateLimitDecision`; nothing else is used.
+Limiter = Union["RateLimiter", "PostgresRateLimiter"]
 
 _TimeFn = Callable[[], float]
 
@@ -136,11 +166,164 @@ class RateLimiter:
             del self._hits[k]
 
 
+class PostgresRateLimiter:
+    """Sliding-window-log limiter whose state is shared by every process.
+
+    Same contract as :class:`RateLimiter` -- ``check(key)`` records a hit and
+    decides -- so the two are interchangeable and the route code is unchanged.
+
+    Why not one atomic upsert into a per-window counter: that is a FIXED window,
+    which lets a caller spend the whole limit at the end of one window and again
+    at the start of the next. Double the intended rate, exactly at the burst
+    these routes exist to stop. Matching the in-process limiter's semantics is
+    worth three statements at 5-60 requests a minute.
+
+    The three statements need to be atomic against each other, or two workers
+    counting concurrently both see room and both insert. A transaction alone
+    does not give that -- under READ COMMITTED neither sees the other's
+    uncommitted hit -- so the whole check runs under a per-key transactional
+    advisory lock. It is released at commit or rollback, with no unlock path to
+    leak, and it serialises only the principals colliding on one key.
+
+    Wall clock, not ``time.monotonic``: monotonic is only comparable within one
+    process, and this state crosses processes by construction.
+    """
+
+    def __init__(self, name: str, limit: int, window_seconds: float) -> None:
+        # The limiter NAME is part of the stored key. The in-memory store gets
+        # this for free -- one `_hits` dict per registry entry -- but here every
+        # limiter writes to one flat table, so without the prefix all six share
+        # a single window: five requests to any limited route would 429 puzzle
+        # generation, import and diagnosis. The two stores must namespace the
+        # same way or they are not interchangeable.
+        self.name = name
+        self.limit = limit
+        self.window_seconds = float(window_seconds)
+
+    def _scoped(self, key: str) -> str:
+        return f"{self.name}:{key}"
+
+    def check(self, key: str) -> RateLimitDecision:
+        if self.limit <= 0:
+            return RateLimitDecision(allowed=True, retry_after=0)
+
+        with SessionLocal() as db:
+            try:
+                return self._check(db, self._scoped(key))
+            except Exception as exc:
+                db.rollback()
+                # Fail OPEN, deliberately. This limiter protects expensive
+                # routes from a well-behaved-TCP principal; it is not the DDoS
+                # layer (that is the ingress). A database blip must not turn
+                # every limited endpoint into a 429 -- the outage would be
+                # larger than the abuse it prevents.
+                # ERROR, not warning: this is the security control switching
+                # itself off. A typo, or a deploy landing before its migration,
+                # makes every limited route unlimited while the logs read as a
+                # hiccup and /ops/health stays green. The counter is what makes
+                # "it has been off for an hour" answerable -- see /ops/status.
+                FAILURES["count"] += 1
+                # The CLASS and the SQLSTATE, never the message. Truncating the
+                # message was cosmetic: a real bad-password OperationalError
+                # reads `connection failed: connection to server at
+                # "172.19.0.2", port 5432 failed: FATAL: password
+                # authentication failed for us` -- host and port are both
+                # inside the first 120 characters, and the username escaped only
+                # because that prefix happens to be 124 long. A ProgrammingError
+                # carries the failing SQL. /ops/status is operator-gated, but
+                # the gate accepts any tailnet identity while
+                # KNIGHTMIND_OPS_TAILNET_USER is unset -- the documented default,
+                # and exactly the population this is protecting against.
+                #
+                # SQLSTATE is what an operator actually needs: 42P01 is "the
+                # migration has not run", 28P01 is "the password is wrong".
+                sqlstate = getattr(getattr(exc, "orig", None), "sqlstate", None)
+                FAILURES["last_error"] = f"{type(exc).__name__}" + (
+                    f" (SQLSTATE {sqlstate})" if sqlstate else ""
+                )
+                logger.error(
+                    "Rate limit check FAILED OPEN (%s total); limiting is NOT in "
+                    "effect for this request",
+                    FAILURES["count"],
+                    exc_info=True,
+                )
+                return RateLimitDecision(allowed=True, retry_after=0)
+
+    def _check(self, db: Session, key: str) -> RateLimitDecision:
+        # Every time value comes from the SERVER, and every one is
+        # `now() AT TIME ZONE 'UTC'` -- naive UTC regardless of the session's
+        # TimeZone. Plain now() is a timestamptz, and storing that in this naive
+        # column records LOCAL time: two sessions on different timezones then
+        # disagree about what the stored value means, and the hourly purge
+        # (running on its own session) deleted hits that were seconds old.
+        # Comparing in SQL is not enough when the stored value is ambiguous.
+        #
+        # The Python clock is per-host, which is the property a shared store exists to
+        # remove: a host 90s fast sweeps away another's live window, so the
+        # principal gets a second full budget; one 90s slow reads future-dated
+        # rows and hands a legitimate client a Retry-After well past the window.
+        window = f"{self.window_seconds} seconds"
+
+        # Bounded wait. pg_advisory_xact_lock does NOT raise while it waits, so
+        # the fail-open below cannot see it: one long-lived transaction holding
+        # this key would hang every limited request indefinitely, each pinning a
+        # threadpool token and a pool connection -- a worse outage than the 429s
+        # fail-open was written to avoid. LOCAL, so it reverts with the
+        # transaction rather than leaking into the next use of this connection.
+        db.execute(text("SET LOCAL lock_timeout = '2s'"))
+        # A collision in hashtext() merges two keys onto one lock: a slowdown,
+        # not a cycle. Each transaction takes exactly one advisory lock and then
+        # touches only that key's rows, so there is no second lock to invert.
+        db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"), {"k": key})
+        db.execute(
+            text(
+                "DELETE FROM rate_limit_hits "
+                "WHERE key = :k AND hit_at <= (now() AT TIME ZONE 'UTC') - CAST(:w AS interval)"
+            ),
+            {"k": key, "w": window},
+        )
+        count, retry_after = db.execute(
+            text(
+                "SELECT count(*), "
+                "       CEIL(EXTRACT(EPOCH FROM "
+                "            (min(hit_at) + CAST(:w AS interval)) "
+                "            - (now() AT TIME ZONE 'UTC'))) "
+                "FROM rate_limit_hits "
+                "WHERE key = :k AND hit_at > (now() AT TIME ZONE 'UTC') - CAST(:w AS interval)"
+            ),
+            {"k": key, "w": window},
+        ).one()
+
+        if count >= self.limit:
+            db.commit()
+            return RateLimitDecision(
+                allowed=False, retry_after=max(int(retry_after or 1), 1)
+            )
+
+        db.execute(
+            text(
+                "INSERT INTO rate_limit_hits (key, hit_at) "
+                "VALUES (:k, now() AT TIME ZONE 'UTC')"
+            ),
+            {"k": key},
+        )
+        db.commit()
+        return RateLimitDecision(allowed=True, retry_after=0)
+
+    def reset(self) -> None:
+        """Drop this limiter's recorded state. For tests and hot-reconfiguration."""
+        with SessionLocal() as db:
+            db.execute(
+                delete(RateLimitHit).where(RateLimitHit.key.startswith(f"{self.name}:"))
+            )
+            db.commit()
+
+
 # --- Registry ---------------------------------------------------------------
 # One named limiter per route, created lazily from env on first use so config is
 # read once at startup and tests can reach a limiter by name to inject a clock.
 
-_LIMITERS: dict[str, RateLimiter] = {}
+_LIMITERS: dict[str, Limiter] = {}
 _REGISTRY_LOCK = threading.Lock()
 
 
@@ -149,13 +332,18 @@ def get_limiter(
     *,
     default_limit: int,
     default_window: float = 60.0,
-) -> RateLimiter:
+) -> Limiter:
     """Return the named limiter, creating it from env config on first request.
 
     Env overrides (read once, at creation):
       ``RATE_LIMIT_<NAME>``         -> max requests per window (0 disables)
       ``RATE_LIMIT_<NAME>_WINDOW``  -> window length in seconds
     where ``<NAME>`` is ``name`` upper-cased.
+
+    ``KNIGHTMIND_RATE_LIMIT_STORE`` picks the backing store: ``memory`` (default,
+    and correct only while the API runs one process) or ``postgres`` (shared, and
+    what makes more than one safe). Defaulting to memory keeps the unit tests
+    free of a database round trip per check; the deployed API sets postgres.
     """
     with _REGISTRY_LOCK:
         limiter = _LIMITERS.get(name)
@@ -164,7 +352,10 @@ def get_limiter(
             # No min_value: 0 (or any int) is meaningful here — 0 disables.
             limit = env_int(f"RATE_LIMIT_{upper}", default_limit)
             window = float(env_int(f"RATE_LIMIT_{upper}_WINDOW", int(default_window)))
-            limiter = RateLimiter(limit, window)
+            if os.environ.get("KNIGHTMIND_RATE_LIMIT_STORE") == "postgres":
+                limiter = PostgresRateLimiter(name, limit, window)
+            else:
+                limiter = RateLimiter(limit, window)
             _LIMITERS[name] = limiter
         return limiter
 

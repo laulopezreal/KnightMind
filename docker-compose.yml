@@ -22,6 +22,13 @@
 # ============================================================================
 
 services:
+  # Connection budget, stated rather than inherited. postgres:16-alpine defaults
+  # to max_connections=100 with 3 reserved for superusers, so 97 are usable:
+  #   API 50 (10 + 40, matching anyio's 40-thread pool)
+  # + worker 10 (sized down below -- it runs one job at a time)
+  # + headroom for the deploy's alembic run, a `compose run` one-off, psql
+  # = 70, comfortably inside 97. Raising WEB_CONCURRENCY multiplies the API's
+  # 50 per process and does NOT fit; see the note in the Dockerfile.
   db:
     image: postgres:16-alpine
     restart: unless-stopped
@@ -42,6 +49,13 @@ services:
       retries: 5
 
   api:
+    # Explicit tag, shared with `worker` below. Without it compose derives a
+    # per-service name and builds TWO images -- and the deploy runs
+    # `compose build api`, so every deploy after the first would leave the
+    # worker running the code from the deploy before it while the schema and
+    # the API moved on. Silently: the stale worker keeps beating, so
+    # /ops/health stays green and the gate passes.
+    image: knightmind-api
     build:
       context: .
       dockerfile: Dockerfile
@@ -57,6 +71,61 @@ services:
       # Override DATABASE_URL to point to the compose postgres service
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
       STOCKFISH_PATH: /usr/games/stockfish
+      # The worker is its own service below. EXTERNAL, not DISABLED: the API must
+      # still REPORT on it via /ops/health, and DISABLED means "no worker at
+      # all", which would make a dead queue look healthy. Without either flag
+      # the API starts a second worker in-process, putting Stockfish back on
+      # the request path -- the thing separating them was for.
+      KNIGHTMIND_WORKER_EXTERNAL: "true"
+      # Shared limiter state. The in-memory store keeps one window PER PROCESS,
+      # so the effective limit multiplies by the worker count -- which is what
+      # kept this service at `--workers 1`. Setting this is what makes raising
+      # it safe; see the note in the Dockerfile before you do.
+      KNIGHTMIND_RATE_LIMIT_STORE: postgres
+
+  # Same image, different command. Sharing it keeps the engine binary, the
+  # migration chain and the Python environment identical to the API's by
+  # construction; a separate worker image is a second thing to keep in step, and
+  # the first drift shows up as a job that only fails in production.
+  worker:
+    # Same tag as `api` -- that is what makes "same image, different command"
+    # true rather than aspirational.
+    image: knightmind-api
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    # No published ports: it serves nothing. Liveness is the heartbeat row it
+    # writes, which the API reports through /ops/health.
+    command: ["python", "-m", "services.api.worker_main"]
+    # The image carries the API's HTTP healthcheck. This container serves no
+    # HTTP, so it would curl a dead port every 30s and sit permanently
+    # `unhealthy` -- noise that trains operators to ignore the column. Liveness
+    # here is the heartbeat row, reported through the API's /ops/health.
+    healthcheck:
+      disable: true
+    # PID 1 with no reaper leaves zombie Stockfish children; tini reaps them and
+    # forwards SIGTERM to the shutdown handler.
+    init: true
+    env_file:
+      - .env.docker
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      STOCKFISH_PATH: /usr/games/stockfish
+      # A small pool on purpose. The default (10 + 40 = 50) is sized for the
+      # API, where 40 anyio threadpool workers can each hold a session. This
+      # process runs ONE job at a time, so 50 is a ceiling it can never use --
+      # and two processes each entitled to 50 is 100 against a server allowing
+      # 97, before the deploy's alembic run or an operator's psql.
+      KNIGHTMIND_DB_POOL_SIZE: "2"
+      KNIGHTMIND_DB_MAX_OVERFLOW: "8"
+    # A job can be mid-analysis when a deploy lands. worker_main handles SIGTERM
+    # to finish it; this gives it room to, rather than being killed at the
+    # default 10s and left for crash recovery to reclaim after its lease expires.
+    stop_grace_period: 120s
 
 volumes:
   pgdata:

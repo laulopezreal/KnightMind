@@ -45,3 +45,18 @@ services:
       https_proxy: "http://172.18.0.1:8899"
       NO_PROXY: "localhost,127.0.0.1,::1,db,172.18.0.0/16"
       no_proxy: "localhost,127.0.0.1,::1,db,172.18.0.0/16"
+
+  worker:
+    # The worker needs this too, and it is easy to miss: AI diagnosis moved
+    # here with the job worker, and ai/client.py swallows provider failures
+    # into an ERROR outcome -- so without the proxy the job succeeds, the
+    # log is a warning and health stays green while enrichment silently
+    # stops. Same reasoning as the api block below.
+    # Merged onto the base worker service: only adds proxy env. HTTPS-only so the
+    # postgres driver (raw TCP, ignores these) and any http call are untouched;
+    # NO_PROXY additionally exempts internal hosts as belt-and-suspenders.
+    environment:
+      HTTPS_PROXY: "http://172.18.0.1:8899"
+      https_proxy: "http://172.18.0.1:8899"
+      NO_PROXY: "localhost,127.0.0.1,::1,db,172.18.0.0/16"
+      no_proxy: "localhost,127.0.0.1,::1,db,172.18.0.0/16"

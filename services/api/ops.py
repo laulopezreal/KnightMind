@@ -6,15 +6,34 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
+from services.api import ratelimit as ratelimit_module
 from services.api.ai import config as ai_config
 from services.api.auth import require_operator
 from services.api.db import get_db
 from services.api.engine import is_engine_available
-from services.api.models import Job, JobStatus
+from services.api.models import Job, JobStatus, WorkerHeartbeat
 from services.api.storage.ai_audit_repository import AIAuditRepository
 from services.api.worker import worker
 
 router = APIRouter(prefix="/ops", tags=["ops"])
+
+
+# The worker beats every BEAT_INTERVAL_SECONDS (5s) on its OWN task, so this is
+# six missed beats. It is deliberately not tied to job duration: the beat used
+# to be a step in the job loop, which made any job longer than this threshold
+# report a working worker as dead.
+WORKER_HEARTBEAT_STALE_AFTER = timedelta(seconds=30)
+
+
+def _worker_status_from_heartbeat(db: Session) -> str:
+    """Freshest worker heartbeat, read as ok / stale / not_running."""
+    latest = db.execute(select(func.max(WorkerHeartbeat.beat_at))).scalar_one_or_none()
+    if latest is None:
+        return "not_running"
+    # Stored naive-UTC (the column is DateTime without timezone), so compare
+    # against a naive now -- mixing the two raises rather than misreporting.
+    age = datetime.now(timezone.utc).replace(tzinfo=None) - latest
+    return "ok" if age <= WORKER_HEARTBEAT_STALE_AFTER else "stale"
 
 
 @router.get("/ping")
@@ -37,9 +56,26 @@ def get_health(db: Session = Depends(get_db)):
         db_status = "error"
 
     # 2. Check Worker
-    worker_disabled = os.environ.get("KNIGHTMIND_WORKER_DISABLED") == "true"
-    if worker_disabled:
+    #
+    # Three distinct states, and collapsing any two of them reports a lie:
+    #
+    #   DISABLED  no worker in this deployment at all (tests, or a deliberately
+    #             queue-less deploy). Nothing to be unhealthy about.
+    #   EXTERNAL  the worker runs in its own container. `worker.is_running` is an
+    #             in-process flag and is always False here, so liveness has to
+    #             come from the heartbeat rows it writes. Reporting "disabled"
+    #             for this -- which is what reusing the DISABLED flag would do --
+    #             would claim a healthy system while the queue was dead, and the
+    #             deploy gate probes this endpoint.
+    #   otherwise the legacy in-process worker; ask it directly.
+    if os.environ.get("KNIGHTMIND_WORKER_DISABLED") == "true":
         worker_status = "disabled"
+    elif os.environ.get("KNIGHTMIND_WORKER_EXTERNAL") == "true":
+        # Only meaningful if the DB answered above; a failed probe already makes
+        # the response unhealthy, and a second query would just raise.
+        worker_status = (
+            _worker_status_from_heartbeat(db) if db_status == "ok" else "unknown"
+        )
     else:
         worker_status = "ok" if worker.is_running else "not_running"
 
@@ -165,7 +201,19 @@ def get_ops_status(db: Session = Depends(get_db)):
         "version": version,
         "active_job": active_job,
         "recent_jobs": recent_jobs,
-        "last_recovery": worker.recovery_stats,
+        # In-process only, so this is permanently empty when the worker
+        # runs elsewhere -- the recoveries happen in that container. Reported
+        # as None rather than a zeroed dict, because "0 recoveries" is a claim
+        # and this process has no basis for making it.
+        # Fail-open means a broken limiter looks exactly like a working one
+        # from outside. This is the only place that difference is visible.
+        "rate_limit_failures": ratelimit_module.FAILURES["count"],
+        "rate_limit_last_error": ratelimit_module.FAILURES["last_error"],
+        "last_recovery": (
+            None
+            if os.environ.get("KNIGHTMIND_WORKER_EXTERNAL") == "true"
+            else worker.recovery_stats
+        ),
         # Rule/model agreement over the last week. This is the earliest signal
         # that a prompt or model change regressed — the feature ships with the
         # AI flag ON, so there was no quiet period in which to measure it.

@@ -74,6 +74,57 @@ Live containers:
   - command: `uvicorn services.api.main:app --host 0.0.0.0 --port 8000 --workers 1`
   - host mapping: `127.0.0.1:8000 -> 8000/tcp`
   - Docker healthcheck: `curl -f http://localhost:8000/ops/health || exit 1`
+    - the `worker` field here reports the SEPARATE worker container, read from
+      its heartbeat rows. `stale` means it is up but has stopped looping;
+      `not_running` means no worker has ever beaten. Both return 503, so this
+      healthcheck and the deploy gate both catch a dead queue.
+  - `--workers 1` is deliberate, and the reason is the connection budget.
+
+    Postgres allows **97** non-superuser connections (`max_connections=100`
+    minus 3 reserved). Current demand:
+
+    | consumer | ceiling | why |
+    |---|---|---|
+    | API | 50 | `POOL_SIZE 10 + MAX_OVERFLOW 40`, matching anyio's 40-thread pool — each thread can hold a session |
+    | worker | 10 | sized down in compose; it runs one job at a time |
+    | deploys / operators | ~10 | `alembic upgrade`, `compose run` one-offs, `psql` |
+    | **total** | **70** | 27 spare |
+
+    A second uvicorn worker adds another 50 and does not fit. It is also not the
+    concurrency lever it appears to be: the 40-thread pool already gives 40-way
+    concurrency for blocking handlers inside one process, so more processes
+    mostly buy more connections.
+
+    If request concurrency genuinely runs out, in order: raise the threadpool
+    and the DB pool together in one process; then put PgBouncer (transaction
+    mode) in front so app-side pooling stops mapping 1:1 onto server
+    connections; raise `max_connections` last, since each connection is a
+    backend process with its own memory.
+- `knightmind-worker-1`
+  - image: `knightmind-api` — the *same tag* as the API, set explicitly on both
+    services. Without that, compose builds a second image and a deploy that
+    rebuilds only `api` leaves this container on stale code indefinitely.
+  - command: `python -m services.api.worker_main`
+  - host mapping: none — it serves nothing
+  - liveness: it writes a row to `worker_heartbeats` on its own timer (every 5s,
+    independent of the job loop, so a long job does not read as death); the API
+    reports that as the `worker` field of `/ops/health`. The image's HTTP
+    healthcheck is explicitly disabled for this container — it serves no HTTP,
+    so it would curl a dead port and sit permanently `unhealthy`.
+  - it also runs the hourly housekeeping loop: abandoned-session cleanup, the
+    AI audit retention sweep, the rate-limit hit purge and the dead-heartbeat
+    purge. That lives with whichever process runs the worker, so there is
+    exactly one of it — except when `KNIGHTMIND_WORKER_DISABLED=true`, which is
+    honoured by both containers: the API stops judging worker health and the
+    worker process exits without claiming anything.
+  - the 120s grace period covers a typical job, not every job: `max_games` goes
+    to 2000, and a large generation will exceed it and be killed, leaving the
+    job for the 15-minute crash-recovery lease.
+  - restart: `docker compose --env-file .env.docker restart worker`
+  - logs: `docker compose --env-file .env.docker logs -f worker`
+  - stopping it is safe mid-job: it handles SIGTERM and finishes the running job
+    first, with a 120s grace period. Killing it instead leaves the job for crash
+    recovery, which reclaims it only after the lease expires.
 - `knightmind-db-1`
   - image: `postgres:16-alpine`
   - host mapping: `127.0.0.1:5432 -> 5432/tcp`
@@ -89,14 +140,20 @@ Known live database contents at restoration time:
 
 ## Outbound dependencies
 
-The API makes egress calls to exactly three third parties. All are best-effort:
-a failure degrades one feature and never takes the API down.
+Three third parties, and **which container reaches them now matters**: the job
+worker runs in its own container, so everything reachable from a job handler
+egresses from `knightmind-worker-1`, not from the API. Both containers get the
+proxy env from `docker-compose.override.yml`. All are best-effort: a failure
+degrades one feature and never takes the service down.
 
-| Host | Used by | On failure |
-| --- | --- | --- |
-| `api.chess.com` | game import, rating snapshots | the import or snapshot fails and is reported to the caller |
-| `explorer.lichess.ovh` | `/openings/baseline` | serves a stale cached row if one exists, else 503; the Openings page simply omits the comparison |
-| `api.anthropic.com` | AI diagnosis prose | diagnosis falls back to the rules-based cause; the written explanation is simply absent |
+| Host | Container | Used by | On failure |
+| --- | --- | --- | --- |
+| `api.chess.com` | **api** | game import, rating snapshots | the import or snapshot fails and is reported to the caller |
+| `explorer.lichess.ovh` | **api** | `/openings/baseline` | serves a stale cached row if one exists, else 503; the Openings page simply omits the comparison |
+| `api.anthropic.com` | **worker** | AI diagnosis prose, AI puzzle naming | diagnosis falls back to the rules-based cause; naming leaves the puzzle pending and retries later |
+
+Debugging "AI stopped working" therefore means checking the **worker**'s proxy
+env, not the API's — the API no longer calls Anthropic at all.
 
 This table must stay in step with `ALLOWED_HOST_SUFFIXES` in
 `deploy/egress-proxy/connect_proxy.py`, currently
@@ -120,13 +177,17 @@ Notes for the Anthropic API:
 - **Chess data does leave the box here**, unlike the explorer: the prompt carries
   position and game context so the model can explain the mistake. No account
   credentials are sent.
-- **Kill switch**: `KNIGHTMIND_AI_DIAGNOSIS=0` stops the model call entirely — no
-  request, no audit row, diagnosis falls back to rules.
+- **Kill switches, plural**: `KNIGHTMIND_AI_DIAGNOSIS=0` stops the *diagnosis*
+  model call — no request, no audit row, diagnosis falls back to rules. It does
+  **not** stop AI puzzle naming, which has its own `KNIGHTMIND_AI_NAMING` flag.
+  Pulling only the first lever during a spend incident leaves naming calling
+  Anthropic.
 - **Absent key is safe.** `ANTHROPIC_API_KEY` is read at call time, never at
   startup, so an unset key degrades to rules-only instead of blocking boot.
 - **Spend ceilings** are counted from `diagnosis_audit_log`:
   `KNIGHTMIND_AI_DAILY_CAP_USER` (bounds one backfill) and
-  `KNIGHTMIND_AI_DAILY_CAP_GLOBAL` (backstop against a runaway loop).
+  `KNIGHTMIND_AI_DAILY_CAP_GLOBAL` (backstop against a runaway loop). Naming has
+  its own pair, `KNIGHTMIND_AI_NAMING_CAP_USER` / `_CAP_GLOBAL`.
 - **Prompts and responses are retained** in `diagnosis_audit_log` for incident
   review and swept by the session-cleanup loop.
 - **Blocking egress to it is a supported configuration**, same as the explorer:
