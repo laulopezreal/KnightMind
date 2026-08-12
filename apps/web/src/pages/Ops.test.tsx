@@ -207,4 +207,27 @@ describe('Ops', () => {
 
     expect(screen.getByText('Backend Unavailable')).toBeInTheDocument();
   });
+
+  it('does not claim there are no users while retrying a failed users fetch', async () => {
+    // Under the default the error clears when the retry STARTS, and the branch
+    // below then renders "No users found yet." -- asserting something the page
+    // does not know. The users fetch uses clearErrorOn: 'success' plus a busy
+    // guard so neither the error nor a false "none" is shown mid-flight.
+    mockGetUsers.mockRejectedValue(new Error('users boom'));
+    render(<Ops />);
+    await screen.findByText(/users boom/);
+
+    let release: (v: unknown) => void = () => {};
+    mockGetUsers.mockImplementationOnce(
+      () => new Promise((resolve) => { release = resolve; }),
+    );
+    fireEvent.click(screen.getByRole('button', { name: /refresh users/i }));
+
+    await waitFor(() => expect(mockGetUsers).toHaveBeenCalledTimes(2));
+    expect(screen.queryByText('No users found yet.')).not.toBeInTheDocument();
+    expect(screen.getByText(/users boom/)).toBeInTheDocument();
+
+    release(['admin']);
+    await waitFor(() => expect(screen.queryByText(/users boom/)).not.toBeInTheDocument());
+  });
 });

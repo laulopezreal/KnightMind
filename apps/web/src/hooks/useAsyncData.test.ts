@@ -313,4 +313,21 @@ describe('useAsyncData', () => {
         expect(result.current.refreshing).toBe(true);
         expect(result.current.busy).toBe(true);
     });
+
+    it('reports `busy` during the FIRST load too', async () => {
+        // The other half of the same contract, and it needs its own assertion:
+        // `busy = refreshing` alone satisfies the refetch test above, which
+        // would leave every first-load spinner wired to `busy` permanently off.
+        const pending = deferred<string>();
+        const { result } = renderHook(() => useAsyncData(() => pending.promise, ['a']));
+
+        await waitFor(() => expect(result.current.loading).toBe(true));
+        expect(result.current.refreshing).toBe(false);
+        expect(result.current.busy).toBe(true);
+
+        await act(async () => {
+            pending.resolve('done');
+        });
+        expect(result.current.busy).toBe(false);
+    });
 });

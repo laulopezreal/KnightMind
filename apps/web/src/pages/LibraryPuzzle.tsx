@@ -169,7 +169,7 @@ export default function LibraryPuzzle() {
     // belongs, but the render-time reset above makes it unreachable: the pass
     // where `puzzle` is new and `status` still old is discarded by React before
     // commit, so no effect ever observes it. Verified -- removing the conjunct
-    // changes no test, while deferring the reset to an effect fails five. A
+    // changes no test, while deferring the reset to an effect fails four. A
     // condition that cannot change an outcome is not a safety net, it is noise
     // that makes the real guarantee harder to find.
     const resolved =

@@ -180,6 +180,7 @@ export default function Ops() {
                         <button
                             type="button"
                             onClick={reloadUsers}
+                            aria-label="Refresh users"
                             className="text-[10px] uppercase tracking-widest border border-primary/20 px-3 py-1 rounded-sm km-interactive km-focus-visible"
                         >
                             Refresh
@@ -227,6 +228,7 @@ export default function Ops() {
                         <button
                             type="button"
                             onClick={reloadStorageReport}
+                            aria-label="Refresh storage report"
                             className="text-[10px] uppercase tracking-widest border border-primary/20 px-3 py-1 rounded-sm km-interactive km-focus-visible"
                         >
                             Refresh

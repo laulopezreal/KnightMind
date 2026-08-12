@@ -5,8 +5,12 @@ import LibraryPuzzle from './LibraryPuzzle';
 let mockUsername = 'testplayer';
 let mockPuzzleId = 'puzzle-abc';
 
+const mockNavigate = vi.fn();
 vi.mock('react-router-dom', () => ({
     useParams: () => ({ puzzleId: mockPuzzleId }),
+    // ConnectAccountEmpty (the no-username branch) calls this. Its absence is
+    // why that branch could not be tested at all.
+    useNavigate: () => mockNavigate,
     Link: ({ children, to, ...props }: { children: React.ReactNode; to: string; [key: string]: unknown }) => (
         <a href={to} {...props}>{children}</a>
     ),
@@ -623,5 +627,19 @@ describe('LibraryPuzzle', () => {
                 expect(screen.getByRole('button', { name: /reveal/i })).toBeInTheDocument(),
             );
         });
+    });
+
+    it('asks for an account instead of hanging on a spinner', async () => {
+        // This page had no no-username branch: its fetch returned early BEFORE
+        // setting the loading flag, so `isLoading` kept its initial `true` and
+        // the page showed "Loading puzzle..." forever with no account connected.
+        mockUsername = '';
+        render(<LibraryPuzzle />);
+
+        expect(
+            await screen.findByText('Connect your Chess.com account'),
+        ).toBeInTheDocument();
+        expect(screen.queryByText(/loading puzzle/i)).not.toBeInTheDocument();
+        expect(mockGetLibraryPuzzle).not.toHaveBeenCalled();
     });
 });

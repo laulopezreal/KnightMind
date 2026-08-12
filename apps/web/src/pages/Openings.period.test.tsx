@@ -260,4 +260,29 @@ describe('Openings — the graph follows the window', () => {
     // expanded lines for it is the thing the remount key must not do.
     expect(mounts.count).toBe(1);
   });
+
+  it('does not remount until the new window has actually loaded', async () => {
+    // The remount key must describe the tree ON SCREEN, not the live controls.
+    // If it tracked the controls, changing the window would remount immediately
+    // -- discarding the user's zoom while the OLD tree is still displayed, and
+    // again when the new one lands. The key travels with the data from the
+    // fetcher for exactly this reason, and nothing pinned that until now: a
+    // version deriving it from the live controls passed all 94 Openings tests.
+    const user = userEvent.setup();
+    await ready();
+    expect(mounts.count).toBe(1);
+
+    let release: (v: unknown) => void = () => {};
+    mockGetOpenings.mockImplementationOnce(
+      () => new Promise((resolve) => { release = resolve; }),
+    );
+    await user.selectOptions(periodControl(), '30');
+    await waitFor(() => expect(mockGetOpenings.mock.calls.length).toBeGreaterThan(1));
+
+    // Request in flight, previous tree still on screen: same instance.
+    expect(mounts.count).toBe(1);
+
+    release(JSON.parse(JSON.stringify(TREE)));
+    await waitFor(() => expect(mounts.count).toBe(2));
+  });
 });
