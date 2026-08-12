@@ -656,7 +656,9 @@ def test_equivalent_best_moves_are_all_accepted(
     assert stats.primary_motif == motif
     # Named from the position, so the title names the move that was missed
     # rather than repeating the motif's canonical string.
-    assert stats.title == "The Queen to d5"
+    # Named from the move the player PLAYED (a2a3), never the engine's d1d5 —
+    # the fallback used to put the answer square in the title.
+    assert stats.title == "Pawn to a3"
     assert stats.title_source == "position"
     assert stats.attempts == 0
     assert puzzle.accept_moves_uci is not None

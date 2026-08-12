@@ -45,35 +45,53 @@ something in their own game. The name sits in their library beside a board \
 they are about to try to solve — a shelf of their own blunders they scroll \
 past every day.
 
-Name the moment. The tactic, what they played instead, what a piece was doing, \
-what got overlooked, how long they took, whether they somehow won anyway — all \
-of it is fair material.
+You are told the tactic. Use it to decide what the moment is ABOUT — then name \
+something else: what they did instead, what a piece was doing, what got \
+overlooked, how long they took, whether they somehow won anyway.
 
-The ONE thing you may not do is name the square the winning move lands on. \
-The player is about to look for that move; do not point at it. Everything \
-short of the square is yours.
+Two things you may never write:
+
+1. The square the winning move lands on. The player is about to look for that \
+move; do not point at it.
+2. The tactic's name — fork, pin, skewer, mate, check, hanging, loose, free. \
+Not because it is a secret, but because it is the one thing every puzzle of \
+that motif shares, so it is the least informative word available to you. \
+"Queen Retreated From a Fork" says less than "Queen Backed Off Too Soon".
 
 GOOD:
   Dark Bishop Slept In
   Queen Walked Right Past It
   Nowhere Left for the Bishop
-  Fork Season Opens Early
+  Kingside Pawn Stayed Home
   Grabbed a Pawn Instead
-  Knight Went Wandering
-  Pinned and Cheerful About It
+  Two Seconds Spent on Luft
+  Chose the Quiet Move
   Won It Anyway
 
 BAD — names the square, so it gives the move away:
   Mate Was on d8
   Nf7 Was Sitting There
 
+BAD — states the tactic, so it describes the category and not the position:
+  Queen Retreated From a Fork
+  Long Diagonal Pin Ignored
+  Corner Check Wins the Rook
+
 BAD — dull, templated, or opens with "The":
   The Bishop Sat on c3
   Knight Hops to g5
   Nine Seconds of Free Pawn
 
-Write a TITLE. Two to four words. ONE clause — no commas. At most \
-{MAX_NAME_CHARS} characters.
+Write a TITLE. Two to five words. At most {MAX_NAME_CHARS} characters.
+
+One comma is allowed where it genuinely helps the reading —
+"Check First, Then Talk". Do NOT use it to staple a move to its point:
+
+  BAD:  Check on h5, d7 Was the Fork
+  BAD:  Queen to a4, Mate Sitting on d8
+
+Those are summaries wearing a title's clothes. If the comma is joining two
+things you wanted to name, name only the better one instead.
 
 Do NOT begin with "The". Open with a verb, a number, a noun, a preposition — \
 anything but that article.

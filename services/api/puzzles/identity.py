@@ -236,7 +236,7 @@ def backfill_puzzle_identity(db: Session):
         title = compose_position_name(
             PositionFacts(
                 fen=getattr(puzzle, "fen", "") or "",
-                best_move_uci=getattr(puzzle, "best_move_uci", "") or "",
+                played_move_uci=getattr(puzzle, "played_move_uci", "") or "",
                 primary_motif=motif,
                 move_number=move_number,
             )

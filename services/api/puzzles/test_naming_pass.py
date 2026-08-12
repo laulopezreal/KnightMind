@@ -147,7 +147,7 @@ class TestNaming:
         naming_pass.name_puzzles(db_session, username=USER)
 
         stats = db_session.get(PuzzleStats, "p1")
-        assert stats.title == "The f7 Knight Fork"
+        assert stats.title == "King to g2"
         assert stats.title_source == "position"
 
     def test_a_puzzle_with_no_stats_row_gets_one(
