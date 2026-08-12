@@ -227,6 +227,20 @@ def _name_new_puzzles(db: Session, username: str, canceled: bool = False) -> int
         # the branch almost every deployment and every test takes.
         return 0
 
+    if naming_pass.retry_is_backed_off(db, username):
+        # The provider is failing every call. The worker already stops
+        # re-queuing on this signal, but diagnosis has its own reasons to run —
+        # a backfill converges on its own — and each of those runs would
+        # otherwise spend a batch of connection timeouts to learn what the
+        # ledger already knows. Skipping keeps the diagnosis job doing the work
+        # it can actually do; naming resumes when the streak expires.
+        #
+        # Only the automatic caller defers. scripts/ai_name_puzzles.py goes
+        # through name_puzzles directly, so an operator retrying by hand is
+        # never blocked by a breaker they are trying to test.
+        logger.info("Puzzle naming deferred for %s: provider failing", username)
+        return 0
+
     try:
         summary = naming_pass.name_puzzles(
             db, username=username, limit=naming_pass.NAMING_BATCH_MAX

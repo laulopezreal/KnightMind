@@ -541,7 +541,15 @@ class JobWorker:
                 # Without this term the chain would stop there and the rest
                 # would keep their deterministic names until someone ran the
                 # CLI. Returns 0 when naming is disabled.
-                pending += naming_pass.pending_count(db, username)
+                #
+                # Counted only while naming can actually make progress. Its
+                # pending count stays high through a provider outage by design
+                # — an error is not an answer — so taking it at face value
+                # would re-queue a job that fails identically two seconds
+                # later, for as long as the provider is down. Diagnosis is
+                # unaffected and still chains: it does its work locally.
+                if not naming_pass.retry_is_backed_off(db, username):
+                    pending += naming_pass.pending_count(db, username)
         except Exception as exc:  # noqa: BLE001 - enrichment must stay best-effort
             logger.warning("Could not check remaining diagnosis work: %s", exc)
             return
