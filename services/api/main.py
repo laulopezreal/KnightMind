@@ -114,10 +114,26 @@ async def run_session_cleanup():
         await asyncio.sleep(CLEANUP_INTERVAL_SECONDS)
 
 
+def _worker_runs_elsewhere() -> bool:
+    """Whether this process should skip starting the worker and cleanup loop.
+
+    Two different reasons, deliberately separate env vars: DISABLED means there
+    is no worker in this deployment at all, EXTERNAL means it runs in its own
+    container. /ops/health has to tell them apart -- see the comment there.
+    """
+    return (
+        os.environ.get("KNIGHTMIND_WORKER_DISABLED") == "true"
+        or os.environ.get("KNIGHTMIND_WORKER_EXTERNAL") == "true"
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Prevent worker startup in tests or if explicitly disabled
-    if os.environ.get("KNIGHTMIND_WORKER_DISABLED") != "true":
+    # Prevent worker startup in tests, if explicitly disabled, or when the
+    # worker runs as its own service (docker-compose `worker`). Starting it here
+    # as well would put Stockfish back on the request path -- the thing
+    # separating them was for -- while both processes competed for one queue.
+    if not _worker_runs_elsewhere():
         worker.start()
 
     # Backfill identity (title/motif) for any existing puzzles missing them.
@@ -137,7 +153,7 @@ async def lifespan(app: FastAPI):
 
     # Start session cleanup background task if not disabled
     cleanup_task = None
-    if os.environ.get("KNIGHTMIND_WORKER_DISABLED") != "true":
+    if not _worker_runs_elsewhere():
         cleanup_task = asyncio.create_task(run_session_cleanup())
 
     yield

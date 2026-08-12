@@ -10,11 +10,28 @@ from services.api.ai import config as ai_config
 from services.api.auth import require_operator
 from services.api.db import get_db
 from services.api.engine import is_engine_available
-from services.api.models import Job, JobStatus
+from services.api.models import Job, JobStatus, WorkerHeartbeat
 from services.api.storage.ai_audit_repository import AIAuditRepository
 from services.api.worker import worker
 
 router = APIRouter(prefix="/ops", tags=["ops"])
+
+
+# A worker beats once per loop iteration, and an idle loop sleeps 2s. Three
+# times that leaves room for a slow beat or a long-running job's iteration
+# without calling a live worker dead.
+WORKER_HEARTBEAT_STALE_AFTER = timedelta(seconds=30)
+
+
+def _worker_status_from_heartbeat(db: Session) -> str:
+    """Freshest worker heartbeat, read as ok / stale / not_running."""
+    latest = db.execute(select(func.max(WorkerHeartbeat.beat_at))).scalar_one_or_none()
+    if latest is None:
+        return "not_running"
+    # Stored naive-UTC (the column is DateTime without timezone), so compare
+    # against a naive now -- mixing the two raises rather than misreporting.
+    age = datetime.now(timezone.utc).replace(tzinfo=None) - latest
+    return "ok" if age <= WORKER_HEARTBEAT_STALE_AFTER else "stale"
 
 
 @router.get("/ping")
@@ -37,9 +54,26 @@ def get_health(db: Session = Depends(get_db)):
         db_status = "error"
 
     # 2. Check Worker
-    worker_disabled = os.environ.get("KNIGHTMIND_WORKER_DISABLED") == "true"
-    if worker_disabled:
+    #
+    # Three distinct states, and collapsing any two of them reports a lie:
+    #
+    #   DISABLED  no worker in this deployment at all (tests, or a deliberately
+    #             queue-less deploy). Nothing to be unhealthy about.
+    #   EXTERNAL  the worker runs in its own container. `worker.is_running` is an
+    #             in-process flag and is always False here, so liveness has to
+    #             come from the heartbeat rows it writes. Reporting "disabled"
+    #             for this -- which is what reusing the DISABLED flag would do --
+    #             would claim a healthy system while the queue was dead, and the
+    #             deploy gate probes this endpoint.
+    #   otherwise the legacy in-process worker; ask it directly.
+    if os.environ.get("KNIGHTMIND_WORKER_DISABLED") == "true":
         worker_status = "disabled"
+    elif os.environ.get("KNIGHTMIND_WORKER_EXTERNAL") == "true":
+        # Only meaningful if the DB answered above; a failed probe already makes
+        # the response unhealthy, and a second query would just raise.
+        worker_status = (
+            _worker_status_from_heartbeat(db) if db_status == "ok" else "unknown"
+        )
     else:
         worker_status = "ok" if worker.is_running else "not_running"
 

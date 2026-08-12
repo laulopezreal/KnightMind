@@ -736,3 +736,33 @@ class OpeningExplorerCache(Base):
     fetched_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(timezone.utc), nullable=False
     )
+
+
+class WorkerHeartbeat(Base):
+    """Liveness for a job worker that no longer runs inside the API.
+
+    Before the worker was extracted, ``/ops/health`` answered "is the worker
+    up?" from an in-process flag. Once it runs in its own container the API
+    cannot see it at all -- and the naive version of that move leaves the API
+    reporting ``disabled`` (because KNIGHTMIND_WORKER_DISABLED is set on the API)
+    while the worker is running fine next door. The deploy gate probes that same
+    endpoint, so worker health would have gone dark exactly where it is checked.
+
+    One row per worker, rewritten on every loop iteration. Staleness, not
+    presence, is what makes it meaningful: a crashed worker stops updating and
+    its row ages out, which is the same mechanism the per-job ``heartbeat_at``
+    lease already uses for crash recovery.
+    """
+
+    __tablename__ = "worker_heartbeats"
+    __table_args__ = {"extend_existing": True}
+
+    # Identifies the process. Defaults to the container hostname, so a second
+    # worker replica gets its own row rather than fighting over one.
+    worker_id: Mapped[str] = mapped_column(String, primary_key=True)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc), nullable=False
+    )
+    beat_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc), nullable=False
+    )

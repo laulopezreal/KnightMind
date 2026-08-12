@@ -85,5 +85,9 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD curl -f http://localhost:8000/ops/health || exit 1
 
-# Run with uvicorn. WEB_CONCURRENCY=1 required for in-process worker.
+# Run with uvicorn. The worker no longer runs in this process (see the `worker`
+# service in docker-compose.yml), so the single worker here is no longer a
+# constraint imposed by it. Raising it needs the rate limiter's shared store to
+# be in place first -- per-principal windows are per-process otherwise, and the
+# effective limit multiplies by the worker count.
 CMD ["uvicorn", "services.api.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]

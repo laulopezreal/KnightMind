@@ -1,17 +1,20 @@
 import asyncio
 import logging
+import os
+import socket
 import traceback
 from dataclasses import asdict, dataclass, is_dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, TypedDict, cast
 
 from sqlalchemy import CursorResult, func, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from services.api.db import SessionLocal
 from services.api.diagnosis.job import DIAGNOSIS_BATCH_MAX, run_diagnosis
-from services.api.models import Job, JobStatus, JobType
+from services.api.models import Job, JobStatus, JobType, WorkerHeartbeat
 from services.api.puzzles import naming_pass
 from services.api.puzzles.generator import generate_puzzles
 from services.api.storage.diagnosis_repository import DiagnosisRepository
@@ -105,6 +108,10 @@ class _RecoveryStats(TypedDict):
 
 class JobWorker:
     def __init__(self):
+        # Identifies this process in worker_heartbeats. The container hostname
+        # is distinct per replica, so scaling the worker gives each its own row
+        # instead of two processes overwriting one.
+        self.worker_id = os.environ.get("KNIGHTMIND_WORKER_ID") or socket.gethostname()
         self.is_running = False
         self._task = None
         self.recovery_stats: _RecoveryStats = {
@@ -127,6 +134,31 @@ class JobWorker:
             await self._task
             logger.info("Job worker stopped")
 
+    def _beat(self) -> None:
+        """Record liveness where a different process can read it.
+
+        The API used to answer "is the worker up?" from ``self.is_running``. Once
+        the worker runs in its own container that flag is unreachable, so the
+        only honest signal is one written to shared storage. Failure here is
+        logged and swallowed: a database blip must not take down a worker that
+        is otherwise able to run jobs, and a missed beat already reads as
+        staleness rather than as death.
+        """
+        try:
+            with SessionLocal() as db:
+                now = datetime.now(timezone.utc)
+                stmt = (
+                    pg_insert(WorkerHeartbeat)
+                    .values(worker_id=self.worker_id, started_at=now, beat_at=now)
+                    .on_conflict_do_update(
+                        index_elements=["worker_id"], set_={"beat_at": now}
+                    )
+                )
+                db.execute(stmt)
+                db.commit()
+        except Exception as e:  # pragma: no cover - defensive
+            logger.warning(f"Heartbeat write failed: {e}")
+
     async def run_worker_loop(self):
         """Main worker loop trying to fetch and process jobs."""
         logger.info("Worker loop running")
@@ -136,6 +168,7 @@ class JobWorker:
 
         while self.is_running:
             try:
+                await asyncio.to_thread(self._beat)
                 processed = await self.process_next_job()
                 if not processed:
                     # No job found, sleep a bit

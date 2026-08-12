@@ -384,3 +384,78 @@ def test_health_ok_when_worker_disabled(client, monkeypatch):
     data = response.json()
     assert data["ok"] is True
     assert data["worker"] == "disabled"
+
+
+# --- worker running as its own service -------------------------------------
+#
+# The API cannot see an out-of-process worker, so /ops/health reads the
+# heartbeat rows it writes. These pin the three answers, because getting this
+# wrong reports a healthy system with a dead queue -- and the deploy gate probes
+# this endpoint.
+
+
+def _external_worker(monkeypatch):
+    from services.api import ops as ops_module
+
+    monkeypatch.setattr(ops_module, "is_engine_available", lambda: (True, "OK"))
+    monkeypatch.delenv("KNIGHTMIND_WORKER_DISABLED", raising=False)
+    monkeypatch.setenv("KNIGHTMIND_WORKER_EXTERNAL", "true")
+
+
+def _beat(db_session, worker_id, age_seconds):
+    from datetime import datetime, timedelta, timezone
+
+    from services.api.models import WorkerHeartbeat
+
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    db_session.add(
+        WorkerHeartbeat(
+            worker_id=worker_id,
+            started_at=now,
+            beat_at=now - timedelta(seconds=age_seconds),
+        )
+    )
+    db_session.commit()
+
+
+def test_health_ok_when_external_worker_is_beating(client, db_session, monkeypatch):
+    _external_worker(monkeypatch)
+    _beat(db_session, "worker-1", age_seconds=1)
+
+    response = client.get("/ops/health")
+    assert response.status_code == 200
+    assert response.json()["worker"] == "ok"
+
+
+def test_health_503_when_external_worker_stops_beating(client, db_session, monkeypatch):
+    """A crashed worker stops writing; its row ages out. That is the signal."""
+    _external_worker(monkeypatch)
+    _beat(db_session, "worker-1", age_seconds=600)
+
+    response = client.get("/ops/health")
+    assert response.status_code == 503
+    assert response.json()["worker"] == "stale"
+
+
+def test_health_503_when_no_external_worker_has_ever_run(client, monkeypatch):
+    _external_worker(monkeypatch)
+
+    response = client.get("/ops/health")
+    assert response.status_code == 503
+    assert response.json()["worker"] == "not_running"
+
+
+def test_a_second_replica_keeps_the_service_healthy(client, db_session, monkeypatch):
+    """Liveness is the FRESHEST beat, not every beat.
+
+    Scaling the worker gives each replica its own row. If one dies while another
+    keeps working the queue is still being served, so the endpoint must not go
+    unhealthy on the stale row -- which a per-row check would.
+    """
+    _external_worker(monkeypatch)
+    _beat(db_session, "worker-dead", age_seconds=600)
+    _beat(db_session, "worker-alive", age_seconds=1)
+
+    response = client.get("/ops/health")
+    assert response.status_code == 200
+    assert response.json()["worker"] == "ok"

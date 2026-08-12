@@ -57,6 +57,37 @@ services:
       # Override DATABASE_URL to point to the compose postgres service
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
       STOCKFISH_PATH: /usr/games/stockfish
+      # The worker is its own service below. EXTERNAL, not DISABLED: the API must
+      # still REPORT on it via /ops/health, and DISABLED means "no worker at
+      # all", which would make a dead queue look healthy. Without either flag
+      # the API starts a second worker in-process, putting Stockfish back on
+      # the request path -- the thing separating them was for.
+      KNIGHTMIND_WORKER_EXTERNAL: "true"
+
+  # Same image, different command. Sharing it keeps the engine binary, the
+  # migration chain and the Python environment identical to the API's by
+  # construction; a separate worker image is a second thing to keep in step, and
+  # the first drift shows up as a job that only fails in production.
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    # No published ports: it serves nothing. Liveness is the heartbeat row it
+    # writes, which the API reports through /ops/health.
+    command: ["python", "-m", "services.api.worker_main"]
+    env_file:
+      - .env.docker
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      STOCKFISH_PATH: /usr/games/stockfish
+    # A job can be mid-analysis when a deploy lands. worker_main handles SIGTERM
+    # to finish it; this gives it room to, rather than being killed at the
+    # default 10s and left for crash recovery to reclaim after its lease expires.
+    stop_grace_period: 120s
 
 volumes:
   pgdata:
