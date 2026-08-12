@@ -30,10 +30,18 @@ logging.basicConfig(
 logger = logging.getLogger("knightmind.worker")
 
 
-async def _run() -> None:
+async def _run() -> bool:
+    """Run until stopped. Returns True if a signal asked us to stop.
+
+    The distinction decides the exit code: a requested stop is success, a loop
+    that died on its own is a failure the container should be restarted for.
+    """
     stopping = asyncio.Event()
+    asked_to_stop = False
 
     def _request_stop(signame: str) -> None:
+        nonlocal asked_to_stop
+        asked_to_stop = True
         # Compose sends SIGTERM on `stop`/`down` and on a rolling deploy. Without
         # handling it the process is killed outright after the grace period,
         # abandoning a running job to crash recovery -- which works, but only
@@ -52,8 +60,11 @@ async def _run() -> None:
     # looking", not "stop".
     if os.environ.get("KNIGHTMIND_WORKER_DISABLED") == "true":
         logger.info("KNIGHTMIND_WORKER_DISABLED=true; not starting the worker")
-        return
+        return True
 
+    # Leave the shutdown wait if the loop dies on its own, not only on a
+    # signal. Otherwise the process outlives the thing it exists to run.
+    worker.on_exit(stopping.set)
     worker.start()
     # Housekeeping belongs to whichever process runs the worker, and there is
     # exactly one of those. It was previously started by the API's lifespan; the
@@ -71,14 +82,21 @@ async def _run() -> None:
     # `stop` clears the run flag and awaits the loop task, so an in-flight job
     # runs to completion rather than being torn out from under its transaction.
     await worker.stop()
+    return asked_to_stop
 
 
 def main() -> None:
     logger.info("Starting job worker (id=%s)", worker.worker_id)
     try:
-        asyncio.run(_run())
+        asked_to_stop = asyncio.run(_run())
     except KeyboardInterrupt:  # pragma: no cover - interactive use
-        pass
+        asked_to_stop = True
+    if not asked_to_stop:
+        # Nobody asked: the loop died. Exit non-zero so `restart: unless-stopped`
+        # actually restarts the container -- otherwise it sits Up with a dead
+        # queue until a human notices.
+        logger.error("Job worker exited because its loop died; restarting")
+        raise SystemExit(1)
     logger.info("Job worker exited")
 
 

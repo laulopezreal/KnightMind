@@ -119,10 +119,17 @@ class JobWorker:
         self.is_running = False
         self._task = None
         self._beat_task: asyncio.Task | None = None
+        # Notified when the job loop ends for any reason; worker_main uses this
+        # to leave its shutdown wait so the process can exit and be restarted.
+        self._on_exit: list[Callable[[], None]] = []
         self.recovery_stats: _RecoveryStats = {
             "recovered_count": 0,
             "last_recovery_at": None,
         }
+
+    def on_exit(self, callback: Callable[[], None]) -> None:
+        """Register a callback for "the job loop has ended, for any reason"."""
+        self._on_exit.append(callback)
 
     def start(self):
         """Start the worker background task."""
@@ -147,14 +154,29 @@ class JobWorker:
         logger.info("Job worker started")
 
     def _job_loop_finished(self, task: "asyncio.Task[None]") -> None:
+        """Stop attesting to a worker that has stopped working.
+
+        The reachable trigger is cancellation, or an error escaping
+        `run_worker_loop`'s own handler. Note what does NOT reach here:
+        MemoryError is an Exception, so that handler swallows it and the loop
+        carries on; SystemExit inside a Task is re-raised by asyncio and kills
+        the process outright. An earlier comment claimed both as the motivation
+        and was wrong on both counts.
+        """
         if self.is_running:
-            # Still "running" means the loop exited on its own -- an unhandled
-            # error, not a requested stop.
+            # Still "running" means the loop exited on its own, not on request.
             exc = task.exception() if not task.cancelled() else None
             logger.error("Worker loop exited unexpectedly: %r", exc)
             self.is_running = False
         if self._beat_task:
             self._beat_task.cancel()
+        # Tell the process. Without this the container is a zombie: the beat
+        # stops and health goes stale, but `worker_main` sits on its shutdown
+        # event forever, so the container stays Up, `restart: unless-stopped`
+        # never fires, and the queue is dead until a human notices. Nothing else
+        # reads `is_running`.
+        for callback in self._on_exit:
+            callback()
 
     async def _beat_loop(self) -> None:
         # Runs until CANCELLED, not until `is_running` clears. stop() clears

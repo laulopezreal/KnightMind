@@ -223,13 +223,24 @@ class PostgresRateLimiter:
                 # hiccup and /ops/health stays green. The counter is what makes
                 # "it has been off for an hour" answerable -- see /ops/status.
                 FAILURES["count"] += 1
-                # Type plus a truncated message, NOT repr(). A psycopg
-                # OperationalError's repr embeds the DSN -- host, port and
-                # username -- and a ProgrammingError's carries the failing SQL.
-                # /ops/status is operator-gated, but the gate accepts any
-                # tailnet identity while KNIGHTMIND_OPS_TAILNET_USER is unset,
-                # which is the documented default.
-                FAILURES["last_error"] = f"{type(exc).__name__}: {str(exc)[:120]}"
+                # The CLASS and the SQLSTATE, never the message. Truncating the
+                # message was cosmetic: a real bad-password OperationalError
+                # reads `connection failed: connection to server at
+                # "172.19.0.2", port 5432 failed: FATAL: password
+                # authentication failed for us` -- host and port are both
+                # inside the first 120 characters, and the username escaped only
+                # because that prefix happens to be 124 long. A ProgrammingError
+                # carries the failing SQL. /ops/status is operator-gated, but
+                # the gate accepts any tailnet identity while
+                # KNIGHTMIND_OPS_TAILNET_USER is unset -- the documented default,
+                # and exactly the population this is protecting against.
+                #
+                # SQLSTATE is what an operator actually needs: 42P01 is "the
+                # migration has not run", 28P01 is "the password is wrong".
+                sqlstate = getattr(getattr(exc, "orig", None), "sqlstate", None)
+                FAILURES["last_error"] = f"{type(exc).__name__}" + (
+                    f" (SQLSTATE {sqlstate})" if sqlstate else ""
+                )
                 logger.error(
                     "Rate limit check FAILED OPEN (%s total); limiting is NOT in "
                     "effect for this request",

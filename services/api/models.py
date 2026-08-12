@@ -761,11 +761,19 @@ class WorkerHeartbeat(Base):
     # Identifies the process. Defaults to the container hostname, so a second
     # worker replica gets its own row rather than fighting over one.
     worker_id: Mapped[str] = mapped_column(String, primary_key=True)
+    # Naive UTC defaults, matching the column. An AWARE default on a naive
+    # column is the same anti-pattern the heartbeat write had: Postgres casts it
+    # through the session TimeZone and stores local time. Production supplies
+    # both explicitly, but any ORM-constructed row would reproduce it.
     started_at: Mapped[datetime] = mapped_column(
-        DateTime, default=lambda: datetime.now(timezone.utc), nullable=False
+        DateTime,
+        default=lambda: datetime.now(timezone.utc).replace(tzinfo=None),
+        nullable=False,
     )
     beat_at: Mapped[datetime] = mapped_column(
-        DateTime, default=lambda: datetime.now(timezone.utc), nullable=False
+        DateTime,
+        default=lambda: datetime.now(timezone.utc).replace(tzinfo=None),
+        nullable=False,
     )
 
 

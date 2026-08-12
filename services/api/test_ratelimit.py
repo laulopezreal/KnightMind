@@ -546,7 +546,11 @@ def test_the_purge_uses_the_database_clock(db_session):
 
     dbname = db_session.execute(text("SELECT current_database()")).scalar_one()
     db_session.execute(
-        text(f"ALTER DATABASE \"{dbname}\" SET timezone TO 'America/New_York'")
+        # Pacific/Kiritimati (+14), deliberately EAST of UTC. The bug only bites
+        # in that direction -- west of UTC the broken SQL over-retains, so a
+        # western zone lets the pre-fix version pass and proves nothing. That is
+        # exactly what the first version of this test did.
+        text(f"ALTER DATABASE \"{dbname}\" SET timezone TO 'Pacific/Kiritimati'")
     )
     db_session.commit()
     db_module.engine.dispose()
@@ -555,7 +559,14 @@ def test_the_purge_uses_the_database_clock(db_session):
         limiter.reset()
         assert limiter.check("acct-1").allowed is True
 
-        purge_stale_rate_limit_hits(db_session)
+        # A FRESH session, so the purge runs under the odd timezone too. Using
+        # the test's own session hid the bug: that connection was opened before
+        # the ALTER and stayed on UTC, so the broken SQL compared UTC to UTC and
+        # behaved. Both sides have to be on the wrong clock for it to show.
+        from services.api.db import SessionLocal
+
+        with SessionLocal() as purge_db:
+            purge_stale_rate_limit_hits(purge_db)
 
         live = (
             db_session.query(RateLimitHit)
@@ -568,3 +579,42 @@ def test_the_purge_uses_the_database_clock(db_session):
         db_session.execute(text(f'ALTER DATABASE "{dbname}" RESET timezone'))
         db_session.commit()
         db_module.engine.dispose()
+
+
+@pytest.mark.postgres
+def test_the_recorded_failure_carries_no_connection_detail(db_session, monkeypatch):
+    """What /ops/status stores must not describe the infrastructure.
+
+    Truncating the message was not enough: a real bad-password
+    OperationalError puts the host and port inside the first 120 characters,
+    and the username escaped only because that prefix happens to run to 124.
+    """
+    from sqlalchemy.exc import OperationalError
+
+    from services.api import ratelimit as rl
+
+    limiter = _pg("leaky", limit=1, window=60)
+    monkeypatch.setitem(rl.FAILURES, "last_error", None)
+
+    class _Orig(Exception):
+        sqlstate = "28P01"
+
+    def explode(*_a, **_k):
+        raise OperationalError(
+            "SELECT 1",
+            {},
+            _Orig(
+                'connection failed: connection to server at "172.19.0.2", '
+                "port 5432 failed: FATAL:  password authentication failed "
+                'for user "knightmind"'
+            ),
+        )
+
+    monkeypatch.setattr(limiter, "_check", explode)
+    assert limiter.check("acct-1").allowed is True
+
+    recorded = str(rl.FAILURES["last_error"])
+    for secret in ("172.19.0.2", "5432", "knightmind", "password"):
+        assert secret not in recorded, f"{secret!r} leaked into {recorded!r}"
+    # Still actionable: the class and the SQLSTATE say what went wrong.
+    assert "OperationalError" in recorded and "28P01" in recorded

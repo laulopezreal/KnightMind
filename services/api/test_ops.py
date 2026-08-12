@@ -548,3 +548,49 @@ def test_a_departed_worker_does_not_keep_health_green(client, db_session, monkey
     response = client.get("/ops/health")
     assert response.status_code == 503
     assert response.json()["worker"] == "not_running"
+
+
+@pytest.mark.postgres
+def test_the_heartbeat_purge_spares_live_workers(db_session):
+    """Had no test at all: `WHERE true` survived the whole suite.
+
+    It deletes rows for workers that will never beat again. Deleting a LIVE
+    worker's row flips health to not_running on a healthy system, which is the
+    same false alarm the withdrawal-on-exit fix exists to avoid — in reverse.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from services.api.jobs.cleanup_sessions import purge_dead_worker_heartbeats
+    from services.api.models import WorkerHeartbeat
+
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    db_session.add(
+        WorkerHeartbeat(
+            worker_id="long-lived",
+            # Up for over a week, still beating: must survive.
+            started_at=now - timedelta(days=9),
+            beat_at=now,
+        )
+    )
+    db_session.add(
+        WorkerHeartbeat(
+            worker_id="long-dead",
+            started_at=now - timedelta(days=20),
+            beat_at=now - timedelta(days=9),
+        )
+    )
+    db_session.commit()
+
+    purge_dead_worker_heartbeats(db_session)
+
+    remaining = {
+        row.worker_id
+        for row in db_session.query(WorkerHeartbeat).all()
+        if row.worker_id in {"long-lived", "long-dead"}
+    }
+    assert remaining == {"long-lived"}, remaining
+
+    db_session.query(WorkerHeartbeat).filter(
+        WorkerHeartbeat.worker_id.in_(["long-lived", "long-dead"])
+    ).delete(synchronize_session=False)
+    db_session.commit()
