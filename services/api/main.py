@@ -40,8 +40,7 @@ from services.api.identity import (
     require_account,
 )
 from services.api.jobs.cleanup_sessions import (
-    cleanup_abandoned_sessions,
-    purge_expired_ai_audit,
+    run_session_cleanup,
 )
 from services.api.models import (
     Account,
@@ -75,8 +74,6 @@ from services.ingest import (
     ImportError as ChessComImportError,
 )
 
-CLEANUP_INTERVAL_SECONDS = 3600
-
 # Commit imported games in batches instead of once per game: a full import can
 # span tens of thousands of games, and per-game commits hammer Postgres.
 IMPORT_COMMIT_BATCH_SIZE = 200
@@ -86,32 +83,6 @@ IMPORT_COMMIT_BATCH_SIZE = 200
 # See services/api/ratelimit.py for the algorithm and the multi-worker caveat.
 RATE_LIMIT_IMPORT_CHESSCOM = 5  # heavy Chess.com fetch + bulk DB writes
 RATE_LIMIT_DIAGNOSE = 5  # enqueues a whole-corpus analysis job
-
-
-async def run_session_cleanup():
-    """Background task for periodic housekeeping.
-
-    Session cleanup and AI-audit retention run in separate try blocks on
-    purpose: a failure in one must not skip the other, and a stalled retention
-    sweep would let prompt/response blobs accumulate past their window
-    silently.
-    """
-    while True:
-        try:
-            # Run cleanup
-            with SessionLocal() as db:
-                await asyncio.to_thread(cleanup_abandoned_sessions, db)
-        except Exception as e:
-            print(f"Error in session cleanup: {e}")
-
-        try:
-            with SessionLocal() as db:
-                await asyncio.to_thread(purge_expired_ai_audit, db)
-        except Exception as e:
-            print(f"Error in AI audit purge: {e}")
-
-        # Sleep for defined interval
-        await asyncio.sleep(CLEANUP_INTERVAL_SECONDS)
 
 
 def _worker_runs_elsewhere() -> bool:
@@ -152,6 +123,11 @@ async def lifespan(app: FastAPI):
     await anyio.to_thread.run_sync(warm_eco)
 
     # Start session cleanup background task if not disabled
+    # Housekeeping runs wherever the worker runs -- one process, whichever it
+    # is. Widening this guard to cover EXTERNAL without moving the loop into the
+    # worker is how it stopped running at all: the API skipped it because the
+    # worker was elsewhere, and the worker never started it. Abandoned sessions
+    # accumulated and AI audit rows outlived their retention window, silently.
     cleanup_task = None
     if not _worker_runs_elsewhere():
         cleanup_task = asyncio.create_task(run_session_cleanup())

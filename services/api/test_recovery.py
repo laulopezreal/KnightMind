@@ -318,3 +318,50 @@ def test_long_single_game_keeps_lease_fresh_and_not_reset(
     db.refresh(job)
     assert job.status == JobStatus.RUNNING
     db.close()
+
+
+@pytest.mark.postgres
+def test_the_worker_keeps_beating_while_a_job_runs(db_session, monkeypatch):
+    """Busy is not dead, and the naive version could not tell them apart.
+
+    Beating inside the job loop meant a worker stopped beating for the whole
+    duration of a job, because `process_next_job` awaits the handler in a
+    thread. Any job longer than the staleness threshold made a healthy worker
+    report `stale`: /ops/health 503s, the API's Docker healthcheck marks the API
+    unhealthy, and the deploy gate fails. The beat is its own task for this
+    reason, and this is what says so.
+    """
+    import asyncio
+
+    from services.api import worker as worker_module
+    from services.api.models import WorkerHeartbeat
+
+    monkeypatch.setattr(worker_module, "BEAT_INTERVAL_SECONDS", 0.05)
+
+    async def scenario():
+        w = worker_module.JobWorker()
+        w.worker_id = "busy-worker"
+        w.is_running = True
+        # Stand in for a long job holding the loop: the beat must not depend on
+        # this returning.
+        w._beat_task = asyncio.create_task(w._beat_loop())
+        await asyncio.sleep(0.4)
+        w.is_running = False
+        w._beat_task.cancel()
+        try:
+            await w._beat_task
+        except asyncio.CancelledError:
+            pass
+
+    asyncio.run(scenario())
+
+    beats = (
+        db_session.query(WorkerHeartbeat)
+        .filter(WorkerHeartbeat.worker_id == "busy-worker")
+        .all()
+    )
+    assert len(beats) == 1, "one row per worker, rewritten in place"
+    db_session.query(WorkerHeartbeat).filter(
+        WorkerHeartbeat.worker_id == "busy-worker"
+    ).delete()
+    db_session.commit()

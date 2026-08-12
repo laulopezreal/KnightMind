@@ -91,6 +91,15 @@ services:
     # No published ports: it serves nothing. Liveness is the heartbeat row it
     # writes, which the API reports through /ops/health.
     command: ["python", "-m", "services.api.worker_main"]
+    # The image carries the API's HTTP healthcheck. This container serves no
+    # HTTP, so it would curl a dead port every 30s and sit permanently
+    # `unhealthy` -- noise that trains operators to ignore the column. Liveness
+    # here is the heartbeat row, reported through the API's /ops/health.
+    healthcheck:
+      disable: true
+    # PID 1 with no reaper leaves zombie Stockfish children; tini reaps them and
+    # forwards SIGTERM to the shutdown handler.
+    init: true
     env_file:
       - .env.docker
     environment:

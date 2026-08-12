@@ -170,9 +170,19 @@ class PostgresRateLimiter:
     process, and this state crosses processes by construction.
     """
 
-    def __init__(self, limit: int, window_seconds: float) -> None:
+    def __init__(self, name: str, limit: int, window_seconds: float) -> None:
+        # The limiter NAME is part of the stored key. The in-memory store gets
+        # this for free -- one `_hits` dict per registry entry -- but here every
+        # limiter writes to one flat table, so without the prefix all six share
+        # a single window: five requests to any limited route would 429 puzzle
+        # generation, import and diagnosis. The two stores must namespace the
+        # same way or they are not interchangeable.
+        self.name = name
         self.limit = limit
         self.window_seconds = float(window_seconds)
+
+    def _scoped(self, key: str) -> str:
+        return f"{self.name}:{key}"
 
     def check(self, key: str) -> RateLimitDecision:
         if self.limit <= 0:
@@ -180,7 +190,7 @@ class PostgresRateLimiter:
 
         with SessionLocal() as db:
             try:
-                return self._check(db, key)
+                return self._check(db, self._scoped(key))
             except Exception:
                 db.rollback()
                 # Fail OPEN, deliberately. This limiter protects expensive
@@ -223,9 +233,11 @@ class PostgresRateLimiter:
         return RateLimitDecision(allowed=True, retry_after=0)
 
     def reset(self) -> None:
-        """Drop all recorded state. For tests and hot-reconfiguration."""
+        """Drop this limiter's recorded state. For tests and hot-reconfiguration."""
         with SessionLocal() as db:
-            db.execute(delete(RateLimitHit))
+            db.execute(
+                delete(RateLimitHit).where(RateLimitHit.key.startswith(f"{self.name}:"))
+            )
             db.commit()
 
 
@@ -263,7 +275,7 @@ def get_limiter(
             limit = env_int(f"RATE_LIMIT_{upper}", default_limit)
             window = float(env_int(f"RATE_LIMIT_{upper}_WINDOW", int(default_window)))
             if os.environ.get("KNIGHTMIND_RATE_LIMIT_STORE") == "postgres":
-                limiter = PostgresRateLimiter(limit, window)
+                limiter = PostgresRateLimiter(name, limit, window)
             else:
                 limiter = RateLimiter(limit, window)
             _LIMITERS[name] = limiter

@@ -269,8 +269,8 @@ def test_postgres_limiter_shares_a_window_across_instances(db_session):
     """
     from services.api.ratelimit import PostgresRateLimiter
 
-    worker_a = PostgresRateLimiter(limit=3, window_seconds=60)
-    worker_b = PostgresRateLimiter(limit=3, window_seconds=60)
+    worker_a = PostgresRateLimiter("engine_eval", limit=3, window_seconds=60)
+    worker_b = PostgresRateLimiter("engine_eval", limit=3, window_seconds=60)
     worker_a.reset()
 
     assert worker_a.check("acct-1").allowed is True
@@ -288,7 +288,7 @@ def test_postgres_limiter_shares_a_window_across_instances(db_session):
 def test_postgres_limiter_keeps_principals_apart(db_session):
     from services.api.ratelimit import PostgresRateLimiter
 
-    limiter = PostgresRateLimiter(limit=1, window_seconds=60)
+    limiter = PostgresRateLimiter("engine_eval", limit=1, window_seconds=60)
     limiter.reset()
 
     assert limiter.check("acct-1").allowed is True
@@ -306,7 +306,7 @@ def test_postgres_limiter_lets_the_caller_through_once_the_window_passes(db_sess
     from services.api.models import RateLimitHit
     from services.api.ratelimit import PostgresRateLimiter
 
-    limiter = PostgresRateLimiter(limit=1, window_seconds=60)
+    limiter = PostgresRateLimiter("engine_eval", limit=1, window_seconds=60)
     limiter.reset()
     assert limiter.check("acct-1").allowed is True
     assert limiter.check("acct-1").allowed is False
@@ -325,6 +325,33 @@ def test_postgres_limiter_disabled_at_zero(db_session):
     """0 is the documented per-route kill switch, same as the in-memory store."""
     from services.api.ratelimit import PostgresRateLimiter
 
-    limiter = PostgresRateLimiter(limit=0, window_seconds=60)
+    limiter = PostgresRateLimiter("engine_eval", limit=0, window_seconds=60)
     for _ in range(10):
         assert limiter.check("acct-1").allowed is True
+
+
+@pytest.mark.postgres
+def test_postgres_limiter_keeps_routes_apart(db_session):
+    """Each route needs its own window, exactly as the in-memory store gives.
+
+    The in-memory store namespaces implicitly -- one dict per registry entry --
+    so this is free there and easy to lose here, where every limiter writes to
+    one flat table. Without the route in the key, five requests to ANY limited
+    route would 429 puzzle generation, import and diagnosis at once.
+    """
+    from services.api.ratelimit import PostgresRateLimiter
+
+    generous = PostgresRateLimiter("openings_baseline", limit=60, window_seconds=60)
+    strict = PostgresRateLimiter("puzzles_generate", limit=5, window_seconds=60)
+    generous.reset()
+    strict.reset()
+
+    # Spend more than the strict limiter's budget on the generous route.
+    for _ in range(10):
+        assert generous.check("acct-1").allowed is True
+
+    # The strict route has not been used at all, so it is untouched.
+    assert strict.check("acct-1").allowed is True
+
+    generous.reset()
+    strict.reset()

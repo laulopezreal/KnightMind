@@ -20,6 +20,10 @@ from services.api.puzzles.generator import generate_puzzles
 from services.api.storage.diagnosis_repository import DiagnosisRepository
 from services.api.usernames import canonical_username
 
+# Beat well inside ops.py's staleness threshold so a slow write or a busy
+# event loop does not read as death.
+BEAT_INTERVAL_SECONDS = 5
+
 logger = logging.getLogger(__name__)
 
 
@@ -114,6 +118,7 @@ class JobWorker:
         self.worker_id = os.environ.get("KNIGHTMIND_WORKER_ID") or socket.gethostname()
         self.is_running = False
         self._task = None
+        self._beat_task: asyncio.Task | None = None
         self.recovery_stats: _RecoveryStats = {
             "recovered_count": 0,
             "last_recovery_at": None,
@@ -125,11 +130,31 @@ class JobWorker:
             return
         self.is_running = True
         self._task = asyncio.create_task(self.run_worker_loop())
+        # Its OWN task, not a step in the job loop. Beating inside the loop
+        # meant a worker stopped beating for the entire duration of a job --
+        # `process_next_job` awaits the handler in a thread -- so any job over
+        # the staleness threshold made a perfectly healthy worker report
+        # `stale`. /ops/health would 503, the API's Docker healthcheck would
+        # mark the API unhealthy after ~90s, and the deploy gate would fail:
+        # busy is not dead, and the naive version could not tell them apart.
+        self._beat_task = asyncio.create_task(self._beat_loop())
         logger.info("Job worker started")
+
+    async def _beat_loop(self) -> None:
+        while self.is_running:
+            await asyncio.to_thread(self._beat)
+            await asyncio.sleep(BEAT_INTERVAL_SECONDS)
 
     async def stop(self):
         """Stop the worker."""
         self.is_running = False
+        if self._beat_task:
+            self._beat_task.cancel()
+            try:
+                await self._beat_task
+            except asyncio.CancelledError:
+                pass
+            self._beat_task = None
         if self._task:
             await self._task
             logger.info("Job worker stopped")
@@ -146,7 +171,13 @@ class JobWorker:
         """
         try:
             with SessionLocal() as db:
-                now = datetime.now(timezone.utc)
+                # Naive UTC, matching the column. Passing an AWARE datetime lets
+                # psycopg send a timestamptz that Postgres casts through the
+                # session TimeZone -- so a PGTZ of America/New_York stores every
+                # beat 4h in the past (permanent `stale`, 503, failed deploys)
+                # and Europe/Madrid stores it 2h in the future (a worker dead for
+                # an hour reads as healthy). ops.py compares against a naive now.
+                now = datetime.now(timezone.utc).replace(tzinfo=None)
                 stmt = (
                     pg_insert(WorkerHeartbeat)
                     .values(worker_id=self.worker_id, started_at=now, beat_at=now)
@@ -168,7 +199,6 @@ class JobWorker:
 
         while self.is_running:
             try:
-                await asyncio.to_thread(self._beat)
                 processed = await self.process_next_job()
                 if not processed:
                     # No job found, sleep a bit

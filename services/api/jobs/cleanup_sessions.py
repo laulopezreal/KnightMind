@@ -8,14 +8,19 @@ per-user sweep is ever added it must fold with ``canonical_username`` like every
 other storage entry point (see ``services.api.usernames``).
 """
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import cast
 
 from sqlalchemy import CursorResult, update
 from sqlalchemy.orm import Session
 
+from services.api.db import SessionLocal
 from services.api.models import TrainingSession
 from services.api.storage.ai_audit_repository import AIAuditRepository
+
+# Hourly. Low-frequency housekeeping; the interval is not load-bearing.
+CLEANUP_INTERVAL_SECONDS = 3600
 
 
 def cleanup_abandoned_sessions(db: Session, hours_threshold: int = 24) -> int:
@@ -66,3 +71,29 @@ def purge_expired_ai_audit(db: Session) -> int:
         db.commit()
         print(f"Purged {removed} expired AI audit row(s)")
     return removed
+
+
+async def run_session_cleanup():
+    """Background task for periodic housekeeping.
+
+    Session cleanup and AI-audit retention run in separate try blocks on
+    purpose: a failure in one must not skip the other, and a stalled retention
+    sweep would let prompt/response blobs accumulate past their window
+    silently.
+    """
+    while True:
+        try:
+            # Run cleanup
+            with SessionLocal() as db:
+                await asyncio.to_thread(cleanup_abandoned_sessions, db)
+        except Exception as e:
+            print(f"Error in session cleanup: {e}")
+
+        try:
+            with SessionLocal() as db:
+                await asyncio.to_thread(purge_expired_ai_audit, db)
+        except Exception as e:
+            print(f"Error in AI audit purge: {e}")
+
+        # Sleep for defined interval
+        await asyncio.sleep(CLEANUP_INTERVAL_SECONDS)

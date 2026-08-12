@@ -459,3 +459,54 @@ def test_a_second_replica_keeps_the_service_healthy(client, db_session, monkeypa
     response = client.get("/ops/health")
     assert response.status_code == 200
     assert response.json()["worker"] == "ok"
+
+
+@pytest.mark.postgres
+def test_the_beat_is_stored_as_naive_utc(db_session, monkeypatch):
+    """The worker's own write path, under a NON-UTC session timezone.
+
+    The other heartbeat tests build their rows with `.replace(tzinfo=None)`, so
+    they never exercise how the worker writes -- and under the default UTC
+    session an aware write stores the same value, so they cannot catch this at
+    all. Passing an AWARE datetime makes psycopg send a timestamptz, which
+    Postgres casts to this naive column THROUGH the session TimeZone: one
+    environment variable away from reporting every live worker stale, or every
+    dead one healthy. The timezone here is what makes the assertion real.
+    """
+    from datetime import datetime, timezone
+
+    from sqlalchemy import text
+
+    from services.api import db as db_module
+    from services.api import worker as worker_module
+    from services.api.models import WorkerHeartbeat
+
+    dbname = db_session.execute(text("SELECT current_database()")).scalar_one()
+    db_session.execute(
+        text(f"ALTER DATABASE \"{dbname}\" SET timezone TO 'America/New_York'")
+    )
+    db_session.commit()
+    # New connections only; drop the pooled ones so the setting takes effect.
+    db_module.engine.dispose()
+    try:
+        w = worker_module.JobWorker()
+        w.worker_id = "tz-probe"
+        w._beat()
+
+        stored = db_session.execute(
+            text("SELECT beat_at FROM worker_heartbeats WHERE worker_id = 'tz-probe'")
+        ).scalar_one()
+        drift = abs(
+            (datetime.now(timezone.utc).replace(tzinfo=None) - stored).total_seconds()
+        )
+        assert drift < 60, (
+            f"beat stored {drift:.0f}s from now -- written as an aware datetime "
+            "and cast through the session timezone"
+        )
+    finally:
+        db_session.execute(text(f'ALTER DATABASE "{dbname}" RESET timezone'))
+        db_session.query(WorkerHeartbeat).filter(
+            WorkerHeartbeat.worker_id == "tz-probe"
+        ).delete()
+        db_session.commit()
+        db_module.engine.dispose()

@@ -19,6 +19,7 @@ import asyncio
 import logging
 import signal
 
+from services.api.jobs.cleanup_sessions import run_session_cleanup
 from services.api.worker import worker
 
 logging.basicConfig(
@@ -44,7 +45,19 @@ async def _run() -> None:
         loop.add_signal_handler(getattr(signal, signame), _request_stop, signame)
 
     worker.start()
+    # Housekeeping belongs to whichever process runs the worker, and there is
+    # exactly one of those. It was previously started by the API's lifespan; the
+    # move out left it started by nobody, so abandoned sessions accumulated and
+    # AI audit rows outlived their retention window without a sound.
+    cleanup_task = asyncio.create_task(run_session_cleanup())
+
     await stopping.wait()
+
+    cleanup_task.cancel()
+    try:
+        await cleanup_task
+    except asyncio.CancelledError:
+        pass
     # `stop` clears the run flag and awaits the loop task, so an in-flight job
     # runs to completion rather than being torn out from under its transaction.
     await worker.stop()

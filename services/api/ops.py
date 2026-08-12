@@ -199,7 +199,15 @@ def get_ops_status(db: Session = Depends(get_db)):
         "version": version,
         "active_job": active_job,
         "recent_jobs": recent_jobs,
-        "last_recovery": worker.recovery_stats,
+        # In-process only, so this is permanently empty when the worker
+        # runs elsewhere -- the recoveries happen in that container. Reported
+        # as None rather than a zeroed dict, because "0 recoveries" is a claim
+        # and this process has no basis for making it.
+        "last_recovery": (
+            None
+            if os.environ.get("KNIGHTMIND_WORKER_EXTERNAL") == "true"
+            else worker.recovery_stats
+        ),
         # Rule/model agreement over the last week. This is the earliest signal
         # that a prompt or model change regressed — the feature ships with the
         # AI flag ON, so there was no quiet period in which to measure it.

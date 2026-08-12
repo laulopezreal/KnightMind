@@ -104,10 +104,14 @@ Live containers:
   - image: `knightmind-api` (the same image as the API, different command)
   - command: `python -m services.api.worker_main`
   - host mapping: none — it serves nothing
-  - liveness: it writes a row to `worker_heartbeats` each loop; the API reports
-    that as the `worker` field of `/ops/health`. There is no Docker healthcheck
-    on this container because a process that is up but not claiming jobs is the
-    failure worth catching, and only the heartbeat shows it.
+  - liveness: it writes a row to `worker_heartbeats` on its own timer (every 5s,
+    independent of the job loop, so a long job does not read as death); the API
+    reports that as the `worker` field of `/ops/health`. The image's HTTP
+    healthcheck is explicitly disabled for this container — it serves no HTTP,
+    so it would curl a dead port and sit permanently `unhealthy`.
+  - it also runs the hourly housekeeping loop (abandoned-session cleanup and
+    the AI audit retention sweep). That lives with whichever process runs the
+    worker, so there is exactly one of it.
   - restart: `docker compose --env-file .env.docker restart worker`
   - logs: `docker compose --env-file .env.docker logs -f worker`
   - stopping it is safe mid-job: it handles SIGTERM and finishes the running job
