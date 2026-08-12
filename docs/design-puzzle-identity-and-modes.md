@@ -28,6 +28,32 @@ bug in its purest form, and it belongs to the tenant with **no diagnosis rows at
 all** — so any design deriving identity from `puzzle_diagnoses` fixes nothing
 for the user who most has the problem. Revision 1 did exactly that.
 
+### 1.1 The zero is a backfill gap, not missing data
+
+Worth separating, because it changes what to build versus what to run. Measured:
+
+```
+alfi3sr   161 games,  161 with pgn_blob,  161 with time_control
+           30 puzzles, 0 with a NULL fen / best move / played move
+```
+
+Nothing is missing. Running the real `extract_game_context` over eight of that
+user's actual PGNs derives an opening and an ECO code for **8 of 8** —
+`Sicilian Defense B27`, `Horwitz Defense A40`, `Nimzowitsch Defense B00`. The
+old schema is not the obstacle.
+
+The diagnosis job simply never ran for that user. It auto-chains only from
+puzzle generation (`worker.py:358`), and those puzzles predate the diagnosis
+feature — so **any user who stopped importing games before diagnosis shipped has
+no diagnosis rows, and nothing will ever give them any.** There is no
+backfill-on-deploy for it, and `POST /users/{u}/diagnose` is manual.
+
+That is a defect in its own right, independent of naming, and §11 schedules it.
+The design still does not *depend* on opening coverage — a freshly generated
+puzzle has no diagnosis row either, because diagnosis is asynchronous — but the
+coverage argument in §3.1 is now about timing rather than about a tenant being
+permanently unreachable.
+
 A third fact came from the UI. `Puzzles.tsx` renders the motif chip beside the
 title *while the player is solving* (`:1139` mobile, `:1337` desktop, neither
 gated on resolution). The codebase already believes this is wrong —
@@ -77,7 +103,12 @@ that day's games — `(source_game_id, ply)` is unique per user by existing
 constraint, so a deterministic tiebreak always exists.
 
 Revision 1 used opening + move and measured 272/318 on one tenant. That is worse
-*and* unreachable for the other.
+*and*, until the backfill in §1.1 runs, unavailable for the other.
+
+The base stays date + move even after that backfill, because the gap is not only
+historical: diagnosis is asynchronous, so a puzzle generated a minute ago has no
+opening either. Provenance must be answerable at insert time, and only date and
+move number are.
 
 ## 4. The gate is the puzzle's state, not the session's mode
 
@@ -272,6 +303,12 @@ shape exist across `services/api/`.
 
 Each step ships and reverts independently.
 
+0. **Diagnose the un-diagnosed** (§1.1). Independent of everything below, and
+   worth doing whether or not the rest ships: it is rules-only, costs no model
+   calls, and turns one tenant's opening coverage from 0% to whatever the
+   classifier can reach. Needs a mechanism, not just one manual call — a user
+   who stops importing games must not become permanently un-diagnosable.
+
 1. `display_name` + provenance helper; every puzzle route through one
    serializer. Nickname still wins wherever it exists — nothing visibly changes.
 2. Move `tricky` and Library search onto it (§8).
@@ -335,10 +372,10 @@ should be re-earned rather than kept.
    and messier.
 3. **Whether hinted solves should schedule differently** (§9). Needs usage data
    that does not exist.
-4. **Whether `alfi3sr` having no diagnosis rows is a bug in its own right.** This
-   design routes around it. If the real answer is "that user should have been
-   diagnosed", the provenance ladder still stands but §3.1's coverage argument
-   is solving a symptom.
+4. ~~Whether `alfi3sr` having no diagnosis rows is a bug in its own right.~~
+   **Resolved, and it is.** Measured in §1.1: the games and PGNs are intact and
+   the opening derives from 8 of 8 real samples. The job never ran, and nothing
+   would ever run it. Fixed as rollout step 0 rather than routed around.
 
 Everything else is settled by measurement against production, or by a decision
 already made in the codebase.
