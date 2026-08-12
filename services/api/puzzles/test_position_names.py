@@ -8,7 +8,6 @@ is the distinctness one, not the per-template ones.
 from typing import Any
 
 import chess
-import pytest
 
 from services.api.puzzles.position_names import (
     PositionFacts,
@@ -27,7 +26,7 @@ def facts(**kw) -> PositionFacts:
     # and splatting that into the dataclass is a mypy arg-type error.
     base: dict[str, Any] = {
         "fen": CAPTURE_FEN,
-        "best_move_uci": "f3g5",
+        "played_move_uci": "f3g5",
         "primary_motif": "blunder",
         "move_number": 12,
     }
@@ -35,45 +34,44 @@ def facts(**kw) -> PositionFacts:
     return PositionFacts(**base)
 
 
-def test_name_includes_the_target_square():
-    """The square is what makes two puzzles of the same motif different."""
-    assert "g5" in compose_position_name(facts())
+def test_the_name_never_carries_the_answer_square():
+    """The whole reason this composer changed.
 
-
-@pytest.mark.parametrize(
-    "motif,expected_fragment",
-    [
-        ("fork", "Fork"),
-        ("pin", "Pin"),
-        ("back_rank", "Back Rank"),
-        ("mate_threat", "Mate"),
-    ],
-)
-def test_motif_chooses_the_template(motif, expected_fragment):
-    name = compose_position_name(facts(primary_motif=motif))
-    assert expected_fragment in name
-    assert "g5" in name
-
-
-def test_fork_names_the_piece_that_forks():
-    # f3 holds a knight in CAPTURE_FEN.
-    assert compose_position_name(facts(primary_motif="fork")) == "The g5 Knight Fork"
-
-
-def test_capture_names_the_captured_piece():
-    """g4 holds the black knight, so f3g4 is a capture."""
-    name = compose_position_name(facts(best_move_uci="f3g4"))
-    assert name == "The Knight on g4"
-
-
-def test_default_motif_still_varies_by_square():
-    """The regression that started all this: 150 puzzles, one name.
-
-    Every one of these is the fallback motif — the case that used to collapse
-    onto ``The Missed Win``.
+    It used to build every template from ``best_move_uci``, so the fallback
+    name held the winning move's destination — "The h1 Pin", "The Queen to h1"
+    on real rows. That is the one thing the model's own names are gated
+    against, and this is the branch that runs on EVERY puzzle at creation.
     """
+    # Played g5; the engine's move (and the answer) lands on g4.
+    name = compose_position_name(facts(played_move_uci="f3g5"))
+    assert "g5" in name
+    assert "g4" not in name
+
+
+def test_the_name_describes_the_move_the_player_made():
+    assert compose_position_name(facts()) == "Knight to g5"
+
+
+def test_a_capture_names_what_was_taken():
+    """g4 holds the black knight, so f3g4 is a capture."""
+    assert compose_position_name(facts(played_move_uci="f3g4")) == (
+        "Knight Takes Knight on g4"
+    )
+
+
+def test_the_motif_never_appears_in_the_name():
+    """The motif describes the SOLUTION. Pairing it with the played move's
+    square would be misleading — "The h6 Pin" when the pin is elsewhere — as
+    well as a hint about a tactic the player has not found yet."""
+    for motif in ("fork", "pin", "back_rank", "mate_threat", "hanging_queen"):
+        name = compose_position_name(facts(primary_motif=motif))
+        assert name == "Knight to g5", name
+
+
+def test_names_still_vary_by_move():
+    """The regression that started all this: 150 puzzles, one name."""
     names = {
-        compose_position_name(facts(best_move_uci=uci))
+        compose_position_name(facts(played_move_uci=uci))
         for uci in ("f3g5", "f3e5", "f3d4", "f3h4", "f3g1")
     }
     assert len(names) == 5
@@ -82,7 +80,7 @@ def test_default_motif_still_varies_by_square():
 def test_unreadable_position_falls_back_to_the_motif_title():
     """Total, not raising: one malformed row must not fail a whole backfill."""
     assert compose_position_name(facts(fen="not a fen")) == "The Missed Win"
-    assert compose_position_name(facts(best_move_uci="zzzz")) == "The Missed Win"
+    assert compose_position_name(facts(played_move_uci="zzzz")) == "The Missed Win"
 
 
 def test_no_identity_can_reach_the_name():
@@ -92,12 +90,19 @@ def test_no_identity_can_reach_the_name():
     )
 
 
+def test_the_composer_cannot_see_the_solution_at_all():
+    """Structural, not a rule to remember: there is no field to leak from."""
+    assert "best_move_uci" not in PositionFacts.__dataclass_fields__
+
+
 def test_names_stay_inside_the_card_budget():
     from services.api.puzzles.position_names import MAX_NAME_CHARS
 
     for motif in ("fork", "pin", "hanging_piece", "back_rank", "mate_threat", None):
         for uci in ("f3g5", "f3g4"):
-            name = compose_position_name(facts(primary_motif=motif, best_move_uci=uci))
+            name = compose_position_name(
+                facts(primary_motif=motif, played_move_uci=uci)
+            )
             assert 0 < len(name) <= MAX_NAME_CHARS, name
 
 

@@ -29,9 +29,9 @@ QUIET_BEST = "g1f1"
 # composed from the position now, not looked up from the motif, so they are
 # spelled out here rather than derived — a template change should fail a test,
 # not silently agree with itself.
-FORK_TITLE = "The f7 Knight Fork"
-BACK_RANK_TITLE = "Back Rank on e8"
-QUIET_TITLE = "The King to f1"
+FORK_TITLE = "Knight to d3"
+BACK_RANK_TITLE = "Rook to e2"
+QUIET_TITLE = "King to h1"
 
 
 def _ensure_game(db, game_id, username):
@@ -61,6 +61,7 @@ def _seed_puzzle(
     username,
     fen,
     best_move,
+    played_move="e5d3",
     with_stats=True,
     motif=None,
     title=None,
@@ -77,7 +78,7 @@ def _seed_puzzle(
             ply=10,
             fen=fen,
             side_to_move="white",
-            played_move_uci="a2a3",
+            played_move_uci=played_move,
             best_move_uci=best_move,
             eval_before=0.0,
             eval_after=-3.0,
@@ -119,6 +120,7 @@ def test_reclassify_updates_stale_rows(db_session):
         username="lauureal",
         fen=BACK_RANK_FEN,
         best_move=BACK_RANK_BEST,
+        played_move="e1e2",
         motif="blunder",
         # Both rows really did read "The Missed Win" before per-user title
         # uniqueness landed; that state is now unrepresentable, and the suffix
@@ -285,6 +287,7 @@ def test_already_correct_row_is_untouched(db_session):
         username="lauureal",
         fen=QUIET_FEN,
         best_move=QUIET_BEST,
+        played_move="g1h1",
         motif="blunder",
         title=QUIET_TITLE,
     )

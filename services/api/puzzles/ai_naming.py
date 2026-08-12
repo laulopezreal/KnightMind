@@ -235,17 +235,43 @@ def _first_text(response) -> str | None:
     return None
 
 
-# Naming the tactic used to be rejected here. It is not any more, and the
-# reason is that the check was protecting nothing: the solving page renders
-# `primary_motif` as a badge beside the title (Puzzles.tsx, both the desktop
-# header and the mobile context bar, neither gated on solved state), and the
-# app has a whole motif-filter feature built around exposing it. Banning the
-# word "fork" from a name that sits next to a badge reading "Fork" cost real
-# quality — it is what pushed the model onto the clock, then onto the played
-# move — and bought nothing.
+# Words that state the tactic outright. The model is told the motif and should
+# use it to choose an angle; naming it is what turns a title back into a label.
 #
-# The square is a different matter and is still refused: the badge names the
-# motif, never WHICH move. See _validate.
+# Not a spoiler argument. The solving page renders `primary_motif` as a badge
+# beside the title anyway (Puzzles.tsx, desktop header and mobile context bar,
+# neither gated on resolution), so this protects nothing the UI does not
+# already give away. It is a quality rule: "Queen Retreated From a Fork" says
+# less about this position than "Queen Backed Off Too Soon", because the fork
+# is the one thing every puzzle of that motif shares.
+_TACTIC_WORDS = frozenset(
+    {
+        "fork",
+        "forks",
+        "forked",
+        "forking",
+        "pin",
+        "pins",
+        "pinned",
+        "pinning",
+        "skewer",
+        "skewers",
+        "skewered",
+        "mate",
+        "mates",
+        "mated",
+        "mating",
+        "checkmate",
+        "hanging",
+        "hangs",
+        "hung",
+        "loose",
+        "free",
+        "check",
+        "checks",
+        "checked",
+    }
+)
 
 
 def _validate(parsed: PuzzleName, facts: NameFacts) -> str | None:
@@ -268,19 +294,44 @@ def _validate(parsed: PuzzleName, facts: NameFacts) -> str | None:
     if any(token in name for token in ("1.", "2.", "...")):
         return "name_is_move_list"
 
-    # The failure the first trial run actually produced: 20 of 20 names were a
-    # move and its point joined by a comma ("Check on h5, d7 Was the Fork").
-    # Every one passed the rest of this gate, which is why 100% acceptance was
-    # not the good news it looked like. A title has one clause.
-    if "," in name:
-        return "name_has_two_clauses"
+    # A blanket comma ban used to live here. It was aimed at the first trial
+    # run's failure — 20 of 20 names were a move and its point joined by a
+    # comma ("Check on h5, d7 Was the Fork") — but it treated punctuation as
+    # the disease rather than the symptom.
+    #
+    # The actual cause was the prompt carrying both moves, which read as two
+    # things to name; removing it, capping the length, and showing the failure
+    # back to the model is what fixed the shape. The ban then outlived its
+    # cause and started producing run-ons instead: "Rook Shuffled Bishop
+    # Lived", "Wrong Check Right Queen" — the model still wanted two clauses
+    # and simply jammed them together without punctuation.
+    #
+    # So one comma is allowed and two are not. Two commas is a list, and a list
+    # is the summary shape returning by another route.
+    if name.count(",") > 1:
+        return "name_is_a_list"
 
-    # The one spoiler still worth refusing. The UI already tells the user the
-    # motif — a badge reading "Fork" sits beside this name while they solve —
-    # so a name that says "fork" adds nothing. It does NOT tell them the
-    # square, and "Nf7 Was There" would hand over the move itself.
     words = {w.strip(".!?'\"").lower() for w in name.split()}
+
+    # The square is the hard spoiler: "Nf7 Was There" hands over the move.
     if facts.answer_square and facts.answer_square.lower() in words:
         return f"name_reveals_answer_square:{facts.answer_square}"
+
+    # Naming the tactic is refused again, but for a different reason than the
+    # first time and with the input left alone.
+    #
+    # The first attempt withheld the tactic from the PROMPT, which starved the
+    # model: it fell back on the clock (13 of 40 names became "N Seconds of…"),
+    # then on the played move (11 of 19 became "<Piece> <verb> to <square>").
+    # Relaxing it produced fluent names that mostly said the tactic outright —
+    # 12 of 20 on the first production batch, including "Corner Check Wins the
+    # Rook", which states what the move achieves.
+    #
+    # So the model still receives the tactic and uses it to choose an angle; it
+    # just may not state it. That combination measured best of the three
+    # variants tried, and it is the one arrangement not yet shipped.
+    tactics = words & _TACTIC_WORDS
+    if tactics:
+        return f"name_states_the_tactic:{','.join(sorted(tactics))}"
 
     return None

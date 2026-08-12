@@ -241,7 +241,7 @@ def name_puzzles(
         fallback = compose_position_name(
             PositionFacts(
                 fen=puzzle.fen or "",
-                best_move_uci=puzzle.best_move_uci or "",
+                played_move_uci=puzzle.played_move_uci or "",
                 primary_motif=motif,
                 move_number=(puzzle.ply or 0) // 2 + 1,
             )
