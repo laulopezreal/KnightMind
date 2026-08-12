@@ -207,7 +207,12 @@ jobs:
             echo "Deploying ${SHA} ($(git log -1 --format=%s))"
 
             echo "--- Building new image ---"
-            ${COMPOSE} build api
+            # No service argument. The worker is a second container from the
+            # same image, and `build api` never touched it -- so every deploy
+            # after the first left it running the previous deploy's code while
+            # the schema and the API moved on. Silently: a stale worker keeps
+            # beating, so /ops/health stays green and this gate passes.
+            ${COMPOSE} build
 
             echo "--- Running migrations (new image, before switching traffic) ---"
             # One-off container on the freshly built image; set -e aborts the

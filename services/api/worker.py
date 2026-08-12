@@ -138,16 +138,51 @@ class JobWorker:
         # mark the API unhealthy after ~90s, and the deploy gate would fail:
         # busy is not dead, and the naive version could not tell them apart.
         self._beat_task = asyncio.create_task(self._beat_loop())
+        # The beat must not outlive the thing it attests to. Nothing linked them
+        # before, so a job loop that died on SystemExit or MemoryError left the
+        # beat task happily writing rows -- a dead worker reporting `ok`, which
+        # is worse than the in-loop beat it replaced: that one at least went
+        # stale. `is_running` also stayed True, so worker_main never exited.
+        self._task.add_done_callback(self._job_loop_finished)
         logger.info("Job worker started")
 
+    def _job_loop_finished(self, task: "asyncio.Task[None]") -> None:
+        if self.is_running:
+            # Still "running" means the loop exited on its own -- an unhandled
+            # error, not a requested stop.
+            exc = task.exception() if not task.cancelled() else None
+            logger.error("Worker loop exited unexpectedly: %r", exc)
+            self.is_running = False
+        if self._beat_task:
+            self._beat_task.cancel()
+
     async def _beat_loop(self) -> None:
-        while self.is_running:
+        # Runs until CANCELLED, not until `is_running` clears. stop() clears
+        # that flag first to wind the job loop down, so keying the beat on it
+        # killed the heartbeat at t=0 of a drain -- reporting `stale` while the
+        # worker finished the job it was asked to finish. Cancellation comes
+        # from the job loop's done-callback, or from stop() once the loop has
+        # actually ended.
+        while True:
             await asyncio.to_thread(self._beat)
             await asyncio.sleep(BEAT_INTERVAL_SECONDS)
 
     async def stop(self):
         """Stop the worker."""
         self.is_running = False
+        # Await the job loop FIRST. Cancelling the beat here would stop it at
+        # t=0 of a drain while the job runs on -- and SIGTERM during a job is
+        # the common case, since compose sends it on every deploy. Measured
+        # before this order was fixed: /ops/health flipped to `stale` 27s in
+        # while the job finished at 50s, which fails the API's own healthcheck
+        # and the deploy gate. That is exactly the "busy is not dead" failure
+        # the beat task was introduced to remove, reintroduced on shutdown.
+        #
+        # The done-callback on _task cancels the beat once the loop actually
+        # ends, so this needs only to wait for the settle.
+        if self._task:
+            await self._task
+            logger.info("Job worker stopped")
         if self._beat_task:
             self._beat_task.cancel()
             try:
@@ -155,9 +190,6 @@ class JobWorker:
             except asyncio.CancelledError:
                 pass
             self._beat_task = None
-        if self._task:
-            await self._task
-            logger.info("Job worker stopped")
 
     def _beat(self) -> None:
         """Record liveness where a different process can read it.

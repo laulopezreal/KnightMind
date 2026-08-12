@@ -748,7 +748,8 @@ class WorkerHeartbeat(Base):
     while the worker is running fine next door. The deploy gate probes that same
     endpoint, so worker health would have gone dark exactly where it is checked.
 
-    One row per worker, rewritten on every loop iteration. Staleness, not
+    One row per worker, rewritten on its own timer (not per job-loop
+    iteration -- a long job would otherwise look like death). Staleness, not
     presence, is what makes it meaningful: a crashed worker stops updating and
     its row ages out, which is the same mechanism the per-job ``heartbeat_at``
     lease already uses for crash recovery.

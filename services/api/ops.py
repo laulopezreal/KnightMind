@@ -18,9 +18,10 @@ from services.api.worker import worker
 router = APIRouter(prefix="/ops", tags=["ops"])
 
 
-# A worker beats once per loop iteration, and an idle loop sleeps 2s. Three
-# times that leaves room for a slow beat or a long-running job's iteration
-# without calling a live worker dead.
+# The worker beats every BEAT_INTERVAL_SECONDS (5s) on its OWN task, so this is
+# six missed beats. It is deliberately not tied to job duration: the beat used
+# to be a step in the job loop, which made any job longer than this threshold
+# report a working worker as dead.
 WORKER_HEARTBEAT_STALE_AFTER = timedelta(seconds=30)
 
 

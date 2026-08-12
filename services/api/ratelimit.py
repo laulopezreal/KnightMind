@@ -73,6 +73,19 @@ logger = logging.getLogger("knightmind.ratelimit")
 # a limiter that has been off since the last deploy is answerable, not guessed.
 FAILURES: dict[str, Any] = {"count": 0, "last_error": None}
 
+# Every limiter name the app registers. Listed rather than discovered because
+# the housekeeping purge has to know the widest CONFIGURED window before any
+# route has been hit, and test_env_documentation asserts this matches the code.
+DEFAULT_WINDOW_SECONDS = 60
+KNOWN_LIMITERS = (
+    "diagnose",
+    "engine_eval",
+    "import_chesscom",
+    "openings_baseline",
+    "puzzles_generate",
+    "ratings_snapshot",
+)
+
 # Both stores answer `check(key) -> RateLimitDecision`; nothing else is used.
 Limiter = Union["RateLimiter", "PostgresRateLimiter"]
 
@@ -207,7 +220,13 @@ class PostgresRateLimiter:
                 # hiccup and /ops/health stays green. The counter is what makes
                 # "it has been off for an hour" answerable -- see /ops/status.
                 FAILURES["count"] += 1
-                FAILURES["last_error"] = repr(exc)
+                # Type plus a truncated message, NOT repr(). A psycopg
+                # OperationalError's repr embeds the DSN -- host, port and
+                # username -- and a ProgrammingError's carries the failing SQL.
+                # /ops/status is operator-gated, but the gate accepts any
+                # tailnet identity while KNIGHTMIND_OPS_TAILNET_USER is unset,
+                # which is the documented default.
+                FAILURES["last_error"] = f"{type(exc).__name__}: {str(exc)[:120]}"
                 logger.error(
                     "Rate limit check FAILED OPEN (%s total); limiting is NOT in "
                     "effect for this request",
@@ -217,8 +236,15 @@ class PostgresRateLimiter:
                 return RateLimitDecision(allowed=True, retry_after=0)
 
     def _check(self, db: Session, key: str) -> RateLimitDecision:
-        # Every time value comes from the SERVER, not this process. The Python
-        # clock is per-host, which is the property a shared store exists to
+        # Every time value comes from the SERVER, and every one is
+        # `now() AT TIME ZONE 'UTC'` -- naive UTC regardless of the session's
+        # TimeZone. Plain now() is a timestamptz, and storing that in this naive
+        # column records LOCAL time: two sessions on different timezones then
+        # disagree about what the stored value means, and the hourly purge
+        # (running on its own session) deleted hits that were seconds old.
+        # Comparing in SQL is not enough when the stored value is ambiguous.
+        #
+        # The Python clock is per-host, which is the property a shared store exists to
         # remove: a host 90s fast sweeps away another's live window, so the
         # principal gets a second full budget; one 90s slow reads future-dated
         # rows and hands a legitimate client a Retry-After well past the window.
@@ -238,7 +264,7 @@ class PostgresRateLimiter:
         db.execute(
             text(
                 "DELETE FROM rate_limit_hits "
-                "WHERE key = :k AND hit_at <= now() - CAST(:w AS interval)"
+                "WHERE key = :k AND hit_at <= (now() AT TIME ZONE 'UTC') - CAST(:w AS interval)"
             ),
             {"k": key, "w": window},
         )
@@ -246,9 +272,10 @@ class PostgresRateLimiter:
             text(
                 "SELECT count(*), "
                 "       CEIL(EXTRACT(EPOCH FROM "
-                "            (min(hit_at) + CAST(:w AS interval)) - now())) "
+                "            (min(hit_at) + CAST(:w AS interval)) "
+                "            - (now() AT TIME ZONE 'UTC'))) "
                 "FROM rate_limit_hits "
-                "WHERE key = :k AND hit_at > now() - CAST(:w AS interval)"
+                "WHERE key = :k AND hit_at > (now() AT TIME ZONE 'UTC') - CAST(:w AS interval)"
             ),
             {"k": key, "w": window},
         ).one()
@@ -260,7 +287,10 @@ class PostgresRateLimiter:
             )
 
         db.execute(
-            text("INSERT INTO rate_limit_hits (key, hit_at) VALUES (:k, now())"),
+            text(
+                "INSERT INTO rate_limit_hits (key, hit_at) "
+                "VALUES (:k, now() AT TIME ZONE 'UTC')"
+            ),
             {"k": key},
         )
         db.commit()

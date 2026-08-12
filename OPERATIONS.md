@@ -101,7 +101,9 @@ Live containers:
     connections; raise `max_connections` last, since each connection is a
     backend process with its own memory.
 - `knightmind-worker-1`
-  - image: `knightmind-api` (the same image as the API, different command)
+  - image: `knightmind-api` — the *same tag* as the API, set explicitly on both
+    services. Without that, compose builds a second image and a deploy that
+    rebuilds only `api` leaves this container on stale code indefinitely.
   - command: `python -m services.api.worker_main`
   - host mapping: none — it serves nothing
   - liveness: it writes a row to `worker_heartbeats` on its own timer (every 5s,
@@ -109,9 +111,14 @@ Live containers:
     reports that as the `worker` field of `/ops/health`. The image's HTTP
     healthcheck is explicitly disabled for this container — it serves no HTTP,
     so it would curl a dead port and sit permanently `unhealthy`.
-  - it also runs the hourly housekeeping loop (abandoned-session cleanup and
-    the AI audit retention sweep). That lives with whichever process runs the
-    worker, so there is exactly one of it.
+  - it also runs the hourly housekeeping loop: abandoned-session cleanup, the
+    AI audit retention sweep, the rate-limit hit purge and the dead-heartbeat
+    purge. That lives with whichever process runs the worker, so there is
+    exactly one of it — except when `KNIGHTMIND_WORKER_DISABLED=true`, which
+    turns the worker off entirely and takes housekeeping with it.
+  - the 120s grace period covers a typical job, not every job: `max_games` goes
+    to 2000, and a large generation will exceed it and be killed, leaving the
+    job for the 15-minute crash-recovery lease.
   - restart: `docker compose --env-file .env.docker restart worker`
   - logs: `docker compose --env-file .env.docker logs -f worker`
   - stopping it is safe mid-job: it handles SIGTERM and finishes the running job

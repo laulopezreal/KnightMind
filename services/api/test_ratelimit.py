@@ -492,3 +492,79 @@ def test_a_broken_limiter_is_loud_and_counted(db_session, monkeypatch, caplog):
     assert rl.FAILURES["count"] == 3
     assert "FAILED OPEN" in caplog.text
     assert any(r.levelno >= logging.ERROR for r in caplog.records)
+
+
+@pytest.mark.postgres
+def test_a_held_lock_does_not_hang_the_request(db_session):
+    """`SET LOCAL lock_timeout` is what stops an unbounded hang.
+
+    pg_advisory_xact_lock does not raise while it waits, so the fail-open
+    handler cannot see it: one long-lived transaction holding a key would block
+    every limited request indefinitely, each pinning a threadpool token and a
+    pool connection. Without the timeout this test hangs rather than fails,
+    which is exactly the production symptom.
+    """
+    import time
+
+    from sqlalchemy import text
+
+    from services.api.db import SessionLocal
+
+    limiter = _pg("held", limit=5, window=60)
+    limiter.reset()
+    key = "held:acct-1"
+
+    holder = SessionLocal()
+    holder.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"), {"k": key})
+    try:
+        started = time.monotonic()
+        decision = limiter.check("acct-1")
+        waited = time.monotonic() - started
+        # Bounded, and fails OPEN -- the limiter is not the availability layer.
+        assert decision.allowed is True
+        assert waited < 10, f"waited {waited:.1f}s; lock_timeout did not apply"
+    finally:
+        holder.rollback()
+        holder.close()
+        limiter.reset()
+
+
+@pytest.mark.postgres
+def test_the_purge_uses_the_database_clock(db_session):
+    """The sweep must compare against the clock that stamped the rows.
+
+    `_check` inserts with SQL now(); a Python-side naive cutoff is offset by the
+    session TimeZone. Measured west of UTC, a hit inserted zero seconds earlier
+    was purged, handing the principal a fresh budget every hour -- the heartbeat
+    bug, reintroduced in the sweep one commit later.
+    """
+    from sqlalchemy import text
+
+    from services.api import db as db_module
+    from services.api.jobs.cleanup_sessions import purge_stale_rate_limit_hits
+    from services.api.models import RateLimitHit
+
+    dbname = db_session.execute(text("SELECT current_database()")).scalar_one()
+    db_session.execute(
+        text(f"ALTER DATABASE \"{dbname}\" SET timezone TO 'America/New_York'")
+    )
+    db_session.commit()
+    db_module.engine.dispose()
+    try:
+        limiter = _pg("tz_purge", limit=5, window=60)
+        limiter.reset()
+        assert limiter.check("acct-1").allowed is True
+
+        purge_stale_rate_limit_hits(db_session)
+
+        live = (
+            db_session.query(RateLimitHit)
+            .filter(RateLimitHit.key == "tz_purge:acct-1")
+            .count()
+        )
+        assert live == 1, "the sweep deleted a hit that is inside its window"
+        limiter.reset()
+    finally:
+        db_session.execute(text(f'ALTER DATABASE "{dbname}" RESET timezone'))
+        db_session.commit()
+        db_module.engine.dispose()

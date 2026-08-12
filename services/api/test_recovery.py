@@ -322,14 +322,79 @@ def test_long_single_game_keeps_lease_fresh_and_not_reset(
 
 @pytest.mark.postgres
 def test_the_worker_keeps_beating_while_a_job_runs(db_session, monkeypatch):
-    """Busy is not dead, and the naive version could not tell them apart.
+    """Busy is not dead, and the beat must keep ADVANCING to prove it.
 
-    Beating inside the job loop meant a worker stopped beating for the whole
-    duration of a job, because `process_next_job` awaits the handler in a
-    thread. Any job longer than the staleness threshold made a healthy worker
-    report `stale`: /ops/health 503s, the API's Docker healthcheck marks the API
-    unhealthy, and the deploy gate fails. The beat is its own task for this
-    reason, and this is what says so.
+    The first version of this asserted only that one row existed, which a beat
+    loop that beats once and then sleeps for an hour also satisfies. It has to
+    read beat_at twice, with the job loop genuinely blocked in a thread the way
+    `process_next_job` blocks it.
+    """
+    import asyncio
+    import threading
+    import time
+
+    from services.api import worker as worker_module
+    from services.api.models import WorkerHeartbeat
+
+    monkeypatch.setattr(worker_module, "BEAT_INTERVAL_SECONDS", 0.05)
+    release = threading.Event()
+    seen = []
+
+    async def scenario():
+        w = worker_module.JobWorker()
+        w.worker_id = "busy-worker"
+
+        async def blocked_loop():
+            # Exactly how a real job holds the loop: awaiting a thread.
+            await asyncio.to_thread(release.wait)
+
+        # Through start(), so the wiring under test is the real one. Building
+        # the tasks by hand here is what made the first version of the
+        # dead-loop check pass against a start() that wired nothing.
+        monkeypatch.setattr(w, "run_worker_loop", blocked_loop)
+        w.start()
+
+        for _ in range(2):
+            await asyncio.sleep(0.25)
+            seen.append(_read_beat("busy-worker"))
+        release.set()
+        assert w._task is not None and w._beat_task is not None
+        await w._task
+        w._beat_task.cancel()
+        try:
+            await w._beat_task
+        except asyncio.CancelledError:
+            pass
+
+    def _read_beat(worker_id):
+        from services.api.db import SessionLocal
+
+        with SessionLocal() as db:
+            return (
+                db.query(WorkerHeartbeat)
+                .filter(WorkerHeartbeat.worker_id == worker_id)
+                .one()
+                .beat_at
+            )
+
+    asyncio.run(scenario())
+    assert (
+        seen[1] > seen[0]
+    ), f"beat did not advance while the job loop was blocked: {seen}"
+    time.sleep(0)
+
+    db_session.query(WorkerHeartbeat).filter(
+        WorkerHeartbeat.worker_id == "busy-worker"
+    ).delete()
+    db_session.commit()
+
+
+@pytest.mark.postgres
+def test_a_dead_job_loop_stops_the_beat(db_session, monkeypatch):
+    """A beat outliving the loop reports a dead worker as healthy.
+
+    Worse than the in-loop beat it replaced: that one at least went stale. The
+    two are linked by a done-callback, and this is what says so.
     """
     import asyncio
 
@@ -340,28 +405,90 @@ def test_the_worker_keeps_beating_while_a_job_runs(db_session, monkeypatch):
 
     async def scenario():
         w = worker_module.JobWorker()
-        w.worker_id = "busy-worker"
-        w.is_running = True
-        # Stand in for a long job holding the loop: the beat must not depend on
-        # this returning.
-        w._beat_task = asyncio.create_task(w._beat_loop())
+        w.worker_id = "dying-worker"
+
+        async def doomed_loop():
+            await asyncio.sleep(0.05)
+            raise RuntimeError("loop died")
+
+        monkeypatch.setattr(w, "run_worker_loop", doomed_loop)
+        w.start()
+
         await asyncio.sleep(0.4)
-        w.is_running = False
-        w._beat_task.cancel()
-        try:
-            await w._beat_task
-        except asyncio.CancelledError:
-            pass
+        assert w._beat_task is not None
+        return w.is_running, w._beat_task.cancelled() or w._beat_task.done()
+
+    still_running, beat_stopped = asyncio.run(scenario())
+    assert still_running is False, "a dead loop must clear is_running"
+    assert beat_stopped is True, "a dead loop must stop the beat"
+
+    db_session.query(WorkerHeartbeat).filter(
+        WorkerHeartbeat.worker_id == "dying-worker"
+    ).delete()
+    db_session.commit()
+
+
+@pytest.mark.postgres
+def test_the_beat_survives_a_graceful_drain(db_session, monkeypatch):
+    """SIGTERM during a job must not make the worker look dead while draining.
+
+    compose sends SIGTERM on every deploy, so "shutting down with a job in
+    flight" is the common case, not the rare one. Cancelling the beat before
+    awaiting the job loop reported `stale` 27s into a 50s drain -- failing the
+    API's healthcheck and the deploy gate for a worker doing exactly what it
+    was asked to do.
+    """
+    import asyncio
+    import threading
+
+    from services.api import worker as worker_module
+    from services.api.db import SessionLocal
+    from services.api.models import WorkerHeartbeat
+
+    monkeypatch.setattr(worker_module, "BEAT_INTERVAL_SECONDS", 0.05)
+    release = threading.Event()
+    during_drain = {}
+
+    async def scenario():
+        w = worker_module.JobWorker()
+        w.worker_id = "draining-worker"
+
+        async def draining_loop():
+            await asyncio.to_thread(release.wait)
+
+        monkeypatch.setattr(w, "run_worker_loop", draining_loop)
+        w.start()
+        await asyncio.sleep(0.2)
+
+        stopping = asyncio.create_task(w.stop())
+        # Mid-drain: the job has not finished, so the beat must still be alive.
+        await asyncio.sleep(0.3)
+        with SessionLocal() as db:
+            first = (
+                db.query(WorkerHeartbeat)
+                .filter(WorkerHeartbeat.worker_id == "draining-worker")
+                .one()
+                .beat_at
+            )
+        await asyncio.sleep(0.3)
+        with SessionLocal() as db:
+            second = (
+                db.query(WorkerHeartbeat)
+                .filter(WorkerHeartbeat.worker_id == "draining-worker")
+                .one()
+                .beat_at
+            )
+        during_drain["advanced"] = second > first
+
+        release.set()
+        await stopping
 
     asyncio.run(scenario())
+    assert during_drain[
+        "advanced"
+    ], "the beat stopped while the worker was still draining a job"
 
-    beats = (
-        db_session.query(WorkerHeartbeat)
-        .filter(WorkerHeartbeat.worker_id == "busy-worker")
-        .all()
-    )
-    assert len(beats) == 1, "one row per worker, rewritten in place"
     db_session.query(WorkerHeartbeat).filter(
-        WorkerHeartbeat.worker_id == "busy-worker"
+        WorkerHeartbeat.worker_id == "draining-worker"
     ).delete()
     db_session.commit()
