@@ -1,278 +1,344 @@
-# Design: puzzle identity, and the modes that decide what it may say
+# Design: puzzle identity, and what may be seen before an attempt
 
-Status: draft, reviewed once adversarially (§11 records what that changed).
-Supersedes the naming half of `#364`'s plan. Not yet reflected in `#366`.
+Status: draft, revision 3. Two adversarial reviews have run against it; §12
+records what each changed, because the deltas are most of the argument.
+Supersedes the naming half of `#364`'s plan. Nothing here is implemented and no
+PR is open.
 
-## 1. The problem, measured
+## 1. The problem, measured per tenant
 
-The complaint was "all the puzzles have the same name". The cause was that
-`generate_puzzle_title` was `MOTIF_TITLES.get(motif)` — a seven-entry table, so
-seven names was the ceiling however large the corpus. On the real corpus that
-produced `The Missed Win` 150 times.
+The complaint was "all the puzzles have the same name". The cause:
+`generate_puzzle_title` was `MOTIF_TITLES.get(motif)` — seven entries, so seven
+names was the ceiling however large the corpus.
 
-Measuring to size the fix turned up two larger facts:
+Revision 1 of this document measured one user and called the result settled.
+There are two, and they are not alike. Measured against **live production**:
 
 ```
-puzzles                 318
-ever attempted           23     7%
-failed at least once     20
-failed twice or more     15
-primary_motif='blunder' 156     the classifier's "could not tell"
-opening_name known      318     100%
+                        lauureal   alfi3sr
+puzzles                      318        30
+ever attempted                23         1
+failed at least once          20         0
+primary_motif='blunder'      156         —
+puzzle_diagnoses rows        318         0     <-- 0%, not "missing", zero
 ```
 
-**93% of the library has never been opened**, and the motif — the thing a name
-most wants to talk about — is unknown for about two thirds of it.
+`alfi3sr`'s library is `The Missed Win` ×19, `The Fork` ×7. That is the reported
+bug in its purest form, and it belongs to the tenant with **no diagnosis rows at
+all** — so any design deriving identity from `puzzle_diagnoses` fixes nothing
+for the user who most has the problem. Revision 1 did exactly that.
 
-A third fact came from reading the UI rather than the data. `Puzzles.tsx`
-renders the motif as a chip beside the title *while the player is solving*
-(`:1139` mobile, `:1337` desktop, neither gated on resolution). The codebase
-already believes this is wrong — `LibraryPuzzle.tsx:54` keeps similar-puzzles
-post-mortem because "naming the shared motif before the attempt would hand over
-the tactic" — it simply never applied that rule to the puzzle's own identity.
+A third fact came from the UI. `Puzzles.tsx` renders the motif chip beside the
+title *while the player is solving* (`:1139` mobile, `:1337` desktop, neither
+gated on resolution). The codebase already believes this is wrong —
+`LibraryPuzzle.tsx:54` keeps similar-puzzles post-mortem because "naming the
+shared motif before the attempt would hand over the tactic" — it just never
+applied that rule to the puzzle's own identity.
 
 ## 2. Why one label cannot work
 
-A puzzle's label is asked to do two jobs that pull in opposite directions:
+A label is asked to do two jobs that pull apart:
 
 - **Identify** — "which puzzle is this". Needed *before* the attempt.
 - **Recall** — "the one where the bishop had bigger plans". Valuable *after*,
   and what makes a spaced-repetition library navigable.
 
-A label good at recall is distinctive, and distinctive means it talks about what
-happened — which is the answer. This branch has three measured attempts at
-making one label do both: withholding the tactic pushed the model onto the clock
-(13 of 40 names became "N Seconds of…"), then onto the played move (11 of 19
-became "\<Piece\> \<verb\> to \<square\>"). The fix is not a better prompt.
+Good recall means distinctive; distinctive means it talks about what happened,
+which is the answer. This branch has three measured attempts at one label doing
+both: withholding the tactic pushed the model onto the clock (13 of 40 names
+became "N Seconds of…"), then onto the played move (11 of 19 became
+"\<Piece\> \<verb\> to \<square\>"). The fix is not a better prompt.
 
 ## 3. Two labels
 
-| | job | example | derived from | cost |
+| | job | example | source | cost |
 |---|---|---|---|---|
-| **Provenance** | identify | `Sicilian Defense · move 18` | opening + move number | no model call |
+| **Provenance** | identify | `12 Mar · Sicilian · move 18` | game date + move, opening when known | no model call |
 | **Nickname** | recall | `Bishop Had Bigger Plans` | model call over the puzzle's facts | one call, only where earned |
 
-Provenance is inherently non-revealing: an opening and a move number say where
-you are, never what to play. The nickname is free to say anything, because it is
-never shown before an attempt.
+### 3.1 Provenance is built on the one thing every puzzle has
 
-This is what dissolves the spoiler problem. **No content gate is required** —
-not the tactic-word list, not the answer-square check. The constraint moves from
-*what a name may say* to *where a name may appear*, which a code path can
-enforce and a string inspection cannot.
+`puzzles.source_game_id` is a real FK, so **every puzzle has a game**, and every
+game has an `end_time`. Measured on production: 348 of 348 puzzles resolve to a
+game with a usable timestamp; zero manual puzzles exist.
 
-### 3.1 Provenance is identifying, not unique
+So the base is **date + move number**, available for 100% of both tenants. The
+opening is *added when a diagnosis row exists*, never depended upon.
 
-Measured: 272 distinct `(opening, move)` pairs across 318 puzzles; worst
-collision three (`Sicilian Defense · move 15`).
+Distinctness of `(date, opening, move)`, per tenant, measured:
 
-Acceptable **because of where it appears**: blind mode shows one puzzle at a
-time beside a position counter (`3 / 20`). Provenance never has to distinguish
-two rows in a list — the nickname does that, and it is unique per user by
-database constraint. If provenance ever needs to appear in a list, it gains the
-game date.
+```
+lauureal   318 / 318   100%
+alfi3sr     27 /  30    3 collisions (no opening, so effectively date+move)
+```
 
-### 3.2 It is not free — it needs a join
+When two puzzles still collide, they are disambiguated by their position within
+that day's games — `(source_game_id, ply)` is unique per user by existing
+constraint, so a deterministic tiebreak always exists.
 
-The session payload builds from `Puzzle` + `PuzzleStats` and **does not join
-`puzzle_diagnoses`** (`puzzles_routes.py:623-636`, `:834-851`), which is where
-`opening_name` lives. The Library list already joins it (`:1239`); the session
-endpoints must too. One batched join, not a per-puzzle lookup.
+Revision 1 used opening + move and measured 272/318 on one tenant. That is worse
+*and* unreachable for the other.
 
-Diagnosis rows are written asynchronously, so a freshly generated puzzle has
-none. Fallback ladder, every rung non-revealing:
+## 4. The gate is the puzzle's state, not the session's mode
 
-    opening + move  →  move number alone ("Move 18")  →  puzzle id prefix
+Revision 1 gated on session mode. That was wrong on its primary axis: **mode is
+per-session and known at one endpoint; the leak surface is per-puzzle and spread
+across five.**
 
-## 4. One field, computed server-side
+- `GET /puzzles/list` (`:1078`) — `title` and `primary_motif` unconditional at
+  `:1365-1367`; `status` filter admits `new` at `:1255`.
+- `GET /puzzles/{id}` (`:1407`) — `primary_motif` unconditional at `:1470`.
+- `GET /puzzles/{id}/similar` (`:1657`), `GET /puzzles/{id}/diagnosis` (`:1588`).
+- `GET /puzzles/due` — and `queue_reason.pattern` (`:675-682`) names the
+  diagnosed cause *inside the scored pre-attempt payload*, so it would have
+  slipped past a strip list naming only "motif and nickname".
 
-Clients must never choose between nickname and provenance, and must never
-receive a value they are expected not to render.
+Worse, `/puzzles/due` is fetched **before** the session is created
+(`usePuzzleSession.ts:502` then `:532`), so "read the mode from the session" is
+unavailable at the one request that matters most. And `session_data` is
+client-supplied (`sessions.py:110`), so recording intent there does not make it
+unforgeable — revision 1 claimed it did.
 
-The API returns **`display_name`**: the nickname when the surface permits it and
-one exists, else provenance. In blind mode the response carries provenance and
-the motif is absent from the payload entirely.
+**So the gate is a property of the puzzle, not the request:**
 
-This matters more than it looks. If blind mode were "the component does not
-render the chip", the tactic still ships in the JSON — readable in devtools, and
-leaked wholesale to any other client. `_strip_solution` already establishes the
-pattern for exactly this (audit gate 13 strips `best_move_uci`,
-`accept_moves_uci`, `played_move_uci`, `solution_pv` from scored payloads). The
-motif and the nickname join that list under blind mode.
+> A puzzle's *revealing* fields — nickname, motif, diagnosis prose, queue
+> reason — are served only when that `(user, puzzle)` is **resolved**:
+> `attempts > 0`, or the solution was explicitly revealed.
 
-Enforcing server-side also means the rule survives a frontend refactor, which a
-convention about JSX does not.
+One predicate, applied in one serializer that every puzzle-returning route uses.
+It survives deep links, a second tab, back-navigation, and a session resumed
+days later *by construction*, because it describes the thing being protected
+rather than the request asking for it.
 
-## 5. Modes
+`PuzzleStats.attempts` is already selected into the very response that leaks the
+title (`puzzles_routes.py:1378`) and no handler consults it.
 
-Targeted practice and spoiler-freeness are the same knob: "practise your forks"
-and "don't tell me it's a fork" cannot both hold. So the rule follows the user's
-intent rather than applying globally — the resolution Lichess and Chess.com both
-reach.
+This also settles a contradiction revision 1 carried: it claimed nicknames are
+"never shown before an attempt" while its own mode table showed them in the
+Library. Under a per-puzzle gate the Library obeys the same rule as the trainer,
+so browsing on Monday can no longer pre-spoil Friday's blind attempt.
 
-| mode | entry | motif | nickname | scheduling |
-|---|---|---|---|---|
-| **Blind** | `/puzzles` | stripped from payload | stripped; provenance shown | normal |
-| **Themed** | weakest-motifs, `?motif=`, "more like this" | shown — it is the point | shown | normal, session flagged |
-| **Exploration** | `/library`, `/library/:id` | shown | shown | already excluded |
-| **Post-resolution** | any mode, after the attempt | shown | shown | — |
+## 5. Modes become overrides, not the axis
 
-Exploration needs no change: `LibraryPuzzle.tsx:310` already tells the user
-results there are not counted as verified training.
+Targeted practice and spoiler-freeness are the same knob — "practise your forks"
+and "don't tell me it's a fork" cannot both hold. Intent still matters; it just
+*relaxes* the gate rather than defining it.
 
-Similarity survives whole. It was never an unsolicited pre-attempt hint — it is
-post-mortem in the library today — and "more like this" from a post-mortem panel
-is an explicit request, which is themed by definition.
+| intent | effect on the gate |
+|---|---|
+| Blind session (default) | none — resolution rule applies |
+| Themed (`?motif=`, weakest-motifs, "more like this") | motif revealed; the user named it, so it is not a spoiler |
+| Focus bias (`?focus_cause=`, `?focus_opening=`) | that cause/opening revealed — it is already in `queue_reason` |
+| Warmup (`?warmup=true`) | none |
+| Explicit reveal / solved | full unlock (existing behaviour) |
 
-### 5.1 Intent is recorded, not re-read
+Similarity is unaffected: it is post-mortem today, and "more like this" is an
+explicit request.
 
-`?motif=` is a URL parameter, so a shared link or a bookmark can put someone in
-themed mode without choosing it. Mode is therefore decided **once, at session
-creation**, and stored on `TrainingSession` (`session_data` is JSON and already
-exists — no migration). Every later request reads the session, never the query
-string. Without this, "intent" is forgeable, and since themed sessions are
-flagged for analytics, that would be a data-correctness hole rather than a
-cosmetic one.
+Because the base rule is per-puzzle, an override that is forged or arrives by a
+shared link grants only what it names — the *other* puzzles in the session stay
+gated. That is the property revision 1 could not get from session mode.
 
-### 5.2 Blind mode has an exit
+### 5.1 The gate has an exit
 
-A gate with no release valve gets ripped out rather than tuned. An escalating
-hint ladder already exists (`utils/puzzle-clue.ts`, rungs named in
+An escalating hint ladder exists (`utils/puzzle-clue.ts`, rungs named in
 `a11yCopy.ts`):
 
-    0  name the piece to move
-    1  highlight the destination square
-    2  reveal the full solution
+    0  name the piece to move   1  highlight the destination   2  reveal the solution
 
-**The motif becomes a new rung 0**, pushing the others down — not the last rung,
-as an earlier draft had it. Naming the tactic is strictly *less* revealing than
-naming the piece that plays it, so putting it last would break the ladder's
-monotonicity. The visible affordance goes from "Hint (n/3)" to "(n/4)".
+The motif becomes a **new rung 0** — it reveals less than naming the piece, so
+it sorts first. Copy moves from "Hint (n/3)" to "(n/4)" (`a11yCopy.ts:48`).
 
-A stuck player can ask, which is consent, and the ask is recorded:
-`sessions.py:306` already increments `TrainingSession.hints_used` on every rung.
+Revision 1 claimed `sessions.py:306` already delivers this. It does not: that
+endpoint takes `session_id` + `username`, has **no `puzzle_id`**, and only
+increments a counter. Since §4 strips the motif from the payload, a hint rung
+needs a puzzle-scoped endpoint that returns it and records the ask. **That is
+new work and this design budgets it** — one endpoint, reusing the existing
+counter.
 
-That also reframes the chip honestly. Today the tactic is given away
-unrequested; here it is the cheapest hint you can spend.
+## 6. When a nickname is earned, and how it is actually enqueued
 
-## 6. When a nickname is earned
+Not at creation. Not at first failure either — that names the puzzle when the
+user has just seen the solution and needs no cue, and puts a model call on a
+review POST.
 
-Not at creation, and — after review — not at first failure either.
+**A nickname is written when a failed puzzle is scheduled to return.**
 
-The nickname's job is retrieval at the **next** encounter. Naming at the moment
-of failure creates it when the user has just seen the solution and needs no cue,
-and it costs a model call inside a review POST, putting provider latency on the
-write path this design has kept clear throughout.
+Revision 1 said "the existing job chain picks this up". It does not, and the
+review was right to call it: `worker.py:358` early-returns unless the job is
+`PUZZLE_GENERATION`, and the review handler enqueues nothing. Fail a puzzle,
+never import another game, and no nickname would ever be written.
 
-So: **a nickname is written when a failed puzzle is scheduled to return.**
-`next_due_at` is set by the review; the existing job chain picks up puzzles with
-`fail_count > 0` and a future `next_due_at` and names them asynchronously. The
-name exists before the encounter that needs it, and no request waits on it.
+So this design adds the path explicitly:
 
-~20 puzzles today rather than 318, scaling with engagement instead of corpus
-size.
+- `POST /puzzles/{id}/review` enqueues naming best-effort when a review sets
+  `next_due_at` on a puzzle with `fail_count > 0` and no nickname — the same
+  shape as `_enqueue_diagnosis`, wrapped so a follow-up failure cannot fail the
+  review that already succeeded.
+- Selection and the re-queue predicate share **one** expression of "needs a
+  nickname". Today `name_puzzles` (`naming_pass.py:147`) and `pending_count`
+  (`:411`) express it independently; narrowing one and not the other makes the
+  worker re-queue forever on rows the pass will never take. That is the loop
+  this branch already fixed once, from the other side.
 
-A puzzle with no nickname shows provenance everywhere. That is a complete label,
-not a placeholder.
+~20 puzzles today rather than 318, scaling with engagement rather than corpus.
 
-## 7. Data model, and the migration this costs
+### 6.1 A failed call writes nothing
+
+When the model is disabled, over budget, or rejected, the pass currently writes
+the deterministic name with `title_source='position'` (`naming_pass.py:254,
+261, 264, 299`). Under this design that would bless a generated identifier as a
+nickname — the exact thing being removed.
+
+Instead: **write nothing, leave `title` NULL, show provenance.** "A puzzle with
+no nickname shows provenance" is then true without exception, and
+`title_source` genuinely narrows to `ai | user`.
+
+## 7. Data model and the migrations this costs
 
 - `puzzle_stats.title` — the nickname. NULL until earned. Unique per user
   (`uq_puzzle_stats_username_title`, already built in `#366`).
-- `puzzle_stats.title_source` — narrows to `ai | user`.
-- Provenance is **derived, never stored** — a pure function of `opening_name`
-  and `ply`, so it cannot drift and needs no backfill.
+- `puzzle_stats.title_source` — `ai | user` only.
+- Provenance is **derived, never stored**.
 
-Two things follow that an earlier draft of this document got wrong by claiming
-"nothing is dropped that took a migration":
+Three things must change together, and revision 1 named only the first:
 
-1. `b1c2d3e4f5a6` stamped `title_source='motif'` onto 260 live rows, and
-   `save_puzzle` writes `'position'` on every creation. Under this design those
-   titles are not nicknames — they are the generated identifiers the whole
-   effort set out to remove. **They are cleared to NULL** so provenance shows,
-   and that is a migration.
-2. `save_puzzle` stops writing a title at all. A puzzle is born with provenance
-   and earns a nickname later, or never.
+1. **Clear the generated titles.** They are identifiers, not nicknames.
+2. **`save_puzzle` stops writing a title.** A puzzle is born with provenance.
+3. **`backfill_puzzle_identity` stops writing titles.** This is the one that
+   makes the other two real. It runs in `lifespan` on **every API boot**
+   (`main.py:117-129`), selects exactly the rows step 1 clears
+   (`identity.py:190`, `title IS NULL`) and rewrites them with
+   `title_source='position'` (`:255-256`). Without this, clearing titles is
+   undone by the next deploy. `scripts/reclassify_motifs.py` needs the same
+   treatment for its operator-run path.
 
-`title` is NULL for the overwhelming majority, which the unique index tolerates
-(Postgres treats NULLs as distinct) and which `display_name` hides from every
-consumer.
+`title` NULL for most rows is safe for the unique index (Postgres treats NULLs
+as distinct; `title_registry.py:47` already filters them out of `taken_titles`),
+and no code sorts or exports by title.
 
-## 8. Scoring: what is decided and what is not
+## 8. `display_name`, and the surfaces that assume a title exists
 
-**Decided.** A themed session is flagged at creation (§5.1). Reviews inside it
-still update `pass_count`, `fail_count` and `ease_factor` exactly as today —
-skipping them would mean practice does not count, which is worse than counting
-it imperfectly.
+The API returns **`display_name`** — nickname when the gate permits and one
+exists, else provenance. Clients never branch, and never receive a value they
+are trusted not to render.
 
-**Not decided, deliberately.** Whether a hinted or themed solve should advance
-the interval *less* than a blind one. Nothing computes a rating from
-`TrainingSession` today; `PuzzleStats.ease_factor` is what actually moves. The
-design's job here is to *record* the distinction — mode on the session, hint use
-already counted — so the question can be answered later with data. Changing the
-scheduler now would be guessing.
+Two consumers currently assume a non-null title and must move to it:
 
-## 9. What survives from #366
+- `GET /{username}/puzzles/tricky` (`dashboard.py:453`) declares `title: str`
+  **non-null** (`:111`) and survives only via `title=stat.title or "Untitled
+  Puzzle"` (`:499`). It filters `fail_count >= 2` — precisely the puzzles that
+  earn nicknames, and precisely the ones that will not have one yet. Without
+  `display_name` the Dashboard's "Recently Tricky" card becomes a column of
+  `Untitled Puzzle`: the original bug, on the surface dedicated to it.
+- Library search is `lower(title) LIKE …` (`puzzles_routes.py:1245`). With
+  titles NULL it silently degrades to hex-id search while the placeholder still
+  says "Search by title or ID" (`Library.tsx:319`). Search must cover
+  provenance, or say what it covers.
 
-Kept whole: the model client with its gate/audit/budget/degradation, the
-per-user uniqueness constraint and migration, the naming pass, and the job chain
-that runs it. The position namer survives as the nickname's offline fallback.
+## 9. Scoring: decided and deliberately open
 
-Changed: naming trigger moves from "every puzzle" to "scheduled to return after
-a failure"; the content gate is deleted; pre-attempt payloads strip motif and
-nickname; `display_name` is introduced.
+**Decided.** Reviews inside a themed or hinted session still update
+`pass_count`, `fail_count` and `ease_factor` as today. Skipping them would mean
+practice does not count, which is worse than counting it imperfectly. The
+distinction is *recorded* — mode on the session, hint use already counted at
+`sessions.py:306`.
 
-Costs a migration: clearing the generated titles (§7).
+**Open, on purpose.** Whether a hinted or themed solve should advance the
+interval *less*. Nothing computes a rating from `TrainingSession` today;
+`ease_factor` is what moves. Changing the scheduler now would be guessing;
+recording the distinction is what makes answering it possible later.
 
-## 10. Rollout
+## 10. How this is tested
+
+The central claim — "a revealing field is never served for an unresolved
+puzzle" — is an invariant over (route × puzzle state). Revision 1 could only
+have been tested per endpoint, which is the shape that lets a sixth endpoint be
+added later without failing anything.
+
+Under §4 it becomes two tests:
+
+1. A parametrised test over every puzzle-returning route: seed one unresolved
+   puzzle, assert none of the revealing fields appear in any response.
+2. A registry test: every route returning puzzle data goes through the shared
+   serializer. This is the one that catches the endpoint added next year.
+
+Note `puzzles/test_generator.py:659` asserts `stats.title == "The Queen to d5"`
+and `title_source == "position"` directly on the creation path §7 removes. It is
+a spec, not a fixture, and it changes with the design — 19 assertions of that
+shape exist across `services/api/`.
+
+## 11. Rollout
 
 Each step ships and reverts independently.
 
-1. `display_name` + the diagnosis join on the session endpoints. Nothing visibly
-   changes yet — nickname still wins wherever it exists.
-2. Mode recorded at session creation (§5.1). No behaviour change.
-3. Blind mode strips motif and nickname server-side; provenance shows. The
-   motif becomes the last hint rung (§5.2).
-4. Post-resolution panel (`#364` §4.1), reusing `MistakeDiagnosisCard`.
-5. Naming trigger moves to scheduled-return; delete the content gate; clear the
-   generated titles.
-6. `blunder` stops rendering as a motif — `usable_motif()` already exists in
-   `diagnosis/clusters.py` and is used in exactly one place; route the remaining
-   renders through it. Smaller than `#364` §5 implied.
+1. `display_name` + provenance helper; every puzzle route through one
+   serializer. Nickname still wins wherever it exists — nothing visibly changes.
+2. Move `tricky` and Library search onto it (§8).
+3. Turn on the resolution gate (§4). Motif, nickname, queue-reason pattern and
+   diagnosis prose become post-resolution.
+4. Overrides for themed / focus intent (§5); puzzle-scoped hint endpoint (§5.1).
+5. Post-resolution panel (`#364` §4.1), reusing `MistakeDiagnosisCard`.
+6. Retire title-writing in `save_puzzle`, `backfill_puzzle_identity` and
+   `reclassify_motifs`; clear generated titles; move the naming trigger; delete
+   the content gate (§6, §7).
+7. `blunder` stops rendering as a motif — `usable_motif()` already exists in
+   `diagnosis/clusters.py` and is used in exactly one place.
 
-## 11. What the adversarial pass changed
+Step 6 is the only irreversible one. It runs last, once 1–5 have shown the
+gate holds.
 
-Recorded because the deltas are the argument:
+## 12. What the two reviews changed
 
-- **Provenance is not free** — the session payload has no diagnosis join (§3.2).
-  The first draft called it "free, deterministic".
-- **Enforce in the payload, not the component** — otherwise the tactic ships in
-  JSON and leaks to any other client (§4).
-- **First-failure was the wrong trigger** — it names when the cue is least
-  needed and puts a model call on the write path (§6).
-- **`?motif=` is forgeable**, so intent must be recorded at session creation
-  rather than re-read per request (§5.1).
-- **A gate needs an exit** — the motif became a hint rung instead of a
-  prohibition (§5.2). Verifying that against the existing ladder then corrected
-  the correction: it belongs *first*, not last, because it reveals less than
-  naming the piece.
-- **It does cost a migration** — 260 rows carry generated titles that this model
-  says are not nicknames (§7).
-- **§8 was asserted, not designed** — now split into what is decided and what is
-  deliberately left open.
+**Review 1** (self, with the repo open): provenance is not free — the session
+payload has no diagnosis join; enforcement belongs in the payload, not the
+component; first-failure was the wrong trigger; `?motif=` is forgeable; it does
+cost a migration. The hint-rung correction was itself corrected: the motif sorts
+*first*, not last.
 
-## 12. Where this is uncertain
+**Review 2** (independent, adversarial):
 
-Three things are judgement, not measurement, and are the places to push back:
+- **The gating axis was wrong** — per-session mode cannot cover a per-puzzle
+  leak spread over five endpoints, and `/puzzles/due` runs before the session
+  exists. Now §4.
+- **Single-tenant measurement.** `alfi3sr` has 0 diagnosis rows, so revision 1's
+  provenance was unreachable for the tenant with the worst duplication. Now §3.1.
+- **The migration did not stick** — `backfill_puzzle_identity` runs every boot
+  and rewrites exactly what was cleared. Now §7.3.
+- **The naming trigger had no path** — nothing a review does enqueues naming.
+  Now §6.
+- **Narrowing the trigger without narrowing `pending_count`** re-creates the
+  infinite re-queue. Now §6.
+- **`queue_reason.pattern`** leaks the diagnosed cause in the scored payload and
+  is neither motif nor nickname. Now §4.
+- **The hint rung had no delivery mechanism** — `use_hint` has no `puzzle_id`.
+  Now budgeted in §5.1.
+- **`title_source` contradiction** — the fallback writes `position`. Now §6.1.
+- **`tricky` requires a non-null title**; search degrades. Now §8.
+- **Testability** — now §10.
 
-1. **The trigger clock.** "Scheduled to return after a failure" is better
-   argued than first-failure, but it is still a guess about when a cue helps. It
-   is cheap to move.
-2. **Clearing 260 titles.** Coherent with the model, and they are the bug this
-   started as — but they are strings a user may have seen. The alternative is
-   keeping them as grandfathered nicknames, which is defensible and messier.
-3. **Whether hinted solves should schedule differently** (§8). Left open on
-   purpose; it needs usage data that does not exist yet.
+One correction to review 2: it read ~100 rows with `title_source='ai'` as
+production state. Those are writes from this branch's trial runs against a
+scratch copy; production has no `title_source` column at all. Its substantive
+point survives in a different form — 24 of those names contain their own answer
+square, and they are what the *current* prompt produces, so the leak is
+prospective rather than shipped. Names generated before the content gate existed
+should be re-earned rather than kept.
 
-Everything else here is settled by measurement or by an existing decision in the
-codebase.
+## 13. Where this is still judgement
+
+1. **The trigger clock.** "Scheduled to return after a failure" is better argued
+   than first-failure, but it is still a guess about when a cue helps. Cheap to
+   move.
+2. **Clearing existing titles.** Coherent with the model, and they are the bug —
+   but they are strings a user may have seen. Grandfathering them is defensible
+   and messier.
+3. **Whether hinted solves should schedule differently** (§9). Needs usage data
+   that does not exist.
+4. **Whether `alfi3sr` having no diagnosis rows is a bug in its own right.** This
+   design routes around it. If the real answer is "that user should have been
+   diagnosed", the provenance ladder still stands but §3.1's coverage argument
+   is solving a symptom.
+
+Everything else is settled by measurement against production, or by a decision
+already made in the codebase.
