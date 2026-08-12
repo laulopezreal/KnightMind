@@ -63,6 +63,11 @@ services:
       # the API starts a second worker in-process, putting Stockfish back on
       # the request path -- the thing separating them was for.
       KNIGHTMIND_WORKER_EXTERNAL: "true"
+      # Shared limiter state. The in-memory store keeps one window PER PROCESS,
+      # so the effective limit multiplies by the worker count -- which is what
+      # kept this service at `--workers 1`. Setting this is what makes raising
+      # it safe; see the note in the Dockerfile before you do.
+      KNIGHTMIND_RATE_LIMIT_STORE: postgres
 
   # Same image, different command. Sharing it keeps the engine binary, the
   # migration chain and the Python environment identical to the API's by

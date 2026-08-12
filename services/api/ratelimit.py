@@ -49,18 +49,29 @@ absorption belongs at the ingress (Caddy), not here — this layer defends
 against a single well-behaved-TCP principal abusing an expensive endpoint.
 """
 
+import logging
 import math
+import os
 import threading
 import time
 from collections import deque
 from dataclasses import dataclass
-from typing import Callable
+from datetime import datetime, timedelta, timezone
+from typing import Callable, Union
 
 from fastapi import Depends, HTTPException, Request
+from sqlalchemy import delete, func, select, text
+from sqlalchemy.orm import Session
 
+from services.api.db import SessionLocal
 from services.api.envutil import env_int
 from services.api.identity import require_account
-from services.api.models import Account
+from services.api.models import Account, RateLimitHit
+
+logger = logging.getLogger("knightmind.ratelimit")
+
+# Both stores answer `check(key) -> RateLimitDecision`; nothing else is used.
+Limiter = Union["RateLimiter", "PostgresRateLimiter"]
 
 _TimeFn = Callable[[], float]
 
@@ -136,11 +147,93 @@ class RateLimiter:
             del self._hits[k]
 
 
+class PostgresRateLimiter:
+    """Sliding-window-log limiter whose state is shared by every process.
+
+    Same contract as :class:`RateLimiter` -- ``check(key)`` records a hit and
+    decides -- so the two are interchangeable and the route code is unchanged.
+
+    Why not one atomic upsert into a per-window counter: that is a FIXED window,
+    which lets a caller spend the whole limit at the end of one window and again
+    at the start of the next. Double the intended rate, exactly at the burst
+    these routes exist to stop. Matching the in-process limiter's semantics is
+    worth three statements at 5-60 requests a minute.
+
+    The three statements need to be atomic against each other, or two workers
+    counting concurrently both see room and both insert. A transaction alone
+    does not give that -- under READ COMMITTED neither sees the other's
+    uncommitted hit -- so the whole check runs under a per-key transactional
+    advisory lock. It is released at commit or rollback, with no unlock path to
+    leak, and it serialises only the principals colliding on one key.
+
+    Wall clock, not ``time.monotonic``: monotonic is only comparable within one
+    process, and this state crosses processes by construction.
+    """
+
+    def __init__(self, limit: int, window_seconds: float) -> None:
+        self.limit = limit
+        self.window_seconds = float(window_seconds)
+
+    def check(self, key: str) -> RateLimitDecision:
+        if self.limit <= 0:
+            return RateLimitDecision(allowed=True, retry_after=0)
+
+        with SessionLocal() as db:
+            try:
+                return self._check(db, key)
+            except Exception:
+                db.rollback()
+                # Fail OPEN, deliberately. This limiter protects expensive
+                # routes from a well-behaved-TCP principal; it is not the DDoS
+                # layer (that is the ingress). A database blip must not turn
+                # every limited endpoint into a 429 -- the outage would be
+                # larger than the abuse it prevents.
+                logger.warning("Rate limit check failed; allowing", exc_info=True)
+                return RateLimitDecision(allowed=True, retry_after=0)
+
+    def _check(self, db: Session, key: str) -> RateLimitDecision:
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        cutoff = now - timedelta(seconds=self.window_seconds)
+
+        # hashtext() is stable for a given string within a major version, and a
+        # collision only means two unrelated keys serialise briefly.
+        db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"), {"k": key})
+        # Sweeping this key's aged-out rows on every check keeps the table
+        # proportional to live traffic without a background job.
+        db.execute(
+            delete(RateLimitHit).where(
+                RateLimitHit.key == key, RateLimitHit.hit_at <= cutoff
+            )
+        )
+        oldest, count = db.execute(
+            select(func.min(RateLimitHit.hit_at), func.count()).where(
+                RateLimitHit.key == key, RateLimitHit.hit_at > cutoff
+            )
+        ).one()
+
+        if count >= self.limit and oldest is not None:
+            retry_after = math.ceil(
+                (oldest + timedelta(seconds=self.window_seconds) - now).total_seconds()
+            )
+            db.commit()
+            return RateLimitDecision(allowed=False, retry_after=max(retry_after, 1))
+
+        db.add(RateLimitHit(key=key, hit_at=now))
+        db.commit()
+        return RateLimitDecision(allowed=True, retry_after=0)
+
+    def reset(self) -> None:
+        """Drop all recorded state. For tests and hot-reconfiguration."""
+        with SessionLocal() as db:
+            db.execute(delete(RateLimitHit))
+            db.commit()
+
+
 # --- Registry ---------------------------------------------------------------
 # One named limiter per route, created lazily from env on first use so config is
 # read once at startup and tests can reach a limiter by name to inject a clock.
 
-_LIMITERS: dict[str, RateLimiter] = {}
+_LIMITERS: dict[str, Limiter] = {}
 _REGISTRY_LOCK = threading.Lock()
 
 
@@ -149,13 +242,18 @@ def get_limiter(
     *,
     default_limit: int,
     default_window: float = 60.0,
-) -> RateLimiter:
+) -> Limiter:
     """Return the named limiter, creating it from env config on first request.
 
     Env overrides (read once, at creation):
       ``RATE_LIMIT_<NAME>``         -> max requests per window (0 disables)
       ``RATE_LIMIT_<NAME>_WINDOW``  -> window length in seconds
     where ``<NAME>`` is ``name`` upper-cased.
+
+    ``KNIGHTMIND_RATE_LIMIT_STORE`` picks the backing store: ``memory`` (default,
+    and correct only while the API runs one process) or ``postgres`` (shared, and
+    what makes more than one safe). Defaulting to memory keeps the unit tests
+    free of a database round trip per check; the deployed API sets postgres.
     """
     with _REGISTRY_LOCK:
         limiter = _LIMITERS.get(name)
@@ -164,7 +262,10 @@ def get_limiter(
             # No min_value: 0 (or any int) is meaningful here — 0 disables.
             limit = env_int(f"RATE_LIMIT_{upper}", default_limit)
             window = float(env_int(f"RATE_LIMIT_{upper}_WINDOW", int(default_window)))
-            limiter = RateLimiter(limit, window)
+            if os.environ.get("KNIGHTMIND_RATE_LIMIT_STORE") == "postgres":
+                limiter = PostgresRateLimiter(limit, window)
+            else:
+                limiter = RateLimiter(limit, window)
             _LIMITERS[name] = limiter
         return limiter
 

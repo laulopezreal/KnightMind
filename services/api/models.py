@@ -766,3 +766,36 @@ class WorkerHeartbeat(Base):
     beat_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(timezone.utc), nullable=False
     )
+
+
+class RateLimitHit(Base):
+    """One recorded request against a rate-limited route, shared across processes.
+
+    The in-process limiter is correct for a single uvicorn worker and wrong the
+    moment there are two: each process keeps its own window, so the effective
+    limit multiplies by the worker count. That is the constraint that kept the
+    API pinned to ``--workers 1``.
+
+    A row per hit rather than a counter per window: it preserves the in-process
+    limiter's sliding-window-log semantics exactly, so both stores answer
+    identically. A fixed-window counter would be one cheap upsert instead of
+    three statements, but it lets a caller spend the whole limit at the end of
+    one window and again at the start of the next -- double the intended rate,
+    precisely at the burst these routes are protected from.
+
+    Volume is negligible: every limited route is an expensive one, capped
+    between 5 and 60 requests a minute.
+    """
+
+    __tablename__ = "rate_limit_hits"
+    __table_args__ = (
+        # The only query shape: hits for one key inside a window, and the sweep
+        # of everything already aged out.
+        Index("ix_rate_limit_hits_key_hit_at", "key", "hit_at"),
+        {"extend_existing": True},
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    # "<limiter name>:<principal>" -- the account when auth is on, else client IP.
+    key: Mapped[str] = mapped_column(String, nullable=False)
+    hit_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)

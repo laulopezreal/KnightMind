@@ -87,7 +87,12 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 
 # Run with uvicorn. The worker no longer runs in this process (see the `worker`
 # service in docker-compose.yml), so the single worker here is no longer a
-# constraint imposed by it. Raising it needs the rate limiter's shared store to
-# be in place first -- per-principal windows are per-process otherwise, and the
-# effective limit multiplies by the worker count.
+# constraint imposed by it, and the rate limiter's shared store
+# (KNIGHTMIND_RATE_LIMIT_STORE=postgres) removes the other one.
+#
+# Still 1 here on purpose. The remaining question is connections, not limits:
+# db.py sizes the pool at POOL_SIZE + MAX_OVERFLOW = 50 PER PROCESS, so N
+# workers can demand N*50 against a Postgres whose default max_connections is
+# 100. Raising this means sizing the pool down per worker or raising the
+# server's ceiling -- deliberately, with the arithmetic done.
 CMD ["uvicorn", "services.api.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]

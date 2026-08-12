@@ -14,6 +14,7 @@ os.environ["KNIGHTMIND_WORKER_DISABLED"] = "true"
 from typing import cast
 from unittest.mock import patch
 
+import pytest
 from fastapi.testclient import TestClient
 from starlette.requests import Request
 
@@ -218,8 +219,11 @@ def test_window_reset_lets_the_caller_through_again(monkeypatch):
     monkeypatch.setenv("RATE_LIMIT_ENGINE_EVAL", "1")
     reset_limiters()
     clock = FakeClock()
-    # Force the route's limiter to use our deterministic clock.
+    # Force the route's limiter to use our deterministic clock. The assert is
+    # the narrowing: get_limiter can now return the Postgres-backed store, which
+    # has no injectable clock because its window is wall-clock and shared.
     limiter = get_limiter("engine_eval", default_limit=30)
+    assert isinstance(limiter, RateLimiter)
     limiter.time_fn = clock
 
     client = TestClient(app)
@@ -246,3 +250,81 @@ def test_oversized_fen_is_rejected_with_400():
     assert "too long" in resp.json()["detail"].lower()
     # Rejected before the engine was ever consulted.
     mock_eval.assert_not_called()
+
+
+# --- the shared store -------------------------------------------------------
+#
+# The in-process limiter is correct for one uvicorn worker and wrong for two:
+# each keeps its own window, so the effective limit multiplies by the worker
+# count. That is what pinned the API to --workers 1. These pin the property that
+# lifts it.
+
+
+@pytest.mark.postgres
+def test_postgres_limiter_shares_a_window_across_instances(db_session):
+    """Two limiter instances = two API workers. They must count as one.
+
+    Separate instances with no shared memory: this fails against the in-process
+    limiter, which is the whole reason the Postgres store exists.
+    """
+    from services.api.ratelimit import PostgresRateLimiter
+
+    worker_a = PostgresRateLimiter(limit=3, window_seconds=60)
+    worker_b = PostgresRateLimiter(limit=3, window_seconds=60)
+    worker_a.reset()
+
+    assert worker_a.check("acct-1").allowed is True
+    assert worker_b.check("acct-1").allowed is True
+    assert worker_a.check("acct-1").allowed is True
+
+    # Four hits against a limit of three, spread over both "workers".
+    denied = worker_b.check("acct-1")
+    assert denied.allowed is False
+    assert denied.retry_after >= 1
+    worker_a.reset()
+
+
+@pytest.mark.postgres
+def test_postgres_limiter_keeps_principals_apart(db_session):
+    from services.api.ratelimit import PostgresRateLimiter
+
+    limiter = PostgresRateLimiter(limit=1, window_seconds=60)
+    limiter.reset()
+
+    assert limiter.check("acct-1").allowed is True
+    assert limiter.check("acct-1").allowed is False
+    # A different principal has its own window.
+    assert limiter.check("acct-2").allowed is True
+    limiter.reset()
+
+
+@pytest.mark.postgres
+def test_postgres_limiter_lets_the_caller_through_once_the_window_passes(db_session):
+    """The window slides: an aged-out hit stops counting."""
+    from datetime import datetime, timedelta, timezone
+
+    from services.api.models import RateLimitHit
+    from services.api.ratelimit import PostgresRateLimiter
+
+    limiter = PostgresRateLimiter(limit=1, window_seconds=60)
+    limiter.reset()
+    assert limiter.check("acct-1").allowed is True
+    assert limiter.check("acct-1").allowed is False
+
+    # Age the recorded hit past the window rather than sleeping through it.
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    db_session.query(RateLimitHit).update({"hit_at": now - timedelta(seconds=120)})
+    db_session.commit()
+
+    assert limiter.check("acct-1").allowed is True
+    limiter.reset()
+
+
+@pytest.mark.postgres
+def test_postgres_limiter_disabled_at_zero(db_session):
+    """0 is the documented per-route kill switch, same as the in-memory store."""
+    from services.api.ratelimit import PostgresRateLimiter
+
+    limiter = PostgresRateLimiter(limit=0, window_seconds=60)
+    for _ in range(10):
+        assert limiter.check("acct-1").allowed is True

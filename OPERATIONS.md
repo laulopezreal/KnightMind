@@ -74,6 +74,28 @@ Live containers:
   - command: `uvicorn services.api.main:app --host 0.0.0.0 --port 8000 --workers 1`
   - host mapping: `127.0.0.1:8000 -> 8000/tcp`
   - Docker healthcheck: `curl -f http://localhost:8000/ops/health || exit 1`
+    - the `worker` field here reports the SEPARATE worker container, read from
+      its heartbeat rows. `stale` means it is up but has stopped looping;
+      `not_running` means no worker has ever beaten. Both return 503, so this
+      healthcheck and the deploy gate both catch a dead queue.
+  - `--workers 1` is deliberate. The worker no longer runs in this process and
+    the rate limiter's state is shared (`KNIGHTMIND_RATE_LIMIT_STORE=postgres`),
+    so neither blocks raising it — but `db.py` sizes the pool at 50 per process
+    against a Postgres defaulting to `max_connections=100`. Raise the pool math
+    or the server ceiling first.
+- `knightmind-worker-1`
+  - image: `knightmind-api` (the same image as the API, different command)
+  - command: `python -m services.api.worker_main`
+  - host mapping: none — it serves nothing
+  - liveness: it writes a row to `worker_heartbeats` each loop; the API reports
+    that as the `worker` field of `/ops/health`. There is no Docker healthcheck
+    on this container because a process that is up but not claiming jobs is the
+    failure worth catching, and only the heartbeat shows it.
+  - restart: `docker compose --env-file .env.docker restart worker`
+  - logs: `docker compose --env-file .env.docker logs -f worker`
+  - stopping it is safe mid-job: it handles SIGTERM and finishes the running job
+    first, with a 120s grace period. Killing it instead leaves the job for crash
+    recovery, which reclaims it only after the lease expires.
 - `knightmind-db-1`
   - image: `postgres:16-alpine`
   - host mapping: `127.0.0.1:5432 -> 5432/tcp`
