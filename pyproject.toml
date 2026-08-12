@@ -40,7 +40,12 @@ kill-backends = "scripts.kill_backends:main"
 dev = [
     "black~=26.5",
     "flake8",
-    "mypy",
+    # Three components on purpose, like ruff~=0.15.20: `~=1.19` would still
+    # admit 1.20 and 1.30. mypy does not use SemVer -- new checks land in minor
+    # releases by upstream policy (1.20's better narrowing can even mark code
+    # unreachable and stop checking it), so a minor bump can move this baseline
+    # with only a one-line lock diff to review. Patch-only.
+    "mypy~=1.19.1",
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
     "ruff~=0.15.20",
@@ -60,6 +65,46 @@ markers = [
     # conftest.py. CI runs these with `pytest -m postgres`.
     "postgres: requires a disposable Postgres instance",
 ]
+
+[tool.mypy]
+python_version = "3.13"
+# Third-party stubs are inconsistent across this dependency set (chess, stockfish,
+# anthropic); missing ones would drown the signal we actually want.
+ignore_missing_imports = true
+# Check the bodies of unannotated functions too. Off by default, which meant
+# the gate skipped the body of any `def` with no annotations at all -- 92% of
+# production defs were annotated so little was lost there, but only 2.5% of
+# test defs were, so most test bodies were never looked at. "no issues found
+# in 119 source files" counted files it opened, not code it checked.
+check_untyped_defs = true
+# Migrations are immutable history. Their alembic op signatures drift between
+# versions and re-typing an applied migration is never worth it.
+exclude = ["services/api/alembic/versions/"]
+
+# Every module under services/api is enforced. There is no `ignore_errors`
+# list any more: it began at 12 modules and 120 suppressed errors when the gate
+# went in, and is now empty.
+#
+# What the gate covers, measured rather than estimated. mypy prints "checked
+# 119 source files": that is the services/api crawl, with the 32 migrations
+# under alembic/versions excluded above and genuinely never parsed (a syntax
+# error in one does not fail the run). But it ALSO follows imports and enforces
+# 7 repo files that count never mentions -- root conftest.py, three under
+# scripts/, and services/ingest/chesscom.py. 126 repo files are read, all
+# enforced.
+#
+# Two limits remain:
+#   - `ignore_missing_imports` above also hides typo'd or undeclared imports.
+#   - `check_untyped_defs` checks BODIES, not signatures. A call to an
+#     unannotated helper still returns Any and erases everything downstream of
+#     it: 80% of defs here have no return annotation, and 97% of test defs are
+#     unannotated entirely. "Every module is enforced" is a claim about
+#     modules, not about every expression inside them.
+#
+# If a future change cannot be typed cleanly, add a narrow `# type: ignore[code]`
+# at the line with a reason, rather than reinstating a per-module blackout --
+# `ignore_errors` silences NEW bugs in a module as completely as old ones,
+# which is what made the original list worth deleting rather than living with.
 
 [tool.ruff]
 # Exclude a variety of commonly ignored directories.

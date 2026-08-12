@@ -43,6 +43,12 @@ data/
 .coverage
 htmlcov/
 
+# Tooling caches. These land CWD-relative, so running mypy or ruff from
+# services/ puts them inside the `COPY services/ ./services/` scope and they
+# would ship in the runtime image.
+.mypy_cache/
+.ruff_cache/
+
 # Docs (not needed at runtime)
 docs/
 

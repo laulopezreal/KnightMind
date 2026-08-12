@@ -41,14 +41,18 @@ class TestTable:
         assert classify(epd("e4")) == ("B00", "King's Pawn Game")
 
     def test_names_a_main_line(self):
-        code, name = classify(epd("e4", "c5"))
+        result = classify(epd("e4", "c5"))
+        assert result is not None
+        code, name = result
         assert code == "B20"
         assert name == "Sicilian Defense"
 
     def test_names_a_deep_variation(self):
-        code, name = classify(
+        result = classify(
             epd("e4", "c5", "Nf3", "d6", "d4", "cxd4", "Nxd4", "Nf6", "Nc3", "a6")
         )
+        assert result is not None
+        code, name = result
         assert code == "B90"
         assert "Najdorf" in name
 

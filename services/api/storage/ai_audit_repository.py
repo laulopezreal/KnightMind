@@ -35,6 +35,9 @@ def _utcnow_naive() -> datetime:
 class AuditWrite:
     username: str
     status: str
+    # diagnosis | naming. Defaulted so every existing caller keeps working and
+    # keeps landing in the diagnosis ledger.
+    call_type: str = "diagnosis"
     puzzle_id: str | None = None
     reason: str | None = None
     agreed_with_rules: bool | None = None
@@ -50,18 +53,26 @@ class AuditWrite:
 
 @dataclass(frozen=True)
 class Budget:
-    """A day's remaining AI allowance."""
+    """A day's remaining allowance for one kind of AI call.
+
+    The caps are carried on the instance rather than read from ``config`` in
+    the properties, because diagnosis and naming have separate ceilings and a
+    Budget must not be able to answer with the wrong one. They default to the
+    diagnosis caps so existing construction sites are unchanged.
+    """
 
     user_used: int
     global_used: int
+    user_cap: int = config.DAILY_CAP_PER_USER
+    global_cap: int = config.DAILY_CAP_GLOBAL
 
     @property
     def user_remaining(self) -> int:
-        return max(0, config.DAILY_CAP_PER_USER - self.user_used)
+        return max(0, self.user_cap - self.user_used)
 
     @property
     def global_remaining(self) -> int:
-        return max(0, config.DAILY_CAP_GLOBAL - self.global_used)
+        return max(0, self.global_cap - self.global_used)
 
     @property
     def remaining(self) -> int:
@@ -73,7 +84,9 @@ class Budget:
 
     def spend(self, n: int = 1) -> "Budget":
         """Account for a call locally between database re-reads."""
-        return Budget(self.user_used + n, self.global_used + n)
+        return Budget(
+            self.user_used + n, self.global_used + n, self.user_cap, self.global_cap
+        )
 
 
 class AIAuditRepository:
@@ -96,6 +109,7 @@ class AIAuditRepository:
         row = DiagnosisAuditLog(
             # Folded so the row lands under the same key budget_last_24h counts.
             username=canonical_username(write.username),
+            call_type=write.call_type,
             puzzle_id=write.puzzle_id,
             status=write.status,
             reason=write.reason,
@@ -113,7 +127,7 @@ class AIAuditRepository:
         self.db.add(row)
         return row
 
-    def budget_last_24h(self, username: str) -> Budget:
+    def budget_last_24h(self, username: str, call_type: str = "diagnosis") -> Budget:
         """Calls billed in the last rolling 24 hours, per-user and globally.
 
         Rolling rather than calendar-day on purpose: a calendar reset gives a
@@ -124,9 +138,14 @@ class AIAuditRepository:
         and cost money. ``skipped`` never called, and ``error`` covers failures
         that were not billed (network, auth) — counting either would let a
         provider outage consume the day's allowance.
+
+        Scoped to one ``call_type``. Diagnosis and naming hold separate
+        ledgers, so a bulk naming backfill cannot spend the allowance that
+        keeps per-page diagnosis working.
         """
         since = _utcnow_naive() - timedelta(days=1)
         billable = DiagnosisAuditLog.status.in_(("accepted", "rejected"))
+        of_type = DiagnosisAuditLog.call_type == call_type
 
         user_used = (
             self.db.scalar(
@@ -136,6 +155,7 @@ class AIAuditRepository:
                     DiagnosisAuditLog.username == canonical_username(username),
                     DiagnosisAuditLog.created_at >= since,
                     billable,
+                    of_type,
                 )
             )
             or 0
@@ -144,11 +164,21 @@ class AIAuditRepository:
             self.db.scalar(
                 select(func.count())
                 .select_from(DiagnosisAuditLog)
-                .where(DiagnosisAuditLog.created_at >= since, billable)
+                .where(DiagnosisAuditLog.created_at >= since, billable, of_type)
             )
             or 0
         )
-        return Budget(user_used=user_used, global_used=global_used)
+        caps = (
+            (config.NAMING_DAILY_CAP_PER_USER, config.NAMING_DAILY_CAP_GLOBAL)
+            if call_type == "naming"
+            else (config.DAILY_CAP_PER_USER, config.DAILY_CAP_GLOBAL)
+        )
+        return Budget(
+            user_used=user_used,
+            global_used=global_used,
+            user_cap=caps[0],
+            global_cap=caps[1],
+        )
 
     def purge_older_than(self, days: int | None = None) -> int:
         """Delete audit rows past the retention window. Returns rows removed."""
@@ -172,7 +202,11 @@ class AIAuditRepository:
         since = _utcnow_naive() - timedelta(days=days)
         rows = self.db.execute(
             select(DiagnosisAuditLog.status, DiagnosisAuditLog.agreed_with_rules).where(
-                DiagnosisAuditLog.created_at >= since
+                DiagnosisAuditLog.created_at >= since,
+                # Diagnosis only. A name has no rules ranking to agree with, so
+                # naming rows would dilute the agreement rate toward zero and
+                # make the regression signal unreadable.
+                DiagnosisAuditLog.call_type == "diagnosis",
             )
         ).all()
 

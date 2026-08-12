@@ -11,6 +11,24 @@ Description=Keep Docker bridge routes local when Tailscale exit-node routing is 
 Documentation=file:/home/lauureal/apps/knightmind/OPERATIONS.md
 Wants=docker.service tailscaled.service
 After=docker.service tailscaled.service network-online.target
+# Re-run whenever tailscaled restarts, not only at boot.
+#
+# tailscaled rebuilds table 52 from scratch when it starts, which deletes the
+# throw routes this unit installs. With ordering alone the unit ran once at
+# boot and never again, so a tailscale restart or package upgrade silently
+# removed the exceptions — and the unit kept reporting active from its last
+# successful run, so nothing looked wrong.
+#
+# Observed 2026-08-12: unit last ran 2026-08-01 19:40, tailscaled restarted
+# 2026-08-09 16:59, table 52 held `default dev tailscale0` and no throw routes.
+# Host -> container traffic hung: `ip route get 172.17.0.2` resolved to
+# tailscale0, docker-proxy still accepted on 127.0.0.1 so the port looked open,
+# and the connection then timed out with nothing relaying.
+#
+# PartOf propagates tailscaled's stop/restart to this unit; combined with the
+# After= above, the re-run lands after tailscaled is back and has written its
+# routes. Requisite= would be wrong here — this unit must not block tailscaled.
+PartOf=tailscaled.service
 
 [Service]
 Type=oneshot
@@ -19,3 +37,7 @@ RemainAfterExit=yes
 
 [Install]
 WantedBy=multi-user.target
+# PartOf only propagates stop/restart to a unit that is already active, so it
+# does not cover tailscaled being started while this unit is inactive. This
+# pulls it in on every tailscaled start; After= keeps the ordering.
+WantedBy=tailscaled.service

@@ -48,9 +48,11 @@ from services.api.models import (
     PuzzleReview,
     PuzzleStats,
 )
+from services.api.puzzles import naming_pass
 from services.api.storage.ai_audit_repository import (
     AIAuditRepository,
     AuditWrite,
+    Budget,
     prompt_hash,
 )
 from services.api.storage.diagnosis_repository import (
@@ -146,7 +148,13 @@ def run_diagnosis(ctx) -> dict:
         )
         total = len(pending)
         if not total:
-            return _result(username, db, repo, 0, 0, 0, False, 0)
+            # Nothing to diagnose does not mean nothing to name: naming is
+            # bounded per run, so a large import finishes diagnosing long
+            # before it finishes naming, and this is the path those later
+            # re-queued runs take.
+            return _result(
+                username, db, repo, 0, 0, 0, False, 0, _name_new_puzzles(db, username)
+            )
 
         motif_rates = _motif_fail_rates(db, username)
         # Read the day's spend once, then track locally between commits. A
@@ -187,9 +195,47 @@ def run_diagnosis(ctx) -> dict:
         # cancellation path — a cancel must keep the work already done, not
         # roll it back.
         db.commit()
+        named = _name_new_puzzles(db, username, canceled)
+
         return _result(
-            username, db, repo, diagnosed, unchanged, unavailable, canceled, enriched
+            username,
+            db,
+            repo,
+            diagnosed,
+            unchanged,
+            unavailable,
+            canceled,
+            enriched,
+            named,
         )
+
+
+def _name_new_puzzles(db: Session, username: str, canceled: bool = False) -> int:
+    """Give AI names to puzzles that still carry a computed one. Best-effort.
+
+    This job is already chained after puzzle generation and re-queued while
+    work remains, so hanging naming off it is what makes new puzzles get named
+    without an operator running anything. The alternative — a call inside
+    ``save_puzzle`` — would put provider latency and provider outages inside a
+    game import.
+
+    Bounded per run, and wrapped: naming is enrichment on top of enrichment,
+    and it must not be able to fail a diagnosis job that already did its work.
+    """
+    if canceled or not ai_config.naming_is_enabled():
+        # Cheap exit before touching the database. Naming ships off, so this is
+        # the branch almost every deployment and every test takes.
+        return 0
+
+    try:
+        summary = naming_pass.name_puzzles(
+            db, username=username, limit=naming_pass.NAMING_BATCH_MAX
+        )
+        return summary["named"]
+    except Exception as exc:  # noqa: BLE001 - enrichment must stay best-effort
+        logger.warning("Puzzle naming skipped after diagnosis: %s", exc)
+        db.rollback()
+        return 0
 
 
 def _diagnosis_tables_ready(db: Session) -> bool:
@@ -207,7 +253,7 @@ def _diagnosis_tables_ready(db: Session) -> bool:
 
 
 def _result(
-    username, db, repo, diagnosed, unchanged, unavailable, canceled, enriched
+    username, db, repo, diagnosed, unchanged, unavailable, canceled, enriched, named=0
 ) -> dict:
     return {
         "username": username,
@@ -215,6 +261,10 @@ def _result(
         "unchanged": unchanged,
         "unavailable": unavailable,
         "enriched": enriched,
+        # Puzzles given an AI name by this run. Reported separately from
+        # "enriched" because it is a different kind of call against a different
+        # budget, and a reader should not have to guess which one moved.
+        "named": named,
         "remaining": repo.pending_count(username),
         "canceled": canceled,
     }
@@ -233,9 +283,12 @@ def _diagnose_one(
     audit: AIAuditRepository,
     username: str,
     puzzle_id: str,
-    motif_rates: dict[str, tuple[float, int]],
-    budget,
-) -> tuple[str, object, bool]:
+    # `float | None`: _motif_fail_rates returns None for a motif with no
+    # attempts, and _history_facts below takes `float | None`. The narrower
+    # annotation was simply wrong -- nothing ever relied on it.
+    motif_rates: dict[str, tuple[float | None, int]],
+    budget: Budget,
+) -> tuple[str, Budget, bool]:
     """Diagnose one puzzle. Returns (outcome, budget, used_ai)."""
     # Puzzle and PuzzleStats are keyed on puzzle_id alone (a puzzle id belongs
     # to exactly one user by construction); Game is keyed on (game_id, username)
@@ -395,7 +448,10 @@ def _enrich(db, audit, username, puzzle_id, packet, assessment, digest, budget):
         # leave the rules diagnosis exactly as it was.
         return _Enrichment(attempted=outcome.status != ai_client.SKIPPED)
 
+    # `usable` is `status == ACCEPTED and diagnosis is not None`, so this
+    # holds by construction -- mypy just cannot narrow through a property.
     d = outcome.diagnosis
+    assert d is not None
     return _Enrichment(
         attempted=True,
         source="llm",
@@ -484,7 +540,7 @@ def _game_context(game: Game | None, puzzle: Puzzle):
 def _history_facts(
     stats: PuzzleStats | None,
     motif: str | None,
-    motif_rates: dict[str, tuple[float, int]],
+    motif_rates: dict[str, tuple[float | None, int]],
 ) -> HistoryFacts:
     rate, sample = motif_rates.get(motif, (None, 0)) if motif else (None, 0)
     return HistoryFacts(

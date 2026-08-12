@@ -50,10 +50,13 @@ from sqlalchemy.orm import Session
 
 from services.api.db import SessionLocal
 from services.api.models import Puzzle, PuzzleStats
-from services.api.puzzles.identity import (
-    assign_primary_motif,
-    generate_puzzle_title,
+from services.api.puzzles.identity import assign_primary_motif
+from services.api.puzzles.position_names import (
+    PositionFacts,
+    compose_position_name,
+    disambiguate,
 )
+from services.api.puzzles.title_registry import taken_titles
 from services.api.usernames import canonical_username
 
 logger = logging.getLogger("reclassify_motifs")
@@ -91,7 +94,12 @@ def reclassify_motifs(
         ``"<missing_stats>"`` in ``before``.
     """
     stmt = select(Puzzle, PuzzleStats).outerjoin(
-        PuzzleStats, PuzzleStats.puzzle_id == Puzzle.id
+        PuzzleStats,
+        # Both halves of the key. puzzle_id alone would fan out the moment two
+        # users own stats for the same puzzle id, inflating every count in the
+        # report and reclassifying another user's row.
+        (PuzzleStats.puzzle_id == Puzzle.id)
+        & (PuzzleStats.username == Puzzle.username),
     )
     if username:
         # Fold to the same canonical storage key every API entry point uses, so a
@@ -106,10 +114,48 @@ def reclassify_motifs(
     created = 0
     changed_existing = 0
 
+    # Titles are unique per user, so a rename has to pick a free name rather
+    # than discover it was taken at commit time — this script writes every row
+    # in one transaction, and a single collision would abort the whole run.
+    # Seeded from the database because the run may be scoped to --username and
+    # still shares a namespace with rows it never looked at.
+    used: dict[str, set[str]] = {}
+
+    def titles_for(handle: str) -> set[str]:
+        key = canonical_username(handle)
+        if key not in used:
+            used[key] = taken_titles(db, key)
+        return used[key]
+
     for puzzle, stats in rows:
         # assign_primary_motif reads .fen / .best_move_uci off the ORM row.
         new_motif = assign_primary_motif(puzzle)
-        new_title = generate_puzzle_title(new_motif)
+        move_number = (puzzle.ply or 0) // 2 + 1
+        new_title = compose_position_name(
+            PositionFacts(
+                fen=puzzle.fen or "",
+                best_move_uci=puzzle.best_move_uci or "",
+                primary_motif=new_motif,
+                move_number=move_number,
+            )
+        )
+        # A name the user typed, or one the model wrote, is not this script's
+        # to replace. Without this guard a single reclassify run would undo an
+        # entire AI naming pass and put the seven motif strings back.
+        keep_title = stats is not None and stats.title_source in ("ai", "user")
+
+        if not keep_title:
+            titles = titles_for(puzzle.username)
+            # A row keeps its own name for free; the name it gives up stays
+            # reserved for the rest of the run, so no two UPDATEs in this one
+            # transaction can swap a title between them (Postgres checks the
+            # unique index per statement, and the unit of work emits UPDATEs in
+            # primary-key order — the loser would abort the run at random).
+            current = stats.title if stats is not None else None
+            new_title = disambiguate(
+                new_title, titles - {current} if current else titles, move_number
+            )
+            titles.add(new_title)
 
         if stats is None:
             before["<missing_stats>"] += 1
@@ -132,13 +178,18 @@ def reclassify_motifs(
                         username=puzzle.username,
                         primary_motif=new_motif,
                         title=new_title,
+                        title_source="position",
                     )
                 )
-        elif new_motif != stats.primary_motif or new_title != stats.title:
+        elif new_motif != stats.primary_motif or (
+            not keep_title and new_title != stats.title
+        ):
             changed_existing += 1
             if not dry_run:
                 stats.primary_motif = new_motif
-                stats.title = new_title
+                if not keep_title:
+                    stats.title = new_title
+                    stats.title_source = "position"
 
     if dry_run:
         db.rollback()

@@ -3,15 +3,16 @@ import logging
 import traceback
 from dataclasses import asdict, dataclass, is_dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable
+from typing import Any, Callable, TypedDict, cast
 
-from sqlalchemy import func, select, update
+from sqlalchemy import CursorResult, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from services.api.db import SessionLocal
 from services.api.diagnosis.job import DIAGNOSIS_BATCH_MAX, run_diagnosis
 from services.api.models import Job, JobStatus, JobType
+from services.api.puzzles import naming_pass
 from services.api.puzzles.generator import generate_puzzles
 from services.api.storage.diagnosis_repository import DiagnosisRepository
 from services.api.usernames import canonical_username
@@ -89,11 +90,27 @@ def _result_payload(result: Any) -> dict | None:
     )
 
 
+class _RecoveryStats(TypedDict):
+    """Crash-recovery counters, surfaced by /ops health (see ops.py).
+
+    A TypedDict rather than a bare dict: the two values have different types,
+    so a plain literal infers as `dict[str, int | None]` and assigning the
+    ISO timestamp is then a type error. Same shape of problem as ratings.py's
+    game_details, one key smaller.
+    """
+
+    recovered_count: int
+    last_recovery_at: str | None
+
+
 class JobWorker:
     def __init__(self):
         self.is_running = False
         self._task = None
-        self.recovery_stats = {"recovered_count": 0, "last_recovery_at": None}
+        self.recovery_stats: _RecoveryStats = {
+            "recovered_count": 0,
+            "last_recovery_at": None,
+        }
 
     def start(self):
         """Start the worker background task."""
@@ -200,11 +217,14 @@ class JobWorker:
             .where(Job.id == candidate_id, Job.status == JobStatus.QUEUED)
             .values(status=JobStatus.RUNNING, updated_at=now, heartbeat_at=now)
         )
+        # Session.execute() is typed Result[Any], but a DML statement returns a
+        # CursorResult -- which is where rowcount lives. The casts here and below
+        # record that rather than silencing the checker.
         result = db.execute(update_stmt)
         db.commit()
         # rowcount == 1: we won the claim. rowcount == 0: another worker
         # claimed it between our SELECT and UPDATE; leave it to them.
-        return candidate_id if result.rowcount == 1 else None
+        return candidate_id if cast(CursorResult, result).rowcount == 1 else None
 
     async def process_next_job(self) -> bool:
         """
@@ -365,6 +385,12 @@ class JobWorker:
         try:
             with SessionLocal() as db:
                 pending = DiagnosisRepository(db).pending_count(username)
+                # Naming rides on this job and is bounded per run, so a corpus
+                # can be fully diagnosed while most of it is still unnamed.
+                # Without this term the chain would stop there and the rest
+                # would keep their deterministic names until someone ran the
+                # CLI. Returns 0 when naming is disabled.
+                pending += naming_pass.pending_count(db, username)
         except Exception as exc:  # noqa: BLE001 - enrichment must stay best-effort
             logger.warning("Could not check remaining diagnosis work: %s", exc)
             return
@@ -450,7 +476,7 @@ class JobWorker:
                         updated_at=now,
                     )
                 )
-                rowcount = db.execute(success_stmt).rowcount
+                rowcount = cast(CursorResult, db.execute(success_stmt)).rowcount
                 db.commit()
 
             if rowcount == 0:
@@ -480,7 +506,7 @@ class JobWorker:
                         updated_at=now,
                     )
                 )
-                fail_rowcount = db.execute(failure_stmt).rowcount
+                fail_rowcount = cast(CursorResult, db.execute(failure_stmt)).rowcount
                 db.commit()
 
             if fail_rowcount == 0:

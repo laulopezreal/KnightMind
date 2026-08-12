@@ -323,14 +323,17 @@ The system uses a simple deterministic scheduling algorithm:
 
 ## Database Configuration
 
-KnightMind uses Postgres in production and supports SQLite for local development. The
-database connection is configured via `DATABASE_URL`, which is **required** — the API
-fails fast at startup if it is unset, rather than silently writing to an ephemeral
-SQLite file.
+KnightMind is **Postgres-only**, in production and locally. The connection is configured
+via `DATABASE_URL`, which is **required**: the API fails fast at startup when it is unset,
+and refuses a SQLite URL outright rather than silently writing to an ephemeral file. The
+test suite runs on Postgres too — there is no second backend to fall back to, which is the
+point.
 
 - **Postgres example:** `postgresql+psycopg://user:password@host:5432/knightmind`
-- **Local development:** point `DATABASE_URL` at the compose Postgres; there is no opt-in
-  `sqlite:///./knightmind.db` without setting `DATABASE_URL`. Never use this in production.
+- **Local development:** point `DATABASE_URL` at the compose Postgres (`make docker-up`).
+
+This paragraph used to say SQLite was supported for local development. It has not been
+since the fallback was removed; `services/api/db.py` rejects any URL beginning `sqlite`.
 
 Alembic migrations load `services/api/.env` (the same file the API reads) and use the same
 `DATABASE_URL` value, so `alembic upgrade head` runs against the database the app uses.

@@ -355,6 +355,27 @@ describe('RatingInsights fetch concurrency & error isolation', () => {
         expect(mockGetRatingHistory.mock.calls.length).toBeGreaterThanOrEqual(2);
     });
 
+    it('an explain aborted by the session-mode bail-out still arrives once the probe resolves', async () => {
+        // fetchExplain calls begin() BEFORE its bail-outs, so a Retry in session
+        // mode with no id yet cancels whatever is in flight. That is only safe if
+        // the coordination effect still fires explain when the probe resolves --
+        // otherwise the bail-out would strand the page with no data at all.
+        let resolveProbe!: (v: unknown) => void;
+        mockGetRecentSessions.mockReturnValue(new Promise(res => { resolveProbe = res; }));
+        mockGetRatingHistory.mockRejectedValue(new Error('history down'));
+        mockGetRatingExplain.mockResolvedValue(EXPLAIN_WITH_GAMES);
+
+        render(<RatingInsights />);
+        await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('history down'));
+
+        fireEvent.click(screen.getByRole('button', { name: 'Retry loading rating insights' }));
+        await new Promise(r => setTimeout(r, 30));
+        expect(mockGetRatingExplain).not.toHaveBeenCalled();
+
+        resolveProbe([{ session_id: 's1' }]);
+        await waitFor(() => expect(screen.getByText('15W - 3D - 7L')).toBeInTheDocument());
+    });
+
     it('does not render the loading skeleton alongside a history-failure banner', async () => {
         // Probe pending forever, history fails fast: the banner must not sit
         // next to a "content coming soon" skeleton.

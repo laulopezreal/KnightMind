@@ -11,7 +11,7 @@ from services.api.puzzles.identity import (
 
 def test_assign_primary_motif_default():
     """Verify that we default to 'blunder' when no metadata is available."""
-    puzzle = {}
+    puzzle: dict[str, object] = {}
     assert assign_primary_motif(puzzle) == "blunder"
 
 

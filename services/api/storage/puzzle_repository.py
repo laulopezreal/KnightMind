@@ -1,16 +1,25 @@
 import uuid
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
+from typing import cast
 
-from sqlalchemy import func, select, update
+from sqlalchemy import CursorResult, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from services.api.day_boundary import utc_today
 from services.api.models import Puzzle as PuzzleModel
 from services.api.models import PuzzleStats
-from services.api.puzzles.identity import assign_primary_motif, generate_puzzle_title
+from services.api.puzzles.identity import assign_primary_motif
+from services.api.puzzles.position_names import PositionFacts, compose_position_name
+from services.api.puzzles.title_registry import is_duplicate_title, unique_title
 from services.api.usernames import canonical_username
+
+# How many times a save will re-pick a title after losing a race for it. Each
+# attempt costs one round trip and the loop only runs when two concurrent saves
+# want the SAME name, so a small number is plenty — and a bounded loop is the
+# point: an unbounded one would turn a permanent title conflict into a hang.
+TITLE_ATTEMPTS = 5
 
 
 def normalized_position(fen: str) -> str:
@@ -123,63 +132,124 @@ class PuzzleRepository:
             return False, existing
 
         puzzle_id = puzzle_id or str(uuid.uuid4())
+        move_number = ply // 2 + 1
+        # Resolved once, not per attempt: a retry is the same save, and it must
+        # not drift to a later timestamp than the one this call decided on.
+        created_at = created_at or datetime.now(timezone.utc)
+        imported_at = imported_at or datetime.now(timezone.utc)
 
-        puzzle = PuzzleModel(
-            id=puzzle_id,
-            username=username_lower,
-            source_game_id=source_game_id,
-            ply=ply,
-            fen=fen,
-            # Position-identity key derived from the SAME fen we store, so the
-            # endpoint's precheck (which queries this column) and the partial
-            # unique index dedup transpositions consistently. Derived here rather
-            # than passed in so callers that override fen (e.g. tests simulating a
-            # concurrent save) can never store a mismatched fen/position pair.
-            normalized_position=normalized_position(fen),
-            side_to_move=side_to_move,
-            played_move_uci=played_move_uci,
-            best_move_uci=best_move_uci,
-            accept_moves_uci=accept_moves_uci,
-            eval_before=eval_before,
-            eval_after=eval_after,
-            swing=swing,
-            confirmed_depth=confirmed_depth,
-            solution_pv=solution_pv,
-            created_at=created_at or datetime.now(timezone.utc),
-            used_on=used_on,
-            imported_at=imported_at or datetime.now(timezone.utc),
-            source_path=source_path,
-        )
-        self.db.add(puzzle)
+        def _build_puzzle() -> PuzzleModel:
+            return PuzzleModel(
+                id=puzzle_id,
+                username=username_lower,
+                source_game_id=source_game_id,
+                ply=ply,
+                fen=fen,
+                # Position-identity key derived from the SAME fen we store, so the
+                # endpoint's precheck (which queries this column) and the partial
+                # unique index dedup transpositions consistently. Derived here rather
+                # than passed in so callers that override fen (e.g. tests simulating a
+                # concurrent save) can never store a mismatched fen/position pair.
+                normalized_position=normalized_position(fen),
+                side_to_move=side_to_move,
+                played_move_uci=played_move_uci,
+                best_move_uci=best_move_uci,
+                accept_moves_uci=accept_moves_uci,
+                eval_before=eval_before,
+                eval_after=eval_after,
+                swing=swing,
+                confirmed_depth=confirmed_depth,
+                solution_pv=solution_pv,
+                created_at=created_at,
+                used_on=used_on,
+                imported_at=imported_at,
+                source_path=source_path,
+            )
+
         # Use the caller's explicit motif/title when provided (the analysis-save
         # path already knows them); otherwise derive them from the position (the
-        # generation path). Title falls back to the motif's canonical name only
-        # when the caller does not supply one.
+        # generation path).
         motif = (
-            primary_motif if primary_motif is not None else assign_primary_motif(puzzle)
+            primary_motif
+            if primary_motif is not None
+            else assign_primary_motif(_build_puzzle())
         )
-        stats_title = title if title is not None else generate_puzzle_title(motif)
-        self.db.add(
-            PuzzleStats(
-                puzzle_id=puzzle_id,
-                username=username_lower,
-                attempts=0,
-                pass_count=0,
-                fail_count=0,
-                ease_factor=2.0,
-                primary_motif=motif,
-                title=stats_title,
+        # An explicit title reaches here only from the manual-save route, where
+        # it is the string the user typed — so it is recorded as theirs and
+        # nothing may overwrite it later.
+        #
+        # Otherwise the name is composed from the position, NOT from the model.
+        # Naming is a bulk pass run by scripts/ai_name_puzzles.py; making the
+        # write path wait on an API call would put provider latency (and
+        # provider outages) inside puzzle generation, which imports whole games
+        # at a time.
+        if title is not None:
+            stats_title, title_source = title, "user"
+        else:
+            stats_title = compose_position_name(
+                PositionFacts(
+                    fen=fen,
+                    best_move_uci=best_move_uci,
+                    primary_motif=motif,
+                    move_number=move_number,
+                )
             )
-        )
-        try:
-            self.db.commit()
-            return True, puzzle_id
-        except IntegrityError:
-            self.db.rollback()
-            existing = self._existing_puzzle_id(username_lower, source_game_id, ply)
-            if existing:
-                return False, existing
-            raise
+            title_source = "position"
+
+        # Titles are unique per user, and position-derived names collide
+        # constantly: two knight forks landing on f7 in two different games
+        # compose the same string. That is a cosmetic problem right up until a
+        # unique index turns it into a failed INSERT — and this INSERT is how a
+        # freshly generated puzzle gets saved during a game import, so failing
+        # it would lose the puzzle to a naming clash. It must not.
+        #
+        # So: pick a free name first (cheap, and the only thing that runs in the
+        # overwhelming case), and treat a lost race for that name as a reason to
+        # pick another one rather than as an error. A user-typed title is
+        # uniquified the same way — "My Nemesis (2)" is a far better answer to
+        # "you already used that name" than a 500 on save.
+        #
+        # Every attempt builds FRESH ORM objects: the rollback below expunges
+        # the pending instances back to transient, and re-adding them would
+        # replay a state SQLAlchemy no longer owns.
+        for attempt in range(TITLE_ATTEMPTS):
+            # Read the free-name set BEFORE anything is pending, so the query
+            # cannot flush a half-built puzzle into the transaction on a session
+            # left autoflushing.
+            free_title = unique_title(self.db, username_lower, stats_title, move_number)
+            self.db.add(_build_puzzle())
+            self.db.add(
+                PuzzleStats(
+                    puzzle_id=puzzle_id,
+                    username=username_lower,
+                    attempts=0,
+                    pass_count=0,
+                    fail_count=0,
+                    ease_factor=2.0,
+                    primary_motif=motif,
+                    title=free_title,
+                    title_source=title_source,
+                )
+            )
+            try:
+                self.db.commit()
+                return True, puzzle_id
+            except IntegrityError as error:
+                self.db.rollback()
+                # Unchanged and load-bearing: the natural duplicate key wins
+                # first, so a concurrent save of the SAME puzzle still resolves
+                # to the winner's id instead of retrying under a new name.
+                existing = self._existing_puzzle_id(username_lower, source_game_id, ply)
+                if existing:
+                    return False, existing
+                # Anything that is not the title index — a position-index
+                # violation the manual route absorbs, a missing FK — is still
+                # re-raised untouched, on the first attempt, as before.
+                if not is_duplicate_title(error) or attempt == TITLE_ATTEMPTS - 1:
+                    raise
+
+        # Unreachable: the loop either returns or raises on its last attempt.
+        raise AssertionError("save_puzzle exhausted its title attempts")
 
     def get_puzzle(self, username: str, puzzle_id: str) -> Puzzle | None:
         puzzle = self.db.get(PuzzleModel, puzzle_id)
@@ -271,7 +341,7 @@ class PuzzleRepository:
         )
         result = self.db.execute(stmt)
         self.db.commit()
-        return result.rowcount or 0
+        return cast(CursorResult, result).rowcount or 0
 
     def get_puzzle_count(self, username: str) -> int:
         username_lower = canonical_username(username)

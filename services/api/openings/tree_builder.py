@@ -8,7 +8,7 @@ with statistics for each position (games count, win/draw/loss).
 import io
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Literal, cast
 
 import chess.pgn
 
@@ -226,7 +226,11 @@ class OpeningTreeBuilder:
                 return False
 
             # Walk through the moves and update the tree
-            self._add_moves_to_tree(game, result, player_color)
+            self._add_moves_to_tree(
+                game,
+                cast(Literal["win", "draw", "loss"], result),
+                cast(Literal["white", "black"], player_color),
+            )
             self.report.games_analyzed += 1
             return True
 
@@ -242,7 +246,7 @@ class OpeningTreeBuilder:
         player_color: Literal["white", "black"],
     ) -> None:
         """Add moves from a game to the tree."""
-        node = game
+        node: chess.pgn.GameNode = game
         current_tree_node = self.root
         ply = 0
 

@@ -1,5 +1,5 @@
 ---
-last_edited_at: 2026-08-01T19:32:26+02:00
+last_edited_at: 2026-08-06T00:49:34+02:00
 ---
 # KnightMind Operations
 
@@ -25,8 +25,9 @@ There is exactly one intended KnightMind app/deploy instance on claw-home.
   - Containers: `knightmind-api-1`, `knightmind-db-1`
   - Network: `knightmind_default` with static Linux bridge name `km-bridge`
   - DB volume: `knightmind_pgdata`
-- **Backups:** `/home/lauureal/backups/knightmind/`
-  - Take a fresh backup before any Compose, migration, rebuild, or ingress change.
+- **Backups:** `/home/lauureal/backups/knightmind/` — the only backup location. See "Backup first rule".
+  - Take a fresh backup before any Compose, migration, rebuild, ingress change, or release merge.
+  - `/home/lauureal/apps/knightmind/backups/` is NOT a backup location. Two stray dumps lived there until 2026-08-06 and were moved here; the directory was removed. Backups do not belong inside the deploy clone, which `deploy.yaml` runs `git reset --hard` in.
 - **Public frontend:** Cloudflare Pages currently serving `https://guessme.world` and `https://knightmind.pages.dev`.
 - **Public API:** Caddy container `knightmind-public-caddy` is deployed from `/home/lauureal/apps/knightmind/deploy/public-caddy/`, runs with `network_mode: host`, binds only `${PUBLIC_IP:-65.108.67.53}`, and reverse-proxies `api.guessme.world` to `127.0.0.1:8000`. `https://api.guessme.world/ops/ping` returns JSON and Caddy obtained a Let's Encrypt certificate on 2026-07-10.
 
@@ -151,25 +152,97 @@ docker compose --env-file .env.docker ps
 
 Before any command that can recreate, stop, remove, migrate, or rebuild the live stack, create a fresh DB backup.
 
-Current backup command:
+**Merging a `dev` -> `main` release PR counts.** `deploy.yaml` fires on push to `main` and runs build -> `alembic upgrade head` -> traffic switch, unattended, and takes no backup of its own. The backup is a manual step *before* the merge; nothing in the pipeline waits for it.
+
+### The one location, the one command
+
+Backups live in **`/home/lauureal/backups/knightmind/`** and nowhere else. Take one with:
 
 ```bash
-TS=$(date +%Y%m%dT%H%M%S%z)
-BACKUP_DIR=/home/lauureal/backups/knightmind
-mkdir -p "$BACKUP_DIR"
-docker exec knightmind-db-1 sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc' > "$BACKUP_DIR/knightmind-db-$TS.dump"
-sha256sum "$BACKUP_DIR/knightmind-db-$TS.dump" > "$BACKUP_DIR/knightmind-db-$TS.dump.sha256"
+cd /home/lauureal/apps/knightmind && ./deploy/postgres-backup.sh
 ```
+
+That is the only sanctioned mechanism. It writes `knightmind_<YYYYMMDD>_<HHMMSS>.sql.gz`, reads it back with `gzip -t`, and only then writes the matching `.sha256`, so a `.sha256` existing means the dump was readable when written. It then applies the retention policy below.
+
+**A dump that fails `gzip -t` is renamed to `<name>.sql.gz.corrupt` and no checksum is written for it.** `.corrupt` matches no retention glob, so it stays for inspection and is never counted as a backup — delete it by hand once you know why it happened. The script exits non-zero; if you see that, you have no fresh backup, whatever the directory looks like.
+
+`deploy/test-postgres-backup.sh` covers classification, both age rules, the citation guard, the orphan sweep, and the corrupt-dump path against temporary fixture directories. It touches no database and no real backup. `Ops CI` (`.github/workflows/ci-ops.yaml`) runs it, plus `bash -n` over every script in `deploy/`, on any change under `deploy/`. Run it by hand too when you are changing the backup script; it takes a second and needs nothing installed.
+
+### Retention
+
+Two classes, distinguished by filename, each with an age limit and a floor:
+
+| class | shape | kept | floor |
+| --- | --- | --- | --- |
+| routine | `knightmind_<date>_<time>.sql.gz`, `knightmind-db-<ISO>.dump` | `RETENTION_DAYS`, default 14 | `MIN_KEEP`, default 3 |
+| labelled | a word between prefix and timestamp, e.g. `knightmind-pre-release-pr343-...` | `MILESTONE_RETENTION_DAYS`, default 90 | `MILESTONE_MIN_KEEP`, default 2 |
+
+The floors matter because backups here are manual: without them a quiet fortnight ages out every routine copy and leaves only whatever the current run just wrote. The two classes are counted independently, so a burst of routine dumps cannot push labelled ones past their floor.
+
+**Label a dump when you take it before something risky**, and say what it precedes — `pre-release-pr343`, `pre-strip-flag`, `pre-hardening`. That is what buys it the longer horizon. Rename an existing dump to promote it, and rewrite its `.sha256` to match: the checksum records a bare filename, so a rename without it makes `sha256sum -c` fail on an intact file.
+
+**Labelled does not mean immortal.** Until 2026-08-06 they were exempt entirely, and the directory accumulated four dumps of a single schema revision, each kept forever because it had a nice name. A dump's restore value decays as the schema moves past it: recovering to a revision several migrations back means replaying all of them onto data that old. When several labelled dumps share a revision, prune by hand — the script cannot tell which label matters.
+
+**A dump cited in a document is never deleted automatically, whatever its age.** Before removing anything, the script greps the doc trees in `CITATION_PATHS` (default: the repo it lives in, plus `~/projects/knightmind`) for the dump's filename, and skips it if there is a hit, logging `Keeping <name>: past its N-day horizon but cited in a project document.`
+
+The floors do not cover this on their own. This document names three labelled dumps while `MILESTONE_MIN_KEEP` keeps two, so without the guard the oldest cited one is deleted the day it turns 90 — with its filename and SHA256 still printed a few sections down. That is the same dangling-citation failure as below, arriving on a timer instead of by hand.
+
+The consequence to accept: **a cited dump is kept until its citation is removed.** To let one go, edit the citing document first. Every retained citation is logged so the directory cannot quietly grow without anyone noticing.
+
+**The same rule binds you when deleting by hand**, because the script only guards its own deletions:
+
+```bash
+grep -rl "<dump-filename>" ~/git/knightmind/ ~/apps/knightmind/ ~/projects/knightmind/
+```
+
+The repo alone is not enough. On 2026-08-06 a pruned dump turned out to be cited in `~/projects/knightmind/handoffs/` as a session's verified-restorable backup, and the reference was left dangling. If a citation exists and the dump is going anyway, annotate the citing document with a substitute — and verify the substitute restores before naming it, rather than assuming a neighbouring dump is equivalent.
+
+To see what a dump would restore to:
+
+```bash
+zcat BACKUP.sql.gz | grep -A1 'COPY public.alembic_version' | sed -n 2p   # plain SQL
+pg_restore -f - < BACKUP.dump | grep -A1 'COPY public.alembic_version' | sed -n 2p   # -Fc
+```
+
+There is **no cron entry and no systemd timer**, so a backup exists only when someone runs this. Do not add a second mechanism: until 2026-08-06 this section documented an inline `pg_dump -Fc` instead of the script, so the directory accumulated two formats that need two different restore commands and only one of which was pruned.
+
+### Restoring
+
+The two formats in the directory restore differently. Check the extension first.
+
+```bash
+# knightmind_*.sql.gz  -- plain SQL, written by the script
+zcat BACKUP.sql.gz | docker exec -i knightmind-db-1 psql -U knightmind -d knightmind -v ON_ERROR_STOP=1
+
+# knightmind-db-*.dump -- legacy pg_dump custom format (-Fc), taken by hand before 2026-08-06
+docker exec -i knightmind-db-1 pg_restore -U knightmind -d knightmind --clean --if-exists < BACKUP.dump
+```
+
+### A dump is not verified until it has been restored
+
+`sha256sum -c` proves the file did not rot. It does not prove the dump is loadable or complete. Before relying on a backup for a risky change, restore it into a throwaway container and compare row counts to live:
+
+```bash
+docker run -d --name km-restorecheck -e POSTGRES_USER=knightmind -e POSTGRES_PASSWORD=knightmind \
+  -e POSTGRES_DB=restore_test postgres:16
+# wait for a real connection, not pg_isready -- that answers during initdb's temporary server
+until docker exec km-restorecheck psql -U knightmind -d restore_test -c 'SELECT 1' >/dev/null 2>&1; do sleep 1; done
+zcat BACKUP.sql.gz | docker exec -i km-restorecheck psql -U knightmind -d restore_test -v ON_ERROR_STOP=1
+docker exec km-restorecheck psql -U knightmind -d restore_test -At -c 'SELECT count(*) FROM games;'
+docker rm -f km-restorecheck
+```
+
+Counting `COPY` blocks in the gzipped dump is not a substitute; it over-counts and has given wrong figures for every table.
 
 Most recent restoration safety backup:
 
-- `/home/lauureal/backups/knightmind/knightmind-db-20260710T113350+0200.dump`
+- `/home/lauureal/backups/knightmind/knightmind-pre-restoration-20260710T113350+0200.dump`
 - SHA256: `80797430297a808f54f97ba364f818f65c676350f4a5470c86772fb4e26660d6`
 
 Most recent hardening safety backup before the 2026-07-20 DB/API recreation:
 
-- `/home/lauureal/backups/knightmind/knightmind-db-20260720T145709+0200.dump`
-- SHA256 recorded in `/home/lauureal/backups/knightmind/knightmind-db-20260720T145709+0200.dump.sha256` and verified with `sha256sum -c` before Compose changes.
+- `/home/lauureal/backups/knightmind/knightmind-pre-hardening-20260720T145709+0200.dump`
+- SHA256 recorded in `/home/lauureal/backups/knightmind/knightmind-pre-hardening-20260720T145709+0200.dump.sha256` and verified with `sha256sum -c` before Compose changes.
 
 ## Security hardening status
 
@@ -181,7 +254,7 @@ Applied on 2026-07-20 after taking and verifying the backup above:
 - API and DB are healthy after recreation; public `https://api.guessme.world/ops/ping` returns `200 {"status":"pong"}`.
 - Multi-user auth remains intentionally disabled until Lau provisions the account and flips `KNIGHTMIND_REQUIRE_AUTH=true` in `.env.docker`.
 
-Applied on 2026-08-05, after taking backup `knightmind-db-20260805T103703+0200.dump`:
+Applied on 2026-08-05, after taking backup `knightmind-pre-strip-flag-20260805T103703+0200.dump`:
 
 - **`KNIGHTMIND_STRIP_PUZZLE_SOLUTIONS=1` is now set** in `.env.docker`. Before this,
   the flag defaulted OFF and `/puzzles/due` shipped `best_move_uci`,
@@ -261,6 +334,37 @@ sudo cp /home/lauureal/apps/knightmind/deploy/tailscale-docker-route-exceptions.
 sudo systemctl daemon-reload
 sudo systemctl enable --now tailscale-docker-route-exceptions.service
 ```
+
+### "Active" does not mean the routes are still there
+
+The unit is `Type=oneshot` with `RemainAfterExit=yes`, so it reports `active`
+forever after one successful run. tailscaled rebuilds table 52 when it starts
+and deletes the throw routes — so the exceptions can be gone while
+`systemctl status` still looks healthy. **Check the routes, not the unit.**
+
+Seen on 2026-08-12: unit last ran 2026-08-01 19:40, tailscaled restarted
+2026-08-09 16:59, and table 52 held `default dev tailscale0` with no throw
+routes. Every host-to-container connection hung. The symptom is misleading —
+docker-proxy still accepts on `127.0.0.1`, so the port probes as **open** and
+only the relay to the container fails:
+
+```bash
+# looks fine — docker-proxy answers on loopback
+timeout 3 bash -c 'cat < /dev/null > /dev/tcp/127.0.0.1/5432' && echo open
+
+# the real test — this is what actually breaks
+timeout 3 bash -c 'cat < /dev/null > /dev/tcp/172.17.0.2/5432' && echo open
+
+ip route get 172.17.0.2     # must say `dev docker0`, NOT `dev tailscale0`
+```
+
+`docker exec ... psql` keeps working throughout, because it uses no networking
+at all — which is what makes this look like an application or database fault.
+
+`PartOf=tailscaled.service` plus `WantedBy=tailscaled.service` now re-run the
+helper on every tailscaled start or restart. That fix only applies once the
+unit file is reinstalled — the install block above must be re-run after
+pulling it.
 
 Manual one-shot repair is only the fallback if the service is missing or inactive:
 

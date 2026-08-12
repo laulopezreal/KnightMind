@@ -193,6 +193,13 @@ class FenEvalCache(Base):
     )
 
 
+# The per-user title uniqueness index, named once so the model, the code that
+# recognises its IntegrityError (services.api.puzzles.title_registry) and the
+# tests all mean the same object. The migration that creates it spells the name
+# out literally, as migrations must.
+PUZZLE_TITLE_UNIQUE_INDEX = "uq_puzzle_stats_username_title"
+
+
 class PuzzleStats(Base):
     __tablename__ = "puzzle_stats"
     __table_args__ = (
@@ -202,6 +209,25 @@ class PuzzleStats(Base):
             "fail_count",
             "last_reviewed_at",
         ),
+        # A title is a display name, and a library that shows the same name
+        # twice cannot be navigated: "The Missed Win" appeared 103 times for one
+        # user. Application code deduplicated within a single naming pass, which
+        # says nothing about the pass before it — so uniqueness has to be a
+        # property of the table, not of a run.
+        #
+        # Scoped to the user, not global. Two users independently reaching the
+        # same fork on f7 SHOULD both get "The f7 Knight Fork"; making that
+        # collide would let one tenant's corpus rename another's.
+        #
+        # Not partial, and that matters: Postgres treats NULLs as distinct in a
+        # unique index, so the untitled rows (a stats row written before its
+        # name was computed) stay unconstrained for free.
+        Index(
+            PUZZLE_TITLE_UNIQUE_INDEX,
+            "username",
+            "title",
+            unique=True,
+        ),
         {"extend_existing": True},
     )
 
@@ -210,6 +236,14 @@ class PuzzleStats(Base):
     )
     username: Mapped[str] = mapped_column(String, index=True)
     title: Mapped[str] = mapped_column(String, nullable=True)
+    # Where ``title`` came from: motif | position | ai | user.
+    #
+    # Without this, "has a title" was the only signal available, and every
+    # puzzle has one — the creation path always writes a generated title. Code
+    # that wanted to mean "the user named this, leave it alone" could only test
+    # for non-NULL, which is true for all of them. This column is what makes
+    # "never overwrite a name the user chose" expressible.
+    title_source: Mapped[str | None] = mapped_column(String, nullable=True)
     primary_motif: Mapped[str] = mapped_column(String, nullable=True)
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     pass_count: Mapped[int] = mapped_column(Integer, default=0)
@@ -374,6 +408,9 @@ class DiagnosisAuditLog(Base):
         Index("ix_diagnosis_audit_created_at", "created_at"),
         # Per-user daily spend.
         Index("ix_diagnosis_audit_username_created", "username", "created_at"),
+        # The per-type spend count filters on call_type as well, which the two
+        # indexes above do not cover.
+        Index("ix_diagnosis_audit_call_type_created", "call_type", "created_at"),
         {"extend_existing": True},
     )
 
@@ -382,6 +419,15 @@ class DiagnosisAuditLog(Base):
     )
     puzzle_id: Mapped[str | None] = mapped_column(String, nullable=True)
     username: Mapped[str] = mapped_column(String, nullable=False, index=True)
+
+    # Which kind of model call this row records: diagnosis | naming.
+    #
+    # The table doubles as the spend ledger, so without a discriminator a
+    # naming backfill would silently consume the diagnosis budget and land in
+    # agreement_stats, where agreed_with_rules is meaningless for a name.
+    call_type: Mapped[str] = mapped_column(
+        String, nullable=False, default="diagnosis", server_default="diagnosis"
+    )
 
     # accepted | rejected | skipped | error
     status: Mapped[str] = mapped_column(String, nullable=False)

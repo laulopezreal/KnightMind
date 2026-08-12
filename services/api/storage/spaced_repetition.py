@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from services.api.models import Puzzle, PuzzleResult, PuzzleReview, PuzzleStats
 from services.api.puzzles.identity import assign_primary_motif, generate_puzzle_title
+from services.api.puzzles.title_registry import unique_title
 from services.api.storage.puzzle_repository import PuzzleRepository
 from services.api.usernames import canonical_username
 
@@ -220,7 +221,17 @@ def update_puzzle_stats(
     if not stats:
         puzzle = PuzzleRepository(db).get_puzzle(username, puzzle_id)
         motif = assign_primary_motif(puzzle)
-        title = generate_puzzle_title(motif)
+        # generate_puzzle_title has seven strings in it, so this row's name
+        # collides with an existing one as soon as the user has two puzzles of
+        # the same motif with no stats row — and titles are unique per user, so
+        # that collision would now fail the review instead of merely repeating a
+        # name. Reviewing a puzzle must never fail because of what it is called.
+        title = unique_title(
+            db,
+            username,
+            generate_puzzle_title(motif),
+            (getattr(puzzle, "ply", 0) or 0) // 2 + 1 if puzzle else None,
+        )
         stats = PuzzleStats(
             puzzle_id=puzzle_id,
             username=username,
@@ -261,7 +272,7 @@ def get_adaptive_puzzles(
     puzzle_ids: list[str],
     n: int = 5,
     session_type: str = "standard",
-    target_accuracy: float = None,
+    target_accuracy: float | None = None,
     focus_puzzle_ids: set[str] | None = None,
 ) -> tuple[list[str], dict[str, PuzzleStats]]:
     """

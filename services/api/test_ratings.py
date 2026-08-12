@@ -10,12 +10,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 
 from services.api.db import get_db
-from services.api.main import (
-    app,
+from services.api.main import app
+from services.api.models import Game, RatingSnapshot
+from services.api.ratings import (
     calculate_expected_score,
     get_opponent_rating_from_pgn,
 )
-from services.api.models import Game, RatingSnapshot
 from services.api.time_control import classify_time_control
 
 client = TestClient(app)
@@ -114,7 +114,7 @@ def client_with_db(db_session, monkeypatch):
     app.dependency_overrides.clear()
 
 
-@patch("services.api.main.get_player_stats")
+@patch("services.api.ratings.get_player_stats")
 def test_create_rating_snapshot_success(mock_get_stats, client_with_db, db_session):
     mock_get_stats.return_value = {"chess_rapid": {"last": {"rating": 1500}}}
 
@@ -132,7 +132,7 @@ def test_create_rating_snapshot_success(mock_get_stats, client_with_db, db_sessi
     assert snapshot.rating == 1500
 
 
-@patch("services.api.main.get_player_stats")
+@patch("services.api.ratings.get_player_stats")
 def test_create_rating_snapshot_hides_internal_error(mock_get_stats, client_with_db):
     """dim 23: an unexpected exception must not leak its raw text to the caller.
 
@@ -154,7 +154,7 @@ def test_create_rating_snapshot_hides_internal_error(mock_get_stats, client_with
     assert detail == "Internal server error"
 
 
-@patch("services.api.main.get_player_stats")
+@patch("services.api.ratings.get_player_stats")
 def test_create_rating_snapshot_missing_rating(mock_get_stats, client_with_db):
     mock_get_stats.return_value = {"chess_rapid": {"last": {}}}
 
@@ -895,3 +895,144 @@ def test_explain_auto_snapshot_is_throttled(mock_stats, client_with_db, db_sessi
         assert response.status_code == 200
 
     assert mock_stats.await_count == 1
+
+
+# --- Attribution drivers -------------------------------------------------
+#
+# These three branches compare each game's opponent rating against the
+# player's own rating for that game (`_GameDetail.r_self`), which falls back
+# to the window reference when the PGN has no Elo header for the player.
+# Nothing exercised them before, so the dict -> dataclass refactor of
+# game_details would have been unverified on exactly the code it changed.
+
+
+def _seed_rated(db_session, i, since_time, player_elo, opp_elo, result):
+    """One rated rapid game with explicit Elo headers on both sides."""
+    pgn = (
+        '[White "testuser"]\n[Black "opponent"]\n'
+        f'[WhiteElo "{player_elo}"]\n[BlackElo "{opp_elo}"]\n\n1. e4 e5 1-0'
+    )
+    _seed_game(db_session, i, since_time, rated=True, pgn=pgn, result=result)
+
+
+def _explain(client_with_db, since_time):
+    response = client_with_db.get(
+        "/ratings/explain",
+        params={
+            "username": "testuser",
+            "time_control": "rapid",
+            "since": since_time.isoformat(),
+        },
+    )
+    assert response.status_code == 200
+    return response.json()
+
+
+def test_explain_driver_wins_vs_higher_rated(client_with_db, db_session):
+    """Wins against opponents >= r_self + 100 are attributed as upward pressure.
+
+    Player is 1400 throughout; four opponents are 1550 (well over the 100-point
+    threshold), all won. Needs >= MIN_GAMES_FOR_RATING_DRIVERS rated games or
+    the explainer stays deliberately descriptive instead.
+    """
+    since_time = datetime.now(timezone.utc) - timedelta(days=2)
+    for i in range(8):
+        _seed_rated(db_session, i, since_time, 1400, 1550, "win")
+    db_session.commit()
+
+    data = _explain(client_with_db, since_time)
+    texts = [d["text"] for d in data["drivers"]]
+    assert any(
+        "higher-rated" in t for t in texts
+    ), f"expected a wins-vs-higher driver, got {texts}"
+    assert any("8 wins against higher-rated" in t for t in texts)
+
+
+def test_explain_driver_losses_vs_lower_rated(client_with_db, db_session):
+    """Losses against opponents <= r_self - 100 are attributed as the drop."""
+    since_time = datetime.now(timezone.utc) - timedelta(days=2)
+    for i in range(8):
+        _seed_rated(db_session, i, since_time, 1400, 1250, "loss")
+    db_session.commit()
+
+    data = _explain(client_with_db, since_time)
+    texts = [d["text"] for d in data["drivers"]]
+    assert any(
+        "lower-rated" in t for t in texts
+    ), f"expected a losses-vs-lower driver, got {texts}"
+    assert any("8 losses against lower-rated" in t for t in texts)
+
+
+def test_explain_driver_uses_per_game_player_elo_not_window_reference(
+    client_with_db, db_session
+):
+    """r_self is per-game, so a rising player is judged against the rating they
+    actually held at each game -- not one window-wide number.
+
+    The player climbs 1200 -> 1900 while every opponent sits at 1500. Against a
+    single window-wide reference (the ~1550 average) none of these would count
+    as wins vs higher-rated; per-game, the four early games at 1200-1350 are
+    all >= 100 below 1500 and do count.
+    """
+    since_time = datetime.now(timezone.utc) - timedelta(days=2)
+    for i, elo in enumerate([1200, 1250, 1300, 1350, 1700, 1800, 1850, 1900]):
+        _seed_rated(db_session, i, since_time, elo, 1500, "win")
+    db_session.commit()
+
+    data = _explain(client_with_db, since_time)
+    texts = [d["text"] for d in data["drivers"]]
+    assert any(
+        "4 wins against higher-rated" in t for t in texts
+    ), f"expected exactly the 4 early games to count, got {texts}"
+
+
+def test_explain_driver_opponent_rating_volatility(client_with_db, db_session):
+    """A wide spread of opponent ratings raises the volatility driver.
+
+    Also the one path that reads avg_opp, which is None when no game carries an
+    opponent Elo -- the guard there is now explicit rather than implied by a
+    second variable.
+    """
+    since_time = datetime.now(timezone.utc) - timedelta(days=2)
+    for i, opp in enumerate([1000, 1200, 1400, 1600, 1800, 2000]):
+        _seed_rated(db_session, i, since_time, 1400, opp, "win")
+    db_session.commit()
+
+    data = _explain(client_with_db, since_time)
+    texts = [d["text"] for d in data["drivers"]]
+    assert any(
+        "volatility" in t for t in texts
+    ), f"expected a volatility driver, got {texts}"
+
+
+def test_explain_missing_player_elo_falls_back_to_window_reference(
+    client_with_db, db_session
+):
+    """With no player Elo header, r_self falls back to the window reference.
+
+    The assertions pin the fallback VALUE, not just that it resolves. With no
+    player Elo anywhere, reference_rating becomes the opponent average (1000),
+    so r_self == r_opp for every game: each expected score is exactly 0.5, and
+    eight losses underperform by 8 * 0.5 = 4.0 points. Any other fallback moves
+    that number -- 1200, for instance, gives 6.1 -- and also starts reporting
+    these as losses against *lower*-rated opponents, which they are not.
+    """
+    since_time = datetime.now(timezone.utc) - timedelta(days=2)
+    for i in range(8):
+        pgn = (
+            '[White "testuser"]\n[Black "opponent"]\n'
+            '[BlackElo "1000"]\n\n1. e4 e5 1-0'
+        )
+        _seed_game(db_session, i, since_time, rated=True, pgn=pgn, result="loss")
+    db_session.commit()
+
+    data = _explain(client_with_db, since_time)
+    assert data["stats"]["games"] == 8
+    assert data["trajectory"] == []
+
+    texts = [d["text"] for d in data["drivers"]]
+    assert any(
+        "underperformed expectations by -4.0 points" in t for t in texts
+    ), f"expected the -4.0 that r_self == r_opp implies, got {texts}"
+    # r_self == r_opp exactly, so nothing is 100+ below the player.
+    assert not any("lower-rated" in t for t in texts), texts

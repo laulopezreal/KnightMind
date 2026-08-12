@@ -1,0 +1,47 @@
+name: Ops CI
+
+# `deploy/` ships the scripts that back up and restore production, and until now
+# nothing ran when they changed: `ci-backend.yaml` filters on services/, scripts/
+# and the build inputs, `ci-frontend.yaml` on apps/web. A PR touching only
+# `deploy/` drew zero checks, and GitHub reports a PR with zero checks as CLEAN --
+# the same mergeable state as all-green. That is how #355 found a dependency bump
+# reaching `dev` untested; this is the same hole for the backup mechanism.
+#
+# Cheap on purpose: no database, no docker, no network. The fixture tests run
+# against temporary directories, so this stays fast enough to never be the reason
+# someone skips it.
+
+on:
+  push:
+    branches: [ main, dev ]
+    paths:
+      - 'deploy/**'
+      - '.github/workflows/ci-ops.yaml'
+  pull_request:
+    branches: [ main, dev ]
+    paths:
+      - 'deploy/**'
+      - '.github/workflows/ci-ops.yaml'
+
+jobs:
+  shell:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Parse every deploy shell script
+      # `bash -n` catches the unterminated quote or missing `fi` that would
+      # otherwise be discovered by a script failing halfway through a production
+      # change. Covers all of deploy/, not just the files under test below.
+      run: |
+        set -euo pipefail
+        for f in deploy/*.sh; do
+          echo "checking $f"
+          bash -n "$f"
+        done
+
+    - name: Backup script fixture tests
+      # Retention, the citation guard, the orphan sweep and the corrupt-dump
+      # path, against temporary directories. See deploy/test-postgres-backup.sh.
+      run: ./deploy/test-postgres-backup.sh

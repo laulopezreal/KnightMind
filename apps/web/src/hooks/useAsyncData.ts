@@ -6,10 +6,33 @@ export interface AsyncData<T> {
     data: T | null;
     /** User-facing message from the most recent failure, or null. */
     error: string | null;
+    /**
+     * The value that was actually thrown, for the callers that must branch on
+     * its type rather than its text.
+     *
+     * `error` is a string because that is what a page renders, but reducing to
+     * `err.message` throws away everything else -- Openings has to tell a 404
+     * ("nothing imported yet", a first-run state with a real next step) from
+     * any other failure ("Retry"), and comparing message text to do it is the
+     * kind of coupling that breaks the first time wording changes.
+     */
+    errorCause: unknown;
     /** True only while the FIRST load is in flight — drives the full-page spinner. */
     loading: boolean;
     /** True while a later load is in flight, with `data` still showing the old value. */
     refreshing: boolean;
+    /**
+     * True while ANY fetch is in flight -- `loading || refreshing`.
+     *
+     * This exists because its absence caused the same bug in three separate
+     * pages at once. `loading` reads like "is it loading", but it is FIRST load
+     * only: after one success it is permanently false, so a spinner or a
+     * disabled button wired to it silently dies on every subsequent refetch and
+     * the page shows stale data with no indication anything is happening.
+     * Reach for `busy` for pending indicators; reach for `loading` only when you
+     * specifically mean "there is nothing to show yet".
+     */
+    busy: boolean;
     /** Re-run the fetch (window focus, a mutation the page just made, a retry button). */
     reload: () => void;
 }
@@ -23,6 +46,17 @@ export interface UseAsyncDataOptions {
     enabled?: boolean;
     /** Fallback message when the thrown value is not an Error. */
     errorMessage?: string;
+    /**
+     * When the error slot is cleared. Default 'start' -- an in-flight attempt
+     * blanks the previous failure, which is what a user-triggered retry should
+     * look like.
+     *
+     * 'success' keeps the message until something actually succeeds. That is
+     * what a POLLED fetch needs: Ops refreshes every five seconds, and clearing
+     * on start makes a persistent outage flicker between "API unreachable" and
+     * nothing, once per tick.
+     */
+    clearErrorOn?: 'start' | 'success';
 }
 
 /**
@@ -59,10 +93,15 @@ export function useAsyncData<T>(
     deps: React.DependencyList,
     options: UseAsyncDataOptions = {},
 ): AsyncData<T> {
-    const { enabled = true, errorMessage = 'Something went wrong. Please try again.' } = options;
+    const {
+        enabled = true,
+        errorMessage = 'Something went wrong. Please try again.',
+        clearErrorOn = 'start',
+    } = options;
 
     const [data, setData] = useState<T | null>(null);
     const [error, setError] = useState<string | null>(null);
+    const [errorCause, setErrorCause] = useState<unknown>(null);
     const [loading, setLoading] = useState(enabled);
     const [refreshing, setRefreshing] = useState(false);
 
@@ -98,7 +137,10 @@ export function useAsyncData<T>(
         const firstLoad = !hasLoadedRef.current;
         if (firstLoad) setLoading(true);
         else setRefreshing(true);
-        setError(null);
+        if (clearErrorOn === 'start') {
+            setError(null);
+            setErrorCause(null);
+        }
 
         (async () => {
             try {
@@ -108,9 +150,14 @@ export function useAsyncData<T>(
                 if (token.isStale()) return;
                 setData(result);
                 hasLoadedRef.current = true;
+                // Under 'success' the slot survives failed attempts, so the one
+                // that succeeds has to clear it.
+                setError(null);
+                setErrorCause(null);
             } catch (err) {
                 if (token.isStale()) return;
                 setError(err instanceof Error ? err.message : errorMessage);
+                setErrorCause(err);
             } finally {
                 if (!token.isStale()) {
                     setLoading(false);
@@ -121,7 +168,7 @@ export function useAsyncData<T>(
         // `deps` is the caller's contract for when to refetch; `fetcher` is
         // deliberately absent (read through a ref instead).
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [...deps, enabled, reloadCount, request, errorMessage]);
+    }, [...deps, enabled, reloadCount, request, errorMessage, clearErrorOn]);
 
-    return { data, error, loading, refreshing, reload };
+    return { data, error, errorCause, loading, refreshing, busy: loading || refreshing, reload };
 }

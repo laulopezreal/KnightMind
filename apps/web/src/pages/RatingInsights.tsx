@@ -78,6 +78,15 @@ export default function RatingInsights() {
     const historyRequest = useLatestRequest();
 
     const fetchExplain = useCallback(async (resolvedSessionId?: string | null) => {
+        // Guard against stale-response races: a username/time-control/window change
+        // begins a newer request; the older, slower response must not clobber it.
+        //
+        // begin() runs BEFORE the early returns on purpose. isStale() only turns
+        // true once a newer request starts, so a bail-out placed after it would
+        // invalidate nothing and let the previous selection's response land. Both
+        // conditions below are only reachable when whatever is in flight is
+        // already for a superseded selection, so cancelling it is what we want.
+        const token = explainRequest.begin();
         if (!username) return;
         const effectiveSessionId = resolvedSessionId !== undefined ? resolvedSessionId : lastSessionIdRef.current;
         // 'session' mode with no session id yet (e.g. Retry clicked while the
@@ -85,9 +94,6 @@ export default function RatingInsights() {
         // silently violate the selected mode. Skip — the coordinated effect
         // fires explain once the probe resolves.
         if (windowSource === 'session' && !effectiveSessionId) return;
-        // Guard against stale-response races: a username/time-control/window change
-        // begins a newer request; the older, slower response must not clobber it.
-        const token = explainRequest.begin();
         setLoading(true);
         setError(null);
         try {
@@ -114,8 +120,9 @@ export default function RatingInsights() {
     }, [username, timeControl, windowSource, explainRequest]);
 
     const fetchHistory = useCallback(async () => {
-        if (!username) return;
+        // begin() before the bail-out, for the reason given in fetchExplain.
         const token = historyRequest.begin();
+        if (!username) return;
         setHistoryError(null);
         try {
             const historyData = await getRatingHistory(username, timeControl);

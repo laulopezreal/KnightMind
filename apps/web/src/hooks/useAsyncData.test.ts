@@ -228,4 +228,106 @@ describe('useAsyncData', () => {
         expect(result.current.loading).toBe(false);
     });
 
+
+    it('exposes the thrown value, not only its message', async () => {
+        // Pages that must distinguish failure KINDS -- Openings tells a 404
+        // ("nothing imported yet") from any other error -- would otherwise have
+        // to compare message text, which breaks the first time wording changes.
+        class NotFound extends Error {
+            statusCode = 404;
+        }
+        const fetcher = vi.fn(() => Promise.reject(new NotFound('no games')));
+        const { result } = renderHook(() => useAsyncData(fetcher, ['u']));
+
+        await waitFor(() => expect(result.current.error).toBe('no games'));
+        expect(result.current.errorCause).toBeInstanceOf(NotFound);
+        expect((result.current.errorCause as NotFound).statusCode).toBe(404);
+    });
+
+    it('clears the error on the next attempt by default', async () => {
+        const fetcher = vi
+            .fn()
+            .mockRejectedValueOnce(new Error('boom'))
+            .mockImplementationOnce(() => new Promise(() => {}));
+        const { result } = renderHook(() => useAsyncData(fetcher, ['u']));
+        await waitFor(() => expect(result.current.error).toBe('boom'));
+
+        act(() => result.current.reload());
+        // The second attempt never settles; the slot is empty because it STARTED.
+        await waitFor(() => expect(result.current.error).toBeNull());
+        expect(result.current.errorCause).toBeNull();
+    });
+
+    it("with clearErrorOn 'success', keeps the message until something succeeds", async () => {
+        // A polled fetch against a down API must not blank its banner on every
+        // tick. The message survives the next attempt, and only a success
+        // clears it.
+        const fetcher = vi
+            .fn()
+            .mockRejectedValueOnce(new Error('API unreachable'))
+            .mockImplementationOnce(() => new Promise(() => {}));
+        const { result } = renderHook(() =>
+            useAsyncData(fetcher, ['u'], { clearErrorOn: 'success' }),
+        );
+        await waitFor(() => expect(result.current.error).toBe('API unreachable'));
+
+        act(() => result.current.reload());
+        await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
+        // Still showing, because nothing has succeeded.
+        expect(result.current.error).toBe('API unreachable');
+    });
+
+    it("with clearErrorOn 'success', a success does clear it", async () => {
+        const fetcher = vi
+            .fn()
+            .mockRejectedValueOnce(new Error('API unreachable'))
+            .mockResolvedValueOnce('recovered');
+        const { result } = renderHook(() =>
+            useAsyncData(fetcher, ['u'], { clearErrorOn: 'success' }),
+        );
+        await waitFor(() => expect(result.current.error).toBe('API unreachable'));
+
+        act(() => result.current.reload());
+        await waitFor(() => expect(result.current.data).toBe('recovered'));
+        expect(result.current.error).toBeNull();
+        expect(result.current.errorCause).toBeNull();
+    });
+
+    it('reports `busy` for a refetch, where `loading` is first-load only', async () => {
+        // The distinction that broke three pages: after one success, `loading`
+        // stays false for every later fetch, so any pending indicator wired to
+        // it dies silently and the page shows stale data as though settled.
+        const pending = deferred<string>();
+        let call = 0;
+        const fetcher = vi.fn(() => (call++ === 0 ? Promise.resolve('first') : pending.promise));
+        const { result, rerender } = renderHook(
+            ({ id }) => useAsyncData(fetcher, [id]),
+            { initialProps: { id: 'a' } },
+        );
+        await waitFor(() => expect(result.current.data).toBe('first'));
+
+        rerender({ id: 'b' });
+        await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
+
+        expect(result.current.loading).toBe(false);
+        expect(result.current.refreshing).toBe(true);
+        expect(result.current.busy).toBe(true);
+    });
+
+    it('reports `busy` during the FIRST load too', async () => {
+        // The other half of the same contract, and it needs its own assertion:
+        // `busy = refreshing` alone satisfies the refetch test above, which
+        // would leave every first-load spinner wired to `busy` permanently off.
+        const pending = deferred<string>();
+        const { result } = renderHook(() => useAsyncData(() => pending.promise, ['a']));
+
+        await waitFor(() => expect(result.current.loading).toBe(true));
+        expect(result.current.refreshing).toBe(false);
+        expect(result.current.busy).toBe(true);
+
+        await act(async () => {
+            pending.resolve('done');
+        });
+        expect(result.current.busy).toBe(false);
+    });
 });

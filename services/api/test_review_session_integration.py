@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker
 
-import services.api.main as main
+import services.api.puzzles_routes as main
 from services.api.db import Base, get_db
 from services.api.main import app
 from services.api.models import Game, PuzzleReview, PuzzleStats, TrainingSession
@@ -273,7 +273,7 @@ def _make_race_find(monkeypatch):
     SELECT ran), so this request proceeds to INSERT and hits the unique index.
     Subsequent calls (the post-IntegrityError replay) use the real lookup.
     """
-    import services.api.main as main_module
+    import services.api.puzzles_routes as main_module
 
     real_find = main_module._find_existing_review
     state = {"calls": 0}
@@ -406,7 +406,7 @@ def test_review_endpoint_rolls_back_atomically_on_failure(client, test_db, monke
     def boom(*args, **kwargs):
         raise RuntimeError("simulated failure during stats update")
 
-    monkeypatch.setattr("services.api.main.update_puzzle_stats", boom)
+    monkeypatch.setattr("services.api.puzzles_routes.update_puzzle_stats", boom)
 
     with pytest.raises(RuntimeError, match="simulated failure"):
         client.post(
@@ -763,6 +763,7 @@ def _pg_review_harness():
     onto one connection and defeat the point; here two threads genuinely race on
     two connections.
     """
+    assert POSTGRES_URL is not None  # guarded by the `postgres` marker
     engine = create_engine(POSTGRES_URL)
     Base.metadata.create_all(engine)
     PgSession = sessionmaker(bind=engine)
@@ -787,7 +788,7 @@ def _pg_review_harness():
 
 
 def _install_race_barrier(monkeypatch, attr):
-    """Patch ``services.api.main.<attr>`` so the FIRST invocation from each of two
+    """Patch ``services.api.puzzles_routes.<attr>`` so the FIRST invocation from each of two
     racing threads blocks on a shared 2-party barrier, guaranteeing both threads
     cross the patched point concurrently before either proceeds to commit.
 

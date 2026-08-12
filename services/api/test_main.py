@@ -3,6 +3,7 @@ import os
 
 os.environ["KNIGHTMIND_WORKER_DISABLED"] = "true"
 from datetime import date, datetime, timedelta, timezone
+from typing import TypedDict
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -560,7 +561,31 @@ def test_get_player_profile_invalid_json_returns_network_error(monkeypatch):
 
 MOCK_ARCHIVES = ["https://api.chess.com/pub/player/testuser/games/2024/01"]
 
-MOCK_GAMES = [
+
+class _MockSide(TypedDict):
+    username: str
+    result: str
+
+
+class _MockGame(TypedDict):
+    """The Chess.com game payload shape these tests stand in for.
+
+    Annotated because a bare list of these literals infers as
+    ``list[dict[str, object]]``: every ``game["url"]`` is then ``object`` and
+    every ``game["white"]["username"]`` is un-indexable, which accounted for
+    72 of the errors that surfaced when check_untyped_defs was turned on.
+    """
+
+    url: str
+    pgn: str
+    time_control: str
+    end_time: int
+    rated: bool
+    white: _MockSide
+    black: _MockSide
+
+
+MOCK_GAMES: list[_MockGame] = [
     {
         "url": "https://www.chess.com/game/live/12345",
         "pgn": '[Event "Live Chess"]\n[Site "Chess.com"]\n[White "testuser"]\n[Black "opponent1"]\n[Result "1-0"]\n\n1. e4 e5 2. Nf3 Nc6 1-0',
@@ -622,7 +647,7 @@ def test_import_chesscom_skips_malformed_game(mock_import_games, client_with_db)
         from services.ingest import ChessGame
 
         # A malformed game with an empty url between two valid ones.
-        payloads = [MOCK_GAMES[0], {**MOCK_GAMES[1], "url": ""}]
+        payloads: list[_MockGame] = [MOCK_GAMES[0], {**MOCK_GAMES[1], "url": ""}]
         for game_data in payloads:
             yield ChessGame(
                 url=game_data["url"],
@@ -1633,7 +1658,7 @@ def test_check_pv_accepts_equivalent_first_move(client_with_db, db_session):
 # --- Engine tests ---
 
 
-@patch("services.api.main.is_engine_available")
+@patch("services.api.engine_routes.is_engine_available")
 def test_engine_status_available(mock_available):
     mock_available.return_value = (True, "Stockfish is ready")
     response = client.get("/engine/status")
@@ -1641,7 +1666,7 @@ def test_engine_status_available(mock_available):
     assert response.json() == {"available": True, "message": "Stockfish is ready"}
 
 
-@patch("services.api.main.get_or_compute_eval")
+@patch("services.api.engine_routes.get_or_compute_eval")
 def test_engine_eval_invalid_fen(mock_eval):
     from services.api.engine import InvalidFenError
 
@@ -1651,7 +1676,7 @@ def test_engine_eval_invalid_fen(mock_eval):
     assert "Invalid FEN" in response.json()["detail"]
 
 
-@patch("services.api.main.get_or_compute_eval")
+@patch("services.api.engine_routes.get_or_compute_eval")
 def test_engine_eval_unavailable(mock_eval):
     from services.api.engine import EngineNotAvailableError
 
@@ -1661,7 +1686,7 @@ def test_engine_eval_unavailable(mock_eval):
     assert "Engine not available" in response.json()["detail"]
 
 
-@patch("services.api.main._ENGINE_EVAL_MAX_INFLIGHT", 0)
+@patch("services.api.engine_routes._ENGINE_EVAL_MAX_INFLIGHT", 0)
 def test_engine_eval_rejects_when_at_capacity():
     """The unauthenticated /engine/eval guard returns 429 when saturated."""
     response = client.post("/engine/eval", json={"fen": "any"})
@@ -1669,7 +1694,7 @@ def test_engine_eval_rejects_when_at_capacity():
     assert "capacity" in response.json()["detail"].lower()
 
 
-@patch("services.api.main.get_or_compute_eval")
+@patch("services.api.engine_routes.get_or_compute_eval")
 def test_engine_eval_terminal_position_is_not_500(mock_eval):
     """A terminal FEN yields an EvalResult with best_move_uci=None. The
     response model must accept that (200 terminal shape) rather than raising a

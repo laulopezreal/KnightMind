@@ -49,6 +49,45 @@ AUDIT_RETENTION_DAYS = env_int("KNIGHTMIND_AI_AUDIT_RETENTION_DAYS", 30, min_val
 AUDIT_RESPONSE_MAX_CHARS = 16_384
 
 
+# --- Puzzle naming -----------------------------------------------------------
+#
+# Naming is a second, independent kind of model call. It gets its own flag,
+# model pin and budget rather than sharing diagnosis's, because the two fail
+# and cost differently: diagnosis is enrichment on a page the user is looking
+# at, naming is a bulk pass over a whole library. A runaway backfill must not
+# be able to spend the day's diagnosis allowance.
+#
+# Ships OFF. Unlike diagnosis this one writes a user-visible string to a column
+# that already has a value, so the first run should be a deliberate one.
+_NAMING_FLAG = "KNIGHTMIND_AI_NAMING"
+
+NAMING_MODEL = "claude-opus-5"
+
+# Naming is a shorter task than diagnosis — one line, from facts already
+# extracted — so it gets the same low effort and a much smaller token ceiling.
+NAMING_EFFORT = "low"
+NAMING_MAX_TOKENS = 2048
+
+# Sized against the real corpus: 318 puzzles, so a full backfill fits inside
+# one day's per-user allowance with room to re-run after a prompt change.
+NAMING_DAILY_CAP_PER_USER = env_int("KNIGHTMIND_AI_NAMING_CAP_USER", 500, min_value=1)
+NAMING_DAILY_CAP_GLOBAL = env_int("KNIGHTMIND_AI_NAMING_CAP_GLOBAL", 1000, min_value=1)
+
+
+def naming_is_enabled() -> bool:
+    """Whether AI naming should be attempted at all.
+
+    Default OFF, the opposite of ``is_enabled``. Naming overwrites a column
+    users already see, so it is opt-in: set ``KNIGHTMIND_AI_NAMING=1``. With it
+    unset, every puzzle is named deterministically from its position and no
+    model call is made.
+    """
+    raw = os.environ.get(_NAMING_FLAG)
+    if raw is None or raw.strip() == "":
+        return False
+    return raw.strip().lower() not in {"0", "false", "no", "off"}
+
+
 def is_enabled() -> bool:
     """Whether AI enrichment should be attempted at all.
 

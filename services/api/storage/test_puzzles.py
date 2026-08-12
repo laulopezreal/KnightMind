@@ -9,7 +9,7 @@ from sqlalchemy.exc import IntegrityError
 
 from scripts.backfill_storage import validate_puzzle_data
 from services.api.models import Game, PuzzleStats
-from services.api.puzzles.identity import assign_primary_motif, generate_puzzle_title
+from services.api.puzzles.identity import assign_primary_motif
 from services.api.storage.puzzle_repository import PuzzleRepository
 
 
@@ -192,7 +192,10 @@ def test_save_puzzle_creates_identity_stats(repository, db_session):
     assert stats is not None
     assert stats.username == "testuser"
     assert stats.primary_motif == motif
-    assert stats.title == generate_puzzle_title(motif)
+    # The creation path names from the position, never from the model: an API
+    # call here would put provider latency inside puzzle generation.
+    assert stats.title == "The Queen to d5"
+    assert stats.title_source == "position"
     assert stats.attempts == 0
     assert stats.pass_count == 0
     assert stats.fail_count == 0
