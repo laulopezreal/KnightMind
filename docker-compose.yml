@@ -22,6 +22,13 @@
 # ============================================================================
 
 services:
+  # Connection budget, stated rather than inherited. postgres:16-alpine defaults
+  # to max_connections=100 with 3 reserved for superusers, so 97 are usable:
+  #   API 50 (10 + 40, matching anyio's 40-thread pool)
+  # + worker 10 (sized down below -- it runs one job at a time)
+  # + headroom for the deploy's alembic run, a `compose run` one-off, psql
+  # = 70, comfortably inside 97. Raising WEB_CONCURRENCY multiplies the API's
+  # 50 per process and does NOT fit; see the note in the Dockerfile.
   db:
     image: postgres:16-alpine
     restart: unless-stopped
@@ -89,6 +96,13 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
       STOCKFISH_PATH: /usr/games/stockfish
+      # A small pool on purpose. The default (10 + 40 = 50) is sized for the
+      # API, where 40 anyio threadpool workers can each hold a session. This
+      # process runs ONE job at a time, so 50 is a ceiling it can never use --
+      # and two processes each entitled to 50 is 100 against a server allowing
+      # 97, before the deploy's alembic run or an operator's psql.
+      KNIGHTMIND_DB_POOL_SIZE: "2"
+      KNIGHTMIND_DB_MAX_OVERFLOW: "8"
     # A job can be mid-analysis when a deploy lands. worker_main handles SIGTERM
     # to finish it; this gives it room to, rather than being killed at the
     # default 10s and left for crash recovery to reclaim after its lease expires.

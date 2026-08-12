@@ -78,11 +78,28 @@ Live containers:
       its heartbeat rows. `stale` means it is up but has stopped looping;
       `not_running` means no worker has ever beaten. Both return 503, so this
       healthcheck and the deploy gate both catch a dead queue.
-  - `--workers 1` is deliberate. The worker no longer runs in this process and
-    the rate limiter's state is shared (`KNIGHTMIND_RATE_LIMIT_STORE=postgres`),
-    so neither blocks raising it — but `db.py` sizes the pool at 50 per process
-    against a Postgres defaulting to `max_connections=100`. Raise the pool math
-    or the server ceiling first.
+  - `--workers 1` is deliberate, and the reason is the connection budget.
+
+    Postgres allows **97** non-superuser connections (`max_connections=100`
+    minus 3 reserved). Current demand:
+
+    | consumer | ceiling | why |
+    |---|---|---|
+    | API | 50 | `POOL_SIZE 10 + MAX_OVERFLOW 40`, matching anyio's 40-thread pool — each thread can hold a session |
+    | worker | 10 | sized down in compose; it runs one job at a time |
+    | deploys / operators | ~10 | `alembic upgrade`, `compose run` one-offs, `psql` |
+    | **total** | **70** | 27 spare |
+
+    A second uvicorn worker adds another 50 and does not fit. It is also not the
+    concurrency lever it appears to be: the 40-thread pool already gives 40-way
+    concurrency for blocking handlers inside one process, so more processes
+    mostly buy more connections.
+
+    If request concurrency genuinely runs out, in order: raise the threadpool
+    and the DB pool together in one process; then put PgBouncer (transaction
+    mode) in front so app-side pooling stops mapping 1:1 onto server
+    connections; raise `max_connections` last, since each connection is a
+    backend process with its own memory.
 - `knightmind-worker-1`
   - image: `knightmind-api` (the same image as the API, different command)
   - command: `python -m services.api.worker_main`

@@ -90,9 +90,20 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 # constraint imposed by it, and the rate limiter's shared store
 # (KNIGHTMIND_RATE_LIMIT_STORE=postgres) removes the other one.
 #
-# Still 1 here on purpose. The remaining question is connections, not limits:
-# db.py sizes the pool at POOL_SIZE + MAX_OVERFLOW = 50 PER PROCESS, so N
-# workers can demand N*50 against a Postgres whose default max_connections is
-# 100. Raising this means sizing the pool down per worker or raising the
-# server's ceiling -- deliberately, with the arithmetic done.
+# Still 1 here on purpose, and the reason is connections, not limits.
+#
+# Each uvicorn worker carries its OWN anyio threadpool (40 threads), and each of
+# those can hold a session -- which is why db.py sizes the pool at 50 per
+# process. Postgres allows 97 non-superuser connections, so the budget today is
+# API 50 + worker 10 + ~10 for deploys and operators = 70. A second uvicorn
+# worker adds another 50 and does not fit.
+#
+# So raising this is not the concurrency lever it looks like: the 40-thread pool
+# already gives 40-way concurrency for blocking handlers within ONE process, and
+# adding processes multiplies connections for little gain. If request
+# concurrency ever genuinely runs out, the order is: raise the threadpool and
+# pool together in one process, then put PgBouncer (transaction mode) in front
+# so app-side pooling stops mapping 1:1 onto server connections. Raising
+# max_connections is the last resort -- each connection is a backend process
+# with its own memory.
 CMD ["uvicorn", "services.api.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
