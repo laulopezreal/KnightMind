@@ -28,6 +28,7 @@ import {
 import { ConnectAccountEmpty } from '../components/ConnectAccountEmpty';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
 import { useLatestRequest } from '../hooks/useLatestRequest';
+import { useAsyncData } from '../hooks/useAsyncData';
 
 /** Trailing clause for the page subtitle, e.g. "alice's openings in games as White". */
 const SCOPE_SUFFIX: Record<ColorFilter, string> = {
@@ -124,12 +125,6 @@ function countAllNodes(node: OpeningNode): number {
 export default function Openings() {
   const navigate = useNavigate();
   const graphRef = useRef<OpeningGraphHandle>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  // Distinct from `error`: the account simply has nothing imported yet. That is
-  // a first-run state with a real next step, not a failure with a Retry that
-  // can only fail again.
-  const [noGamesImported, setNoGamesImported] = useState(false);
   const { username } = useChessUsername();
   const [searchParams, setSearchParams] = useSearchParams();
   const [storedColor, setStoredColor] = useLocalStorage<ColorFilter>(
@@ -152,7 +147,6 @@ export default function Openings() {
     parsePersistedPeriod
   );
 
-  const [treeData, setTreeData] = useState<OpeningNode | null>(null);
   // Which colour the tree on screen actually answers for. The graph is keyed on
   // this rather than on `colorFilter`, because a refresh deliberately keeps the
   // old tree while the new one loads — keying on the control would remount the
@@ -162,7 +156,6 @@ export default function Openings() {
   // answers for. Both are questions rather than refreshes: switching from five
   // years to thirty days can turn a wide tree into three nodes, and a view
   // fitted to the old one then frames mostly empty space.
-  const [loadedView, setLoadedView] = useState<string | null>(null);
   const [tooltip, setTooltip] = useState<{ anchor: NodeAnchor; data: OpeningNode } | null>(null);
   const tooltipRef = useRef<HTMLDivElement>(null);
   /** Line the graph has already been told to open, so a refetch does not
@@ -170,7 +163,6 @@ export default function Openings() {
    *  too, because that remounts the graph and empties what it knows. */
   const revealedRef = useRef<string | null>(null);
   const online = useOnlineStatus();
-  const request = useLatestRequest();
 
   // The URL says what the view *is*; localStorage only supplies a default for a
   // visit that does not name one. Held this way round, a link carries a view to
@@ -182,6 +174,72 @@ export default function Openings() {
   // itself null, so absent has to be undefined to fall through to storage.
   const urlPeriod = offeredPeriod(searchParams.get('period'));
   const period = urlPeriod === undefined ? storedPeriod : urlPeriod;
+
+  // The fetcher returns the view label alongside the tree so the two cannot
+  // disagree. Keeping `loadedView` in its own state and syncing it from an
+  // effect looked equivalent and was not: a cache (or a test mock) that hands
+  // back the SAME object twice makes React bail out of the state update, so the
+  // effect never re-runs and the label silently describes the previous window.
+  const {
+    data: loaded,
+    error: rawError,
+    errorCause,
+    loading,
+    refreshing,
+    busy,
+    reload: refetchOpenings,
+  } = useAsyncData<{ tree: OpeningNode; view: string }>(
+    async () => {
+      try {
+        const tree = await getOpenings(username, colorFilter, maxPly, period);
+        return { tree, view: `${colorFilter}:${periodParam(period)}` };
+      } catch (err) {
+        // `message` is the user-facing text the hook will surface; `detail` is
+        // technical and logged only.
+        if (err instanceof ApiError && err.detail) console.error('[openings]', err.detail);
+        throw err;
+      }
+    },
+    [username, colorFilter, maxPly, period],
+    { enabled: Boolean(username.trim()), errorMessage: 'Failed to load openings' },
+  );
+
+  // A 404 is not a failure: the account has nothing imported yet. Telling it
+  // from a real error needs the thrown value, not its message -- which is why
+  // useAsyncData exposes errorCause. Matching on message text would have tied
+  // this branch to the exact wording of a server string.
+  const noGamesImported = errorCause instanceof ApiError && errorCause.statusCode === 404;
+  // A 404 makes the tree ABSENT, not merely unrendered. Suppressing the tree
+  // branches alone left `treeData` populated with the previous account's tree,
+  // so switching to a fresh account rendered BOTH empty-state cards and let the
+  // peer-baseline effect fetch against the old tree's position under the new
+  // username.
+  const treeData = noGamesImported ? null : (loaded?.tree ?? null);
+  const loadedView = loaded?.view ?? null;
+  // OpeningGraph reports its own render failures, which are not fetch failures
+  // and so are not the hook's to own. They share one banner because the user
+  // does not care which layer broke, but they need separate slots -- a refetch
+  // clearing the hook's error must not silently clear a graph error that is
+  // still true.
+  const [graphError, setGraphError] = useState<string | null>(null);
+  // OpeningGraph only ever reports errors, never clears them, so nothing else
+  // would: a transient draw failure used to be cleared by the next fetch's
+  // setError(null) and would otherwise persist for the life of the page.
+  const [graphErrorFor, setGraphErrorFor] = useState<unknown>(null);
+  if (loaded && graphErrorFor !== loaded) {
+    setGraphErrorFor(loaded);
+    if (graphError !== null) setGraphError(null);
+  }
+  // The 404 owns its own render path below, so it must not also appear as an
+  // error banner with a Retry that could only fail the same way.
+  const error = noGamesImported ? null : (rawError ?? graphError);
+
+  // Keeping the previous tree through a failed refresh is the hook's behaviour
+  // -- it replaces `data` only on success -- and it is exactly what this page
+  // wants: a transient blip must not cost the user their zoom and expanded
+  // lines. The 404 is the deliberate exception, and it is handled by suppressing
+  // the tree branches below rather than by clearing the data.
+
   // Read with `get`, not a truthiness check: the root *is* a selectable line
   // ("Starting position", with its own Engine link), and it encodes to the
   // empty string. Absent and present-but-empty have to stay distinguishable,
@@ -303,8 +361,25 @@ export default function Openings() {
     [selectedPath]
   );
 
-  useEffect(() => {
+  // Clearing the stale baseline is a reset-on-dependency-change, so it happens
+  // during render rather than in the effect below. Doing it in the effect
+  // triggers a cascading render (react-hooks/set-state-in-effect), which the
+  // linter only started reporting once this component became analysable --
+  // the behaviour was always the same, and this is the same render-time reset
+  // used for the puzzle state in LibraryPuzzle.
+  // `username` belongs in the key. The tree is deliberately kept through a
+  // refresh, so switching account leaves `selectedFen` unchanged -- and without
+  // the username the reset never fires, leaving the previous user's comparison
+  // (their figure, their rating band) on screen under the new name. The refetch
+  // swallows its own errors by design, so it can persist indefinitely.
+  const baselineKey = `${username}:${selectedFen ?? ''}:${colorFilter}`;
+  const [baselineFor, setBaselineFor] = useState<string | null>(baselineKey);
+  if (baselineFor !== baselineKey) {
+    setBaselineFor(baselineKey);
     setPeerBaseline(null);
+  }
+
+  useEffect(() => {
     // begin() before the bail-out: deselecting a line or switching to "both"
     // clears the baseline above, and without invalidating here the previous
     // position's response would arrive and repopulate what was just cleared.
@@ -343,7 +418,7 @@ export default function Openings() {
   // The API always answers a 200 with a root node, even when nothing matched —
   // so "did anything load" must be judged on the contents, not the container.
   const analysis = treeData?.analysis;
-  const hasOpenings = treeData !== null && treeData.games_count > 0;
+  const hasOpenings = treeData !== null && treeData.games_count > 0 && !noGamesImported;
   const skippedGames = analysis?.games_skipped ?? 0;
   // The floor the server actually applied — it raises a shallow request at
   // depth, so reporting what we asked for could contradict the tree on screen.
@@ -363,7 +438,12 @@ export default function Openings() {
   // every line they had expanded, for a request that usually returns the same
   // data. See `isRefreshing` for the in-place indicator.
   const showLoading = (loading && !treeData) || (!treeData && !error && !noGamesImported);
-  const isRefreshing = loading && treeData !== null;
+  // The hook distinguishes these: `loading` is the FIRST load only, `refreshing`
+  // is every later one with the old data still on screen. That is exactly the
+  // split this page hand-rolled, so it maps straight across -- but it does have
+  // to be mapped: leaving `isRefreshing` derived from `loading` made it
+  // permanently false and silently dropped the in-place refresh indicator.
+  const isRefreshing = refreshing;
 
   const subtitle = (() => {
     if (showLoading) {
@@ -385,60 +465,9 @@ export default function Openings() {
     return 'Load your games to build your opening knowledge graph.';
   })();
 
-  const fetchOpenings = useCallback(async (user: string, color: ColorFilter, plies: number, sinceDays: Period) => {
-    // Guard against stale-response races: a username/color change begins a newer
-    // request; the older, slower response must not clobber the newer one.
-    // begin() precedes the bail-out so that clearing the username invalidates
-    // anything already running rather than letting it land.
-    const token = request.begin();
-
-    // The page renders a connect-account state when there is no username, so
-    // there is nothing actionable to say here.
-    if (!user.trim()) return;
-    setLoading(true);
-    setError(null);
-    setNoGamesImported(false);
-
-    try {
-      const data = await getOpenings(user, color, plies, sinceDays);
-      if (token.isStale()) return;
-      setTreeData(data);
-      setLoadedView(`${color}:${periodParam(sinceDays)}`);
-    } catch (err) {
-      if (token.isStale()) return;
-      let isMissingGames = false;
-      if (err instanceof ApiError) {
-        // `message` is the user-facing text; `detail` is technical and logged only.
-        if (err.detail) console.error('[openings]', err.detail);
-        if (err.statusCode === 404) {
-          isMissingGames = true;
-          setNoGamesImported(true);
-        } else {
-          setError(err.message);
-        }
-      } else {
-        setError(err instanceof Error ? err.message : 'Failed to load openings');
-      }
-      // A failed *refresh* must not discard the tree the user is looking at —
-      // that loses their zoom and expanded lines to a transient network blip,
-      // which is exactly what keeping the graph mounted during a refresh was
-      // meant to prevent. Only a 404 genuinely means "there is nothing here".
-      setTreeData(previous => (previous && !isMissingGames ? previous : null));
-    } finally {
-      if (!token.isStale()) setLoading(false);
-    }
-  }, [request]);
-
   const handleFetchClick = () => {
-    fetchOpenings(username, colorFilter, maxPly, period);
+    refetchOpenings();
   };
-
-  // Auto-fetch when page loads with username or when username/color filter changes
-  useEffect(() => {
-    if (username.trim()) {
-      fetchOpenings(username, colorFilter, maxPly, period);
-    }
-  }, [username, colorFilter, maxPly, period, fetchOpenings]);
 
   /**
    * A 200 with an empty tree has several distinct causes; each needs a
@@ -607,7 +636,7 @@ export default function Openings() {
         onNodeHover={(anchor, node) => setTooltip({ anchor, data: node })}
         onNodeHoverEnd={() => setTooltip(null)}
         onNodeSelect={handleNodeSelect}
-        onError={setError}
+        onError={setGraphError}
         graphRef={graphRef}
       />
 
@@ -747,18 +776,18 @@ export default function Openings() {
           <button
             type="button"
             onClick={handleFetchClick}
-            disabled={loading}
+            disabled={busy}
             className={[
               'px-6 py-2 rounded-sm font-serif transition-all km-focus-visible',
-              loading ? 'km-interactive-disabled' : 'km-interactive',
+              busy ? 'km-interactive-disabled' : 'km-interactive',
               treeData
                 ? 'border border-primary/20 text-primary hover:bg-primary hover:text-bg-primary'
                 : 'bg-primary text-bg-primary',
             ].join(' ')}
           >
             {treeData
-              ? loading ? 'Refreshing...' : 'Refresh'
-              : loading ? 'Analyzing...' : 'Load Openings'}
+              ? busy ? 'Refreshing...' : 'Refresh'
+              : busy ? 'Analyzing...' : 'Load Openings'}
           </button>
         </section>
       )}
@@ -824,7 +853,7 @@ export default function Openings() {
                 ? `Couldn’t refresh: ${error}`
                 : 'You appear to be offline, so this could not be refreshed.'}
               onRefresh={handleFetchClick}
-              refreshPending={loading}
+              refreshPending={busy}
             >
               {graphPanel}
             </DataStateStale>
@@ -833,7 +862,7 @@ export default function Openings() {
               message={`${skippedGames} of ${analysis?.games_stored ?? '?'} stored games could not be analysed (unreadable, unfinished, or played under a different username), so they are missing from this tree.`}
               onRetry={handleFetchClick}
               retryLabel="Reload"
-              retryPending={loading}
+              retryPending={busy}
             >
               {graphPanel}
             </DataStatePartial>

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
 import Ops from './Ops';
 
 let mockUsername = 'admin';
@@ -143,5 +143,91 @@ describe('Ops', () => {
       expect(screen.getByText('DOWN')).toBeInTheDocument();
       expect(screen.getByText('ERROR')).toBeInTheDocument();
     });
+  });
+
+  it('shows the newly selected user\'s storage report, not a slower earlier one', async () => {
+    // The report is keyed on the selected user, and nothing used to stop an
+    // earlier, slower response from landing after a later one -- putting one
+    // user's row counts on screen under another user's name. Deliberately
+    // resolves the FIRST request last.
+    let releaseFirst: (v: unknown) => void = () => {};
+    mockGetStorageReport
+      .mockImplementationOnce(
+        () => new Promise((resolve) => { releaseFirst = resolve; }),
+      )
+      .mockResolvedValueOnce({
+        report: { player2: { missing_games_count: 42, missing_puzzles_count: 0 } },
+      });
+
+    render(<Ops />);
+    await waitFor(() => expect(mockGetStorageReport).toHaveBeenCalledTimes(1));
+
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'player2' } });
+    await waitFor(() => expect(mockGetStorageReport).toHaveBeenCalledTimes(2));
+    await screen.findAllByText(/42/);
+
+    // The stale first response lands now. It must be ignored.
+    releaseFirst({
+      report: { admin: { missing_games_count: 999, missing_puzzles_count: 0 } },
+    });
+    // Give the stale response a chance to land before asserting it did not.
+    await waitFor(() => expect(mockGetStorageReport).toHaveBeenCalledTimes(2));
+    expect(screen.queryAllByText(/999/)).toHaveLength(0);
+    expect(screen.queryAllByText(/42/).length).toBeGreaterThan(0);
+  });
+
+  it('keeps the outage banner up across a poll tick', async () => {
+    // This page polls every five seconds. useAsyncData's default clears the
+    // error slot when a fetch STARTS, which would blank the banner on every
+    // tick and flash it back -- so the page opts into clearErrorOn: 'success'.
+    // The second poll is left hanging deliberately: under the default the
+    // banner would be gone and stay gone, so this fails without the opt-in.
+    // Phase-flag rather than mockRejectedValueOnce: mounting fires more than one
+    // request, so ordered one-shot mocks get consumed before the poll and the
+    // hanging one lands on the initial load instead.
+    mockGetHealth.mockRejectedValue(new Error('Connection refused'));
+    mockGetOpsStatus.mockRejectedValue(new Error('Connection refused'));
+
+    render(<Ops />);
+    await waitFor(() =>
+      expect(screen.getByText('Backend Unavailable')).toBeInTheDocument(),
+    );
+
+    // The poll now hangs. Under the default (clear-on-start) the banner would
+    // be gone and STAY gone, because nothing settles to put it back.
+    const before = mockGetHealth.mock.calls.length;
+    mockGetHealth.mockImplementation(() => new Promise(() => {}));
+    mockGetOpsStatus.mockImplementation(() => new Promise(() => {}));
+    await act(async () => {
+      vi.advanceTimersByTime(5000);
+    });
+    await waitFor(() =>
+      expect(mockGetHealth.mock.calls.length).toBeGreaterThan(before),
+    );
+
+    expect(screen.getByText('Backend Unavailable')).toBeInTheDocument();
+  });
+
+  it('does not claim there are no users while retrying a failed users fetch', async () => {
+    // Under the default the error clears when the retry STARTS, and the branch
+    // below then renders "No users found yet." -- asserting something the page
+    // does not know. The users fetch uses clearErrorOn: 'success' plus a busy
+    // guard so neither the error nor a false "none" is shown mid-flight.
+    mockGetUsers.mockRejectedValue(new Error('users boom'));
+    render(<Ops />);
+    await screen.findByText(/users boom/);
+
+    let release: (v: unknown) => void = () => {};
+    mockGetUsers.mockImplementationOnce(
+      () => new Promise((resolve) => { release = resolve; }),
+    );
+    fireEvent.click(screen.getByRole('button', { name: /refresh users/i }));
+
+    await waitFor(() => expect(mockGetUsers).toHaveBeenCalledTimes(2));
+    expect(screen.queryByText('No users found yet.')).not.toBeInTheDocument();
+    expect(screen.getByText(/users boom/)).toBeInTheDocument();
+
+    release(['admin']);
+    await waitFor(() => expect(screen.queryByText(/users boom/)).not.toBeInTheDocument());
   });
 });

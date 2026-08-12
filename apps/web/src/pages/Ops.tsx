@@ -1,19 +1,11 @@
 import { LOCALE } from '../utils/locale';
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import { getHealth, getOpsStatus, getStorageReport, getUsers, ApiError, API_TARGET } from '../api';
 import type { HealthResponse, OpsStatusResponse, RecentJob, StorageReportResponse } from '../api';
 import { useChessUsername } from '../context/ChessUsernameContext';
+import { useAsyncData } from '../hooks/useAsyncData';
 
 export default function Ops() {
-    const [health, setHealth] = useState<HealthResponse | null>(null);
-    const [opsStatus, setOpsStatus] = useState<OpsStatusResponse | null>(null);
-    const [storageReport, setStorageReport] = useState<StorageReportResponse | null>(null);
-    const [storageLoading, setStorageLoading] = useState(false);
-    const [storageError, setStorageError] = useState<string | null>(null);
-    const [users, setUsers] = useState<string[]>([]);
-    const [usersError, setUsersError] = useState<string | null>(null);
-    const [loading, setLoading] = useState(true);
-    const [error, setError] = useState<string | null>(null);
     const { username, setUsername } = useChessUsername();
     const [selectedUser, setSelectedUser] = useState(username);
 
@@ -27,62 +19,97 @@ export default function Ops() {
         return fallback;
     };
 
-    const fetchData = useCallback(async () => {
-        try {
-            const [h, s] = await Promise.all([getHealth(), getOpsStatus()]);
-            setHealth(h);
-            setOpsStatus(s);
-            setError(null);
-        } catch (err) {
-            console.error('Failed to fetch ops data:', err);
-            const msg = getErrorMessage(err, 'Check if API is running and proxy is correctly configured.');
-            setError(`Failed to load operational data: ${msg}`);
-        } finally {
-            setLoading(false);
-        }
-    }, []);
+    // clearErrorOn: 'success' is the whole reason this one can use the hook.
+    // The default clears the error slot when a fetch STARTS, which is right for
+    // a user-triggered retry -- but this polls every five seconds, so against a
+    // down API the banner would blank and reappear on every tick, turning a
+    // steady "API unreachable" into a flicker. Keeping the message until
+    // something actually succeeds is the behaviour this page always had.
+    const {
+        data: opsData,
+        error,
+        loading,
+        busy: opsBusy,
+        reload: reloadOps,
+    } = useAsyncData<[HealthResponse, OpsStatusResponse]>(
+        async () => {
+            try {
+                return await Promise.all([getHealth(), getOpsStatus()]);
+            } catch (err) {
+                console.error('Failed to fetch ops data:', err);
+                const msg = getErrorMessage(err, 'Check if API is running and proxy is correctly configured.');
+                throw new Error(`Failed to load operational data: ${msg}`);
+            }
+        },
+        [],
+        { clearErrorOn: 'success' },
+    );
+    const health = opsData?.[0] ?? null;
+    const opsStatus = opsData?.[1] ?? null;
 
-    const fetchUsers = useCallback(async () => {
-        try {
-            const list = await getUsers();
-            setUsers(list);
-            setUsersError(null);
-        } catch (err) {
-            console.error('Failed to fetch users:', err);
-            setUsersError(getErrorMessage(err, 'Unable to load users.'));
-        }
-    }, []);
+    const {
+        data: usersData,
+        error: usersError,
+        busy: usersBusy,
+        reload: reloadUsers,
+    } = useAsyncData<string[]>(
+        async () => {
+            try {
+                return await getUsers();
+            } catch (err) {
+                console.error('Failed to fetch users:', err);
+                throw new Error(getErrorMessage(err, 'Unable to load users.'));
+            }
+        },
+        [],
+        // Without this a retry clears the error on start, and the branch below
+        // then renders "No users found yet." -- asserting something the page
+        // does not know yet.
+        { clearErrorOn: 'success' },
+    );
+    const users = usersData ?? [];
 
-    const fetchStorageReport = useCallback(async (filterUser?: string) => {
-        try {
-            setStorageLoading(true);
-            const report = await getStorageReport(filterUser);
-            setStorageReport(report);
-            setStorageError(null);
-        } catch (err) {
-            console.error('Failed to fetch storage report:', err);
-            setStorageError(getErrorMessage(err, 'Unable to load report.'));
-        } finally {
-            setStorageLoading(false);
-        }
-    }, []);
+    // This one gains a guarantee it did not have: the report is keyed on
+    // `selectedUser`, and nothing stopped an earlier, slower response from
+    // landing after a later one and showing another user's report under the
+    // current name. The hook's staleness guard closes that.
+    const {
+        data: storageReport,
+        error: storageError,
+        // `busy`, not `loading`: switching user is a REFETCH, and `loading` is
+        // first-load only -- so the panel showed the previous user's counts
+        // under the new user's name with no pending indicator at all.
+        busy: storageLoading,
+        reload: reloadStorageReport,
+    } = useAsyncData<StorageReportResponse>(
+        async () => {
+            try {
+                return await getStorageReport(selectedUser || undefined);
+            } catch (err) {
+                console.error('Failed to fetch storage report:', err);
+                throw new Error(getErrorMessage(err, 'Unable to load report.'));
+            }
+        },
+        [selectedUser],
+    );
 
+    // The hook has no polling of its own; `reload` on an interval is the whole
+    // of it. The first load is the hook's, so this only drives the refreshes.
     useEffect(() => {
-        fetchData();
-        const interval = setInterval(fetchData, 5000);
-        fetchUsers();
+        const interval = setInterval(reloadOps, 5000);
         return () => clearInterval(interval);
-    }, [fetchData, fetchUsers]);
-
-    useEffect(() => {
-        fetchStorageReport(selectedUser || undefined);
-    }, [selectedUser, fetchStorageReport]);
+    }, [reloadOps]);
 
     useEffect(() => {
         setSelectedUser(username);
     }, [username]);
 
-    if (loading && !opsStatus) {
+    // `&& !error` matters once this fetch polls through an outage. The hook
+    // counts a load as "first" until one SUCCEEDS, so with the API down every
+    // retry sets `loading` again -- and without this the page would drop back to
+    // the skeleton on every tick, hiding the very banner that explains why.
+    // The skeleton means "nothing to show yet"; an error is something to show.
+    if (loading && !opsStatus && !error) {
         return (
             <div className="w-full animate-pulse space-y-8">
                 <div className="h-10 w-64 bg-primary/10 rounded" />
@@ -130,10 +157,15 @@ export default function Ops() {
                     )}
                     <button
                         type="button"
-                        onClick={() => { setLoading(true); fetchData(); }}
+                        onClick={reloadOps}
+                        disabled={opsBusy}
                         className="km-interactive km-focus-visible w-fit mt-2 text-[10px] uppercase border border-red-500/30 px-3 py-1 rounded-sm transition-colors hover:bg-red-500/10"
                     >
-                        Retry Connection
+                        {/* The banner now stays up while retrying (it must, or a
+                            poll through an outage would hide it), so the button
+                            itself has to say something is happening -- otherwise
+                            clicking Retry produces no visible change at all. */}
+                        {opsBusy ? 'Retrying…' : 'Retry Connection'}
                     </button>
                 </div>
             )}
@@ -147,7 +179,8 @@ export default function Ops() {
                         </div>
                         <button
                             type="button"
-                            onClick={() => fetchUsers()}
+                            onClick={reloadUsers}
+                            aria-label="Refresh users"
                             className="text-[10px] uppercase tracking-widest border border-primary/20 px-3 py-1 rounded-sm km-interactive km-focus-visible"
                         >
                             Refresh
@@ -180,7 +213,7 @@ export default function Ops() {
                             </button>
                         </div>
                         {usersError && <p className="text-xs text-negative">{usersError}</p>}
-                        {!usersError && users.length === 0 && (
+                        {!usersError && !usersBusy && users.length === 0 && (
                             <p className="text-xs text-primary/70">No users found yet.</p>
                         )}
                     </div>
@@ -194,7 +227,8 @@ export default function Ops() {
                         </div>
                         <button
                             type="button"
-                            onClick={() => fetchStorageReport(selectedUser || undefined)}
+                            onClick={reloadStorageReport}
+                            aria-label="Refresh storage report"
                             className="text-[10px] uppercase tracking-widest border border-primary/20 px-3 py-1 rounded-sm km-interactive km-focus-visible"
                         >
                             Refresh
