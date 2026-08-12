@@ -186,6 +186,7 @@ export default function Openings() {
     errorCause,
     loading,
     refreshing,
+    busy,
     reload: refetchOpenings,
   } = useAsyncData<{ tree: OpeningNode; view: string }>(
     async () => {
@@ -207,15 +208,28 @@ export default function Openings() {
   // from a real error needs the thrown value, not its message -- which is why
   // useAsyncData exposes errorCause. Matching on message text would have tied
   // this branch to the exact wording of a server string.
-  const treeData = loaded?.tree ?? null;
-  const loadedView = loaded?.view ?? null;
   const noGamesImported = errorCause instanceof ApiError && errorCause.statusCode === 404;
+  // A 404 makes the tree ABSENT, not merely unrendered. Suppressing the tree
+  // branches alone left `treeData` populated with the previous account's tree,
+  // so switching to a fresh account rendered BOTH empty-state cards and let the
+  // peer-baseline effect fetch against the old tree's position under the new
+  // username.
+  const treeData = noGamesImported ? null : (loaded?.tree ?? null);
+  const loadedView = loaded?.view ?? null;
   // OpeningGraph reports its own render failures, which are not fetch failures
   // and so are not the hook's to own. They share one banner because the user
   // does not care which layer broke, but they need separate slots -- a refetch
   // clearing the hook's error must not silently clear a graph error that is
   // still true.
   const [graphError, setGraphError] = useState<string | null>(null);
+  // OpeningGraph only ever reports errors, never clears them, so nothing else
+  // would: a transient draw failure used to be cleared by the next fetch's
+  // setError(null) and would otherwise persist for the life of the page.
+  const [graphErrorFor, setGraphErrorFor] = useState<unknown>(null);
+  if (loaded && graphErrorFor !== loaded) {
+    setGraphErrorFor(loaded);
+    if (graphError !== null) setGraphError(null);
+  }
   // The 404 owns its own render path below, so it must not also appear as an
   // error banner with a Retry that could only fail the same way.
   const error = noGamesImported ? null : (rawError ?? graphError);
@@ -353,7 +367,12 @@ export default function Openings() {
   // linter only started reporting once this component became analysable --
   // the behaviour was always the same, and this is the same render-time reset
   // used for the puzzle state in LibraryPuzzle.
-  const baselineKey = `${selectedFen ?? ''}:${colorFilter}`;
+  // `username` belongs in the key. The tree is deliberately kept through a
+  // refresh, so switching account leaves `selectedFen` unchanged -- and without
+  // the username the reset never fires, leaving the previous user's comparison
+  // (their figure, their rating band) on screen under the new name. The refetch
+  // swallows its own errors by design, so it can persist indefinitely.
+  const baselineKey = `${username}:${selectedFen ?? ''}:${colorFilter}`;
   const [baselineFor, setBaselineFor] = useState<string | null>(baselineKey);
   if (baselineFor !== baselineKey) {
     setBaselineFor(baselineKey);
@@ -757,18 +776,18 @@ export default function Openings() {
           <button
             type="button"
             onClick={handleFetchClick}
-            disabled={loading}
+            disabled={busy}
             className={[
               'px-6 py-2 rounded-sm font-serif transition-all km-focus-visible',
-              loading ? 'km-interactive-disabled' : 'km-interactive',
+              busy ? 'km-interactive-disabled' : 'km-interactive',
               treeData
                 ? 'border border-primary/20 text-primary hover:bg-primary hover:text-bg-primary'
                 : 'bg-primary text-bg-primary',
             ].join(' ')}
           >
             {treeData
-              ? loading ? 'Refreshing...' : 'Refresh'
-              : loading ? 'Analyzing...' : 'Load Openings'}
+              ? busy ? 'Refreshing...' : 'Refresh'
+              : busy ? 'Analyzing...' : 'Load Openings'}
           </button>
         </section>
       )}
@@ -834,7 +853,7 @@ export default function Openings() {
                 ? `Couldn’t refresh: ${error}`
                 : 'You appear to be offline, so this could not be refreshed.'}
               onRefresh={handleFetchClick}
-              refreshPending={loading}
+              refreshPending={busy}
             >
               {graphPanel}
             </DataStateStale>
@@ -843,7 +862,7 @@ export default function Openings() {
               message={`${skippedGames} of ${analysis?.games_stored ?? '?'} stored games could not be analysed (unreadable, unfinished, or played under a different username), so they are missing from this tree.`}
               onRetry={handleFetchClick}
               retryLabel="Reload"
-              retryPending={loading}
+              retryPending={busy}
             >
               {graphPanel}
             </DataStatePartial>

@@ -292,4 +292,25 @@ describe('useAsyncData', () => {
         expect(result.current.error).toBeNull();
         expect(result.current.errorCause).toBeNull();
     });
+
+    it('reports `busy` for a refetch, where `loading` is first-load only', async () => {
+        // The distinction that broke three pages: after one success, `loading`
+        // stays false for every later fetch, so any pending indicator wired to
+        // it dies silently and the page shows stale data as though settled.
+        const pending = deferred<string>();
+        let call = 0;
+        const fetcher = vi.fn(() => (call++ === 0 ? Promise.resolve('first') : pending.promise));
+        const { result, rerender } = renderHook(
+            ({ id }) => useAsyncData(fetcher, [id]),
+            { initialProps: { id: 'a' } },
+        );
+        await waitFor(() => expect(result.current.data).toBe('first'));
+
+        rerender({ id: 'b' });
+        await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
+
+        expect(result.current.loading).toBe(false);
+        expect(result.current.refreshing).toBe(true);
+        expect(result.current.busy).toBe(true);
+    });
 });

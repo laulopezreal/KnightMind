@@ -83,14 +83,24 @@ export default function LibraryPuzzle() {
     // because the error branch below distinguishes the two to decide whether to
     // offer a Retry.
     const {
-        data: puzzle,
+        data: loaded,
         error,
-        loading: isLoading,
+        busy: isLoading,
         reload: fetchPuzzle,
-    } = useAsyncData<LibraryPuzzleType>(
+    } = useAsyncData<{ puzzle: LibraryPuzzleType }>(
         async () => {
             try {
-                return await getLibraryPuzzle(puzzleId!, username!);
+                const found = await getLibraryPuzzle(puzzleId!, username!);
+                // Construct here, inside the try, exactly where the old code did.
+                // chess.js throws on a malformed FEN, and that throw belongs in
+                // this catch -- moving it into render turned a bad FEN from an
+                // error card with a Retry into an unmounted page.
+                new Chess(found.fen);
+                // A fresh wrapper per load: the reset below keys on its identity,
+                // so a reload of the SAME id still resets. Keying on puzzle.id
+                // did not, which left a revealed solution and a running solve
+                // clock attached to the next load of that id.
+                return { puzzle: found };
             } catch (err) {
                 if (err instanceof ApiError && err.statusCode === 404) {
                     throw new Error('Puzzle not found');
@@ -101,6 +111,7 @@ export default function LibraryPuzzle() {
         [username, puzzleId],
         { enabled: Boolean(username && puzzleId), errorMessage: 'Failed to load puzzle' },
     );
+    const puzzle = loaded?.puzzle ?? null;
 
     // Success side effects, previously inline in the fetch. Keyed on the loaded
     // puzzle's identity, which changes on every successful load -- including a
@@ -123,10 +134,16 @@ export default function LibraryPuzzle() {
     // sees anything, so the new puzzle and its fresh state land together. The
     // id comparison is what makes it converge -- the second pass sees
     // `puzzle.id === readyFor` and skips.
-    const [readyFor, setReadyFor] = useState<string | null>(null);
-    if (puzzle && puzzle.id !== readyFor) {
-        setReadyFor(puzzle.id);
-        setGame(new Chess(puzzle.fen));
+    // Keyed on the LOAD, not the puzzle id. Every successful fetch returns a new
+    // wrapper, so this fires for a reload of the same id and for a username
+    // change that refetches it -- both of which an id-keyed guard silently
+    // skipped, carrying a revealed solution and a stale solve clock into the
+    // next load.
+    const [readyFor, setReadyFor] = useState<{ puzzle: LibraryPuzzleType } | null>(null);
+    if (loaded && loaded !== readyFor) {
+        setReadyFor(loaded);
+        // Safe in render: the fetcher already parsed this FEN, so it cannot throw.
+        setGame(new Chess(loaded.puzzle.fen));
         resetPuzzleState();
     }
 

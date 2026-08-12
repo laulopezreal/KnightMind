@@ -570,4 +570,58 @@ describe('LibraryPuzzle', () => {
         });
     });
 
+
+    describe('while a sibling is loading', () => {
+        it('does not leave the previous puzzle on screen', async () => {
+            // useAsyncData keeps `data` during a refetch and reports it via
+            // `refreshing`, not `loading` -- `loading` is FIRST load only. Wiring
+            // the page to `loading` alone meant a sibling navigation showed the
+            // previous puzzle's title, board and, if it had been revealed, its
+            // SOLUTION, under the new puzzle's URL for the whole round trip.
+            const { rerender } = render(<LibraryPuzzle />);
+            await waitFor(() => expect(screen.getByText('Deadly Fork')).toBeInTheDocument());
+
+            let release: (v: unknown) => void = () => {};
+            mockGetLibraryPuzzle.mockImplementationOnce(
+                () => new Promise((resolve) => { release = resolve; }),
+            );
+            mockPuzzleId = 'sibling-1';
+            rerender(<LibraryPuzzle />);
+
+            await waitFor(() =>
+                expect(mockGetLibraryPuzzle).toHaveBeenCalledWith('sibling-1', 'testplayer'),
+            );
+            expect(screen.queryByText('Deadly Fork')).not.toBeInTheDocument();
+            expect(screen.getByText(/loading puzzle/i)).toBeInTheDocument();
+
+            release({ ...MOCK_PUZZLE, id: 'sibling-1', title: 'Sibling' });
+            await waitFor(() => expect(screen.getByText('Sibling')).toBeInTheDocument());
+        });
+
+        it('resets solve state when the same puzzle is loaded again', async () => {
+            // Keying the reset on `puzzle.id` skipped it whenever an id reloaded
+            // -- a username change, or a retry that re-lands the id already in
+            // `data`. A revealed solution then carried into the next load of
+            // that same puzzle. One instance, rerendered: two render() calls
+            // leave two mounted copies and make the query ambiguous.
+            const { rerender } = render(<LibraryPuzzle />);
+            await waitFor(() => expect(screen.getByText('Deadly Fork')).toBeInTheDocument());
+            fireEvent.click(screen.getByRole('button', { name: /reveal/i }));
+            await waitFor(() =>
+                expect(screen.queryByRole('button', { name: /reveal/i })).not.toBeInTheDocument(),
+            );
+
+            // Same puzzle id, refetched because the account changed.
+            mockUsername = 'otherplayer';
+            rerender(<LibraryPuzzle />);
+            await waitFor(() =>
+                expect(mockGetLibraryPuzzle).toHaveBeenCalledWith('puzzle-abc', 'otherplayer'),
+            );
+
+            // Back to unsolved: the Reveal button returns.
+            await waitFor(() =>
+                expect(screen.getByRole('button', { name: /reveal/i })).toBeInTheDocument(),
+            );
+        });
+    });
 });

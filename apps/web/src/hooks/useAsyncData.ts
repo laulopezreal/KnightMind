@@ -21,6 +21,18 @@ export interface AsyncData<T> {
     loading: boolean;
     /** True while a later load is in flight, with `data` still showing the old value. */
     refreshing: boolean;
+    /**
+     * True while ANY fetch is in flight -- `loading || refreshing`.
+     *
+     * This exists because its absence caused the same bug in three separate
+     * pages at once. `loading` reads like "is it loading", but it is FIRST load
+     * only: after one success it is permanently false, so a spinner or a
+     * disabled button wired to it silently dies on every subsequent refetch and
+     * the page shows stale data with no indication anything is happening.
+     * Reach for `busy` for pending indicators; reach for `loading` only when you
+     * specifically mean "there is nothing to show yet".
+     */
+    busy: boolean;
     /** Re-run the fetch (window focus, a mutation the page just made, a retry button). */
     reload: () => void;
 }
@@ -158,5 +170,5 @@ export function useAsyncData<T>(
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [...deps, enabled, reloadCount, request, errorMessage, clearErrorOn]);
 
-    return { data, error, errorCause, loading, refreshing, reload };
+    return { data, error, errorCause, loading, refreshing, busy: loading || refreshing, reload };
 }

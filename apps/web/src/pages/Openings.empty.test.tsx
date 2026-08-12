@@ -190,3 +190,26 @@ describe('Openings — partially analysed archive', () => {
     expect(screen.queryByText(/could not be analysed/)).not.toBeInTheDocument();
   });
 });
+
+describe('Openings — switching to an account with nothing imported', () => {
+  it('shows one empty state, not the previous account\'s tree beside it', async () => {
+    // useAsyncData keeps `data` through a failed refetch -- right for a
+    // transient blip, wrong for a 404, which means "this account has nothing".
+    // Suppressing only the tree branches left the previous account's tree in
+    // `treeData`, so the page rendered BOTH the "No games imported yet" card
+    // and the "No opening data yet" card, each with its own Import button.
+    mockGetOpenings.mockResolvedValue(POPULATED_TREE);
+    const { rerender } = renderAt(<Openings />);
+    expect(await screen.findByTestId('opening-graph')).toBeInTheDocument();
+
+    mockGetOpenings.mockRejectedValue(new ApiError('No games found', 404));
+    mockUsername = 'bob';
+    rerender(<Openings />);
+
+    expect(await screen.findByText('No games imported yet')).toBeInTheDocument();
+    expect(screen.queryByText('No opening data yet')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('opening-graph')).not.toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'Import games' })).toHaveLength(1);
+  });
+});
+

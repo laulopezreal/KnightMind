@@ -29,6 +29,7 @@ export default function Ops() {
         data: opsData,
         error,
         loading,
+        busy: opsBusy,
         reload: reloadOps,
     } = useAsyncData<[HealthResponse, OpsStatusResponse]>(
         async () => {
@@ -46,7 +47,12 @@ export default function Ops() {
     const health = opsData?.[0] ?? null;
     const opsStatus = opsData?.[1] ?? null;
 
-    const { data: usersData, error: usersError, reload: reloadUsers } = useAsyncData<string[]>(
+    const {
+        data: usersData,
+        error: usersError,
+        busy: usersBusy,
+        reload: reloadUsers,
+    } = useAsyncData<string[]>(
         async () => {
             try {
                 return await getUsers();
@@ -56,6 +62,10 @@ export default function Ops() {
             }
         },
         [],
+        // Without this a retry clears the error on start, and the branch below
+        // then renders "No users found yet." -- asserting something the page
+        // does not know yet.
+        { clearErrorOn: 'success' },
     );
     const users = usersData ?? [];
 
@@ -66,7 +76,10 @@ export default function Ops() {
     const {
         data: storageReport,
         error: storageError,
-        loading: storageLoading,
+        // `busy`, not `loading`: switching user is a REFETCH, and `loading` is
+        // first-load only -- so the panel showed the previous user's counts
+        // under the new user's name with no pending indicator at all.
+        busy: storageLoading,
         reload: reloadStorageReport,
     } = useAsyncData<StorageReportResponse>(
         async () => {
@@ -145,9 +158,14 @@ export default function Ops() {
                     <button
                         type="button"
                         onClick={reloadOps}
+                        disabled={opsBusy}
                         className="km-interactive km-focus-visible w-fit mt-2 text-[10px] uppercase border border-red-500/30 px-3 py-1 rounded-sm transition-colors hover:bg-red-500/10"
                     >
-                        Retry Connection
+                        {/* The banner now stays up while retrying (it must, or a
+                            poll through an outage would hide it), so the button
+                            itself has to say something is happening -- otherwise
+                            clicking Retry produces no visible change at all. */}
+                        {opsBusy ? 'Retrying…' : 'Retry Connection'}
                     </button>
                 </div>
             )}
@@ -194,7 +212,7 @@ export default function Ops() {
                             </button>
                         </div>
                         {usersError && <p className="text-xs text-negative">{usersError}</p>}
-                        {!usersError && users.length === 0 && (
+                        {!usersError && !usersBusy && users.length === 0 && (
                             <p className="text-xs text-primary/70">No users found yet.</p>
                         )}
                     </div>
