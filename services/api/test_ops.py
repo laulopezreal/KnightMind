@@ -594,3 +594,106 @@ def test_the_heartbeat_purge_spares_live_workers(db_session):
         WorkerHeartbeat.worker_id.in_(["long-lived", "long-dead"])
     ).delete(synchronize_session=False)
     db_session.commit()
+
+
+# --- health must attest to the QUEUE, not just to the process ----------------
+#
+# The heartbeat is written 0.6s after the worker starts and never depended on
+# any work succeeding. So a worker that boots, beats, claims a job and dies
+# executing it -- restarted by `restart: unless-stopped`, forever -- reported a
+# stable green health check with zero throughput. Same failure the deploy's
+# `compose build` fix removed at the image layer, one layer down.
+
+
+def _queued_job(db, *, age_seconds: int, status: str = "queued", username: str = "u"):
+    from datetime import datetime, timedelta, timezone
+
+    from services.api.models import Job
+
+    job = Job(
+        username=username,
+        type="puzzle_generation",
+        status=status,
+        params={},
+        created_at=datetime.now(timezone.utc).replace(tzinfo=None)
+        - timedelta(seconds=age_seconds),
+    )
+    db.add(job)
+    db.commit()
+    return job
+
+
+def test_health_503_when_the_worker_beats_but_the_queue_is_stalled(
+    client, db_session, monkeypatch
+):
+    """The finding: beating is not working."""
+    _external_worker(monkeypatch)
+    _beat(db_session, "worker-1", age_seconds=1)
+    _queued_job(db_session, age_seconds=3600)
+
+    response = client.get("/ops/health")
+    assert response.status_code == 503
+    assert response.json()["worker"] == "stalled"
+
+
+def test_a_busy_worker_with_work_queued_behind_it_is_not_stalled(
+    client, db_session, monkeypatch
+):
+    """Puzzle generation legitimately runs for minutes with jobs waiting. The
+    stall check is scoped to "and nothing is RUNNING" precisely so this stays
+    healthy -- otherwise the fix would be worse than the bug it replaces."""
+    _external_worker(monkeypatch)
+    _beat(db_session, "worker-1", age_seconds=1)
+    _queued_job(db_session, age_seconds=3600, username="waiting")
+    _queued_job(db_session, age_seconds=60, status="running", username="busy")
+
+    response = client.get("/ops/health")
+    assert response.status_code == 200
+    assert response.json()["worker"] == "ok"
+
+
+def test_a_recently_queued_job_is_not_a_stall(client, db_session, monkeypatch):
+    """A job is normally claimed within one poll. Only a job that has waited
+    far past that says nobody is taking them."""
+    _external_worker(monkeypatch)
+    _beat(db_session, "worker-1", age_seconds=1)
+    _queued_job(db_session, age_seconds=5)
+
+    response = client.get("/ops/health")
+    assert response.status_code == 200
+    assert response.json()["worker"] == "ok"
+
+
+def test_an_empty_queue_is_not_a_stall(client, db_session, monkeypatch):
+    _external_worker(monkeypatch)
+    _beat(db_session, "worker-1", age_seconds=1)
+
+    response = client.get("/ops/health")
+    assert response.status_code == 200
+    assert response.json()["worker"] == "ok"
+
+
+def test_health_stays_structured_when_the_heartbeat_table_is_unreadable(
+    client, monkeypatch
+):
+    """An operator part-way through `alembic downgrade` has a reachable database
+    with no worker_heartbeats. The read used to raise out of the endpoint as a
+    bare 500 with no body -- losing the db/worker/stockfish breakdown at exactly
+    the moment it is needed. 503 with "unknown" is still unhealthy; it just says
+    which part."""
+    _external_worker(monkeypatch)
+
+    from services.api import ops as ops_module
+
+    def boom(_db):
+        raise RuntimeError('relation "worker_heartbeats" does not exist')
+
+    monkeypatch.setattr(ops_module, "_worker_status_from_heartbeat", boom)
+
+    response = client.get("/ops/health")
+    assert response.status_code == 503
+    body = response.json()
+    assert body["worker"] == "unknown"
+    # The whole point: the other subsystems still report.
+    assert body["db"] == "ok"
+    assert "stockfish" in body

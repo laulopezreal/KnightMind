@@ -53,13 +53,31 @@ async def _run() -> bool:
     for signame in ("SIGTERM", "SIGINT"):
         loop.add_signal_handler(getattr(signal, signame), _request_stop, signame)
 
+    # Housekeeping belongs to whichever process runs the worker, and there is
+    # exactly one of those. It was previously started by the API's lifespan; the
+    # move out left it started by nobody, so abandoned sessions accumulated and
+    # AI audit rows outlived their retention window without a sound.
+    #
+    # Started BEFORE the kill switch, because sweeping is not job claiming and
+    # "stop the worker" was never meant to mean "stop collecting rubbish". With
+    # it started after, KNIGHTMIND_WORKER_DISABLED=true silently halted all four
+    # sweeps: abandoned sessions, the heartbeat purge, the AI-audit retention
+    # sweep that OPERATIONS.md states as a data-handling commitment, and the
+    # rate_limit_hits purge. That last one is the sharpest — the API keeps
+    # INSERTing into that table regardless of the worker, so the switch
+    # documented for a spend incident was also the switch that let it grow
+    # unbounded while nobody was collecting.
+    cleanup_task = asyncio.create_task(run_session_cleanup())
+
     # The documented kill switch has to be honoured HERE too. `.env.docker` is
     # the env_file for both services, so an operator setting it per the runbook
     # was only telling the API to stop reporting on the worker -- which kept
-    # claiming jobs, beating and running housekeeping. The flag meant "stop
-    # looking", not "stop".
+    # claiming jobs and beating. The flag meant "stop looking", not "stop".
     if os.environ.get("KNIGHTMIND_WORKER_DISABLED") == "true":
-        logger.info("KNIGHTMIND_WORKER_DISABLED=true; idling without claiming anything")
+        logger.info(
+            "KNIGHTMIND_WORKER_DISABLED=true; idling without claiming anything "
+            "(housekeeping still runs)"
+        )
         # Wait rather than return. `restart: unless-stopped` restarts on ANY
         # exit status, including 0, so returning here made the documented kill
         # switch a crash loop: exit clean, get restarted, log the same line,
@@ -68,17 +86,17 @@ async def _run() -> bool:
         # The signal handlers above are already installed, so SIGTERM still
         # ends the process promptly and `docker compose stop worker` behaves.
         await stopping.wait()
+        cleanup_task.cancel()
+        try:
+            await cleanup_task
+        except asyncio.CancelledError:
+            pass
         return asked_to_stop
 
     # Leave the shutdown wait if the loop dies on its own, not only on a
     # signal. Otherwise the process outlives the thing it exists to run.
     worker.on_exit(stopping.set)
     worker.start()
-    # Housekeeping belongs to whichever process runs the worker, and there is
-    # exactly one of those. It was previously started by the API's lifespan; the
-    # move out left it started by nobody, so abandoned sessions accumulated and
-    # AI audit rows outlived their retention window without a sound.
-    cleanup_task = asyncio.create_task(run_session_cleanup())
 
     await stopping.wait()
 

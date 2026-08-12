@@ -1,3 +1,4 @@
+import logging
 import os
 from datetime import datetime, timedelta, timezone
 
@@ -15,6 +16,8 @@ from services.api.models import Job, JobStatus, WorkerHeartbeat
 from services.api.storage.ai_audit_repository import AIAuditRepository
 from services.api.worker import worker
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/ops", tags=["ops"])
 
 
@@ -25,15 +28,63 @@ router = APIRouter(prefix="/ops", tags=["ops"])
 WORKER_HEARTBEAT_STALE_AFTER = timedelta(seconds=30)
 
 
+# How long a job may sit QUEUED with nothing running before the queue is
+# treated as stalled. Generous: a job is normally claimed within one poll
+# (~2s), so five minutes is far past "busy" and squarely in "nobody is taking
+# these". Only consulted when NO job is RUNNING, so a long generation with work
+# queued behind it is not a stall.
+QUEUE_STALL_AFTER = timedelta(minutes=5)
+
+
+def _queue_is_stalled(db: Session) -> bool:
+    """True when jobs are waiting and no worker is taking them.
+
+    The heartbeat attests to a PROCESS, not to the queue. A worker that boots,
+    beats, claims a job and dies executing it is restarted by
+    `restart: unless-stopped`, beats again, claims again, dies again — a stable
+    green health check with zero throughput, because the beat is written 0.6s
+    after start and never depended on any work succeeding.
+
+    That is the same failure the deploy's `compose build` fix removed at the
+    image layer, one layer down: a worker that keeps beating while the queue
+    goes nowhere. Health has to ask the queue, not the process.
+
+    Scoped to "and nothing is RUNNING" so this cannot fire on a busy worker:
+    puzzle generation legitimately runs for minutes with jobs queued behind it.
+    """
+    running = db.execute(
+        select(func.count())
+        .select_from(Job)
+        .where(Job.status == JobStatus.RUNNING.value)
+    ).scalar_one()
+    if running:
+        return False
+
+    oldest_queued = db.execute(
+        select(func.min(Job.created_at)).where(Job.status == JobStatus.QUEUED.value)
+    ).scalar_one_or_none()
+    if oldest_queued is None:
+        return False
+
+    age = datetime.now(timezone.utc).replace(tzinfo=None) - oldest_queued
+    return age > QUEUE_STALL_AFTER
+
+
 def _worker_status_from_heartbeat(db: Session) -> str:
-    """Freshest worker heartbeat, read as ok / stale / not_running."""
+    """Worker liveness: ok / stalled / stale / not_running.
+
+    ``stalled`` means the process is beating but the queue is not moving, which
+    a heartbeat alone reports as ``ok``.
+    """
     latest = db.execute(select(func.max(WorkerHeartbeat.beat_at))).scalar_one_or_none()
     if latest is None:
         return "not_running"
     # Stored naive-UTC (the column is DateTime without timezone), so compare
     # against a naive now -- mixing the two raises rather than misreporting.
     age = datetime.now(timezone.utc).replace(tzinfo=None) - latest
-    return "ok" if age <= WORKER_HEARTBEAT_STALE_AFTER else "stale"
+    if age > WORKER_HEARTBEAT_STALE_AFTER:
+        return "stale"
+    return "stalled" if _queue_is_stalled(db) else "ok"
 
 
 @router.get("/ping")
@@ -73,9 +124,23 @@ def get_health(db: Session = Depends(get_db)):
     elif os.environ.get("KNIGHTMIND_WORKER_EXTERNAL") == "true":
         # Only meaningful if the DB answered above; a failed probe already makes
         # the response unhealthy, and a second query would just raise.
-        worker_status = (
-            _worker_status_from_heartbeat(db) if db_status == "ok" else "unknown"
-        )
+        # Guarded. `SELECT 1` succeeding does not mean these tables exist: an
+        # operator part-way through `alembic downgrade` past a335ae9eeced has a
+        # reachable database with no worker_heartbeats, and the raise escaped
+        # the endpoint as a bare HTTP 500 with no body — losing the db /
+        # worker / stockfish breakdown at exactly the moment it is needed.
+        # 503 with "unknown" is still unhealthy; it just says which part.
+        if db_status != "ok":
+            worker_status = "unknown"
+        else:
+            try:
+                worker_status = _worker_status_from_heartbeat(db)
+            except Exception:
+                logger.exception("Could not read worker liveness")
+                # A failed read must not roll the whole request's session back
+                # into a broken transaction for the queries after it.
+                db.rollback()
+                worker_status = "unknown"
     else:
         worker_status = "ok" if worker.is_running else "not_running"
 
