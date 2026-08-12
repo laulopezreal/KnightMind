@@ -142,7 +142,15 @@ async def lifespan(app: FastAPI):
         except asyncio.CancelledError:
             pass
 
-    await worker.stop()
+    # Symmetric with the guarded start above. stop() now ends by DELETEing this
+    # process's heartbeat row, and worker_id defaults to the hostname but is
+    # overridable with KNIGHTMIND_WORKER_ID — which .env.docker sets for BOTH
+    # services, because they share one env_file. An operator naming the worker
+    # per the runbook would therefore have every API restart delete the live
+    # worker's beat, and /ops/health would report not_running (503) until the
+    # next beat landed. Do not stop a worker this process never started.
+    if not _worker_runs_elsewhere():
+        await worker.stop()
 
 
 app = FastAPI(title="KnightMind API", version="0.1.0", lifespan=lifespan)

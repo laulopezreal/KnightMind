@@ -59,8 +59,16 @@ async def _run() -> bool:
     # claiming jobs, beating and running housekeeping. The flag meant "stop
     # looking", not "stop".
     if os.environ.get("KNIGHTMIND_WORKER_DISABLED") == "true":
-        logger.info("KNIGHTMIND_WORKER_DISABLED=true; not starting the worker")
-        return True
+        logger.info("KNIGHTMIND_WORKER_DISABLED=true; idling without claiming anything")
+        # Wait rather than return. `restart: unless-stopped` restarts on ANY
+        # exit status, including 0, so returning here made the documented kill
+        # switch a crash loop: exit clean, get restarted, log the same line,
+        # forever. OPERATIONS.md promises a container that sits quiet.
+        #
+        # The signal handlers above are already installed, so SIGTERM still
+        # ends the process promptly and `docker compose stop worker` behaves.
+        await stopping.wait()
+        return asked_to_stop
 
     # Leave the shutdown wait if the loop dies on its own, not only on a
     # signal. Otherwise the process outlives the thing it exists to run.

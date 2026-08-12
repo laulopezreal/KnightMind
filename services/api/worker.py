@@ -203,7 +203,20 @@ class JobWorker:
         # The done-callback on _task cancels the beat once the loop actually
         # ends, so this needs only to wait for the settle.
         if self._task:
-            await self._task
+            try:
+                await self._task
+            except Exception:
+                # A loop that died on its own re-raises here. Letting it
+                # propagate skipped everything below — the beat was never
+                # cancelled, the heartbeat row was never withdrawn (it aged out
+                # over 30s instead), and the exception escaped asyncio.run()
+                # past worker_main.main(), which catches only KeyboardInterrupt.
+                # So the "its loop died; restarting" branch this shutdown path
+                # exists to reach was unreachable.
+                #
+                # Logged, not swallowed silently: the caller still learns the
+                # loop is gone from on_exit / the non-zero exit code.
+                logger.exception("Job loop raised on the way out")
             logger.info("Job worker stopped")
         if self._beat_task:
             self._beat_task.cancel()

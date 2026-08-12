@@ -285,6 +285,28 @@ export default function Ops() {
                 </div>
             )}
 
+            {/* The rate limiter fails open: on a database error it lets the
+                request through rather than 500ing. That is the right trade, but
+                it means a broken limiter is invisible from outside — traffic
+                looks identical. This banner is the only place the difference
+                shows, so it is worth a row of its own rather than a curl. */}
+            {(opsStatus?.rate_limit_failures ?? 0) > 0 && (
+                <div className="bg-amber-500/10 border border-amber-500/20 text-warning p-4 rounded-sm font-sans text-xs flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                        <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+                        <span>
+                            <span className="font-bold">Rate limiter failed open:</span>{' '}
+                            {opsStatus?.rate_limit_failures} request{(opsStatus?.rate_limit_failures ?? 0) > 1 ? 's' : ''} passed unchecked
+                        </span>
+                    </div>
+                    {opsStatus?.rate_limit_last_error && (
+                        <span className="opacity-40 text-[10px] truncate max-w-[40%]" title={opsStatus.rate_limit_last_error}>
+                            {opsStatus.rate_limit_last_error}
+                        </span>
+                    )}
+                </div>
+            )}
+
             {/* Health Cards Grid - Fixed responsiveness */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
                 <HealthCard label="API" status={health?.ok ? 'up' : 'down'} value={health?.ok ? 'UP' : 'DOWN'} />
