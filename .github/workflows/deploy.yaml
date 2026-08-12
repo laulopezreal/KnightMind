@@ -234,21 +234,49 @@ jobs:
             # healthy internally. Use 127.0.0.1 explicitly (not 'localhost',
             # which resolves to ::1/IPv6 first while the publish is IPv4-only)
             # and a per-attempt timeout so a wedged socket fails fast.
+            #
+            # Keep the BODY as well as the code. /ops/health answers for three
+            # subsystems, and since the job worker moved to its own container a
+            # dead queue makes this endpoint 503 -- a reachable API, not an
+            # unreachable one. Reporting every failure as "api not reachable,
+            # check the iptables FORWARD rule" sends the operator to the one
+            # place that is definitely fine, and dumping only the api logs hides
+            # the container that would explain it.
             ok=0
+            body=""
+            code=""
             for i in $(seq 1 10); do
-              code=$(curl -s -o /dev/null -m 5 -w "%{http_code}" http://127.0.0.1:8000/ops/health || true)
+              body=$(curl -s -m 5 -w '\n%{http_code}' http://127.0.0.1:8000/ops/health || true)
+              code=$(printf '%s' "${body}" | tail -n1)
+              body=$(printf '%s' "${body}" | sed '$d')
               if [ "${code}" = "200" ]; then
                 echo "Health check passed (attempt ${i}, HTTP 200)"
                 ok=1
                 break
               fi
-              echo "Health check attempt ${i}: HTTP ${code:-000}; retrying in 3s..."
+              echo "Health check attempt ${i}: HTTP ${code:-000} ${body}; retrying in 3s..."
               sleep 3
             done
             if [ "${ok}" -ne 1 ]; then
-              echo "Health check FAILED: api not reachable on host 127.0.0.1:8000 (the path Caddy uses for public ingress)."
-              echo "The container can be healthy internally while host->container forwarding is broken; check the docker port publish / iptables FORWARD rule for the api bridge."
+              if [ -z "${code}" ] || [ "${code}" = "000" ]; then
+                # Nothing answered: this really is the ingress path.
+                echo "Health check FAILED: api not reachable on host 127.0.0.1:8000 (the path Caddy uses for public ingress)."
+                echo "The container can be healthy internally while host->container forwarding is broken; check the docker port publish / iptables FORWARD rule for the api bridge."
+              else
+                # It answered and said no. The body names the subsystem.
+                echo "Health check FAILED: the API answered HTTP ${code} and reported itself unhealthy."
+                echo "Body: ${body}"
+                echo "Read the field that is not \"ok\": db, worker or stockfish."
+                echo "  worker=not_running  no worker has ever beaten -- did the worker container start?"
+                echo "  worker=stale        it beat once and stopped -- check the worker logs below."
+                echo "Ingress is fine: something answered on 127.0.0.1:8000."
+              fi
+              echo "--- api logs ---"
               ${COMPOSE} logs --tail=50 api
+              # The worker is a separate container now, and it is the likeliest
+              # cause of a 503 that is not the database.
+              echo "--- worker logs ---"
+              ${COMPOSE} logs --tail=50 worker
               exit 1
             fi
 
