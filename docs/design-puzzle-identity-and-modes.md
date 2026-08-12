@@ -37,10 +37,23 @@ alfi3sr   161 games,  161 with pgn_blob,  161 with time_control
            30 puzzles, 0 with a NULL fen / best move / played move
 ```
 
-Nothing is missing. Running the real `extract_game_context` over eight of that
-user's actual PGNs derives an opening and an ECO code for **8 of 8** —
-`Sicilian Defense B27`, `Horwitz Defense A40`, `Nimzowitsch Defense B00`. The
-old schema is not the obstacle.
+Nothing is missing. The rules-only diagnosis job was run against a copy of
+production for that user and completed cleanly:
+
+```
+{'diagnosed': 30, 'unchanged': 0, 'unavailable': 0, 'canceled': False}
+
+puzzle_diagnoses:  30 rows,  30 with opening_name,  0 unavailable
+```
+
+**30 of 30**, no model calls, no failures — `Sicilian Defense B27`,
+`Horwitz Defense A40`, `Nimzowitsch Defense B00`. The old schema is not the
+obstacle.
+
+Note what it does *not* buy: provenance distinctness for that user moves from
+27/30 (date + move) to 28/30 (date + opening + move). The backfill is worth
+running for the cause chips, the post-mortem panel and motif recall — not for
+naming, which the date already carries.
 
 The diagnosis job simply never ran for that user. It auto-chains only from
 puzzle generation (`worker.py:358`), and those puzzles predate the diagnosis
