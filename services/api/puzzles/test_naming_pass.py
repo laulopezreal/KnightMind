@@ -2,13 +2,28 @@
 
 The CLI path is exercised by running it; these cover the properties that make
 it safe to hang off a job nobody is watching: it must not call the model when
-naming is off, must not overwrite a human's name, must be idempotent, and must
-report honestly how much work is left.
+naming is off, must not overwrite a human's name, must be idempotent, must
+report honestly how much work is left, and must not spin when the provider is
+down.
 """
+
+from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 
 import pytest
 
-from services.api.models import Game, Puzzle, PuzzleStats
+from services.api.diagnosis.causes import RULE_VERSION
+from services.api.diagnosis.evidence import EXTRACTION_VERSION
+from services.api.models import (
+    DiagnosisAuditLog,
+    Game,
+    Job,
+    JobStatus,
+    JobType,
+    Puzzle,
+    PuzzleDiagnosis,
+    PuzzleStats,
+)
 from services.api.puzzles import ai_naming, naming_pass
 
 FORK_FEN = "3q3k/8/8/4N3/8/8/8/6K1 w - - 0 1"
@@ -16,7 +31,16 @@ FORK_BEST = "e5f7"
 USER = "lauureal"
 
 
-def _seed(db, puzzle_id, *, username=USER, title=None, source=None, stats=True):
+def _seed(
+    db,
+    puzzle_id,
+    *,
+    username=USER,
+    title=None,
+    source=None,
+    stats=True,
+    diagnosed=False,
+):
     if db.get(Game, (f"game-{puzzle_id}", username)) is None:
         db.add(
             Game(
@@ -55,6 +79,20 @@ def _seed(db, puzzle_id, *, username=USER, title=None, source=None, stats=True):
                 title=title,
                 title_source=source,
                 primary_motif="fork",
+            )
+        )
+    if diagnosed:
+        # A current-version diagnosis row, so DiagnosisRepository.pending_count
+        # reports zero for this puzzle. Only the re-queue tests need it: they
+        # assert on what the NAMING term does to the chain, and a puzzle that is
+        # also undiagnosed would keep the chain alive on the diagnosis term
+        # alone and prove nothing.
+        db.add(
+            PuzzleDiagnosis(
+                puzzle_id=puzzle_id,
+                username=username,
+                extraction_version=EXTRACTION_VERSION,
+                rule_version=RULE_VERSION,
             )
         )
     db.commit()
@@ -251,3 +289,190 @@ class TestPendingCount:
         assert naming_pass.pending_count(db_session, USER) == 1
         naming_pass.name_puzzles(db_session, username=USER)
         assert naming_pass.pending_count(db_session, USER) == 0
+
+
+def _provider_unreachable(*args, **kwargs):
+    """What a network failure looks like from inside ai_naming.
+
+    Patched over ``_call`` rather than over ``name_puzzle`` so the real
+    try/except runs and produces a genuine ERROR outcome — the loop being
+    tested starts with that except block, so stubbing past it would test the
+    fixture instead of the code.
+    """
+    raise ConnectionError("provider unreachable")
+
+
+def _chain_once(db) -> int:
+    """One turn of the worker's re-queue chain. Returns jobs it queued.
+
+    Stands in for a diagnosis job completing: the worker marks it SUCCEEDED and
+    then asks whether to queue another. The queued job is removed afterwards
+    because the active-job unique index allows only one per (user, type), so
+    leaving it would silently suppress the next turn and make a loop look
+    bounded.
+    """
+    with patch("services.api.worker.SessionLocal") as mock_sl:
+        from services.api.worker import JobWorker
+
+        mock_sl.return_value.__enter__.return_value = db
+        mock_sl.return_value.__exit__.return_value = None
+        JobWorker._enqueue_remaining_diagnosis_if_pending(
+            JobType.DIAGNOSIS.value, USER, {"auto_chain": True}
+        )
+
+    queued = (
+        db.query(Job)
+        .filter_by(username=USER, type=JobType.DIAGNOSIS, status=JobStatus.QUEUED)
+        .all()
+    )
+    for job in queued:
+        db.delete(job)
+    db.commit()
+    return len(queued)
+
+
+class TestRequeueChain:
+    """What the worker DOES with pending_count, not just what it returns.
+
+    The re-queue predicate had no test of its own for the naming term, and the
+    two halves are only wrong together: an ERROR deliberately leaves a puzzle
+    pending, and the worker re-queues while anything is pending. A provider
+    outage therefore had the worker claiming an identical job every two seconds
+    — writing an audit row per failed call and a job row per turn — with no
+    brake, because an error is not billed and so never reaches the daily cap
+    either.
+    """
+
+    def test_an_outage_stops_the_chain_instead_of_re_queuing_forever(
+        self, db_session, monkeypatch, naming_on
+    ):
+        for pid in ("p1", "p2", "p3", "p4"):
+            _seed(db_session, pid, source="position", diagnosed=True)
+        monkeypatch.setattr(ai_naming, "_call", _provider_unreachable)
+
+        queued = 0
+        for _ in range(5):
+            naming_pass.name_puzzles(
+                db_session, username=USER, limit=naming_pass.NAMING_BATCH_MAX
+            )
+            queued += _chain_once(db_session)
+
+        assert queued == 0
+        # And the puzzles are still pending: the chain paused, it did not give
+        # up on naming them. That distinction is the whole design.
+        assert naming_pass.pending_count(db_session, USER) == 4
+
+    def test_one_isolated_failure_still_chains(
+        self, db_session, monkeypatch, naming_on
+    ):
+        """The brake is for an outage, not for a single unlucky call.
+
+        Tripping on one error would stall naming every time a request happened
+        to be the one that timed out, which is a far more common event than a
+        provider being down.
+        """
+        for pid in ("p1", "p2"):
+            _seed(db_session, pid, source="position", diagnosed=True)
+        db_session.add(
+            DiagnosisAuditLog(
+                username=USER,
+                call_type=ai_naming.CALL_TYPE,
+                puzzle_id="p1",
+                status=ai_naming.ERROR,
+                reason="ConnectionError",
+            )
+        )
+        db_session.commit()
+
+        assert naming_pass.retry_is_backed_off(db_session, USER) is False
+        assert _chain_once(db_session) == 1
+
+    def test_an_answered_call_clears_the_streak(
+        self, db_session, monkeypatch, naming_on
+    ):
+        """Recovery is automatic. Nothing has to notice the provider is back —
+        the first call it answers resets the streak by itself."""
+        for pid in ("p1", "p2", "p3", "p4"):
+            _seed(db_session, pid, source="position", diagnosed=True)
+        monkeypatch.setattr(ai_naming, "_call", _provider_unreachable)
+        naming_pass.name_puzzles(db_session, username=USER)
+        assert naming_pass.retry_is_backed_off(db_session, USER) is True
+
+        _model_returns(monkeypatch, "Knight Went Wandering")
+        # One puzzle only, so work remains and the chain has something to say.
+        naming_pass.name_puzzles(db_session, username=USER, limit=1)
+
+        assert naming_pass.retry_is_backed_off(db_session, USER) is False
+        assert _chain_once(db_session) == 1
+
+    def test_a_stale_streak_expires(self, db_session, monkeypatch, naming_on):
+        """Otherwise the breaker latches shut: the only thing that clears a
+        streak is a successful call, and while it is open there are none."""
+        for pid in ("p1", "p2", "p3", "p4"):
+            _seed(db_session, pid, source="position", diagnosed=True)
+        monkeypatch.setattr(ai_naming, "_call", _provider_unreachable)
+        naming_pass.name_puzzles(db_session, username=USER)
+        assert naming_pass.retry_is_backed_off(db_session, USER) is True
+
+        # Age the failures past the cooldown. Naive UTC, matching how the
+        # column is written and read everywhere else.
+        stale = (
+            datetime.now(timezone.utc).replace(tzinfo=None)
+            - naming_pass.ERROR_STREAK_COOLDOWN
+            - timedelta(minutes=1)
+        )
+        for row in db_session.query(DiagnosisAuditLog).all():
+            row.created_at = stale
+        db_session.commit()
+
+        assert naming_pass.retry_is_backed_off(db_session, USER) is False
+        assert _chain_once(db_session) == 1
+
+    def test_another_users_outage_does_not_pause_this_one(
+        self, db_session, monkeypatch, naming_on
+    ):
+        """The streak is per user for the same reason the budget is: one
+        tenant's failures must not stop everyone else's naming."""
+        for pid in ("p1", "p2", "p3", "p4"):
+            _seed(db_session, pid, username="someone-else", source="position")
+        monkeypatch.setattr(ai_naming, "_call", _provider_unreachable)
+        naming_pass.name_puzzles(db_session, username="someone-else")
+
+        assert naming_pass.retry_is_backed_off(db_session, "someone-else") is True
+        assert naming_pass.retry_is_backed_off(db_session, USER) is False
+
+    def test_the_backoff_costs_nothing_when_naming_is_off(
+        self, db_session, monkeypatch
+    ):
+        """The branch every deployment takes today: no query, no work."""
+        monkeypatch.delenv("KNIGHTMIND_AI_NAMING", raising=False)
+        assert naming_pass.retry_is_backed_off(db_session, USER) is False
+
+    def test_a_diagnosis_run_does_not_retry_naming_while_backed_off(
+        self, db_session, monkeypatch, naming_on
+    ):
+        """Diagnosis converges on its own and keeps running during an outage.
+
+        Each of those runs would otherwise spend a batch of connection timeouts
+        rediscovering what the ledger already records — real wall-clock, since a
+        dead provider fails slowly.
+        """
+        from services.api.diagnosis import job
+
+        for pid in ("p1", "p2", "p3", "p4"):
+            _seed(db_session, pid, source="position")
+        calls = 0
+
+        def _count_then_fail(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            raise ConnectionError("provider unreachable")
+
+        monkeypatch.setattr(ai_naming, "_call", _count_then_fail)
+
+        # Four calls, four failures, four deterministic fallback names.
+        assert job._name_new_puzzles(db_session, USER) == 4
+        assert calls == 4
+        # Second run: the streak is open, so it does not call at all.
+        assert job._name_new_puzzles(db_session, USER) == 0
+        assert calls == 4
