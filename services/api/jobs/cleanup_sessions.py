@@ -12,11 +12,11 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import cast
 
-from sqlalchemy import CursorResult, update
+from sqlalchemy import CursorResult, delete, update
 from sqlalchemy.orm import Session
 
 from services.api.db import SessionLocal
-from services.api.models import TrainingSession
+from services.api.models import RateLimitHit, TrainingSession
 from services.api.storage.ai_audit_repository import AIAuditRepository
 
 # Hourly. Low-frequency housekeeping; the interval is not load-bearing.
@@ -73,6 +73,33 @@ def purge_expired_ai_audit(db: Session) -> int:
     return removed
 
 
+def purge_stale_rate_limit_hits(db: Session, keep_seconds: int = 3600) -> int:
+    """Drop rate-limit rows no live window can still reference.
+
+    The limiter sweeps only the key it is currently checking, so a principal
+    that hits once and never returns leaves its rows forever. Every limited
+    route is unauthenticated and internet-facing, so "distinct principals ever
+    seen" is the growth term, not "live traffic": at 5,000 new one-off IPs a day
+    that is ~1.8M rows and ~287MB after a year.
+
+    It is not only disk. Autovacuum's threshold scales with live tuples, so the
+    permanent garbage makes vacuuming the real churn progressively lazier, and
+    the index-only scan the query plan wants degrades to heap fetches.
+
+    An hour is far longer than the longest window (60s), so this can only ever
+    remove rows that are already outside every window.
+    """
+    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
+        seconds=keep_seconds
+    )
+    result = db.execute(delete(RateLimitHit).where(RateLimitHit.hit_at < cutoff))
+    removed = cast(CursorResult, result).rowcount
+    if removed:
+        db.commit()
+        print(f"Purged {removed} stale rate-limit row(s)")
+    return removed
+
+
 async def run_session_cleanup():
     """Background task for periodic housekeeping.
 
@@ -94,6 +121,12 @@ async def run_session_cleanup():
                 await asyncio.to_thread(purge_expired_ai_audit, db)
         except Exception as e:
             print(f"Error in AI audit purge: {e}")
+
+        try:
+            with SessionLocal() as db:
+                await asyncio.to_thread(purge_stale_rate_limit_hits, db)
+        except Exception as e:
+            print(f"Error in rate-limit purge: {e}")
 
         # Sleep for defined interval
         await asyncio.sleep(CLEANUP_INTERVAL_SECONDS)

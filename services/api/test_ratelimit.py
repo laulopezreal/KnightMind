@@ -260,6 +260,12 @@ def test_oversized_fen_is_rejected_with_400():
 # lifts it.
 
 
+def _pg(name, *, limit, window):
+    from services.api.ratelimit import PostgresRateLimiter
+
+    return PostgresRateLimiter(name, limit, window)
+
+
 @pytest.mark.postgres
 def test_postgres_limiter_shares_a_window_across_instances(db_session):
     """Two limiter instances = two API workers. They must count as one.
@@ -355,3 +361,134 @@ def test_postgres_limiter_keeps_routes_apart(db_session):
 
     generous.reset()
     strict.reset()
+
+
+@pytest.mark.postgres
+def test_concurrent_processes_cannot_exceed_the_limit(db_session):
+    """The atomicity claim, tested the only way it can be: real processes.
+
+    Every other test here is sequential, and adversarial review showed that
+    removing the advisory lock — the entire design justification — left them all
+    passing. Threads would not do either: the race is between transactions, and
+    under READ COMMITTED neither sees the other's uncommitted hit.
+    """
+    import multiprocessing as mp
+    import os
+
+    url = os.environ["KNIGHTMIND_TEST_DATABASE_URL"]
+
+    limiter = _pg("burst", limit=5, window=60)
+    limiter.reset()
+
+    ctx = mp.get_context("spawn")
+    with ctx.Pool(8, initializer=_init_worker, initargs=(url,)) as pool:
+        results = pool.map(_attempt, range(40))
+
+    allowed = sum(results)
+    assert allowed == 5, f"{allowed} of 40 allowed against a limit of 5"
+    limiter.reset()
+
+
+def _init_worker(url: str) -> None:  # pragma: no cover - subprocess helper
+    import os
+
+    os.environ["DATABASE_URL"] = url
+
+
+def _attempt(_: int) -> bool:  # pragma: no cover - subprocess helper
+    from services.api.ratelimit import PostgresRateLimiter
+
+    return PostgresRateLimiter("burst", 5, 60).check("acct-burst").allowed
+
+
+@pytest.mark.postgres
+def test_retry_after_reflects_the_oldest_hit(db_session):
+    """Pinned because a hardcoded `1` survived every previous test."""
+    limiter = _pg("retry_probe", limit=1, window=60)
+    limiter.reset()
+
+    assert limiter.check("acct-1").allowed is True
+    denied = limiter.check("acct-1")
+    assert denied.allowed is False
+    # The oldest hit is seconds old, so the wait is most of a full window --
+    # not the 1s floor a broken implementation returns.
+    assert 30 <= denied.retry_after <= 60, denied.retry_after
+    limiter.reset()
+
+
+@pytest.mark.postgres
+def test_reset_touches_only_its_own_limiter(db_session):
+    """`reset` used to issue an unfiltered DELETE across every limiter."""
+    from services.api.models import RateLimitHit
+
+    a = _pg("reset_a", limit=5, window=60)
+    b = _pg("reset_b", limit=5, window=60)
+    a.reset()
+    b.reset()
+
+    a.check("acct-1")
+    b.check("acct-1")
+    a.reset()
+
+    remaining = {
+        row.key
+        for row in db_session.query(RateLimitHit).all()
+        if row.key.startswith(("reset_a:", "reset_b:"))
+    }
+    assert remaining == {"reset_b:acct-1"}, remaining
+    b.reset()
+
+
+@pytest.mark.postgres
+def test_the_housekeeping_purge_reclaims_abandoned_principals(db_session):
+    """The per-key sweep never touches a principal that does not come back."""
+    from datetime import datetime, timedelta, timezone
+
+    from services.api.jobs.cleanup_sessions import purge_stale_rate_limit_hits
+    from services.api.models import RateLimitHit
+
+    old = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=6)
+    db_session.add(RateLimitHit(key="engine_eval:ip:1.2.3.4", hit_at=old))
+    db_session.add(RateLimitHit(key="engine_eval:ip:5.6.7.8", hit_at=old))
+    db_session.commit()
+
+    removed = purge_stale_rate_limit_hits(db_session)
+    assert removed >= 2
+    assert (
+        db_session.query(RateLimitHit)
+        .filter(RateLimitHit.key.startswith("engine_eval:ip:"))
+        .count()
+        == 0
+    )
+
+
+@pytest.mark.postgres
+def test_a_broken_limiter_is_loud_and_counted(db_session, monkeypatch, caplog):
+    """Fail-open is deliberate. Silent fail-open is how it stays broken.
+
+    A typo, or a deploy landing before its migration, makes every limited route
+    unlimited — measured at 200/200 allowed against a limit of 5 — while the
+    logs read as a hiccup and /ops/health stays green. This pins the two things
+    that make it visible: ERROR level, and a counter /ops/status can report.
+    """
+    import logging
+
+    from services.api import ratelimit as rl
+
+    limiter = _pg("broken", limit=1, window=60)
+    limiter.reset()
+    monkeypatch.setitem(rl.FAILURES, "count", 0)
+
+    def explode(*_a, **_k):
+        raise RuntimeError('relation "rate_limit_hits" does not exist')
+
+    monkeypatch.setattr(limiter, "_check", explode)
+
+    with caplog.at_level(logging.ERROR, logger="knightmind.ratelimit"):
+        for _ in range(3):
+            # Fails OPEN, deliberately: the limiter is not the DDoS layer.
+            assert limiter.check("acct-1").allowed is True
+
+    assert rl.FAILURES["count"] == 3
+    assert "FAILED OPEN" in caplog.text
+    assert any(r.levelno >= logging.ERROR for r in caplog.records)

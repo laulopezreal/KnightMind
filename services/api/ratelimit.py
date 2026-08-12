@@ -56,11 +56,10 @@ import threading
 import time
 from collections import deque
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
-from typing import Callable, Union
+from typing import Any, Callable, Union
 
 from fastapi import Depends, HTTPException, Request
-from sqlalchemy import delete, func, select, text
+from sqlalchemy import delete, text
 from sqlalchemy.orm import Session
 
 from services.api.db import SessionLocal
@@ -69,6 +68,10 @@ from services.api.identity import require_account
 from services.api.models import Account, RateLimitHit
 
 logger = logging.getLogger("knightmind.ratelimit")
+
+# Fail-open is deliberate; SILENT fail-open is not. Surfaced on /ops/status so
+# a limiter that has been off since the last deploy is answerable, not guessed.
+FAILURES: dict[str, Any] = {"count": 0, "last_error": None}
 
 # Both stores answer `check(key) -> RateLimitDecision`; nothing else is used.
 Limiter = Union["RateLimiter", "PostgresRateLimiter"]
@@ -191,44 +194,75 @@ class PostgresRateLimiter:
         with SessionLocal() as db:
             try:
                 return self._check(db, self._scoped(key))
-            except Exception:
+            except Exception as exc:
                 db.rollback()
                 # Fail OPEN, deliberately. This limiter protects expensive
                 # routes from a well-behaved-TCP principal; it is not the DDoS
                 # layer (that is the ingress). A database blip must not turn
                 # every limited endpoint into a 429 -- the outage would be
                 # larger than the abuse it prevents.
-                logger.warning("Rate limit check failed; allowing", exc_info=True)
+                # ERROR, not warning: this is the security control switching
+                # itself off. A typo, or a deploy landing before its migration,
+                # makes every limited route unlimited while the logs read as a
+                # hiccup and /ops/health stays green. The counter is what makes
+                # "it has been off for an hour" answerable -- see /ops/status.
+                FAILURES["count"] += 1
+                FAILURES["last_error"] = repr(exc)
+                logger.error(
+                    "Rate limit check FAILED OPEN (%s total); limiting is NOT in "
+                    "effect for this request",
+                    FAILURES["count"],
+                    exc_info=True,
+                )
                 return RateLimitDecision(allowed=True, retry_after=0)
 
     def _check(self, db: Session, key: str) -> RateLimitDecision:
-        now = datetime.now(timezone.utc).replace(tzinfo=None)
-        cutoff = now - timedelta(seconds=self.window_seconds)
+        # Every time value comes from the SERVER, not this process. The Python
+        # clock is per-host, which is the property a shared store exists to
+        # remove: a host 90s fast sweeps away another's live window, so the
+        # principal gets a second full budget; one 90s slow reads future-dated
+        # rows and hands a legitimate client a Retry-After well past the window.
+        window = f"{self.window_seconds} seconds"
 
-        # hashtext() is stable for a given string within a major version, and a
-        # collision only means two unrelated keys serialise briefly.
+        # Bounded wait. pg_advisory_xact_lock does NOT raise while it waits, so
+        # the fail-open below cannot see it: one long-lived transaction holding
+        # this key would hang every limited request indefinitely, each pinning a
+        # threadpool token and a pool connection -- a worse outage than the 429s
+        # fail-open was written to avoid. LOCAL, so it reverts with the
+        # transaction rather than leaking into the next use of this connection.
+        db.execute(text("SET LOCAL lock_timeout = '2s'"))
+        # A collision in hashtext() merges two keys onto one lock: a slowdown,
+        # not a cycle. Each transaction takes exactly one advisory lock and then
+        # touches only that key's rows, so there is no second lock to invert.
         db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"), {"k": key})
-        # Sweeping this key's aged-out rows on every check keeps the table
-        # proportional to live traffic without a background job.
         db.execute(
-            delete(RateLimitHit).where(
-                RateLimitHit.key == key, RateLimitHit.hit_at <= cutoff
-            )
+            text(
+                "DELETE FROM rate_limit_hits "
+                "WHERE key = :k AND hit_at <= now() - CAST(:w AS interval)"
+            ),
+            {"k": key, "w": window},
         )
-        oldest, count = db.execute(
-            select(func.min(RateLimitHit.hit_at), func.count()).where(
-                RateLimitHit.key == key, RateLimitHit.hit_at > cutoff
-            )
+        count, retry_after = db.execute(
+            text(
+                "SELECT count(*), "
+                "       CEIL(EXTRACT(EPOCH FROM "
+                "            (min(hit_at) + CAST(:w AS interval)) - now())) "
+                "FROM rate_limit_hits "
+                "WHERE key = :k AND hit_at > now() - CAST(:w AS interval)"
+            ),
+            {"k": key, "w": window},
         ).one()
 
-        if count >= self.limit and oldest is not None:
-            retry_after = math.ceil(
-                (oldest + timedelta(seconds=self.window_seconds) - now).total_seconds()
-            )
+        if count >= self.limit:
             db.commit()
-            return RateLimitDecision(allowed=False, retry_after=max(retry_after, 1))
+            return RateLimitDecision(
+                allowed=False, retry_after=max(int(retry_after or 1), 1)
+            )
 
-        db.add(RateLimitHit(key=key, hit_at=now))
+        db.execute(
+            text("INSERT INTO rate_limit_hits (key, hit_at) VALUES (:k, now())"),
+            {"k": key},
+        )
         db.commit()
         return RateLimitDecision(allowed=True, retry_after=0)
 

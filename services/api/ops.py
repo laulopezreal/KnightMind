@@ -6,6 +6,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
+from services.api import ratelimit as ratelimit_module
 from services.api.ai import config as ai_config
 from services.api.auth import require_operator
 from services.api.db import get_db
@@ -203,6 +204,10 @@ def get_ops_status(db: Session = Depends(get_db)):
         # runs elsewhere -- the recoveries happen in that container. Reported
         # as None rather than a zeroed dict, because "0 recoveries" is a claim
         # and this process has no basis for making it.
+        # Fail-open means a broken limiter looks exactly like a working one
+        # from outside. This is the only place that difference is visible.
+        "rate_limit_failures": ratelimit_module.FAILURES["count"],
+        "rate_limit_last_error": ratelimit_module.FAILURES["last_error"],
         "last_recovery": (
             None
             if os.environ.get("KNIGHTMIND_WORKER_EXTERNAL") == "true"
