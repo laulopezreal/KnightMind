@@ -49,7 +49,16 @@ class PositionFacts:
     """
 
     fen: str
-    best_move_uci: str
+    # The move the player PLAYED, not the engine's. Naming from the winning
+    # move meant every deterministic name carried the answer's destination
+    # square — "The h1 Pin", "The Queen to h1" — which is the one thing the
+    # model's own names are gated against. The fallback was leaking what the
+    # gate refuses, and it is the branch that runs on every puzzle at creation.
+    #
+    # The played move is never the solution (verified across the corpus:
+    # played_move_uci = best_move_uci in zero rows), so it identifies the
+    # position without pointing at the answer.
+    played_move_uci: str
     primary_motif: str | None = None
     move_number: int | None = None
 
@@ -63,7 +72,7 @@ def _describe(facts: PositionFacts) -> tuple[str | None, str | None, str | None]
     """
     try:
         board = chess.Board(facts.fen)
-        move = chess.Move.from_uci(facts.best_move_uci)
+        move = chess.Move.from_uci(facts.played_move_uci)
     except (ValueError, IndexError, TypeError):
         return None, None, None
 
@@ -77,38 +86,26 @@ def _describe(facts: PositionFacts) -> tuple[str | None, str | None, str | None]
 
 
 def compose_position_name(facts: PositionFacts) -> str:
-    """Name one puzzle from its position. Total: always returns something.
+    """Name one puzzle from the move its player actually made. Always returns.
 
-    The motif chooses the template; the position fills it in. When the position
-    cannot be read at all we fall back to the old motif title, which is worse
-    but never wrong — and is the only branch that can still repeat itself.
+    Deliberately says nothing about the tactic. The motif describes the
+    SOLUTION, so pairing a motif word with the played move's square would be
+    both misleading ("The h6 Pin" when the pin is elsewhere) and a hint. This
+    names what the player did, which is theirs to know.
+
+    When the position cannot be read at all we fall back to the old motif
+    title: worse, but never wrong, and the only branch that can still repeat.
     """
     piece, square, victim = _describe(facts)
-    motif = facts.primary_motif or "blunder"
 
     if square is None:
         # Unreadable position. The motif table is all that is left.
-        return MOTIF_TITLES.get(motif, "Puzzle")
+        return MOTIF_TITLES.get(facts.primary_motif or "blunder", "Puzzle")
 
-    if motif == "fork" and piece:
-        return f"The {square} {piece} Fork"
-    if motif == "pin":
-        return f"The {square} Pin"
-    if motif == "hanging_queen":
-        return f"The Queen on {square}"
-    if motif == "hanging_piece":
-        return f"The Loose {victim or 'Piece'} on {square}"
-    if motif == "back_rank":
-        return f"Back Rank on {square}"
-    if motif == "mate_threat":
-        return f"Mate on {square}"
-
-    # The default motif — the one 150 puzzles landed on. Naming from the move
-    # is what stops them all being called the same thing.
-    if victim:
-        return f"The {victim} on {square}"
+    if victim and piece:
+        return f"{piece} Takes {victim} on {square}"
     if piece:
-        return f"The {piece} to {square}"
+        return f"{piece} to {square}"
     return f"The Move to {square}"
 
 

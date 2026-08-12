@@ -189,7 +189,7 @@ class PuzzleRepository:
             stats_title = compose_position_name(
                 PositionFacts(
                     fen=fen,
-                    best_move_uci=best_move_uci,
+                    played_move_uci=played_move_uci,
                     primary_motif=motif,
                     move_number=move_number,
                 )

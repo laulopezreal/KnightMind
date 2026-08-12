@@ -27,7 +27,7 @@ from services.api.puzzles.title_registry import (
 from services.api.storage.puzzle_repository import PuzzleRepository
 
 # Two DIFFERENT positions whose winning move is a knight landing on f7, so both
-# compose the same name ("The f7 Knight Fork"). This is the collision the
+# compose the same name ("King to g2"). This is the collision the
 # generation path hits in the wild — the same tactic in two different games.
 FORK_A = ("3q3k/8/8/4N3/8/8/8/6K1 w - - 0 1", "e5f7")
 FORK_B = ("3q3k/8/5N2/8/8/8/8/6K1 w - - 0 1", "f6f7")
@@ -107,7 +107,7 @@ class TestTheDatabaseEnforcesIt:
         _, theirs = _save(repository, db_session, OTHER, "g2", 10, FORK_A)
 
         assert _title(db_session, mine) == _title(db_session, theirs)
-        assert _title(db_session, mine) == "The f7 Knight Fork"
+        assert _title(db_session, mine) == "King to g2"
 
     def test_untitled_rows_do_not_collide(self, db_session, repository):
         """The index is not partial because it does not need to be: Postgres
@@ -136,7 +136,7 @@ class TestSaveNeverFailsOverAName:
         assert new_a and new_b, "both puzzles must be created"
         assert id_a != id_b
         assert _title(db_session, id_a) != _title(db_session, id_b)
-        assert _title(db_session, id_a) == "The f7 Knight Fork"
+        assert _title(db_session, id_a) == "King to g2"
 
     def test_a_whole_import_of_identical_tactics_lands(self, db_session, repository):
         """Six of the same tactic in one import — the shape that produced 103
@@ -203,7 +203,7 @@ class TestSaveNeverFailsOverAName:
                     PuzzleStats(
                         puzzle_id="thief",
                         username=USER,
-                        title="The f7 Knight Fork",
+                        title="King to g2",
                         title_source="position",
                     )
                 )
@@ -219,7 +219,7 @@ class TestSaveNeverFailsOverAName:
 
         assert stolen["done"], "the race never happened; the test proves nothing"
         assert is_new, "the puzzle must be saved despite losing its name"
-        assert _title(db_session, puzzle_id) != "The f7 Knight Fork"
+        assert _title(db_session, puzzle_id) != "King to g2"
 
     def test_a_duplicate_puzzle_still_resolves_to_the_winner(
         self, db_session, repository
@@ -290,7 +290,7 @@ class TestTheNamingPassChecksTheDatabase:
         a name written by an EARLIER run — or by a puzzle outside this run's
         scope — was free to be handed out again."""
         self._seed(db_session, "already", source="ai", title="Knight Went Wandering")
-        self._seed(db_session, "p1", source="position", title="The f7 Knight Fork")
+        self._seed(db_session, "p1", source="position", title="King to g2")
         monkeypatch.setattr(
             ai_naming,
             "name_puzzle",
@@ -330,13 +330,13 @@ class TestTheNamingPassChecksTheDatabase:
     ):
         """A row's own title is not a collision with itself; if it were, every
         pass would append another suffix to every puzzle."""
-        self._seed(db_session, "p1", source="position", title="The f7 Knight Fork")
+        self._seed(db_session, "p1", source="position", title="King to g2")
         monkeypatch.delenv("KNIGHTMIND_AI_NAMING")  # deterministic name only
 
         naming_pass.name_puzzles(db_session, username=USER)
         naming_pass.name_puzzles(db_session, username=USER)
 
-        assert _title(db_session, "p1") == "The f7 Knight Fork"
+        assert _title(db_session, "p1") == "King to g2"
 
     def test_another_users_title_is_not_a_collision(
         self, db_session, monkeypatch, naming_on
@@ -357,7 +357,7 @@ class TestTheNamingPassChecksTheDatabase:
         """Two UPDATEs in one transaction cannot trade titles: Postgres checks
         the unique index per statement, and the unit of work emits UPDATEs in
         primary-key order, so one of the two would abort the run at random."""
-        self._seed(db_session, "aaa", source="position", title="The f7 Knight Fork")
+        self._seed(db_session, "aaa", source="position", title="King to g2")
         self._seed(db_session, "zzz", source="position", title="Taken Elsewhere")
         names = iter(["Something Else", "Taken Elsewhere"])
         monkeypatch.setattr(
@@ -409,7 +409,7 @@ class TestTheNamingPassChecksTheDatabase:
                     PuzzleStats(
                         puzzle_id="shadow",
                         username=USER,
-                        title="The f7 Knight Fork",
+                        title="King to g2",
                         title_source="position",
                     )
                 )
@@ -475,7 +475,7 @@ class TestTitleRegistry:
         _save(repository, db_session, USER, "g1", 10, FORK_A)
         _save(repository, db_session, OTHER, "g2", 10, FORK_A)
 
-        assert taken_titles(db_session, USER) == {"The f7 Knight Fork"}
+        assert taken_titles(db_session, USER) == {"King to g2"}
 
     def test_a_rows_own_title_can_be_excluded(self, db_session, repository):
         _, puzzle_id = _save(repository, db_session, USER, "g1", 10, FORK_A)
@@ -500,13 +500,16 @@ def test_the_fork_fixtures_really_do_compose_the_same_name():
     colliding, the collision tests would pass without testing anything."""
     from services.api.puzzles.position_names import PositionFacts, compose_position_name
 
+    # Both fixtures are seeded with the same PLAYED move, which is what the
+    # composer names from now — it used to name from the engine's move, which
+    # put the answer square in every title.
     names = {
         compose_position_name(
-            PositionFacts(fen=fen, best_move_uci=best, primary_motif="fork")
+            PositionFacts(fen=fen, played_move_uci="g1g2", primary_motif="fork")
         )
-        for fen, best in (FORK_A, FORK_B)
+        for fen, _best in (FORK_A, FORK_B)
     }
 
-    assert names == {"The f7 Knight Fork"}
+    assert names == {"King to g2"}
     # And they are genuinely different positions, not the same one twice.
     assert chess.Board(FORK_A[0]).fen() != chess.Board(FORK_B[0]).fen()

@@ -134,7 +134,7 @@ def reclassify_motifs(
         new_title = compose_position_name(
             PositionFacts(
                 fen=puzzle.fen or "",
-                best_move_uci=puzzle.best_move_uci or "",
+                played_move_uci=puzzle.played_move_uci or "",
                 primary_motif=new_motif,
                 move_number=move_number,
             )
