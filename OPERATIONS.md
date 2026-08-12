@@ -114,9 +114,24 @@ Live containers:
   - it also runs the hourly housekeeping loop: abandoned-session cleanup, the
     AI audit retention sweep, the rate-limit hit purge and the dead-heartbeat
     purge. That lives with whichever process runs the worker, so there is
-    exactly one of it — except when `KNIGHTMIND_WORKER_DISABLED=true`, which is
-    honoured by both containers: the API stops judging worker health and the
-    worker process exits without claiming anything.
+    exactly one of it. `KNIGHTMIND_WORKER_DISABLED=true` is honoured by both
+    containers: the API stops judging worker health and the worker idles
+    without claiming anything. **Housekeeping keeps running while it idles** —
+    it is started before the switch is read, deliberately. Sweeping is not job
+    claiming, and the switch documented for a spend incident used to be the
+    same switch that stopped the rate-limit purge while the API kept writing to
+    that table.
+  - **the worker idles rather than exits when disabled.** `restart:
+    unless-stopped` restarts a container on ANY exit status, including 0, so
+    exiting cleanly here produced a crash loop rather than a quiet container.
+    `docker compose stop worker` is the way to stop it entirely.
+  - **green health does not mean jobs are running.** `/ops/health` reads the
+    freshest heartbeat, and the beat is written ~0.6s after the process starts,
+    before any job is attempted. A worker that boots, claims a job and dies
+    executing it is restarted and beats again — stable green, zero throughput.
+    `worker: "stalled"` (HTTP 503) now catches that case: jobs QUEUED for over
+    five minutes with nothing RUNNING. For anything shorter, ask
+    `/ops/status` for `active_job` and `recent_jobs`.
   - the 120s grace period covers a typical job, not every job: `max_games` goes
     to 2000, and a large generation will exceed it and be killed, leaving the
     job for the 15-minute crash-recovery lease.

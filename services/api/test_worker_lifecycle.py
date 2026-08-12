@@ -47,6 +47,34 @@ class TestTheKillSwitchIdles:
         assert asked_to_stop is True  # a signal asked; exit code 0 is correct
         assert started == []  # and nothing was ever claimed
 
+    def test_housekeeping_still_runs_while_disabled(self, monkeypatch):
+        """Stopping the worker was never meant to stop collecting rubbish.
+
+        With the cleanup loop started after the kill-switch branch, pulling the
+        switch also halted the AI-audit retention sweep that OPERATIONS.md
+        states as a data-handling commitment, and the rate_limit_hits purge —
+        while the API kept INSERTing into that table regardless. The switch
+        documented for a spend incident was also the one that let it grow.
+        """
+        monkeypatch.setenv("KNIGHTMIND_WORKER_DISABLED", "true")
+        monkeypatch.setattr(worker_main.worker, "start", lambda: None)
+        swept = asyncio.Event()
+
+        async def fake_cleanup():
+            swept.set()
+            await asyncio.Event().wait()  # runs forever, like the real loop
+
+        monkeypatch.setattr(worker_main, "run_session_cleanup", fake_cleanup)
+
+        async def scenario():
+            task = asyncio.create_task(worker_main._run())
+            await asyncio.wait_for(swept.wait(), timeout=2)
+            worker_main.signal.raise_signal(worker_main.signal.SIGTERM)
+            await asyncio.wait_for(task, timeout=2)
+
+        asyncio.run(scenario())
+        assert swept.is_set(), "housekeeping never started"
+
 
 class TestADeadLoopIsReportable:
     def test_stop_survives_a_loop_that_raised(self):
