@@ -60,32 +60,50 @@ def upgrade() -> None:
         # index is already correct.
         return
 
+    # Interrogate pg_index rather than string-matching indexdef.
+    #
+    # The first draft asked `position('type' in definition) = 0`, which gives
+    # the right answer on the production shape and the wrong one elsewhere: a
+    # NON-UNIQUE index on (username, type) contains the substring, so it was
+    # accepted as "already correct" while enforcing nothing at all. Demonstrated
+    # — two identical queued diagnosis jobs inserted afterwards, both accepted.
+    # The catalogue answers uniqueness, column set and partiality exactly.
     op.execute(f"""
         DO $$
         DECLARE
-            definition text;
+            is_correct boolean;
         BEGIN
-            SELECT indexdef INTO definition
-              FROM pg_indexes
-             WHERE schemaname = current_schema()
-               AND indexname = 'ix_jobs_active_username';
+            SELECT i.indisunique
+                   AND i.indpred IS NOT NULL
+                   AND (
+                       SELECT array_agg(a.attname::text ORDER BY k.ord)
+                         FROM unnest(i.indkey) WITH ORDINALITY AS k(attnum, ord)
+                         JOIN pg_attribute a
+                           ON a.attrelid = i.indrelid AND a.attnum = k.attnum
+                   ) = ARRAY['username', 'type']
+              INTO is_correct
+              FROM pg_index i
+              JOIN pg_class c ON c.oid = i.indexrelid
+              JOIN pg_namespace n ON n.oid = c.relnamespace
+             WHERE c.relname = 'ix_jobs_active_username'
+               AND n.nspname = current_schema();
 
-            IF definition IS NULL THEN
-                -- Absent entirely: create it in the correct shape.
-                CREATE UNIQUE INDEX ix_jobs_active_username
-                    ON jobs (username, type)
-                    WHERE {_PARTIAL_WHERE};
-
-            ELSIF position('type' in definition) = 0 THEN
-                -- The narrow shape. Widening is permissive, so no existing row
-                -- can conflict with the replacement.
-                DROP INDEX ix_jobs_active_username;
-                CREATE UNIQUE INDEX ix_jobs_active_username
-                    ON jobs (username, type)
-                    WHERE {_PARTIAL_WHERE};
-                RAISE NOTICE 'ix_jobs_active_username repaired to (username, type)';
+            IF is_correct IS TRUE THEN
+                RETURN;  -- already the shape the chain says it should be
             END IF;
-            -- Already correct: do nothing.
+
+            IF is_correct IS NOT NULL THEN
+                -- Present but wrong: the narrow shape, or non-unique, or no
+                -- longer partial. Rebuilding is safe either way — widening a
+                -- unique index is permissive, and the WHERE clause below is
+                -- the one every other revision assumes.
+                DROP INDEX ix_jobs_active_username;
+                RAISE NOTICE 'ix_jobs_active_username rebuilt to (username, type) UNIQUE';
+            END IF;
+
+            CREATE UNIQUE INDEX ix_jobs_active_username
+                ON jobs (username, type)
+                WHERE {_PARTIAL_WHERE};
         END $$;
         """)
 
