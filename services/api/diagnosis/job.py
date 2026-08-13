@@ -164,13 +164,23 @@ def run_diagnosis(ctx) -> dict:
         budget = audit.budget_last_24h(username)
 
         for index, puzzle_id in enumerate(pending):
-            # Bounded cadence: the lease still refreshes often enough that
-            # crash recovery cannot mistake a live run for a dead one.
+            # Heartbeat EVERY puzzle, progress on the interval.
+            #
+            # These were batched together at one every 25, which is fine for
+            # progress (cosmetic) and wrong for the heartbeat (a liveness
+            # lease). Each iteration makes one blocking model call — 60s
+            # timeout, 2 retries — so 25 of them against a degraded provider is
+            # up to 75 minutes between bumps, five times the 15-minute lease.
+            # Crash recovery then treats a working job as abandoned, and the
+            # queue-stall check treats the run as no work at all.
+            #
+            # The extra cost is one UPDATE per puzzle against an iteration that
+            # already spends seconds in a model call.
+            if ctx.heartbeat():
+                canceled = True
+                logger.info("Diagnosis canceled for %s", username)
+                break
             if index % HEARTBEAT_INTERVAL == 0:
-                if ctx.heartbeat():
-                    canceled = True
-                    logger.info("Diagnosis canceled for %s", username)
-                    break
                 ctx.progress(index, total)
 
             outcome, budget, used_ai = _diagnose_one(

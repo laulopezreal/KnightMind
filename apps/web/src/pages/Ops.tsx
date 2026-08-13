@@ -5,6 +5,21 @@ import type { HealthResponse, OpsStatusResponse, RecentJob, StorageReportRespons
 import { useChessUsername } from '../context/ChessUsernameContext';
 import { useAsyncData } from '../hooks/useAsyncData';
 
+// /ops/health's `worker` field is one of: ok | stalled | stale | not_running |
+// unknown | disabled. Each says something different about where to look.
+// `disabled` is counted as healthy by /ops/health (no worker in this
+// deployment is not a fault), so painting it red contradicts the endpoint.
+const WORKER_HEALTHY = new Set(['ok', 'disabled']);
+
+const WORKER_LABELS: Record<string, string> = {
+    ok: 'RUNNING',
+    stalled: 'QUEUE STALLED',
+    stale: 'NOT BEATING',
+    not_running: 'OFFLINE',
+    unknown: 'UNREADABLE',
+    disabled: 'DISABLED',
+};
+
 export default function Ops() {
     const { username, setUsername } = useChessUsername();
     const [selectedUser, setSelectedUser] = useState(username);
@@ -311,7 +326,11 @@ export default function Ops() {
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
                 <HealthCard label="API" status={health?.ok ? 'up' : 'down'} value={health?.ok ? 'UP' : 'DOWN'} />
                 <HealthCard label="DB" status={health?.db === 'ok' ? 'up' : 'down'} value={health?.db === 'ok' ? 'CONNECTED' : 'ERROR'} />
-                <HealthCard label="Worker" status={health?.worker === 'ok' ? 'up' : 'down'} value={health?.worker === 'ok' ? 'RUNNING' : 'OFFLINE'} />
+                {/* Not a boolean. `stalled` means the worker process is alive and
+                    beating but the queue is not moving — rendering that as
+                    OFFLINE sends an operator to look at a container that is
+                    running perfectly, which is the opposite of the diagnosis. */}
+                <HealthCard label="Worker" status={WORKER_HEALTHY.has(health?.worker ?? '') ? 'up' : 'down'} value={WORKER_LABELS[health?.worker ?? ''] ?? 'OFFLINE'} />
                 <HealthCard label="Stockfish" status={health?.stockfish === 'ok' ? 'up' : 'down'} value={health?.stockfish === 'ok' ? 'AVAILABLE' : 'MISSING'} />
             </div>
 

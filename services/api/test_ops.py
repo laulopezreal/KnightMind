@@ -605,18 +605,33 @@ def test_the_heartbeat_purge_spares_live_workers(db_session):
 # `compose build` fix removed at the image layer, one layer down.
 
 
-def _queued_job(db, *, age_seconds: int, status: str = "queued", username: str = "u"):
+def _queued_job(
+    db,
+    *,
+    age_seconds: int,
+    status: str = "queued",
+    username: str = "u",
+    lease_age_seconds: int | None = None,
+):
+    """Seed a job. ``lease_age_seconds`` sets heartbeat_at for RUNNING rows:
+    small means a worker is actively working it, large means it was orphaned by
+    a process that died mid-job."""
     from datetime import datetime, timedelta, timezone
 
     from services.api.models import Job
 
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     job = Job(
         username=username,
         type="puzzle_generation",
         status=status,
         params={},
-        created_at=datetime.now(timezone.utc).replace(tzinfo=None)
-        - timedelta(seconds=age_seconds),
+        created_at=now - timedelta(seconds=age_seconds),
+        heartbeat_at=(
+            None
+            if lease_age_seconds is None
+            else now - timedelta(seconds=lease_age_seconds)
+        ),
     )
     db.add(job)
     db.commit()
@@ -639,17 +654,53 @@ def test_health_503_when_the_worker_beats_but_the_queue_is_stalled(
 def test_a_busy_worker_with_work_queued_behind_it_is_not_stalled(
     client, db_session, monkeypatch
 ):
-    """Puzzle generation legitimately runs for minutes with jobs waiting. The
-    stall check is scoped to "and nothing is RUNNING" precisely so this stays
-    healthy -- otherwise the fix would be worse than the bug it replaces."""
+    """Puzzle generation legitimately runs for minutes with jobs waiting, and a
+    check that called that unhealthy would be worse than the bug it replaces.
+    A LIVE lease is what makes it busy rather than abandoned."""
     _external_worker(monkeypatch)
     _beat(db_session, "worker-1", age_seconds=1)
     _queued_job(db_session, age_seconds=3600, username="waiting")
-    _queued_job(db_session, age_seconds=60, status="running", username="busy")
+    _queued_job(
+        db_session,
+        age_seconds=600,
+        status="running",
+        username="busy",
+        lease_age_seconds=5,
+    )
 
     response = client.get("/ops/health")
     assert response.status_code == 200
     assert response.json()["worker"] == "ok"
+
+
+def test_a_job_orphaned_in_running_does_not_mask_a_stalled_queue(
+    client, db_session, monkeypatch
+):
+    """The finding this check was written for, and originally could not catch.
+
+    A worker that dies MID-JOB (OOM-kill, SIGKILL) leaves its row in RUNNING.
+    Counting every RUNNING row therefore short-circuited the query before it
+    looked at the queue: the failure mode disarmed its own detector. Verified
+    against the old predicate as 200 {"worker": "ok"} with a job orphaned for
+    24h and another queued for 24h.
+
+    An expired lease is exactly what crash recovery reclaims on, so this
+    endpoint and recovery cannot disagree about whether work is happening.
+    """
+    _external_worker(monkeypatch)
+    _beat(db_session, "worker-1", age_seconds=1)
+    _queued_job(
+        db_session,
+        age_seconds=86400,
+        status="running",
+        username="orphan",
+        lease_age_seconds=86400,
+    )
+    _queued_job(db_session, age_seconds=86400, username="waiting")
+
+    response = client.get("/ops/health")
+    assert response.status_code == 503
+    assert response.json()["worker"] == "stalled"
 
 
 def test_a_recently_queued_job_is_not_a_stall(client, db_session, monkeypatch):

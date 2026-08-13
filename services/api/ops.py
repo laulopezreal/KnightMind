@@ -35,6 +35,13 @@ WORKER_HEARTBEAT_STALE_AFTER = timedelta(seconds=30)
 # queued behind it is not a stall.
 QUEUE_STALL_AFTER = timedelta(minutes=5)
 
+# The liveness lease a RUNNING job must hold to count as genuinely in progress.
+# Same value crash recovery reclaims on (worker.cleanup_stuck_jobs), and
+# deliberately so: a job this endpoint treats as alive is exactly a job
+# recovery would not yet reclaim, so the two cannot disagree about whether the
+# worker is doing anything.
+JOB_LEASE = timedelta(minutes=15)
+
 
 def _queue_is_stalled(db: Session) -> bool:
     """True when jobs are waiting and no worker is taking them.
@@ -52,10 +59,29 @@ def _queue_is_stalled(db: Session) -> bool:
     Scoped to "and nothing is RUNNING" so this cannot fire on a busy worker:
     puzzle generation legitimately runs for minutes with jobs queued behind it.
     """
+    # Only a job with a LIVE lease masks the stall.
+    #
+    # Counting every RUNNING row made this check disarm itself against the
+    # exact failure it was written for. A worker that dies mid-job (OOM-kill,
+    # SIGKILL, the engine taking the process down) leaves its row in RUNNING
+    # with a fresh lease. `restart: unless-stopped` restarts it, it beats
+    # within a second, claims the next job, dies again — and that abandoned
+    # RUNNING row short-circuited the query before it ever looked at the queue.
+    # Reproduced: a job orphaned in RUNNING for 24h plus another QUEUED for 24h
+    # reported `{"worker": "ok"}`, 200.
+    #
+    # Crash recovery already decides liveness this way (worker.py's
+    # cleanup_stuck_jobs, same COALESCE and same 15-minute lease), so if this
+    # predicate is wrong then recovery has been wrong in the same way all
+    # along. It is also why a busy worker cannot trip it: both handlers bump
+    # the lease per unit of work — generation per game, diagnosis per puzzle —
+    # so a job that is genuinely progressing is never 15 minutes without one.
+    liveness = func.coalesce(Job.heartbeat_at, Job.updated_at, Job.created_at)
+    lease_floor = datetime.now(timezone.utc).replace(tzinfo=None) - JOB_LEASE
     running = db.execute(
         select(func.count())
         .select_from(Job)
-        .where(Job.status == JobStatus.RUNNING.value)
+        .where(Job.status == JobStatus.RUNNING.value, liveness >= lease_floor)
     ).scalar_one()
     if running:
         return False

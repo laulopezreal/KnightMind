@@ -124,14 +124,43 @@ Live containers:
   - **the worker idles rather than exits when disabled.** `restart:
     unless-stopped` restarts a container on ANY exit status, including 0, so
     exiting cleanly here produced a crash loop rather than a quiet container.
-    `docker compose stop worker` is the way to stop it entirely.
-  - **green health does not mean jobs are running.** `/ops/health` reads the
+
+    **The two ways to stop it differ, and neither is strictly better.**
+
+    | | housekeeping | `/ops/health` | deploy gate |
+    |---|---|---|---|
+    | `KNIGHTMIND_WORKER_DISABLED=true` | keeps running | `disabled`, **200 OK** | passes |
+    | `docker compose stop worker` | **stops** | `not_running`, 503 | fails |
+
+    The flag keeps the four sweeps alive — including the AI-audit retention
+    sweep and the `rate_limit_hits` purge, which the API keeps feeding
+    regardless. The cost is that health reports `disabled` as healthy, so a
+    paused queue is invisible to the gate and to monitoring. Stopping the
+    container is louder but silently stops collecting.
+
+    Use the flag for a long pause you are watching (a spend incident); use
+    `stop worker` when you want the outage to be obvious. Either way the queue
+    is not being served — `/ops/health` alone will not remind you.
+  - **green health does not mean jobs are completing.** `/ops/health` reads the
     freshest heartbeat, and the beat is written ~0.6s after the process starts,
-    before any job is attempted. A worker that boots, claims a job and dies
-    executing it is restarted and beats again — stable green, zero throughput.
-    `worker: "stalled"` (HTTP 503) now catches that case: jobs QUEUED for over
-    five minutes with nothing RUNNING. For anything shorter, ask
-    `/ops/status` for `active_job` and `recent_jobs`.
+    before any job is attempted. `worker: "stalled"` (HTTP 503) catches the
+    case where jobs have been QUEUED for over five minutes and no job holds a
+    live lease — a worker that is beating and polling but getting nothing done.
+
+    What it does NOT tell you is when a job last *finished*. Nothing does: no
+    endpoint reports time-since-last-terminal-state. If throughput is the
+    question, ask `/ops/status` for `active_job` and `recent_jobs` and read the
+    timestamps yourself.
+
+    A job orphaned in RUNNING (worker OOM-killed or SIGKILLed mid-job) no
+    longer hides a stalled queue — the stall check ignores RUNNING rows whose
+    15-minute lease has expired, the same lease crash recovery reclaims on.
+    Recovery itself now runs hourly with the other sweeps, not only at worker
+    startup, so an orphan is reclaimed without restarting the container.
+
+  - **there is no operator command to clear a stuck queue.** The only reclaim
+    path is the hourly recovery sweep or a worker restart, both of which wait
+    out the 15-minute lease. If `stalled` fires, that wait is the remedy.
   - the 120s grace period covers a typical job, not every job: `max_games` goes
     to 2000, and a large generation will exceed it and be killed, leaving the
     job for the 15-minute crash-recovery lease.
