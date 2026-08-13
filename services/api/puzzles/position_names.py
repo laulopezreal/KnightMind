@@ -62,9 +62,38 @@ class PositionFacts:
     primary_motif: str | None = None
     move_number: int | None = None
 
+    # The square the WINNING move lands on. Never used to build a name — it is
+    # here so the composer can refuse to name a square that happens to be it.
+    #
+    # Naming from the played move is not sufficient on its own: the two moves
+    # differ, but their DESTINATIONS coincide on 17 of 348 live puzzles (4.9%)
+    # — recaptures, and wrong-piece-right-square. "Queen to h1" for a puzzle
+    # whose answer lands on h1 is exactly the title class this namer was
+    # changed to stop producing. The earlier fix verified whole-move
+    # inequality, which is the wrong invariant.
+    answer_square: str | None = None
 
-def _describe(facts: PositionFacts) -> tuple[str | None, str | None, str | None]:
-    """Return (mover piece name, target square, captured piece name).
+
+def answer_square_of(best_move_uci: str | None) -> str | None:
+    """The square the winning move lands on, or None if unreadable.
+
+    Passed to PositionFacts so the composer can refuse to name it. Shared
+    rather than re-derived per call site: four places build these facts, and a
+    site that forgets it silently reopens the leak.
+    """
+    uci = best_move_uci or ""
+    if len(uci) < 4:
+        return None
+    square = uci[2:4]
+    if square[0] in "abcdefgh" and square[1] in "12345678":
+        return square
+    return None
+
+
+def _describe(
+    facts: PositionFacts,
+) -> tuple[str | None, str | None, str | None, str | None]:
+    """Return (mover piece name, target square, captured piece, origin square).
 
     Any unparseable input yields ``(None, None, None)`` rather than raising:
     a malformed FEN in one old row must not be able to fail a backfill over
@@ -74,7 +103,7 @@ def _describe(facts: PositionFacts) -> tuple[str | None, str | None, str | None]
         board = chess.Board(facts.fen)
         move = chess.Move.from_uci(facts.played_move_uci)
     except (ValueError, IndexError, TypeError):
-        return None, None, None
+        return None, None, None, None
 
     mover = board.piece_at(move.from_square)
     victim = board.piece_at(move.to_square)
@@ -82,6 +111,7 @@ def _describe(facts: PositionFacts) -> tuple[str | None, str | None, str | None]
         PIECE_NAMES.get(mover.piece_type) if mover else None,
         chess.square_name(move.to_square),
         PIECE_NAMES.get(victim.piece_type) if victim else None,
+        chess.square_name(move.from_square),
     )
 
 
@@ -96,10 +126,22 @@ def compose_position_name(facts: PositionFacts) -> str:
     When the position cannot be read at all we fall back to the old motif
     title: worse, but never wrong, and the only branch that can still repeat.
     """
-    piece, square, victim = _describe(facts)
+    piece, square, victim, origin = _describe(facts)
 
     if square is None:
         # Unreadable position. The motif table is all that is left.
+        return MOTIF_TITLES.get(facts.primary_motif or "blunder", "Puzzle")
+
+    if facts.answer_square and square == facts.answer_square:
+        # The played move lands where the winning move lands. Naming that
+        # square would hand over the answer, so name where the piece came
+        # FROM instead — the origin of a move that was not the solution says
+        # nothing about the solution's destination, and it keeps the name
+        # distinct rather than collapsing it to a generic phrase.
+        if piece and origin:
+            return f"{piece} Left {origin}"
+        if origin:
+            return f"The Move From {origin}"
         return MOTIF_TITLES.get(facts.primary_motif or "blunder", "Puzzle")
 
     if victim and piece:

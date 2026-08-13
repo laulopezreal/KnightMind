@@ -150,3 +150,49 @@ class TestDisambiguate:
             assert name not in used
             used.add(name)
         assert len(used) == 3
+
+
+# --- the played move can land where the winning move lands -------------------
+
+
+def test_a_played_move_landing_on_the_answer_square_names_the_origin():
+    """Naming from the played move is not sufficient on its own.
+
+    The two moves differ, but their DESTINATIONS coincide on 17 of 348 live
+    puzzles (4.9%) — recaptures, and wrong-piece-right-square. The earlier fix
+    verified whole-move inequality, which is the wrong invariant: it left
+    titles like "Queen to h1" for a puzzle whose answer lands on h1, which is
+    the exact title class the change was made to stop producing.
+    """
+    # Played Nf3xg4; the winning move also lands on g4.
+    name = compose_position_name(facts(played_move_uci="f3g4", answer_square="g4"))
+
+    assert "g4" not in name
+    assert name == "Knight Left f3"
+
+
+def test_the_origin_square_is_still_distinguishing():
+    """The fallback must not collapse every such puzzle onto one phrase —
+    that would recreate the duplicate-names bug in miniature."""
+    names = {
+        compose_position_name(facts(played_move_uci=uci, answer_square=uci[2:4]))
+        for uci in ("f3g4", "b1c3", "d1d4")
+    }
+    assert len(names) == 3
+
+
+def test_an_unrelated_answer_square_does_not_change_the_name():
+    """The guard fires only on a genuine collision."""
+    assert compose_position_name(
+        facts(played_move_uci="f3g5", answer_square="a1")
+    ) == compose_position_name(facts(played_move_uci="f3g5"))
+
+
+def test_answer_square_of_reads_the_destination():
+    from services.api.puzzles.position_names import answer_square_of
+
+    assert answer_square_of("g1f3") == "f3"
+    assert answer_square_of("e7e8q") == "e8"  # promotion carries a suffix
+    assert answer_square_of(None) is None
+    assert answer_square_of("xx") is None
+    assert answer_square_of("zzzz") is None

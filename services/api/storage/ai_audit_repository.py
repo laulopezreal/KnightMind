@@ -197,6 +197,16 @@ class AIAuditRepository:
         is what makes recovery automatic: nothing has to remember to close a
         breaker that a working call closes by itself.
 
+        ``skipped`` counts as a failure here, not just ``error``. Only ``error``
+        did, and that left three ways to spin: a missing API key, an exhausted
+        daily cap, and a puzzle at the head of the batch that is skipped every
+        run. Each writes ``skipped``, which neither tripped this breaker nor
+        reduced ``naming_pass.pending_count`` — so the worker re-queued, the
+        pass skipped again, and the cycle repeated every ~2 seconds with no
+        spend to bound it, because a skip is not billed. A skip means "this
+        cannot proceed right now", which is exactly the condition a breaker is
+        for; whether the model refused or was never asked does not change that.
+
         Failures older than ``within`` report 0. Without that a streak would
         latch — the only thing that clears it is a successful call, and the
         caller's whole purpose is to stop making calls.
@@ -218,7 +228,7 @@ class AIAuditRepository:
         # one transaction, and two of them can land on the same microsecond, so
         # "the last N rows" is not a well-defined set. An aggregate is.
         streak = select(func.count(), func.max(DiagnosisAuditLog.created_at)).where(
-            *scope, DiagnosisAuditLog.status == "error"
+            *scope, DiagnosisAuditLog.status.in_(("error", "skipped"))
         )
         if last_answer is not None:
             streak = streak.where(DiagnosisAuditLog.created_at > last_answer)

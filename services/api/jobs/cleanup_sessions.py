@@ -93,6 +93,12 @@ def _longest_configured_window() -> float:
     )
 
 
+# Rows per purge statement. Small enough that each transaction is short, large
+# enough that a year's backlog is a few hundred round trips rather than a
+# million.
+_PURGE_BATCH = 5000
+
+
 def purge_stale_rate_limit_hits(db: Session, keep_seconds: int | None = None) -> int:
     """Drop rate-limit rows no live window can still reference.
 
@@ -118,16 +124,38 @@ def purge_stale_rate_limit_hits(db: Session, keep_seconds: int | None = None) ->
     if keep_seconds is None:
         # Ten windows of slack past the widest one actually configured.
         keep_seconds = max(3600, int(_longest_configured_window() * 10))
-    result = db.execute(
-        text(
-            "DELETE FROM rate_limit_hits "
-            "WHERE hit_at < (now() AT TIME ZONE 'UTC') - CAST(:keep AS interval)"
-        ),
-        {"keep": f"{keep_seconds} seconds"},
-    )
-    removed = cast(CursorResult, result).rowcount
-    if removed:
+    # SKIP LOCKED, and in batches.
+    #
+    # A plain DELETE takes row locks that a live `_check` on the same key then
+    # blocks on for its full 2s lock_timeout before failing OPEN — measured, and
+    # it increments rate_limit_failures. That counter is the ONLY signal that
+    # the limiter is broken, so routine housekeeping was manufacturing the alarm
+    # it exists to raise. SKIP LOCKED steps over anything a checker holds; those
+    # rows are inside a live window anyway, so they were not this purge's to
+    # take, and the next run collects them.
+    #
+    # Batched so one sweep cannot hold a long transaction over a large backlog:
+    # the DELETE is an unindexed scan (there is no standalone hit_at index, only
+    # (key, hit_at)), and it grows with however long the worker was down.
+    removed = 0
+    while True:
+        result = db.execute(
+            text(
+                "DELETE FROM rate_limit_hits WHERE ctid IN ("
+                "  SELECT ctid FROM rate_limit_hits"
+                "   WHERE hit_at < (now() AT TIME ZONE 'UTC') - CAST(:keep AS interval)"
+                "   FOR UPDATE SKIP LOCKED"
+                "   LIMIT :batch"
+                ")"
+            ),
+            {"keep": f"{keep_seconds} seconds", "batch": _PURGE_BATCH},
+        )
+        batch = cast(CursorResult, result).rowcount
         db.commit()
+        removed += batch
+        if batch < _PURGE_BATCH:
+            break
+    if removed:
         print(f"Purged {removed} stale rate-limit row(s)")
     return removed
 

@@ -73,11 +73,20 @@ Live containers:
   - image: `knightmind-api`
   - command: `uvicorn services.api.main:app --host 0.0.0.0 --port 8000 --workers 1`
   - host mapping: `127.0.0.1:8000 -> 8000/tcp`
-  - Docker healthcheck: `curl -f http://localhost:8000/ops/health || exit 1`
-    - the `worker` field here reports the SEPARATE worker container, read from
-      its heartbeat rows. `stale` means it is up but has stopped looping;
-      `not_running` means no worker has ever beaten. Both return 503, so this
-      healthcheck and the deploy gate both catch a dead queue.
+  - Docker healthcheck: `curl -f http://localhost:8000/ops/ready || exit 1`
+    - **`/ops/ready`, not `/ops/health`.** This container's status describes
+      THIS container: database reachable and Stockfish available. A dead queue
+      does NOT mark the API unhealthy, deliberately — the worker is a separate
+      container, and stopping it should not make the API look broken while it
+      is serving traffic perfectly.
+    - the **deploy gate** curls `/ops/health` directly, so a dead queue is
+      still caught there. `/ops/health` adds the `worker` field, read from the
+      heartbeat rows: `stale` = up but stopped looping, `not_running` = no
+      worker has ever beaten, `stalled` = beating but the queue is not moving,
+      `unknown` = the heartbeat table could not be read. All return 503.
+    - so: **a 503 from `/ops/health` does not mean the API is down**, and a
+      healthy API container does not mean jobs are running. They answer
+      different questions on purpose.
   - `--workers 1` is deliberate, and the reason is the connection budget.
 
     Postgres allows **97** non-superuser connections (`max_connections=100`
@@ -158,9 +167,14 @@ Live containers:
     Recovery itself now runs hourly with the other sweeps, not only at worker
     startup, so an orphan is reclaimed without restarting the container.
 
-  - **there is no operator command to clear a stuck queue.** The only reclaim
-    path is the hourly recovery sweep or a worker restart, both of which wait
-    out the 15-minute lease. If `stalled` fires, that wait is the remedy.
+  - **there is no operator command to clear a stuck queue, and the wait is up
+    to ~75 minutes.** Recovery needs the 15-minute lease to expire AND the
+    hourly housekeeping sweep to come round — and the sweep runs its passes
+    then sleeps 3600s, so a job orphaned just after one runs waits nearly the
+    full hour on top of the lease. The worker's startup sweep does not help: it
+    fires at t=0, when the orphan is still fresh. Restarting the worker is the
+    only way to force it sooner. Earlier wording said 15 minutes; that is the
+    lease alone, not the latency.
   - the 120s grace period covers a typical job, not every job: `max_games` goes
     to 2000, and a large generation will exceed it and be killed, leaving the
     job for the 15-minute crash-recovery lease.
@@ -501,6 +515,26 @@ Verification after Lau ran the root helper on 2026-07-10:
 
 Host-local API is repaired. Public API ingress is repaired as of 2026-07-10: `https://api.guessme.world/ops/ping` returns JSON.
 
+## `rate_limit_failures` is not always a fault
+
+`/ops/status` exposes `rate_limit_failures`, and the Ops page renders it as an
+amber "N requests passed unchecked" banner. The limiter fails open, so this is
+the only signal that it broke.
+
+It is also incremented by the **hourly rate-limit purge**. The purge deletes
+rows older than an hour; a live check deletes rows older than its window and
+then counts. They overlap, so a check that lands during the purge waits out its
+2s `lock_timeout` and fails open — correctly, and for a request that was going
+to be allowed anyway.
+
+So a small count that grows by roughly the number of concurrent limited
+requests, about once an hour, is the purge. A count that climbs continuously,
+or whose `rate_limit_last_error` is not a lock timeout, is the limiter. Read
+`rate_limit_last_error` before concluding anything; it carries the exception
+class and SQLSTATE.
+
+The counter is per-process and resets when the API container restarts.
+
 ## Public surface status after Caddy deploy
 
 Frontend:
@@ -570,6 +604,27 @@ records its `model_version` and drops out of the query. Re-running is how a
 rejected response gets retried — that is deliberately a manual decision, since
 a standing rule would re-attempt a persistently-rejected puzzle every day.
 
+## KNIGHTMIND_AI_NAMING stays unset on the deployed stack
+
+Naming has only ever been run from the operator CLI, deliberately, against a
+database someone was watching. **Do not set `KNIGHTMIND_AI_NAMING=1` in
+`.env.docker`.**
+
+Setting it arms the background naming pass inside the diagnosis job, and the
+job chain re-queues while `naming_pass.pending_count > 0`. The circuit breaker
+that bounds that loop opens on a failure streak — but three conditions produce
+`skipped` rather than a failure, and a skip is not billed, so the daily cap
+cannot bound it either:
+
+- no `ANTHROPIC_API_KEY` (never self-heals)
+- the daily cap exhausted (the corpus is larger than one day's allowance)
+- a puzzle at the head of the batch that is skipped every run
+
+`skipped` now counts toward the breaker, so the loop is damped to one attempt
+per cooldown window rather than one every two seconds. That makes it survivable,
+not desirable. Run naming from `scripts/ai_name_puzzles.py` and read what it
+wrote.
+
 ## Unsafe without explicit approval
 
 Do not run these without a fresh DB backup and Lau's explicit approval:
@@ -581,6 +636,54 @@ docker compose --env-file .env.docker up -d --build
 docker compose --env-file .env.docker exec api alembic -c services/api/alembic.ini upgrade head
 docker volume rm knightmind_pgdata
 ```
+
+## Rolling back a deploy
+
+There is **no automated rollback**. The deploy applies migrations and replaces
+containers before the health check runs, so a red workflow means the change
+shipped and then failed its check — not that it was prevented.
+
+Three things make this harder than a tag swap, and all three have bitten:
+
+- **No versioned image.** Both services pin `image: knightmind-api` with no
+  tag. The previous build survives only as a dangling image reachable by ID
+  until something prunes it, so rolling back means a full rebuild.
+- **The worker becomes an orphan.** Rolling the compose file back to a revision
+  without the `worker` service leaves `knightmind-worker-1` running NEW code
+  beside the rolled-back API's in-process worker. `--remove-orphans` is not
+  optional here.
+- **Do not downgrade the migrations.** All three of `a335ae9eeced`,
+  `399a35540403` and `d1e2f3a4b5c6` are additive or no-ops, and old code
+  ignores them. Downgrading below `a335ae9eeced` while any worker container
+  survives breaks it mid-write.
+
+```bash
+cd /home/lauureal/apps/knightmind
+COMPOSE="docker compose --env-file .env.docker"
+
+# 1. Stop the worker FIRST, before the schema moves under it.
+$COMPOSE stop worker
+
+# 2. Back to the previous main commit, and rebuild — there is no tagged
+#    previous image to swap to.
+git reset --hard <previous-main-sha>
+$COMPOSE build api
+
+# 3. Restore the old topology AND remove the worker, which no longer exists
+#    in the rolled-back compose file.
+$COMPOSE up -d --remove-orphans
+
+# 4. Verify. Leave the migrations alone.
+curl --noproxy '*' http://127.0.0.1:8000/ops/health
+```
+
+If only the worker is misbehaving, the fastest mitigation is not a rollback:
+
+- `$COMPOSE stop worker` — loud. `/ops/health` reports `not_running` (503) and
+  **every subsequent deploy gate fails** until it is back.
+- `KNIGHTMIND_WORKER_DISABLED=true` + restart the worker — quiet. Housekeeping
+  keeps running and health reports `disabled`, which counts as healthy, so the
+  paused queue is invisible to the gate. See the trade table above.
 
 ## Migration downgrade preconditions
 

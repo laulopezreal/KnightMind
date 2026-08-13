@@ -36,6 +36,7 @@ from services.api.puzzles import ai_naming
 from services.api.puzzles.identity import assign_primary_motif
 from services.api.puzzles.position_names import (
     PositionFacts,
+    answer_square_of,
     compose_position_name,
     disambiguate,
 )
@@ -254,6 +255,7 @@ def name_puzzles(
             PositionFacts(
                 fen=puzzle.fen or "",
                 played_move_uci=puzzle.played_move_uci or "",
+                answer_square=answer_square_of(puzzle.best_move_uci),
                 primary_motif=motif,
                 move_number=(puzzle.ply or 0) // 2 + 1,
             )

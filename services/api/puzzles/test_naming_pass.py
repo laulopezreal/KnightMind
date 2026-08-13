@@ -387,6 +387,45 @@ class TestRequeueChain:
         assert naming_pass.retry_is_backed_off(db_session, USER) is False
         assert _chain_once(db_session) == 1
 
+    def test_a_missing_api_key_backs_off_too(self, db_session, monkeypatch, naming_on):
+        """`skipped` used to be invisible to both the breaker and pending_count.
+
+        A missing key writes SKIPPED("no_api_key"): it never tripped the
+        streak, and it never reduced pending — so the worker re-queued, the
+        pass skipped again, and the cycle repeated every ~2s indefinitely. And
+        because a skip is not billed, the daily cap could not bound it either.
+        Unlike an outage this never self-heals on its own, so it would have run
+        until someone noticed the container was busy doing nothing.
+        """
+        for pid in ("p1", "p2", "p3", "p4"):
+            _seed(db_session, pid, source="position", diagnosed=True)
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+        naming_pass.name_puzzles(db_session, username=USER)
+
+        assert naming_pass.retry_is_backed_off(db_session, USER) is True
+        assert _chain_once(db_session) == 0
+
+    def test_an_exhausted_budget_backs_off_too(
+        self, db_session, monkeypatch, naming_on
+    ):
+        """Same shape, and reachable in ordinary operation rather than only on
+        a misconfiguration: the corpus is larger than a day's allowance."""
+        for pid in ("p1", "p2", "p3", "p4"):
+            _seed(db_session, pid, source="position", diagnosed=True)
+        monkeypatch.setattr(
+            ai_naming,
+            "name_puzzle",
+            lambda facts, avoid=None: ai_naming.NameOutcome(
+                ai_naming.SKIPPED, reason="budget_exhausted"
+            ),
+        )
+
+        naming_pass.name_puzzles(db_session, username=USER)
+
+        assert naming_pass.retry_is_backed_off(db_session, USER) is True
+        assert _chain_once(db_session) == 0
+
     def test_an_answered_call_clears_the_streak(
         self, db_session, monkeypatch, naming_on
     ):
