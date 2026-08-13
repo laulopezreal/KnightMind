@@ -222,6 +222,26 @@ jobs:
             # stack (fresh server, or after systemctl stop knightmind-api).
             ${COMPOSE} run --rm api alembic -c services/api/alembic.ini upgrade head
 
+            echo "--- Checking the deployed schema against the models ---"
+            # CI already runs `alembic check`, but only against a database it
+            # built from the migration chain -- which is correct by
+            # construction. It can never see PRODUCTION drift.
+            #
+            # That gap hid a real one: ix_jobs_active_username sat in its
+            # pre-f3a4b5c6d7e8 shape (username, not username+type) while
+            # Alembic recorded the widening as applied, so a user with any
+            # active job could not enqueue another KIND of job -- and the
+            # endpoint reported success. Nothing would ever have corrected it,
+            # because the migration that should have will never run again.
+            #
+            # A warning, not a gate: this runs AFTER the upgrade, so failing
+            # here would report red on a deploy that has already landed,
+            # without rolling anything back. Promote it to `exit 1` once it has
+            # been seen clean across a few deploys.
+            if ! ${COMPOSE} run --rm api alembic -c services/api/alembic.ini check; then
+              echo "::warning::Deployed schema does not match the models -- drift, or a migration that did not take. Compare pg_indexes and information_schema.columns against a database built from the chain."
+            fi
+
             echo "--- Restarting with new code ---"
             ${COMPOSE} up -d
 
