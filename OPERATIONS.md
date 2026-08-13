@@ -125,13 +125,22 @@ Live containers:
     unless-stopped` restarts a container on ANY exit status, including 0, so
     exiting cleanly here produced a crash loop rather than a quiet container.
 
-    **Prefer the flag to `docker compose stop worker`.** Housekeeping lives
-    only in the worker process, so stopping the container stops all four sweeps
-    — including the AI-audit retention sweep and the `rate_limit_hits` purge,
-    while the API keeps writing to that table. Setting
-    `KNIGHTMIND_WORKER_DISABLED=true` and restarting the worker stops job
-    claiming while housekeeping keeps running, which is what you almost always
-    want.
+    **The two ways to stop it differ, and neither is strictly better.**
+
+    | | housekeeping | `/ops/health` | deploy gate |
+    |---|---|---|---|
+    | `KNIGHTMIND_WORKER_DISABLED=true` | keeps running | `disabled`, **200 OK** | passes |
+    | `docker compose stop worker` | **stops** | `not_running`, 503 | fails |
+
+    The flag keeps the four sweeps alive — including the AI-audit retention
+    sweep and the `rate_limit_hits` purge, which the API keeps feeding
+    regardless. The cost is that health reports `disabled` as healthy, so a
+    paused queue is invisible to the gate and to monitoring. Stopping the
+    container is louder but silently stops collecting.
+
+    Use the flag for a long pause you are watching (a spend incident); use
+    `stop worker` when you want the outage to be obvious. Either way the queue
+    is not being served — `/ops/health` alone will not remind you.
   - **green health does not mean jobs are completing.** `/ops/health` reads the
     freshest heartbeat, and the beat is written ~0.6s after the process starts,
     before any job is attempted. `worker: "stalled"` (HTTP 503) catches the

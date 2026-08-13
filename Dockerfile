@@ -84,12 +84,13 @@ EXPOSE 8000
 # Health check – /ops/ready, NOT /ops/health.
 #
 # This container's health should describe THIS container. /ops/health also
-# reports the worker, which now runs in a separate container and reads its
-# liveness (and, since the queue-stall check, the jobs table) from the
-# database. Pointing the healthcheck at it meant `docker compose stop worker`
-# — which OPERATIONS.md recommends as the way to stop the worker — marked the
-# API `unhealthy` even though it was serving traffic perfectly, and every
-# later deploy's gate then failed on it.
+# reports the worker, which runs in a separate container from #374 onward and
+# reads its liveness (and, since the queue-stall check, the jobs table) from
+# the database. Once that topology is live, stopping the worker would mark the
+# API `unhealthy` while it served traffic perfectly, and every later deploy's
+# gate would fail on it. Not something production has hit — it has run the
+# in-process worker until now — but it is reachable the day the worker
+# container ships, which is the same release as this line.
 #
 # /ops/ready is the same probe minus the worker: DB reachable and Stockfish
 # available, which is exactly "can this API serve requests". The deploy gate

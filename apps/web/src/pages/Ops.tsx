@@ -7,6 +7,10 @@ import { useAsyncData } from '../hooks/useAsyncData';
 
 // /ops/health's `worker` field is one of: ok | stalled | stale | not_running |
 // unknown | disabled. Each says something different about where to look.
+// `disabled` is counted as healthy by /ops/health (no worker in this
+// deployment is not a fault), so painting it red contradicts the endpoint.
+const WORKER_HEALTHY = new Set(['ok', 'disabled']);
+
 const WORKER_LABELS: Record<string, string> = {
     ok: 'RUNNING',
     stalled: 'QUEUE STALLED',
@@ -326,7 +330,7 @@ export default function Ops() {
                     beating but the queue is not moving — rendering that as
                     OFFLINE sends an operator to look at a container that is
                     running perfectly, which is the opposite of the diagnosis. */}
-                <HealthCard label="Worker" status={health?.worker === 'ok' ? 'up' : 'down'} value={WORKER_LABELS[health?.worker ?? ''] ?? 'OFFLINE'} />
+                <HealthCard label="Worker" status={WORKER_HEALTHY.has(health?.worker ?? '') ? 'up' : 'down'} value={WORKER_LABELS[health?.worker ?? ''] ?? 'OFFLINE'} />
                 <HealthCard label="Stockfish" status={health?.stockfish === 'ok' ? 'up' : 'down'} value={health?.stockfish === 'ok' ? 'AVAILABLE' : 'MISSING'} />
             </div>
 
