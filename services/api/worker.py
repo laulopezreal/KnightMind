@@ -118,6 +118,11 @@ class JobWorker:
         self.worker_id = os.environ.get("KNIGHTMIND_WORKER_ID") or socket.gethostname()
         self.is_running = False
         self._task = None
+        # The job this process is executing right now, if any. Crash recovery
+        # must never reclaim it: the handler is still running in a thread and
+        # will try to write its result at the end, and that write is guarded on
+        # status == RUNNING. Reclaiming mid-flight discards the result silently.
+        self._current_job_id: str | None = None
         self._beat_task: asyncio.Task | None = None
         # Notified when the job loop ends for any reason; worker_main uses this
         # to leave its shutdown wait so the process can exit and be restarted.
@@ -311,6 +316,23 @@ class JobWorker:
             limit = now - timedelta(minutes=15)
             liveness = func.coalesce(Job.heartbeat_at, Job.updated_at, Job.created_at)
             stmt = select(Job).where(Job.status == JobStatus.RUNNING, liveness < limit)
+            # Never reclaim the job THIS process is executing.
+            #
+            # This used to run only at startup, when nothing was in flight, so
+            # the exclusion was implicit. It now runs hourly alongside the other
+            # sweeps, and a handler can legitimately outrun the lease — one AI
+            # diagnosis call is up to 180s against a degraded provider, and
+            # run_diagnosis heartbeats in batches. Reclaiming a job whose thread
+            # is still working sets it back to QUEUED, and the completion write
+            # is guarded on status == RUNNING: rowcount 0, the result payload
+            # silently discarded, progress frozen, the follow-up never enqueued,
+            # and a log line blaming a cancel that never happened.
+            #
+            # Excluded by id rather than by lease age: a second replica's stale
+            # job SHOULD still be reclaimed, and only this process knows which
+            # job is genuinely alive in it.
+            if self._current_job_id is not None:
+                stmt = stmt.where(Job.id != self._current_job_id)
             stuck_jobs = db.scalars(stmt).all()
             count = 0
             for job in stuck_jobs:
@@ -567,6 +589,7 @@ class JobWorker:
         """Execute the actual job logic."""
         # Re-fetch job to update status
 
+        self._current_job_id = job_id
         try:
             with SessionLocal() as db:
                 stmt = select(Job).where(Job.id == job_id)
@@ -673,6 +696,11 @@ class JobWorker:
                     f"Job {job_id} failure discarded: job is no longer "
                     "RUNNING (likely canceled); terminal status left intact"
                 )
+        finally:
+            # Cleared on every path, including the early `return` above and the
+            # failure path, so a crashed handler cannot leave this process
+            # permanently shielding a job it is no longer running.
+            self._current_job_id = None
 
 
 worker = JobWorker()

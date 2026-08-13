@@ -81,9 +81,23 @@ USER knightmind
 # Expose API port
 EXPOSE 8000
 
-# Health check – hits the existing /ops/health endpoint
+# Health check – /ops/ready, NOT /ops/health.
+#
+# This container's health should describe THIS container. /ops/health also
+# reports the worker, which runs in a separate container from #374 onward and
+# reads its liveness (and, since the queue-stall check, the jobs table) from
+# the database. Once that topology is live, stopping the worker would mark the
+# API `unhealthy` while it served traffic perfectly, and every later deploy's
+# gate would fail on it. Not something production has hit — it has run the
+# in-process worker until now — but it is reachable the day the worker
+# container ships, which is the same release as this line.
+#
+# /ops/ready is the same probe minus the worker: DB reachable and Stockfish
+# available, which is exactly "can this API serve requests". The deploy gate
+# still curls /ops/health directly, so a broken worker is still caught there —
+# it just no longer poisons the API's own container status.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD curl -f http://localhost:8000/ops/health || exit 1
+    CMD curl -f http://localhost:8000/ops/ready || exit 1
 
 # Run with uvicorn. The worker no longer runs in this process (see the `worker`
 # service in docker-compose.yml), so the single worker here is no longer a

@@ -289,14 +289,24 @@ jobs:
                 echo "Read the field that is not \"ok\": db, worker or stockfish."
                 echo "  worker=not_running  no worker has ever beaten -- did the worker container start?"
                 echo "  worker=stale        it beat once and stopped -- check the worker logs below."
+                echo "  worker=stalled      it IS beating and finding nothing to claim, but jobs are"
+                echo "                      queued. The logs below will look perfectly healthy -- the"
+                echo "                      problem is the queue, not the process. Check"
+                echo "                      /ops/status for active_job, and look for a job stuck in"
+                echo "                      RUNNING whose lease has expired."
+                echo "  worker=unknown      the heartbeat table could not be read -- part-way through"
+                echo "                      a downgrade?"
                 echo "Ingress is fine: something answered on 127.0.0.1:8000."
               fi
               echo "--- api logs ---"
-              ${COMPOSE} logs --tail=50 api
+              ${COMPOSE} logs --tail=50 api || true
               # The worker is a separate container now, and it is the likeliest
               # cause of a 503 that is not the database.
               echo "--- worker logs ---"
-              ${COMPOSE} logs --tail=50 worker
+              # `|| true`: this runs under `set -euo pipefail`, so a non-zero exit
+              # here (missing service, daemon hiccup) would kill the script
+              # before printing the logs this branch exists to print.
+              ${COMPOSE} logs --tail=50 worker || true
               exit 1
             fi
 

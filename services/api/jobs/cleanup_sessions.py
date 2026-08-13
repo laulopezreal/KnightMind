@@ -192,5 +192,21 @@ async def run_session_cleanup():
         except Exception as e:
             print(f"Error in worker heartbeat purge: {e}")
 
+        # Crash recovery, on the clock rather than only at startup.
+        #
+        # cleanup_stuck_jobs ran once, before the job loop, and nothing called
+        # it again — so a job orphaned in RUNNING was reclaimed only if the
+        # worker process restarted. A worker that stays up (the normal case)
+        # left it there forever: /ops/status showed it as active_job
+        # indefinitely, and until the lease-aware fix in ops.py it also masked
+        # the queue-stall check. Recovery belongs on the same clock as every
+        # other sweep.
+        try:
+            from services.api.worker import worker
+
+            await worker.cleanup_stuck_jobs()
+        except Exception as e:
+            print(f"Error in stuck-job recovery: {e}")
+
         # Sleep for defined interval
         await asyncio.sleep(CLEANUP_INTERVAL_SECONDS)
