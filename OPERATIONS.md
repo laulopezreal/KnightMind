@@ -124,14 +124,34 @@ Live containers:
   - **the worker idles rather than exits when disabled.** `restart:
     unless-stopped` restarts a container on ANY exit status, including 0, so
     exiting cleanly here produced a crash loop rather than a quiet container.
-    `docker compose stop worker` is the way to stop it entirely.
-  - **green health does not mean jobs are running.** `/ops/health` reads the
+
+    **Prefer the flag to `docker compose stop worker`.** Housekeeping lives
+    only in the worker process, so stopping the container stops all four sweeps
+    — including the AI-audit retention sweep and the `rate_limit_hits` purge,
+    while the API keeps writing to that table. Setting
+    `KNIGHTMIND_WORKER_DISABLED=true` and restarting the worker stops job
+    claiming while housekeeping keeps running, which is what you almost always
+    want.
+  - **green health does not mean jobs are completing.** `/ops/health` reads the
     freshest heartbeat, and the beat is written ~0.6s after the process starts,
-    before any job is attempted. A worker that boots, claims a job and dies
-    executing it is restarted and beats again — stable green, zero throughput.
-    `worker: "stalled"` (HTTP 503) now catches that case: jobs QUEUED for over
-    five minutes with nothing RUNNING. For anything shorter, ask
-    `/ops/status` for `active_job` and `recent_jobs`.
+    before any job is attempted. `worker: "stalled"` (HTTP 503) catches the
+    case where jobs have been QUEUED for over five minutes and no job holds a
+    live lease — a worker that is beating and polling but getting nothing done.
+
+    What it does NOT tell you is when a job last *finished*. Nothing does: no
+    endpoint reports time-since-last-terminal-state. If throughput is the
+    question, ask `/ops/status` for `active_job` and `recent_jobs` and read the
+    timestamps yourself.
+
+    A job orphaned in RUNNING (worker OOM-killed or SIGKILLed mid-job) no
+    longer hides a stalled queue — the stall check ignores RUNNING rows whose
+    15-minute lease has expired, the same lease crash recovery reclaims on.
+    Recovery itself now runs hourly with the other sweeps, not only at worker
+    startup, so an orphan is reclaimed without restarting the container.
+
+  - **there is no operator command to clear a stuck queue.** The only reclaim
+    path is the hourly recovery sweep or a worker restart, both of which wait
+    out the 15-minute lease. If `stalled` fires, that wait is the remedy.
   - the 120s grace period covers a typical job, not every job: `max_games` goes
     to 2000, and a large generation will exceed it and be killed, leaving the
     job for the 15-minute crash-recovery lease.
