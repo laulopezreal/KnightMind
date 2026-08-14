@@ -207,6 +207,18 @@ class AIAuditRepository:
         cannot proceed right now", which is exactly the condition a breaker is
         for; whether the model refused or was never asked does not change that.
 
+        ``no_position`` is included deliberately, and the temptation to exclude
+        it is worth naming. It reads like a per-puzzle data defect rather than a
+        provider condition, so counting it pauses good rows behind one broken
+        one for ``ERROR_STREAK_COOLDOWN``. That is a real cost, but excluding it
+        here does not pay it — it is the third of the three spins above.
+        ``pending_count`` credits a puzzle only once the model has ANSWERED for
+        it, and a puzzle with no FEN is never asked, so it stays pending
+        forever; this breaker is the only thing standing between that and a
+        re-queue every ~2 seconds. Excluding it needs ``pending_count`` to count
+        such a puzzle as answered FIRST. Until then the pause is the cheaper
+        failure, and it is bounded where the loop is not.
+
         Failures older than ``within`` report 0. Without that a streak would
         latch — the only thing that clears it is a successful call, and the
         caller's whole purpose is to stop making calls.
@@ -230,13 +242,6 @@ class AIAuditRepository:
         streak = select(func.count(), func.max(DiagnosisAuditLog.created_at)).where(
             *scope,
             DiagnosisAuditLog.status.in_(("error", "skipped")),
-            # A skip counts only when it says the SYSTEM cannot proceed.
-            # `no_position` is a per-puzzle data defect — a row with no FEN —
-            # and counting it paused naming for 15 minutes after a run in which
-            # the provider answered every call: measured, 5 of 8 answered and
-            # the three malformed rows at the tail opened the breaker. A broken
-            # row must not stop the queue behind it.
-            DiagnosisAuditLog.reason.is_distinct_from("no_position"),
         )
         if last_answer is not None:
             streak = streak.where(DiagnosisAuditLog.created_at > last_answer)

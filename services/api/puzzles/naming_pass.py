@@ -183,6 +183,9 @@ def name_puzzles(
         return budgets[key]
 
     outcomes: Counter = Counter()
+    # Budget-exhausted audit rows written so far, per user. Keyed the same way
+    # as `budgets`, because it bounds the same thing.
+    exhausted_rows: Counter = Counter()
 
     # The names already spoken for, per user. Two things changed here and both
     # matter.
@@ -262,30 +265,38 @@ def name_puzzles(
         elif budget_for(puzzle.username).exhausted:
             name, title_source = fallback, "position"
             outcomes["budget_exhausted"] += 1
-            audit.record(
-                AuditWrite(
-                    username=puzzle.username,
-                    call_type=ai_naming.CALL_TYPE,
-                    puzzle_id=puzzle.id,
-                    status=ai_naming.SKIPPED,
-                    reason="budget_exhausted",
-                )
-            )
-            # Enough rows to open the breaker, then stop asking.
+            # Enough rows to open this user's breaker, then stop writing them.
             #
-            # Writing one per remaining puzzle is pure noise — the answer will
-            # not change within this run, and a large corpus turns one capped
-            # pass into hundreds of identical audit rows. But stopping at the
-            # FIRST one would leave the streak below ERROR_STREAK_LIMIT, so the
-            # breaker never opens and the worker re-queues immediately: cheaper
-            # rows, same loop. Recording exactly the threshold is what makes the
-            # next run defer instead.
-            if outcomes["budget_exhausted"] >= ERROR_STREAK_LIMIT:
-                logger.info(
-                    "Naming budget exhausted for %s; stopping this pass",
-                    puzzle.username,
+            # One row per remaining puzzle is pure noise: the answer cannot
+            # change within this run, and a large corpus turns one capped pass
+            # into hundreds of identical rows. Writing only the FIRST is worse
+            # still — the streak stays under ERROR_STREAK_LIMIT, the breaker
+            # never opens, and the worker re-queues immediately: cheaper rows,
+            # same loop. Exactly the threshold is what makes the next run defer.
+            #
+            # Counted PER USER, and capped rather than used to leave the loop.
+            # Budgets are per user, so a global count let one exhausted tenant
+            # end the pass for everyone else, and a streak split across two
+            # users opened NEITHER breaker — the same loop the threshold exists
+            # to stop. Leaving the loop was also wrong for the puzzle in hand:
+            # the fallback name is written below, so breaking here denied a name
+            # to the very row that triggered it, and it would be denied again on
+            # every subsequent run.
+            if exhausted_rows[owner] < ERROR_STREAK_LIMIT:
+                exhausted_rows[owner] += 1
+                audit.record(
+                    AuditWrite(
+                        username=puzzle.username,
+                        call_type=ai_naming.CALL_TYPE,
+                        puzzle_id=puzzle.id,
+                        status=ai_naming.SKIPPED,
+                        reason="budget_exhausted",
+                    )
                 )
-                break
+                if exhausted_rows[owner] == ERROR_STREAK_LIMIT:
+                    logger.info(
+                        "Naming budget exhausted for %s; backing off", puzzle.username
+                    )
         else:
             facts = build_facts(puzzle, diagnosis, game, motif=motif)
             outcome = ai_naming.name_puzzle(facts, avoid=recent[-AVOID_WINDOW:])
