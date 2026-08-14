@@ -173,19 +173,30 @@ def test_a_played_move_landing_on_the_answer_square_names_the_origin():
 
 def test_the_origin_square_is_still_distinguishing():
     """The fallback must not collapse every such puzzle onto one phrase —
-    that would recreate the duplicate-names bug in miniature."""
+    that would recreate the duplicate-names bug in miniature.
+
+    Asserts the exact strings, not just that there are three of them: without
+    the guard these are three distinct names too (the destination ones), so a
+    count assertion passes on the broken code and proves nothing.
+    """
     names = {
         compose_position_name(facts(played_move_uci=uci, answer_square=uci[2:4]))
         for uci in ("f3g4", "b1c3", "d1d4")
     }
-    assert len(names) == 3
+    assert names == {"Knight Left f3", "Knight Left b1", "Queen Left d1"}
 
 
 def test_an_unrelated_answer_square_does_not_change_the_name():
-    """The guard fires only on a genuine collision."""
-    assert compose_position_name(
-        facts(played_move_uci="f3g5", answer_square="a1")
-    ) == compose_position_name(facts(played_move_uci="f3g5"))
+    """The guard fires only on a genuine collision.
+
+    Asserts the literal, not equality between two calls: with the guard removed
+    both sides compute the same expression, so the comparison is a tautology
+    that passes either way.
+    """
+    assert (
+        compose_position_name(facts(played_move_uci="f3g5", answer_square="a1"))
+        == "Knight to g5"
+    )
 
 
 def test_answer_square_of_reads_the_destination():

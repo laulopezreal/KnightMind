@@ -50,9 +50,8 @@ services:
 
   api:
     # Explicit tag, shared with `worker` below. Without it compose derives a
-    # per-service name and builds TWO images -- and the deploy runs
-    # `compose build api`, so every deploy after the first would leave the
-    # worker running the code from the deploy before it while the schema and
+    # per-service name and builds TWO images, so a deploy that built only one
+    # service would leave the worker running the code from the deploy before it while the schema and
     # the API moved on. Silently: the stale worker keeps beating, so
     # /ops/health stays green and the gate passes.
     image: knightmind-api

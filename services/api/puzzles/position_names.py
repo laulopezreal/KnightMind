@@ -138,11 +138,11 @@ def compose_position_name(facts: PositionFacts) -> str:
         # FROM instead — the origin of a move that was not the solution says
         # nothing about the solution's destination, and it keeps the name
         # distinct rather than collapsing it to a generic phrase.
-        if piece and origin:
+        # `origin` is non-None whenever `square` is — both come from the same
+        # successful parse — so there is no third branch to write here.
+        if piece:
             return f"{piece} Left {origin}"
-        if origin:
-            return f"The Move From {origin}"
-        return MOTIF_TITLES.get(facts.primary_motif or "blunder", "Puzzle")
+        return f"The Move From {origin}"
 
     if victim and piece:
         return f"{piece} Takes {victim} on {square}"

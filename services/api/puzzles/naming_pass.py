@@ -101,21 +101,6 @@ def _user_won(game, username: str) -> bool | None:
     return None
 
 
-def _answer_square(puzzle) -> str | None:
-    """The square the winning move lands on, e.g. ``"f7"``.
-
-    Used only to reject a name that gives it away. An unparseable move yields
-    None, which just means the gate has one fewer thing to check.
-    """
-    uci = puzzle.best_move_uci or ""
-    if len(uci) < 4:
-        return None
-    square = uci[2:4]
-    if square[0] in "abcdefgh" and square[1] in "12345678":
-        return square
-    return None
-
-
 def build_facts(
     puzzle, diagnosis, game, motif: str | None = None
 ) -> ai_naming.NameFacts:
@@ -139,7 +124,7 @@ def build_facts(
         # Gate input: the square the winning move lands on, so a name that
         # arrives at it is rejected. Not withheld from the model — the move
         # itself is in the prompt — just parsed into the form the check needs.
-        answer_square=_answer_square(puzzle),
+        answer_square=answer_square_of(puzzle.best_move_uci),
     )
 
 
@@ -286,6 +271,21 @@ def name_puzzles(
                     reason="budget_exhausted",
                 )
             )
+            # Enough rows to open the breaker, then stop asking.
+            #
+            # Writing one per remaining puzzle is pure noise — the answer will
+            # not change within this run, and a large corpus turns one capped
+            # pass into hundreds of identical audit rows. But stopping at the
+            # FIRST one would leave the streak below ERROR_STREAK_LIMIT, so the
+            # breaker never opens and the worker re-queues immediately: cheaper
+            # rows, same loop. Recording exactly the threshold is what makes the
+            # next run defer instead.
+            if outcomes["budget_exhausted"] >= ERROR_STREAK_LIMIT:
+                logger.info(
+                    "Naming budget exhausted for %s; stopping this pass",
+                    puzzle.username,
+                )
+                break
         else:
             facts = build_facts(puzzle, diagnosis, game, motif=motif)
             outcome = ai_naming.name_puzzle(facts, avoid=recent[-AVOID_WINDOW:])

@@ -124,19 +124,25 @@ def purge_stale_rate_limit_hits(db: Session, keep_seconds: int | None = None) ->
     if keep_seconds is None:
         # Ten windows of slack past the widest one actually configured.
         keep_seconds = max(3600, int(_longest_configured_window() * 10))
-    # SKIP LOCKED, and in batches.
+    # Batched, and SKIP LOCKED — in that order of importance.
     #
-    # A plain DELETE takes row locks that a live `_check` on the same key then
-    # blocks on for its full 2s lock_timeout before failing OPEN — measured, and
-    # it increments rate_limit_failures. That counter is the ONLY signal that
-    # the limiter is broken, so routine housekeeping was manufacturing the alarm
-    # it exists to raise. SKIP LOCKED steps over anything a checker holds; those
-    # rows are inside a live window anyway, so they were not this purge's to
-    # take, and the next run collects them.
+    # A single DELETE holds row locks for the whole sweep, and a live `_check`
+    # deleting its own expired rows then blocks on them until its 2s
+    # lock_timeout fires and it fails OPEN, incrementing rate_limit_failures.
+    # That counter is the only signal a broken limiter has, so housekeeping was
+    # manufacturing the alarm it exists to raise.
     #
-    # Batched so one sweep cannot hold a long transaction over a large backlog:
-    # the DELETE is an unindexed scan (there is no standalone hit_at index, only
-    # (key, hit_at)), and it grows with however long the worker was down.
+    # **The per-batch commit is what fixes that**, by bounding the hold to one
+    # batch (~10ms measured) instead of the whole backlog. SKIP LOCKED protects
+    # the other direction: the purge steps over rows a checker is holding rather
+    # than waiting on them. Both matter, but only the first was the reported
+    # symptom — an earlier version of this comment credited SKIP LOCKED for it,
+    # and a probe holding rows against a live checker showed the timeout still
+    # firing. Skipped rows are collected by the next pass; nothing is stranded.
+    #
+    # Batching also bounds one sweep over a large backlog: the DELETE is an
+    # unindexed scan (there is no standalone hit_at index, only (key, hit_at)),
+    # and the backlog grows with however long the worker was down.
     removed = 0
     while True:
         result = db.execute(
@@ -151,7 +157,11 @@ def purge_stale_rate_limit_hits(db: Session, keep_seconds: int | None = None) ->
             {"keep": f"{keep_seconds} seconds", "batch": _PURGE_BATCH},
         )
         batch = cast(CursorResult, result).rowcount
-        db.commit()
+        if batch:
+            # Only when there is work. The previous version committed
+            # unconditionally, so a no-op sweep committed a caller-supplied
+            # session — a contract change nothing asked for.
+            db.commit()
         removed += batch
         if batch < _PURGE_BATCH:
             break

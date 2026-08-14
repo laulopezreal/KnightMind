@@ -228,7 +228,15 @@ class AIAuditRepository:
         # one transaction, and two of them can land on the same microsecond, so
         # "the last N rows" is not a well-defined set. An aggregate is.
         streak = select(func.count(), func.max(DiagnosisAuditLog.created_at)).where(
-            *scope, DiagnosisAuditLog.status.in_(("error", "skipped"))
+            *scope,
+            DiagnosisAuditLog.status.in_(("error", "skipped")),
+            # A skip counts only when it says the SYSTEM cannot proceed.
+            # `no_position` is a per-puzzle data defect — a row with no FEN —
+            # and counting it paused naming for 15 minutes after a run in which
+            # the provider answered every call: measured, 5 of 8 answered and
+            # the three malformed rows at the tail opened the breaker. A broken
+            # row must not stop the queue behind it.
+            DiagnosisAuditLog.reason.is_distinct_from("no_position"),
         )
         if last_answer is not None:
             streak = streak.where(DiagnosisAuditLog.created_at > last_answer)

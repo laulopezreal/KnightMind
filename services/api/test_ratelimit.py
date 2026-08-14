@@ -618,3 +618,68 @@ def test_the_recorded_failure_carries_no_connection_detail(db_session, monkeypat
         assert secret not in recorded, f"{secret!r} leaked into {recorded!r}"
     # Still actionable: the class and the SQLSTATE say what went wrong.
     assert "OperationalError" in recorded and "28P01" in recorded
+
+
+@pytest.mark.postgres
+def test_the_purge_batches_and_terminates(db_session):
+    """The batching loop shipped with no coverage at all.
+
+    A single DELETE holds row locks for the whole sweep, and a live check
+    deleting its own expired rows blocks on them until its 2s lock_timeout
+    fires and it fails OPEN — incrementing the one counter that means "the
+    limiter is broken". Committing per batch bounds that hold. The loop must
+    therefore actually loop, and must terminate.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from services.api.jobs.cleanup_sessions import (
+        _PURGE_BATCH,
+        purge_stale_rate_limit_hits,
+    )
+    from services.api.models import RateLimitHit
+
+    old = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=6)
+    # One more than a batch, so a non-looping implementation leaves rows behind.
+    db_session.bulk_save_objects(
+        [
+            RateLimitHit(key=f"engine_eval:ip:10.0.{i // 256}.{i % 256}", hit_at=old)
+            for i in range(_PURGE_BATCH + 1)
+        ]
+    )
+    db_session.commit()
+
+    removed = purge_stale_rate_limit_hits(db_session)
+
+    assert removed >= _PURGE_BATCH + 1
+    assert (
+        db_session.query(RateLimitHit)
+        .filter(RateLimitHit.key.startswith("engine_eval:ip:10.0."))
+        .count()
+        == 0
+    )
+
+
+@pytest.mark.postgres
+def test_the_purge_leaves_a_fresh_hit_alone(db_session):
+    """Termination is not enough: it must not take rows inside a live window."""
+    from datetime import datetime, timedelta, timezone
+
+    from services.api.jobs.cleanup_sessions import purge_stale_rate_limit_hits
+    from services.api.models import RateLimitHit
+
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    db_session.add(RateLimitHit(key="engine_eval:ip:9.9.9.9", hit_at=now))
+    db_session.add(
+        RateLimitHit(key="engine_eval:ip:9.9.9.8", hit_at=now - timedelta(hours=6))
+    )
+    db_session.commit()
+
+    purge_stale_rate_limit_hits(db_session)
+
+    remaining = {
+        row.key
+        for row in db_session.query(RateLimitHit)
+        .filter(RateLimitHit.key.startswith("engine_eval:ip:9.9.9."))
+        .all()
+    }
+    assert remaining == {"engine_eval:ip:9.9.9.9"}
