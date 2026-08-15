@@ -354,8 +354,10 @@ def name_puzzles(
             continue
 
         if stats is None:
-            # 88 puzzles in the live corpus have no stats row at all. Without
-            # this they would be permanently unnameable.
+            # A puzzle can exist with no stats row: 88 did before this pass
+            # first ran, and the row is created on demand rather than at
+            # puzzle creation. Without this branch such a puzzle would be
+            # permanently unnameable — there is nowhere to put the title.
             db.add(
                 PuzzleStats(
                     puzzle_id=puzzle.id,

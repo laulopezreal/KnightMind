@@ -199,13 +199,20 @@ class AIAuditRepository:
 
         ``skipped`` counts as a failure here, not just ``error``. Only ``error``
         did, and that left three ways to spin: a missing API key, an exhausted
-        daily cap, and a puzzle at the head of the batch that is skipped every
-        run. Each writes ``skipped``, which neither tripped this breaker nor
-        reduced ``naming_pass.pending_count`` — so the worker re-queued, the
-        pass skipped again, and the cycle repeated every ~2 seconds with no
-        spend to bound it, because a skip is not billed. A skip means "this
-        cannot proceed right now", which is exactly the condition a breaker is
-        for; whether the model refused or was never asked does not change that.
+        daily cap, and a puzzle that is skipped on every run. Each writes
+        ``skipped``, which neither tripped this breaker nor reduced
+        ``naming_pass.pending_count`` — so the worker re-queued, the pass
+        skipped again, and the cycle repeated every ~2 seconds with no spend to
+        bound it, because a skip is not billed. A skip means "this cannot
+        proceed right now", which is exactly the condition a breaker is for;
+        whether the model refused or was never asked does not change that.
+
+        What spins is a pass in which NOTHING answers, not one bad row among
+        good ones. The streak is measured since the last answer, so a skip
+        followed by an accepted call counts zero — and rightly: that pass named
+        something, so it reduced ``pending_count`` and the chain is making
+        progress. Only when every puzzle in reach skips does the third case
+        above hold, which is the state that needs the brake.
 
         ``no_position`` is included deliberately, and the temptation to exclude
         it is worth naming. It reads like a per-puzzle data defect rather than a

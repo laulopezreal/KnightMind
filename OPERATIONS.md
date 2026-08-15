@@ -618,7 +618,9 @@ cannot bound it either:
 
 - no `ANTHROPIC_API_KEY` (never self-heals)
 - the daily cap exhausted (the corpus is larger than one day's allowance)
-- a puzzle at the head of the batch that is skipped every run
+- a puzzle that is skipped on every run — a missing FEN, say — when nothing
+  else in the pass answers either. One bad row among good ones does not spin:
+  the pass still names something, so pending falls and the streak resets.
 
 `skipped` now counts toward the breaker, so the loop is damped to one attempt
 per cooldown window rather than one every two seconds. That makes it survivable,

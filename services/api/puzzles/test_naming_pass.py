@@ -193,8 +193,9 @@ class TestNaming:
     def test_a_puzzle_with_no_stats_row_gets_one(
         self, db_session, monkeypatch, naming_on
     ):
-        """88 puzzles in the live corpus had none; without this they would be
-        permanently unnameable."""
+        """The stats row is created on demand, not at puzzle creation — 88 live
+        puzzles were in that state before this pass first ran. Without this they
+        would be permanently unnameable: there is nowhere to put the title."""
         _seed(db_session, "p1", stats=False)
         _model_returns(monkeypatch, "Knight Went Wandering")
 
@@ -596,9 +597,10 @@ class TestBudgetExhausted:
 
         Withholding it strands the puzzle: the pass reads the same
         ``created_at`` order every run, so the same row hits the cap at the same
-        position and is passed over again. ``p3`` has no stats row at all, which
-        is the state 88 live puzzles are in — for those, skipping the write
-        leaves them not merely unnamed but unnameable.
+        position and is passed over again. ``p3`` has no stats row at all — the
+        state every puzzle starts in, since the row is written on demand — and
+        for those, skipping the write leaves them not merely unnamed but
+        unnameable.
         """
         _spend_the_days_allowance(db_session, monkeypatch, USER)
         _seed(db_session, "p1", source="position")
