@@ -297,7 +297,12 @@ class TestTheLoopIsWiredToTheWorker:
 
         monkeypatch.setattr(worker_module, "DIAGNOSIS_SWEEP_INTERVAL_SECONDS", 3600)
         calls: list[int] = []
-        monkeypatch.setattr(JobWorker, "_sweep_once", lambda self: calls.append(1) or 0)
+
+        def _record(self) -> int:
+            calls.append(1)
+            return 0
+
+        monkeypatch.setattr(JobWorker, "_sweep_once", _record)
 
         async def scenario():
             task = asyncio.create_task(JobWorker()._sweep_loop())
