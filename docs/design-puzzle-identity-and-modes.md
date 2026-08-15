@@ -1,9 +1,16 @@
 # Design: puzzle identity, and what may be seen before an attempt
 
-Status: draft, revision 3. Two adversarial reviews have run against it; §12
+Status: draft, revision 5. Two adversarial reviews have run against it; §12
 records what each changed, because the deltas are most of the argument.
-Supersedes the naming half of `#364`'s plan. Nothing here is implemented and no
-PR is open.
+Supersedes the naming half of `#364`'s plan. Nothing here is implemented.
+
+Revision 5 reconciles the document against `dev` at `b691baf` and against live
+production on 2026-08-15, after `#377`, `#378`, `#384` and `#385` shipped. Every
+code reference below was re-resolved against that tree; the naming
+implementation moved under those PRs and revision 4's line numbers no longer
+pointed at what they claimed. The substantive change is in §7: **when this was
+written every title in production was deterministic, and now 320 of 348 are
+AI-written**, which inverts what step 1 clears.
 
 ## 1. The problem, measured per tenant
 
@@ -56,7 +63,7 @@ running for the cause chips, the post-mortem panel and motif recall — not for
 naming, which the date already carries.
 
 The diagnosis job simply never ran for that user. It auto-chains only from
-puzzle generation (`worker.py:358`), and those puzzles predate the diagnosis
+puzzle generation (`worker.py:531`), and those puzzles predate the diagnosis
 feature — so **any user who stopped importing games before diagnosis shipped has
 no diagnosis rows, and nothing will ever give them any.** There is no
 backfill-on-deploy for it, and `POST /users/{u}/diagnose` is manual.
@@ -191,7 +198,7 @@ An escalating hint ladder exists (`utils/puzzle-clue.ts`, rungs named in
     0  name the piece to move   1  highlight the destination   2  reveal the solution
 
 The motif becomes a **new rung 0** — it reveals less than naming the piece, so
-it sorts first. Copy moves from "Hint (n/3)" to "(n/4)" (`a11yCopy.ts:48`).
+it sorts first. Copy moves from "Hint (n/3)" to "(n/4)" (`a11yCopy.ts:47-49`).
 
 Revision 1 claimed `sessions.py:306` already delivers this. It does not: that
 endpoint takes `session_id` + `username`, has **no `puzzle_id`**, and only
@@ -209,7 +216,7 @@ review POST.
 **A nickname is written when a failed puzzle is scheduled to return.**
 
 Revision 1 said "the existing job chain picks this up". It does not, and the
-review was right to call it: `worker.py:358` early-returns unless the job is
+review was right to call it: `worker.py:531` early-returns unless the job is
 `PUZZLE_GENERATION`, and the review handler enqueues nothing. Fail a puzzle,
 never import another game, and no nickname would ever be written.
 
@@ -217,26 +224,50 @@ So this design adds the path explicitly:
 
 - `POST /puzzles/{id}/review` enqueues naming best-effort when a review sets
   `next_due_at` on a puzzle with `fail_count > 0` and no nickname — the same
-  shape as `_enqueue_diagnosis`, wrapped so a follow-up failure cannot fail the
-  review that already succeeded.
-- Selection and the re-queue predicate share **one** expression of "needs a
-  nickname". Today `name_puzzles` (`naming_pass.py:147`) and `pending_count`
-  (`:411`) express it independently; narrowing one and not the other makes the
-  worker re-queue forever on rows the pass will never take. That is the loop
-  this branch already fixed once, from the other side.
+  shape as `_enqueue_diagnosis` (`worker.py:480`), wrapped so a follow-up
+  failure cannot fail the review that already succeeded.
+- **Narrowing selection must not strand the re-queue predicate.** Revision 4
+  asked for one shared expression of "needs a nickname", because `name_puzzles`
+  and `pending_count` each carried their own. That is no longer the failure
+  mode. `pending_count` (`naming_pass.py:430`) is now written against the
+  **audit log**: a puzzle the model has already answered for — accepted or
+  rejected — is excluded, while errors and budget skips stay eligible so an
+  outage retries later. It reaches zero because the audit row is the record of
+  the attempt, not because it mirrors the selection query in `name_puzzles`
+  (`:132`).
 
-~20 puzzles today rather than 318, scaling with engagement rather than corpus.
+  The requirement therefore changes shape rather than going away: **whatever
+  the trigger narrows to, an excluded puzzle must be excluded from
+  `pending_count` too, or written into the audit log.** A puzzle that the new
+  trigger will never select, that has no audit row, and whose `title_source` is
+  outside `("ai", "user")` is counted pending forever — one pass plus N audit
+  rows every 15 minutes, indefinitely. That is the residual loop already
+  recorded as accepted on `dev`, and this design must not widen it.
+
+~20 puzzles today rather than 348, scaling with engagement rather than corpus.
+Measured on production 2026-08-15: `fail_count > 0` is **20 rows for `lauureal`
+and 0 for `alfi3sr`**, against 318 and 30 puzzles respectively.
 
 ### 6.1 A failed call writes nothing
 
 When the model is disabled, over budget, or rejected, the pass currently writes
-the deterministic name with `title_source='position'` (`naming_pass.py:254,
-261, 264, 299`). Under this design that would bless a generated identifier as a
+the deterministic name with `title_source='position'` (`naming_pass.py:271,
+278, 281, 345`). Under this design that would bless a generated identifier as a
 nickname — the exact thing being removed.
 
 Instead: **write nothing, leave `title` NULL, show provenance.** "A puzzle with
 no nickname shows provenance" is then true without exception, and
 `title_source` genuinely narrows to `ai | user`.
+
+This is compatible with the audit-log `pending_count` described in §6, and the
+compatibility is not an accident of it: that predicate already treats
+`title_source IS NULL` as pending and already hard-codes `("ai", "user")` as
+the set that counts as done (`naming_pass.py:482-483`). So a puzzle left NULL
+by a rejected call is excluded by its audit row, and one left NULL by an outage
+or an exhausted budget stays eligible and retries — which is the behaviour this
+section wants. The half of §7's target model that concerns `title_source` is
+therefore already expressed on `dev`; what is missing is that the write path
+still populates `position`.
 
 ## 7. Data model and the migrations this costs
 
@@ -245,20 +276,86 @@ no nickname shows provenance" is then true without exception, and
 - `puzzle_stats.title_source` — `ai | user` only.
 - Provenance is **derived, never stored**.
 
-Three things must change together, and revision 1 named only the first:
+### 7.1 This costs no new migration
 
-1. **Clear the generated titles.** They are identifiers, not nicknames.
-2. **`save_puzzle` stops writing a title.** A puzzle is born with provenance.
-3. **`backfill_puzzle_identity` stops writing titles.** This is the one that
-   makes the other two real. It runs in `lifespan` on **every API boot**
-   (`main.py:117-129`), selects exactly the rows step 1 clears
+Revision 4 budgeted for schema work that has since shipped. Both columns and
+the index exist in production, and the deployed head is `d1e2f3a4b5c6`:
+
+| migration | what | state |
+|---|---|---|
+| `b1c2d3e4f5a6` | `title_source`, and `call_type` on the audit log | deployed |
+| `c7d8e9f0a1b2` | `uq_puzzle_stats_username_title` | deployed, verified `(username, title)` |
+| `a335ae9eeced` | worker heartbeats | deployed, unrelated |
+| `399a35540403` | cross-process rate-limit hits | deployed, unrelated |
+| `d1e2f3a4b5c6` | active-job index repair | deployed, unrelated |
+
+The last three are the release this document is being rebased over. **None of
+them touch identity**, so nothing in §7 conflicts with what shipped — the
+reconcile confirms the section rather than changing it. What remains here is a
+data change and three code changes, not DDL.
+
+### 7.2 What the data change actually clears
+
+Revision 4 said "clear the generated titles; they are identifiers, not
+nicknames", written when all 348 titles were deterministic. **That premise is
+gone.** Measured on production 2026-08-15:
+
+```
+              ai   position   total
+lauureal     292         26     318
+alfi3sr       28          2      30
+             320         28     348      0 rows with NULL title
+```
+
+Both tenants now hold AI titles, including the one whose library was
+`The Missed Win` ×19. The reported bug is *already fixed in production* by the
+CLI naming pass — which is precisely what makes the clear contentious, because
+under §6 none of those 320 names were earned. A corpus-wide CLI pass is not "a
+failed puzzle scheduled to return".
+
+So step 1 splits, and the two halves are not equally settled:
+
+1. **Clear the 28 `position` rows.** Uncontested. They are generated
+   identifiers, the thing §3 replaces with provenance, and no argument in this
+   document defends keeping them.
+2. **Grandfather the 320 `ai` rows** — *decided here, reversible, and the one
+   judgement call in this section.*
+
+**The case for grandfathering.** Under §4 a nickname is never served before the
+puzzle is resolved. An unearned nickname on an unattempted puzzle is therefore
+invisible, and becomes visible only at the moment §3 wants a nickname to exist.
+Clearing costs a user-visible regression to buy a definitional property nobody
+can observe. The names are also gate-clean: **0 of 320 contain their answer
+square**, measured after `#385` closed the punctuation bypass.
+
+**The case against, recorded so it can be re-opened.** §12 concluded that names
+generated before the content gate existed "should be re-earned rather than
+kept". That still applies to any row written before `#377`, and this document
+does not establish which of the 320 predate it. If that split matters, the
+audit log (`call_type`, `created_at`) can date them; if it does not, the
+gate-clean measurement covers the concern the re-earn rule was protecting.
+
+Grandfathering makes the migration **28 rows, not 348** — small enough to run
+inside rollout step 6 rather than as its own operation.
+
+### 7.3 The two code changes that make it stick
+
+1. **`save_puzzle` stops writing a title.** A puzzle is born with provenance.
+2. **`backfill_puzzle_identity` stops writing titles.** This is the one that
+   makes the other real. It runs in `lifespan` on **every API boot**
+   (`main.py:110-116`), selects exactly the rows step 1 clears
    (`identity.py:190`, `title IS NULL`) and rewrites them with
-   `title_source='position'` (`:255-256`). Without this, clearing titles is
+   `title_source='position'` (`:257-258`). Without this, clearing titles is
    undone by the next deploy. `scripts/reclassify_motifs.py` needs the same
    treatment for its operator-run path.
 
+Note the ordering hazard the boot backfill creates: clearing 28 rows and
+deploying are the same operation, and the backfill would re-fill them before
+the first request. The clear must land in the same release that removes the
+write, or after it — never before.
+
 `title` NULL for most rows is safe for the unique index (Postgres treats NULLs
-as distinct; `title_registry.py:47` already filters them out of `taken_titles`),
+as distinct; `title_registry.py:51` already filters them out of `taken_titles`),
 and no code sorts or exports by title.
 
 ## 8. `display_name`, and the surfaces that assume a title exists
@@ -269,13 +366,13 @@ are trusted not to render.
 
 Two consumers currently assume a non-null title and must move to it:
 
-- `GET /{username}/puzzles/tricky` (`dashboard.py:453`) declares `title: str`
+- `GET /{username}/puzzles/tricky` (`dashboard.py:454`) declares `title: str`
   **non-null** (`:111`) and survives only via `title=stat.title or "Untitled
   Puzzle"` (`:499`). It filters `fail_count >= 2` — precisely the puzzles that
   earn nicknames, and precisely the ones that will not have one yet. Without
   `display_name` the Dashboard's "Recently Tricky" card becomes a column of
   `Untitled Puzzle`: the original bug, on the surface dedicated to it.
-- Library search is `lower(title) LIKE …` (`puzzles_routes.py:1245`). With
+- Library search is `lower(title) LIKE …` (`puzzles_routes.py:1249`). With
   titles NULL it silently degrades to hex-id search while the placeholder still
   says "Search by title or ID" (`Library.tsx:319`). Search must cover
   provenance, or say what it covers.
@@ -307,10 +404,14 @@ Under §4 it becomes two tests:
 2. A registry test: every route returning puzzle data goes through the shared
    serializer. This is the one that catches the endpoint added next year.
 
-Note `puzzles/test_generator.py:659` asserts `stats.title == "The Queen to d5"`
+Note `puzzles/test_generator.py:661-662` asserts `stats.title == "Pawn to a3"`
 and `title_source == "position"` directly on the creation path §7 removes. It is
-a spec, not a fixture, and it changes with the design — 19 assertions of that
-shape exist across `services/api/`.
+a spec, not a fixture, and it changes with the design — **24** assertions of
+that shape exist across `services/api/`, up from 19 as of revision 4. (The
+expected string moved too: `#384` changed the fallback to name the move the
+player *played*, so the old `"The Queen to d5"` is gone. The count grows every
+time naming is touched, which is the argument for changing the spec once rather
+than chasing it.)
 
 ## 11. Rollout
 
@@ -330,8 +431,10 @@ Each step ships and reverts independently.
 4. Overrides for themed / focus intent (§5); puzzle-scoped hint endpoint (§5.1).
 5. Post-resolution panel (`#364` §4.1), reusing `MistakeDiagnosisCard`.
 6. Retire title-writing in `save_puzzle`, `backfill_puzzle_identity` and
-   `reclassify_motifs`; clear generated titles; move the naming trigger; delete
-   the content gate (§6, §7).
+   `reclassify_motifs`; clear the 28 deterministic titles (§7.2 grandfathers
+   the 320 AI ones); move the naming trigger; delete the content gate (§6, §7).
+   The clear must not ship *before* the write is removed, or the boot backfill
+   re-fills it (§7.3).
 7. `blunder` stops rendering as a motif — `usable_motif()` already exists in
    `diagnosis/clusters.py` and is used in exactly one place.
 
@@ -367,22 +470,32 @@ cost a migration. The hint-rung correction was itself corrected: the motif sorts
 - **`tricky` requires a non-null title**; search degrades. Now §8.
 - **Testability** — now §10.
 
-One correction to review 2: it read ~100 rows with `title_source='ai'` as
-production state. Those are writes from this branch's trial runs against a
-scratch copy; production has no `title_source` column at all. Its substantive
-point survives in a different form — 24 of those names contain their own answer
-square, and they are what the *current* prompt produces, so the leak is
-prospective rather than shipped. Names generated before the content gate existed
-should be re-earned rather than kept.
+One correction to review 2, **itself now overtaken by events**: at revision 4 it
+read ~100 rows with `title_source='ai'` as production state, and the correction
+was that those were trial-run writes against a scratch copy, production having
+no `title_source` column at all.
+
+That is no longer true and the correction should not be carried forward. The
+column shipped in `b1c2d3e4f5a6` and production now holds **320 `ai` rows**
+(§7.2). Review 2 was describing something real, a release early. Its
+substantive point — that 24 of those trial names contained their own answer
+square — was closed by `#377`, `#384` and `#385`: the gate now matches squares
+by substring rather than by whitespace token, and **0 of the 320 shipped AI
+titles contain their answer square**. So "names generated before the content
+gate existed should be re-earned rather than kept" is a rule with a measured
+empty population, which is why §7.2 grandfathers rather than clears.
 
 ## 13. Where this is still judgement
 
 1. **The trigger clock.** "Scheduled to return after a failure" is better argued
    than first-failure, but it is still a guess about when a cue helps. Cheap to
    move.
-2. **Clearing existing titles.** Coherent with the model, and they are the bug —
-   but they are strings a user may have seen. Grandfathering them is defensible
-   and messier.
+2. ~~**Clearing existing titles.**~~ **Decided in §7.2: grandfather the 320 AI
+   titles, clear only the 28 deterministic ones.** Revision 4 left this open
+   when every title was deterministic and the choice was all-or-nothing. It is
+   no longer that: the AI titles are gate-clean and, under §4, invisible until
+   the moment a nickname is wanted. Still reversible, and §7.2 records the
+   argument against.
 3. **Whether hinted solves should schedule differently** (§9). Needs usage data
    that does not exist.
 4. ~~Whether `alfi3sr` having no diagnosis rows is a bug in its own right.~~
