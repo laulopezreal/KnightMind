@@ -1,8 +1,24 @@
 # Design: puzzle identity, and what may be seen before an attempt
 
-Status: draft, revision 7. Four adversarial reviews have run against it; §12
+Status: draft, revision 8. Five adversarial reviews have run against it; §12
 records what the first two changed, because the deltas are most of the argument.
 Supersedes the naming half of `#364`'s plan. Nothing here is implemented.
+
+**Revision 8 is review 5's response.** Two findings are structural. **§7.3 was
+missing a fourth title writer** — `spaced_repetition.py` writes a `MOTIF_TITLES`
+string with no `title_source` on the first review of a puzzle with no stats row,
+which means §6.1's and §7's invariants each have a live counterexample on `dev`
+today, on a path no revision had listed. And **§11 step 6 omitted the
+`pending_count` change** that §6 and §13.6 both required in bold to ship in that
+same commit — the executable checklist contradicted the section it points at,
+which is precisely how a same-commit requirement gets split.
+
+Review 5 also caught this document doing the thing it keeps accusing itself of:
+§1.1 claimed the backfill's projected 27/30 → 28/30 gain "has come true", while
+§3.1's own measured table said date + move alone was already 28/30. The
+prediction did not come true; the opening buys that tenant nothing. Corrected,
+along with an undercount in step 7 (five leak sites, not three) and a §13.2
+justification that is false in production.
 
 **Revision 7 is review 4's response, and it is the one that found real design
 defects rather than stale numbers.** Two are open and block rollout steps:
@@ -96,12 +112,18 @@ obstacle.
 
 **It has since been run against production itself.** Measured 2026-08-15:
 `alfi3sr` 30 rows / 30 with `opening_name`, `lauureal` 318 / 318. Both tenants
-are at full coverage, and the rehearsal's prediction below has come true rather
-than remaining a forecast.
+are at full coverage.
 
-Note what it did *not* buy: provenance distinctness for that user moves from
-27/30 (date + move) to 28/30 (date + opening + move) — **now measured at 28/30
-in production**, exactly as projected. The backfill was worth running for the
+**The rehearsal's prediction did not come true, and revision 6 wrongly reported
+that it had.** The rehearsal projected `alfi3sr` moving from 27/30 (date + move)
+to 28/30 (date + opening + move). Measured against production now: date + move
+alone is **28/30**, and date + opening + move is also **28/30** (§3.1). The
+opening buys that tenant nothing. Revision 6 kept the projected 27 next to a
+freshly measured 28 and read the pair as confirmation, which is the same
+prose-outruns-measurement failure this document keeps catching in itself.
+
+What the backfill did *not* buy, corrected: nothing at all for `alfi3sr`
+provenance. It was worth running for the
 cause chips, the post-mortem panel and motif recall, not for naming, which the
 date already carries.
 
@@ -124,7 +146,7 @@ unreachable.
 A third fact came from the UI. `Puzzles.tsx` renders the motif chip beside the
 title *while the player is solving* (`:1139` mobile, `:1337` desktop, neither
 gated on resolution). The codebase already believes this is wrong —
-`LibraryPuzzle.tsx:54` keeps similar-puzzles post-mortem because "naming the
+`LibraryPuzzle.tsx:51-52` keeps similar-puzzles post-mortem because "naming the
 shared motif before the attempt would hand over the tactic" — it just never
 applied that rule to the puzzle's own identity.
 
@@ -152,8 +174,21 @@ became "N Seconds of…"), then onto the played move (11 of 19 became
 ### 3.1 Provenance is built on the one thing every puzzle has
 
 `puzzles.source_game_id` is a real FK, so **every puzzle has a game**, and every
-game has an `end_time`. Measured on production: 348 of 348 puzzles resolve to a
-game with a usable timestamp; zero manual puzzles exist.
+game has an `end_time` column. Measured on production: 348 of 348 puzzles
+resolve to a game with a usable timestamp; zero manual puzzles exist.
+
+**"Every game has an `end_time`" is true of the column and false of the value on
+one path.** `POST /puzzles/manual` inserts a synthetic game with `end_time=0`
+(`puzzles_routes.py:469-483`) — 1 Jan 1970 — and `GameRepository` excludes
+`MANUAL_GAME_ID` from `get_users`, `get_game_count` and `get_all_metadata`
+(`game_repository.py:148,159,181`), so a provenance builder going through that
+repository finds no game row at all. Today the measurement covers it: there are
+no manual puzzles. But §7.3 deliberately keeps the manual-save path alive as the
+only writer of `title_source='user'`, so the combination is reachable by design:
+save a manual puzzle, have its `user` title withheld pre-attempt under §4, and
+`display_name` falls back to provenance reading `1 Jan 1970 · move N`. The
+provenance helper in rollout step 1 must special-case a missing or zero
+`end_time` rather than formatting it.
 
 So the base is **date + move number**, available for 100% of both tenants. The
 opening is *added when a diagnosis row exists*, never depended upon.
@@ -208,12 +243,20 @@ across five.**
   `:1365-1367`; `status` filter admits `new` at `:1255`.
 - `GET /puzzles/{id}` (`:1407`) — `primary_motif` unconditional at `:1470`.
 - `GET /puzzles/{id}/similar` (`:1657`), `GET /puzzles/{id}/diagnosis` (`:1588`).
-- `GET /puzzles/due` — and `queue_reason.pattern` (`:675-682`) names the
-  diagnosed cause *inside the scored pre-attempt payload*, so it would have
-  slipped past a strip list naming only "motif and nickname".
+- `GET /puzzles/due` — serves `title` **and** `primary_motif` unconditionally
+  (`:835-836`, with the `None` defaults at `:851-852`). Revisions 4-7 listed
+  only `queue_reason.pattern` here, which is the *narrow* leak and the
+  self-permitted one: `pattern` is populated only when `in_focus and focus_name`
+  (`:675-682`, `:855-856`), i.e. only when the caller passed `focus_cause`,
+  which §5's table already allows. Auditing this route against the old bullet
+  would have stripped `pattern` and left the nickname and motif in place, on
+  the request §4 itself calls the one that matters most. `pattern` still
+  belongs on the list — it names the diagnosed cause inside a scored
+  pre-attempt payload, so it would slip past a strip list naming only "motif
+  and nickname" — but it is the smaller half.
 
 Worse, `/puzzles/due` is fetched **before** the session is created
-(`usePuzzleSession.ts:502` then `:532`), so "read the mode from the session" is
+(`usePuzzleSession.ts:502` then `:531`), so "read the mode from the session" is
 unavailable at the one request that matters most. And `session_data` is
 client-supplied (`sessions.py:110`), so recording intent there does not make it
 unforgeable — revision 1 claimed it did.
@@ -251,7 +294,7 @@ Therefore `/puzzles/due` serves the motif and a deliberately recall-optimised
 nickname — "Bishop Had Bigger Plans" — on the review card **immediately before
 the repeat attempt.** This is a spaced-repetition library: the second attempt is
 the whole point, and it is the one the design spoils. §1 cites
-`LibraryPuzzle.tsx:54` to condemn precisely this, and §10's test 1 cannot catch
+`LibraryPuzzle.tsx:51-52` to condemn precisely this, and §10's test 1 cannot catch
 it, because it seeds an *unresolved* puzzle and the failure needs a resolved one.
 
 §2's framing hid it. "Recall is valuable *after* the attempt" is true of attempt
@@ -366,9 +409,14 @@ So this design adds the path explicitly:
   That was wrong by more than two orders of magnitude, and the error mattered.**
   The 15-minute figure is `ERROR_STREAK_COOLDOWN`, and it only bounds anything
   because *failures write audit rows* — `retry_is_backed_off`
-  (`naming_pass.py:495`) opens the breaker off `failing_streak`, a count of
-  calls that errored. A pass that selects nothing makes no calls, so it writes
-  no rows, so the streak stays 0 and the breaker never opens. Meanwhile
+  (`naming_pass.py:491`) opens the breaker off `failing_streak`, which counts
+  errored **and skipped** calls (`ai_audit_repository.py:200`: "``skipped``
+  counts as a failure here, not just ``error``"). That distinction bounds this
+  finding and is worth stating precisely: a puzzle that is *selected* and then
+  skipped does write a row, the streak climbs, and the breaker opens as
+  designed. The failure case is narrower — a pass that **selects nothing at
+  all** makes no calls, writes no rows of any status, so the streak stays 0 and
+  the breaker never opens. Meanwhile
   `pending_count` stays positive and `worker.py:574-585` re-queues on it. The
   worker claims the next job **about two seconds later** — the cadence the
   breaker's own docstring describes as "a spin loop… it burns that container
@@ -431,7 +479,7 @@ the index exist in production, and the deployed head is `d1e2f3a4b5c6`:
 The last three are the release this document is being rebased over. **None of
 them touch identity**, so nothing in §7 conflicts with what shipped — the
 reconcile confirms the section rather than changing it. What remains here is a
-data change and three code changes, not DDL.
+data change and four code changes, not DDL.
 
 ### 7.2 What the data change actually clears
 
@@ -502,7 +550,7 @@ gate-clean measurement covers the concern the re-earn rule was protecting.
 Grandfathering makes the migration **28 rows, not 348** — small enough to run
 inside rollout step 6 rather than as its own operation.
 
-### 7.3 The three code changes that make it stick
+### 7.3 The four code changes that make it stick
 
 1. **`save_puzzle` stops writing a *generated* title** — the emphasis matters.
    It must keep writing an **explicitly supplied** one. `puzzle_repository.py:190-202`
@@ -522,17 +570,43 @@ inside rollout step 6 rather than as its own operation.
    **It also needs a new selector, and revision 6 missed this.** `title IS NULL`
    is today a shrinking set that converges to zero. Under §6.1 it becomes the
    steady state of most of the corpus, so the same query would match nearly
-   every row on **every boot** — a `get_puzzle`, an `assign_primary_motif` and
-   a `taken_titles` per row plus a commit, awaited in `lifespan` before the API
-   serves its first request, growing with the corpus forever. It is
+   every row on **every boot** — a `get_puzzle` and an `assign_primary_motif`
+   per row, awaited in `lifespan` before the API serves its first request,
+   growing with the corpus forever. (Revision 6 also charged a `taken_titles`
+   and a commit per row; both are wrong — `taken_titles` is memoised per
+   username at `identity.py:250-251` and there is a single commit at `:261`.
+   The unbounded `select(...).where(title IS NULL)` with no `LIMIT` is the
+   problem, and it stands.) It is
    simultaneously *under*-selective for the job it keeps: motif backfill now
    skips the 320 grandfathered rows precisely because they have titles. The
    replacement should select on what it actually still fixes —
    `primary_motif IS NULL` — and stop keying off `title` at all.
-3. **`scripts/reclassify_motifs.py` stops writing titles.** The same treatment,
-   for the operator-run path. It re-runs `generate_puzzle_title` over existing
-   rows by design, so leaving it alone hands an operator a one-command undo of
-   the other two.
+3. **`spaced_repetition.py` stops writing titles** — the writer revisions 4-7
+   all missed, and the only one that is **already violating this design on
+   `dev`**. On the first review of a puzzle with no stats row it creates one
+   with `title=unique_title(..., generate_puzzle_title(motif), ...)` and **no
+   `title_source` at all** (`storage/spaced_repetition.py:229-243`). That is the
+   seven-entry `MOTIF_TITLES` table from §1 — the original bug — still being
+   written today, on a path no section of this document listed.
+
+   Two consequences, one of them present tense. **Today:** such a row has a
+   non-NULL `title` with a NULL `title_source`, so §6.1's "true without
+   exception" and §7's "`title_source` genuinely narrows to `ai | user`" each
+   have a live counterexample, and `pending_count`'s `notin_(("ai", "user"))`
+   counts the row pending forever with no audit row — §6's own trap, reached by
+   a path §6 never names. **After step 6:** a user reviews a puzzle whose stats
+   row is missing, gets `The Missed Win` written as its title, and §8's
+   `display_name` serves it as a nickname the moment the gate opens.
+
+4. **`scripts/reclassify_motifs.py` stops writing titles.** The same treatment,
+   for the operator-run path — but a narrower risk than revision 6 claimed. It
+   composes with `compose_position_name` (`:135-142`), not
+   `generate_puzzle_title`; only its stale module docstring at `:13` still says
+   otherwise. And it already carries
+   `keep_title = stats is not None and stats.title_source in ("ai", "user")`
+   (`:147`), so it cannot touch the 320 grandfathered rows and cannot undo an AI
+   naming pass. It does still rewrite the `position` and NULL population
+   (`:183`, `:194`), which is what has to stop.
 
 Note the ordering hazard the boot backfill creates: clearing 28 rows and
 deploying are the same operation, and the backfill would re-fill them before
@@ -644,16 +718,41 @@ Each step ships and reverts independently.
    diagnosis prose become post-resolution.
 4. Overrides for themed / focus intent (§5); puzzle-scoped hint endpoint (§5.1).
 5. Post-resolution panel (`#364` §4.1), reusing `MistakeDiagnosisCard`.
-6. Retire title-writing in `save_puzzle`, `backfill_puzzle_identity` and
-   `reclassify_motifs`; clear the 28 deterministic titles (§7.2 grandfathers
-   the 320 AI ones); move the naming trigger; delete the content gate (§6, §7).
+6. Retire title-writing in `save_puzzle`, `backfill_puzzle_identity`,
+   `reclassify_motifs` **and `spaced_repetition.py`** (§7.3 — four writers, not
+   three); clear the 28 deterministic titles (§7.2 grandfathers the 320 AI
+   ones); move the naming trigger; **and narrow `pending_count` in this same
+   commit.**
+
+   The `pending_count` change is not optional and was missing from this list
+   until revision 8, while §6 and §13.6 both said in bold that it had to ship
+   with the narrowing. An implementer working from this checklist — which is
+   the executable one — would have produced exactly the two-second spin loop §6
+   spends twenty lines establishing. That is how a rollout splits a
+   same-commit requirement by accident.
+
    The clear must not ship *before* the write is removed, or the boot backfill
    re-fills it (§7.3).
+
+   **Deleting the content gate is removed from this step, pending a decision.**
+   Revisions 4-7 listed it with a "(§6, §7)" cross-reference that resolves to
+   nothing: no section argues for removing it. It cannot simply be dropped in
+   either, because §7.2's grandfather case and §12's "measured empty
+   population" both rest on the gate having matched squares by substring since
+   `#385`. Remove it and every nickname written *after* this step loses that
+   guarantee — and while §4.1 is open, such a name is served on the
+   `/puzzles/due` review card immediately before the repeat attempt, so
+   "Rook Takes on e8" would be a direct answer leak on the surface §4 exists to
+   protect.
 7. `blunder` stops rendering as a motif. `usable_motif()` already exists
-   (`diagnosis/clusters.py:85`), but this is a **three-site** change, not the
-   one-site change revisions 4-6 claimed: it is called at `clusters.py:121` and
-   `puzzles_routes.py:1736`, while the raw `stats.primary_motif` is still served
-   unfiltered at `puzzles_routes.py:1367` (`/puzzles/list`) and `:1470`
+   (`diagnosis/clusters.py:85`) and is applied at `clusters.py:121` and
+   `puzzles_routes.py:1736`. Revisions 4-6 called this a one-site change and
+   revision 7 corrected that to three; **both undercounted, and the sites that
+   were missed are the ones that matter.** Raw `stats.primary_motif` is served
+   unfiltered at `puzzles_routes.py:633` (`/daily-puzzle-sessions`), `:836` and
+   `:852` (`/puzzles/due` — the route §4 calls the most important), `:1572`
+   (`DiagnosisResponse`, fed verbatim from `diagnosis/job.py:326,345`), and at
+   `puzzles_routes.py:1367` (`/puzzles/list`) and `:1470`
    (`/puzzles/{id}`) — the two routes §4 already names as leaking.
 
 **Step 6 is no longer the irreversible one, and that is a consequence of §7.2.**
@@ -726,11 +825,19 @@ empty population, which is why §7.2 grandfathers rather than clears.
    the moment a nickname is wanted.
 
    **Reversible, but not cheaply — revision 6 oversold this as "a one-paragraph
-   edit".** Those 320 rows are the main reason `pending_count` is small today,
-   because `title_source='ai'` is what reads as done. Clearing them makes 320
-   rows NULL with no audit row, which drops them straight into the permanent
-   pending population §6 describes — so flipping this decision is a scheduler
-   change, not a prose change. Reverse it only together with the
+   edit", then revision 7 justified that with a claim that is false in
+   production.** Revision 7 said the 320 rows are why `pending_count` is small
+   today. They are not: `pending_count` short-circuits to 0 whenever naming is
+   disabled (`naming_pass.py:454-457`), `naming_is_enabled()` defaults to False,
+   and `OPERATIONS.md:628` mandates that `KNIGHTMIND_AI_NAMING` stays unset on
+   the deployed stack. Production's `pending_count` is exactly 0 regardless of
+   those rows.
+
+   The conclusion survives on the conditional the whole design assumes anyway —
+   that naming is eventually turned on. **Once it is**, clearing the 320 makes
+   them NULL with no audit row, dropping them into the permanent pending
+   population §6 describes, so flipping this decision is a scheduler change
+   rather than a prose change. Reverse it only together with the
    `pending_count` predicate §6 now requires.
 3. **Whether hinted solves should schedule differently** (§9). Needs usage data
    that does not exist.
