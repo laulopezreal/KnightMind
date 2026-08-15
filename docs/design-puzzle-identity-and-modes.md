@@ -162,9 +162,15 @@ alfi3sr     28 /  30   date + move alone
 ```
 
 The opening is what carries `lauureal` from 276 to 318, so it is doing real work
-where it exists. It is still never depended upon: the two remaining `alfi3sr`
-collisions, and the 42 `lauureal` rows that need the opening, both fall through
-to the `(source_game_id, ply)` tiebreak below.
+where it exists. Counting the rows actually involved rather than the difference
+between the two cardinalities: **80 `lauureal` rows sit in 38 colliding
+`(date, move)` groups, and 4 `alfi3sr` rows sit in 2 such groups.**
+
+The opening resolves every one of `lauureal`'s 38 groups — which is what
+318/318 means. It does not resolve `alfi3sr`'s 2, which is why that tenant stays
+at 28/30 even with openings present on all 30 rows. Those 4 rows are the ones
+that fall through to the `(source_game_id, ply)` tiebreak below, and they are
+the reason the tiebreak has to exist rather than being a theoretical backstop.
 
 When two puzzles still collide, they are disambiguated by their position within
 that day's games — `(source_game_id, ply)` is unique per user by existing
