@@ -154,8 +154,15 @@ class DiagnosisRepository:
         including for the majority with nothing pending — the shape that makes
         a maintenance task quietly expensive as the corpus grows.
 
-        Usernames come back already folded: they are stored canonical and this
-        reads them rather than accepting one from a caller.
+        Usernames come back **as stored**, which is not the same as canonical.
+        Every other predicate here folds an incoming username, but this one has
+        none to fold — it reads them out — and "the row was written by a
+        canonical caller" is an invariant nothing enforces (the same point
+        ``worker.py`` makes about crash recovery). The write path folds today,
+        so no unfolded row exists; callers should still fold what they get,
+        because an unfolded name would enqueue work under one spelling and run
+        it under another, leaving the work undone and the user re-emitted on
+        every pass.
         """
         join = (PuzzleDiagnosis.puzzle_id == Puzzle.id) & (
             PuzzleDiagnosis.username == Puzzle.username

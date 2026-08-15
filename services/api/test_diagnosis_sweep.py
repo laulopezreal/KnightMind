@@ -16,7 +16,7 @@ it fixes, because the worker claims the next job about two seconds later.
 
 import asyncio
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 os.environ["KNIGHTMIND_WORKER_DISABLED"] = "true"
 
@@ -101,18 +101,25 @@ def _diagnose(db, puzzle_id: str, username: str, *, current: bool = True) -> Non
     db.commit()
 
 
-def _active_job(db, username: str, status: str = JobStatus.QUEUED.value) -> None:
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+def _active_job(
+    db,
+    username: str,
+    status: str = JobStatus.QUEUED.value,
+    *,
+    age_hours: float = 0,
+    job_id: str | None = None,
+) -> None:
+    when = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=age_hours)
     db.add(
         Job(
-            id=f"job-{username}-{status}",
+            id=job_id or f"job-{username}-{status}",
             username=username,
             type=JobType.DIAGNOSIS.value,
             status=status,
             params={},
-            created_at=now,
-            updated_at=now,
-            heartbeat_at=now,
+            created_at=when,
+            updated_at=when,
+            heartbeat_at=when,
         )
     )
     db.commit()
@@ -214,8 +221,9 @@ class TestItStops:
         _puzzle(db_session, "busy", "busy")
         _active_job(db_session, "busy", status)
 
-        assert sweep() == 1  # it still *considered* the user
-        # but added nothing: the pre-existing job is the only one.
+        # Nothing was inserted, and the count says so: the return value is
+        # rows queued, not users considered.
+        assert sweep() == 0
         assert db_session.query(Job).filter(Job.username == "busy").count() == 1
 
     def test_repeated_sweeps_do_not_accumulate_jobs(self, db_session, sweep):
@@ -231,6 +239,78 @@ class TestItStops:
         sweep()
 
         assert db_session.query(Job).filter(Job.username == "slow").count() == 1
+
+
+class TestItBacksOffAfterAFailedOrCanceledRun:
+    """The spend loop this guard exists to prevent.
+
+    Pending work does not shrink when a job fails, and `execute_job` only
+    enqueues follow-ups on the SUCCEEDED branch -- so a failed job stops the
+    chain today and waits for a human. An unguarded sweep removes exactly that
+    containment: `run_diagnosis` guards only `EvidenceUnavailable` and
+    `_diagnostic_order` is deterministic, so the job would die on the same
+    puzzle every hour, and with COMMIT_INTERVAL = 50 the rolled-back audit rows
+    mean the model calls are spent without ever counting against the budget.
+    """
+
+    def test_a_failed_run_is_not_retried_within_the_backoff(self, db_session, sweep):
+        _puzzle(db_session, "p1", "broken")
+        _active_job(db_session, "broken", JobStatus.FAILED.value, age_hours=1)
+
+        assert sweep() == 0
+        assert _queued(db_session, "broken") == 0
+
+    def test_a_canceled_run_is_not_restarted_within_the_backoff(
+        self, db_session, sweep
+    ):
+        """A cancel is a human saying stop, usually to protect an AI budget.
+        Restarting it within the hour, with nothing in the UI explaining why,
+        is worse than never having swept."""
+        _puzzle(db_session, "p1", "stopped")
+        _active_job(db_session, "stopped", JobStatus.CANCELED.value, age_hours=1)
+
+        assert sweep() == 0
+        assert _queued(db_session, "stopped") == 0
+
+    def test_an_old_failure_is_retried_again(self, db_session, sweep):
+        """Bounded, not permanent: a transient outage still heals."""
+        _puzzle(db_session, "flaky", "flaky")
+        _active_job(db_session, "flaky", JobStatus.FAILED.value, age_hours=25)
+
+        assert sweep() == 1
+        assert _queued(db_session, "flaky") == 1
+
+    def test_a_later_success_clears_an_earlier_failure(self, db_session, sweep):
+        """Only the *most recent* job decides. A user who failed yesterday and
+        succeeded since is working, not broken, and must not be frozen out by
+        history."""
+        _puzzle(db_session, "recovered", "recovered")
+        _active_job(
+            db_session,
+            "recovered",
+            JobStatus.FAILED.value,
+            age_hours=3,
+            job_id="old-fail",
+        )
+        _active_job(
+            db_session,
+            "recovered",
+            JobStatus.SUCCEEDED.value,
+            age_hours=1,
+            job_id="new-ok",
+        )
+
+        assert sweep() == 1
+        assert _queued(db_session, "recovered") == 1
+
+    def test_one_users_failure_does_not_block_another(self, db_session, sweep):
+        _puzzle(db_session, "a1", "broken")
+        _puzzle(db_session, "b1", "healthy")
+        _active_job(db_session, "broken", JobStatus.FAILED.value, age_hours=1)
+
+        assert sweep() == 1
+        assert _queued(db_session, "healthy") == 1
+        assert _queued(db_session, "broken") == 0
 
 
 class TestTheQueryUnderneath:
