@@ -38,7 +38,7 @@ kill-backends = "scripts.kill_backends:main"
 
 [project.optional-dependencies]
 dev = [
-    "black~=26.5",
+    "black~=26.5.1",
     "flake8",
     # Three components on purpose, like ruff~=0.16.3: `~=1.19` would still
     # admit 1.20 and 1.30. mypy does not use SemVer -- new checks land in minor

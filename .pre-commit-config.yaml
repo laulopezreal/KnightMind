@@ -14,10 +14,20 @@ repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.16.3
     hooks:
-      - id: ruff
+      # `ruff-check`, not `ruff`: the bare id is upstream's legacy alias
+      # ("ruff (legacy alias)" in their hooks file). It still resolves at
+      # v0.16.3, but the rev bump that outlives it fails every `pre-commit run`
+      # with "Hook `ruff` is not present in repository".
+      - id: ruff-check
         args: [ --fix, --exit-non-zero-on-fix ]
 
-  # Pinned to the range pyproject declares, so the hook and CI cannot drift.
+  # Pinned to the exact version the lock resolves. Nothing enforces that this
+  # rev and pyproject agree -- no workflow runs pre-commit -- so a
+  # `uv lock --upgrade` that moves CI to 26.6.x while this stays at 26.5.1
+  # recreates the hook-formats-what-CI-rejects trap on the version axis. Hence
+  # black~=26.5.1 in pyproject: patch-only, same policy as ruff and mypy, and
+  # for the strongest reason of the three, since black is the one that rewrites
+  # files.
   - repo: https://github.com/psf/black
     rev: 26.5.1
     hooks:
