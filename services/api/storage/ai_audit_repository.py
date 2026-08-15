@@ -197,6 +197,35 @@ class AIAuditRepository:
         is what makes recovery automatic: nothing has to remember to close a
         breaker that a working call closes by itself.
 
+        ``skipped`` counts as a failure here, not just ``error``. Only ``error``
+        did, and that left three ways to spin: a missing API key, an exhausted
+        daily cap, and a puzzle that is skipped on every run. Each writes
+        ``skipped``, which neither tripped this breaker nor reduced
+        ``naming_pass.pending_count`` — so the worker re-queued, the pass
+        skipped again, and the cycle repeated every ~2 seconds with no spend to
+        bound it, because a skip is not billed. A skip means "this cannot
+        proceed right now", which is exactly the condition a breaker is for;
+        whether the model refused or was never asked does not change that.
+
+        What spins is a pass in which NOTHING answers, not one bad row among
+        good ones. The streak is measured since the last answer, so a skip
+        followed by an accepted call counts zero — and rightly: that pass named
+        something, so it reduced ``pending_count`` and the chain is making
+        progress. Only when every puzzle in reach skips does the third case
+        above hold, which is the state that needs the brake.
+
+        ``no_position`` is included deliberately, and the temptation to exclude
+        it is worth naming. It reads like a per-puzzle data defect rather than a
+        provider condition, so counting it pauses good rows behind one broken
+        one for ``ERROR_STREAK_COOLDOWN``. That is a real cost, but excluding it
+        here does not pay it — it is the third of the three spins above.
+        ``pending_count`` credits a puzzle only once the model has ANSWERED for
+        it, and a puzzle with no FEN is never asked, so it stays pending
+        forever; this breaker is the only thing standing between that and a
+        re-queue every ~2 seconds. Excluding it needs ``pending_count`` to count
+        such a puzzle as answered FIRST. Until then the pause is the cheaper
+        failure, and it is bounded where the loop is not.
+
         Failures older than ``within`` report 0. Without that a streak would
         latch — the only thing that clears it is a successful call, and the
         caller's whole purpose is to stop making calls.
@@ -218,7 +247,8 @@ class AIAuditRepository:
         # one transaction, and two of them can land on the same microsecond, so
         # "the last N rows" is not a well-defined set. An aggregate is.
         streak = select(func.count(), func.max(DiagnosisAuditLog.created_at)).where(
-            *scope, DiagnosisAuditLog.status == "error"
+            *scope,
+            DiagnosisAuditLog.status.in_(("error", "skipped")),
         )
         if last_answer is not None:
             streak = streak.where(DiagnosisAuditLog.created_at > last_answer)

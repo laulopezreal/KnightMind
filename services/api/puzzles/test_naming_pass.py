@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 import pytest
 
+from services.api.ai import config
 from services.api.diagnosis.causes import RULE_VERSION
 from services.api.diagnosis.evidence import EXTRACTION_VERSION
 from services.api.models import (
@@ -25,6 +26,7 @@ from services.api.models import (
     PuzzleStats,
 )
 from services.api.puzzles import ai_naming, naming_pass
+from services.api.storage.ai_audit_repository import AIAuditRepository, AuditWrite
 
 FORK_FEN = "3q3k/8/8/4N3/8/8/8/6K1 w - - 0 1"
 FORK_BEST = "e5f7"
@@ -191,8 +193,9 @@ class TestNaming:
     def test_a_puzzle_with_no_stats_row_gets_one(
         self, db_session, monkeypatch, naming_on
     ):
-        """88 puzzles in the live corpus had none; without this they would be
-        permanently unnameable."""
+        """The stats row is created on demand, not at puzzle creation — 88 live
+        puzzles were in that state before this pass first ran. Without this they
+        would be permanently unnameable: there is nowhere to put the title."""
         _seed(db_session, "p1", stats=False)
         _model_returns(monkeypatch, "Knight Went Wandering")
 
@@ -387,6 +390,73 @@ class TestRequeueChain:
         assert naming_pass.retry_is_backed_off(db_session, USER) is False
         assert _chain_once(db_session) == 1
 
+    def test_a_missing_api_key_backs_off_too(self, db_session, monkeypatch, naming_on):
+        """`skipped` used to be invisible to both the breaker and pending_count.
+
+        A missing key writes SKIPPED("no_api_key"): it never tripped the
+        streak, and it never reduced pending — so the worker re-queued, the
+        pass skipped again, and the cycle repeated every ~2s indefinitely. And
+        because a skip is not billed, the daily cap could not bound it either.
+        Unlike an outage this never self-heals on its own, so it would have run
+        until someone noticed the container was busy doing nothing.
+        """
+        for pid in ("p1", "p2", "p3", "p4"):
+            _seed(db_session, pid, source="position", diagnosed=True)
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+        naming_pass.name_puzzles(db_session, username=USER)
+
+        assert naming_pass.retry_is_backed_off(db_session, USER) is True
+        assert _chain_once(db_session) == 0
+
+    def test_a_puzzle_with_no_position_backs_off_too(
+        self, db_session, monkeypatch, naming_on
+    ):
+        """The skip that reads like a per-puzzle defect is still a systemic one.
+
+        A puzzle with no FEN is never sent, so ``pending_count`` never sees an
+        answer for it and it stays pending for good. That makes it the third
+        spin: the worker re-queues, the pass skips it again, and nothing bills.
+        Excluding it from the streak — on the reasonable-sounding grounds that
+        one broken row should not pause the good ones behind it — removes the
+        only bound there is. The pause is the price; the loop is not.
+        """
+        for pid in ("p1", "p2", "p3", "p4"):
+            _seed(db_session, pid, source="position", diagnosed=True)
+            db_session.query(Puzzle).filter(Puzzle.id == pid).update({"fen": ""})
+        db_session.commit()
+        monkeypatch.setattr(
+            ai_naming,
+            "_call",
+            lambda *a, **k: pytest.fail("a puzzle with no position must not be sent"),
+        )
+
+        naming_pass.name_puzzles(db_session, username=USER)
+
+        assert naming_pass.pending_count(db_session, USER) == 4
+        assert naming_pass.retry_is_backed_off(db_session, USER) is True
+        assert _chain_once(db_session) == 0
+
+    def test_an_exhausted_budget_backs_off_too(
+        self, db_session, monkeypatch, naming_on
+    ):
+        """Same shape, and reachable in ordinary operation rather than only on
+        a misconfiguration: the corpus is larger than a day's allowance."""
+        for pid in ("p1", "p2", "p3", "p4"):
+            _seed(db_session, pid, source="position", diagnosed=True)
+        monkeypatch.setattr(
+            ai_naming,
+            "name_puzzle",
+            lambda facts, avoid=None: ai_naming.NameOutcome(
+                ai_naming.SKIPPED, reason="budget_exhausted"
+            ),
+        )
+
+        naming_pass.name_puzzles(db_session, username=USER)
+
+        assert naming_pass.retry_is_backed_off(db_session, USER) is True
+        assert _chain_once(db_session) == 0
+
     def test_an_answered_call_clears_the_streak(
         self, db_session, monkeypatch, naming_on
     ):
@@ -476,3 +546,155 @@ class TestRequeueChain:
         # Second run: the streak is open, so it does not call at all.
         assert job._name_new_puzzles(db_session, USER) == 0
         assert calls == 4
+
+
+OTHER_USER = "alfi3sr"
+
+
+_TEST_CAP = 3
+
+
+def _spend_the_days_allowance(db, monkeypatch, username):
+    """Exhaust one user's naming budget, leaving every other user's intact.
+
+    The cap is lowered and real billable rows are recorded, rather than patching
+    ``Budget.exhausted`` or the cap to zero. The pass reads its budget through
+    ``budget_last_24h``, so a test that stubbed past it would never prove the
+    loop enters the exhausted branch at all — which is exactly how the existing
+    ``test_an_exhausted_budget_backs_off_too`` misses it. A cap of zero is also
+    not a state the environment can reach: ``env_int`` enforces ``min_value=1``.
+
+    The cap is per user, so lowering it applies to everyone; the rows are what
+    single out this one. That leaves an untouched user ``_TEST_CAP`` calls of
+    room, which is what makes "was the other tenant reached?" answerable.
+    """
+    monkeypatch.setattr(config, "NAMING_DAILY_CAP_PER_USER", _TEST_CAP)
+    audit = AIAuditRepository(db)
+    for _ in range(_TEST_CAP):
+        audit.record(
+            AuditWrite(
+                username=username,
+                call_type=ai_naming.CALL_TYPE,
+                status=ai_naming.ACCEPTED,
+                model_version="test",
+            )
+        )
+    db.commit()
+
+
+class TestBudgetExhausted:
+    """The capped pass, which is the ordinary end of a large backfill.
+
+    A corpus bigger than a day's allowance reaches this branch on every run
+    until the backfill finishes, so what it does with the puzzles it cannot
+    name is not an edge case — it is most of the work.
+    """
+
+    def test_a_puzzle_that_hits_the_cap_still_gets_its_fallback_name(
+        self, db_session, monkeypatch, naming_on
+    ):
+        """The deterministic name is free and does not need the model.
+
+        Withholding it strands the puzzle: the pass reads the same
+        ``created_at`` order every run, so the same row hits the cap at the same
+        position and is passed over again. ``p3`` has no stats row at all — the
+        state every puzzle starts in, since the row is written on demand — and
+        for those, skipping the write leaves them not merely unnamed but
+        unnameable.
+        """
+        _spend_the_days_allowance(db_session, monkeypatch, USER)
+        _seed(db_session, "p1", source="position")
+        _seed(db_session, "p2", source="position")
+        _seed(db_session, "p3", stats=False)
+        _seed(db_session, "p4", source="position")
+        monkeypatch.setattr(
+            ai_naming,
+            "name_puzzle",
+            lambda *a, **k: pytest.fail("the budget is spent; nothing may be called"),
+        )
+
+        summary = naming_pass.name_puzzles(db_session, username=USER)
+
+        assert summary["outcomes"]["budget_exhausted"] == 4
+        for pid in ("p1", "p2", "p3", "p4"):
+            stats = db_session.get(PuzzleStats, pid)
+            assert stats is not None, f"{pid} was left with no stats row"
+            assert stats.title, f"{pid} was left unnamed"
+            assert stats.title_source == "position"
+
+    def test_the_rows_written_are_capped_at_the_streak_threshold(
+        self, db_session, monkeypatch, naming_on
+    ):
+        """Bounded, but not below the threshold.
+
+        One row per remaining puzzle turns a capped pass over a large corpus
+        into hundreds of identical rows. Writing only the first is worse: the
+        streak stays under the limit, the breaker never opens, and the worker
+        re-queues at once — cheaper rows, same loop.
+        """
+        _spend_the_days_allowance(db_session, monkeypatch, USER)
+        for pid in ("p1", "p2", "p3", "p4", "p5", "p6"):
+            _seed(db_session, pid, source="position", diagnosed=True)
+
+        naming_pass.name_puzzles(db_session, username=USER)
+
+        skips = (
+            db_session.query(DiagnosisAuditLog)
+            .filter(
+                DiagnosisAuditLog.call_type == ai_naming.CALL_TYPE,
+                DiagnosisAuditLog.status == ai_naming.SKIPPED,
+            )
+            .all()
+        )
+        assert len(skips) == naming_pass.ERROR_STREAK_LIMIT
+        assert naming_pass.retry_is_backed_off(db_session, USER) is True
+        assert _chain_once(db_session) == 0
+
+    def test_an_exhausted_user_does_not_starve_the_others(
+        self, db_session, monkeypatch, naming_on
+    ):
+        """Budgets are per user, so stopping the pass on one is over-broad.
+
+        ``scripts/ai_name_puzzles.py`` defaults ``--username`` to None, and the
+        live corpus spans two handles — so the pass that ends here is the one
+        that runs over everybody.
+        """
+        _spend_the_days_allowance(db_session, monkeypatch, USER)
+        for pid in ("p1", "p2", "p3", "p4"):
+            _seed(db_session, pid, source="position")
+        _seed(db_session, "q1", username=OTHER_USER, source="position")
+        _seed(db_session, "q2", username=OTHER_USER, source="position")
+        _model_returns(monkeypatch, "Knight Went Wandering")
+
+        naming_pass.name_puzzles(db_session)
+
+        for pid in ("q1", "q2"):
+            stats = db_session.get(PuzzleStats, pid)
+            assert stats.title_source == "ai", f"{pid} was never reached"
+
+    def test_a_streak_split_across_users_still_opens_both_breakers(
+        self, db_session, monkeypatch, naming_on
+    ):
+        """Counting globally is not a smaller version of counting per user.
+
+        With both users capped, a global threshold stops the pass after three
+        rows spread over two ledgers — so neither streak reaches the limit,
+        neither breaker opens, and the next run is byte-identical. The cheap
+        rows were saved and the loop was kept.
+        """
+        _spend_the_days_allowance(db_session, monkeypatch, USER)
+        _spend_the_days_allowance(db_session, monkeypatch, OTHER_USER)
+        for i in range(4):
+            _seed(db_session, f"p{i}", source="position", diagnosed=True)
+            _seed(
+                db_session,
+                f"q{i}",
+                username=OTHER_USER,
+                source="position",
+                diagnosed=True,
+            )
+
+        naming_pass.name_puzzles(db_session)
+
+        assert naming_pass.retry_is_backed_off(db_session, USER) is True
+        assert naming_pass.retry_is_backed_off(db_session, OTHER_USER) is True

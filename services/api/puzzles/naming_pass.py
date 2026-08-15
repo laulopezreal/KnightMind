@@ -36,6 +36,7 @@ from services.api.puzzles import ai_naming
 from services.api.puzzles.identity import assign_primary_motif
 from services.api.puzzles.position_names import (
     PositionFacts,
+    answer_square_of,
     compose_position_name,
     disambiguate,
 )
@@ -100,21 +101,6 @@ def _user_won(game, username: str) -> bool | None:
     return None
 
 
-def _answer_square(puzzle) -> str | None:
-    """The square the winning move lands on, e.g. ``"f7"``.
-
-    Used only to reject a name that gives it away. An unparseable move yields
-    None, which just means the gate has one fewer thing to check.
-    """
-    uci = puzzle.best_move_uci or ""
-    if len(uci) < 4:
-        return None
-    square = uci[2:4]
-    if square[0] in "abcdefgh" and square[1] in "12345678":
-        return square
-    return None
-
-
 def build_facts(
     puzzle, diagnosis, game, motif: str | None = None
 ) -> ai_naming.NameFacts:
@@ -138,7 +124,7 @@ def build_facts(
         # Gate input: the square the winning move lands on, so a name that
         # arrives at it is rejected. Not withheld from the model — the move
         # itself is in the prompt — just parsed into the form the check needs.
-        answer_square=_answer_square(puzzle),
+        answer_square=answer_square_of(puzzle.best_move_uci),
     )
 
 
@@ -197,6 +183,9 @@ def name_puzzles(
         return budgets[key]
 
     outcomes: Counter = Counter()
+    # Budget-exhausted audit rows written so far, per user. Keyed the same way
+    # as `budgets`, because it bounds the same thing.
+    exhausted_rows: Counter = Counter()
 
     # The names already spoken for, per user. Two things changed here and both
     # matter.
@@ -254,6 +243,7 @@ def name_puzzles(
             PositionFacts(
                 fen=puzzle.fen or "",
                 played_move_uci=puzzle.played_move_uci or "",
+                answer_square=answer_square_of(puzzle.best_move_uci),
                 primary_motif=motif,
                 move_number=(puzzle.ply or 0) // 2 + 1,
             )
@@ -275,15 +265,38 @@ def name_puzzles(
         elif budget_for(puzzle.username).exhausted:
             name, title_source = fallback, "position"
             outcomes["budget_exhausted"] += 1
-            audit.record(
-                AuditWrite(
-                    username=puzzle.username,
-                    call_type=ai_naming.CALL_TYPE,
-                    puzzle_id=puzzle.id,
-                    status=ai_naming.SKIPPED,
-                    reason="budget_exhausted",
+            # Enough rows to open this user's breaker, then stop writing them.
+            #
+            # One row per remaining puzzle is pure noise: the answer cannot
+            # change within this run, and a large corpus turns one capped pass
+            # into hundreds of identical rows. Writing only the FIRST is worse
+            # still — the streak stays under ERROR_STREAK_LIMIT, the breaker
+            # never opens, and the worker re-queues immediately: cheaper rows,
+            # same loop. Exactly the threshold is what makes the next run defer.
+            #
+            # Counted PER USER, and capped rather than used to leave the loop.
+            # Budgets are per user, so a global count let one exhausted tenant
+            # end the pass for everyone else, and a streak split across two
+            # users opened NEITHER breaker — the same loop the threshold exists
+            # to stop. Leaving the loop was also wrong for the puzzle in hand:
+            # the fallback name is written below, so breaking here denied a name
+            # to the very row that triggered it, and it would be denied again on
+            # every subsequent run.
+            if exhausted_rows[owner] < ERROR_STREAK_LIMIT:
+                exhausted_rows[owner] += 1
+                audit.record(
+                    AuditWrite(
+                        username=puzzle.username,
+                        call_type=ai_naming.CALL_TYPE,
+                        puzzle_id=puzzle.id,
+                        status=ai_naming.SKIPPED,
+                        reason="budget_exhausted",
+                    )
                 )
-            )
+                if exhausted_rows[owner] == ERROR_STREAK_LIMIT:
+                    logger.info(
+                        "Naming budget exhausted for %s; backing off", puzzle.username
+                    )
         else:
             facts = build_facts(puzzle, diagnosis, game, motif=motif)
             outcome = ai_naming.name_puzzle(facts, avoid=recent[-AVOID_WINDOW:])
@@ -341,8 +354,10 @@ def name_puzzles(
             continue
 
         if stats is None:
-            # 88 puzzles in the live corpus have no stats row at all. Without
-            # this they would be permanently unnameable.
+            # A puzzle can exist with no stats row: 88 did before this pass
+            # first ran, and the row is created on demand rather than at
+            # puzzle creation. Without this branch such a puzzle would be
+            # permanently unnameable — there is nowhere to put the title.
             db.add(
                 PuzzleStats(
                     puzzle_id=puzzle.id,

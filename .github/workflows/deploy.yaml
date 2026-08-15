@@ -155,7 +155,13 @@ jobs:
     needs: ci-gate
     runs-on: ubuntu-latest
     environment: production
-    timeout-minutes: 10
+    # 20, not 10. `compose build` with no service argument builds api and
+    # worker in parallel from the same Dockerfile, so an uncached build is
+    # roughly twice the work; and from the second deploy onward `up -d` can
+    # spend the worker's full 120s stop_grace_period draining a job before it
+    # swaps containers. Ten minutes covered neither, and the failure mode is a
+    # SIGKILLed worker mid-job — which orphans the job for up to ~75 minutes.
+    timeout-minutes: 20
 
     steps:
       # GitHub-hosted runners are not on the tailnet, and the server's public
