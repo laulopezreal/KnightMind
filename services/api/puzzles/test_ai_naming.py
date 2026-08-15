@@ -143,11 +143,27 @@ def test_move_list_is_rejected(monkeypatch):
     assert ai_naming.name_puzzle(facts()).reason == "name_is_move_list"
 
 
-def test_two_clause_name_is_rejected(monkeypatch):
-    """The real failure from the first trial run: a move and its point, joined
-    by a comma. Every one passed the rest of the gate."""
-    _respond_with(monkeypatch, _Response(text=json.dumps({"name": "Rf5, Pawn g4"})))
-    assert ai_naming.name_puzzle(facts()).reason == "name_has_two_clauses"
+def test_one_comma_is_allowed(monkeypatch):
+    """Banning every comma outlived its cause and produced run-ons instead —
+    "Rook Shuffled Bishop Lived" on the first production batch. Punctuation was
+    never the disease; the prompt carrying both moves was.
+
+    Note the example avoids tactic words: "Check First, Then Talk" was the
+    first fixture here and the tactic rule rejected it, which is the two rules
+    interacting exactly as intended."""
+    _respond_with(
+        monkeypatch, _Response(text=json.dumps({"name": "Rook Shuffled, Bishop Idle"}))
+    )
+    assert ai_naming.name_puzzle(facts()).usable
+
+
+def test_a_second_comma_is_a_list_and_is_rejected(monkeypatch):
+    """Two commas is an enumeration, which is the summary shape coming back by
+    another route."""
+    _respond_with(
+        monkeypatch, _Response(text=json.dumps({"name": "Rf5, Pawn g4, Kh1"}))
+    )
+    assert ai_naming.name_puzzle(facts()).reason == "name_is_a_list"
 
 
 def test_a_name_landing_on_the_answer_square_is_rejected(monkeypatch):
@@ -160,20 +176,71 @@ def test_a_name_landing_on_the_answer_square_is_rejected(monkeypatch):
 @pytest.mark.parametrize(
     "name",
     [
+        "Ng4 Was There",
+        "Knight to g4, Finally",
+        "Knight to g4's Square",
+        "Knight (g4) Waited",
+        "The h3g4 Moment",
+        "Everything Ends g4.",
+        "G4 Was Always It",
+    ],
+)
+def test_the_answer_square_is_caught_however_it_is_written(monkeypatch, name):
+    """The first five were accepted before; the last two already worked.
+
+    The check tokenised on whitespace and stripped only ``.!?'"``, so a SAN
+    piece letter, a comma, a possessive, a bracket or a raw UCI move each
+    carried the square straight past it — including ``Ng4 Was There``, which
+    the gate's own comment used as its example of what it catches. The spoiler
+    is the two characters, not the word they happen to sit in.
+
+    A trailing period and a capital were handled by the old strip-and-lower, so
+    they are here as regression cover rather than as fixes.
+    """
+    _respond_with(monkeypatch, _Response(text=json.dumps({"name": name})))
+    assert ai_naming.name_puzzle(facts()).reason == "name_reveals_answer_square:g4"
+
+
+def test_a_square_that_is_not_the_answer_is_still_allowed(monkeypatch):
+    """The substring test must not become a ban on coordinates.
+
+    The deterministic namer names the ORIGIN square, and the model is shown the
+    played move; only the square the winning move lands on is withheld.
+    """
+    _respond_with(
+        monkeypatch, _Response(text=json.dumps({"name": "The h3 Hesitation"}))
+    )
+    assert ai_naming.name_puzzle(facts()).usable
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
         "Missed Fork Again",
         "Pinned and Sorry",
         "Six Seconds of Free Knight",
         "Check With Interest",
     ],
 )
-def test_a_name_may_say_the_tactic(monkeypatch, name):
-    """These were rejected until the UI was actually looked at.
+def test_a_name_that_states_the_tactic_is_rejected(monkeypatch, name):
+    """Refused as a quality rule, not a spoiler one.
 
-    Puzzles.tsx renders `primary_motif` as a badge beside the title while the
-    player is solving, so refusing the word "fork" here protected nothing and
-    cost the names their best material.
+    The solving page already shows the motif as a badge beside the title, so
+    this hides nothing. It is refused because the motif is the one thing every
+    puzzle of that motif shares, making it the least informative word a title
+    can spend — measured at 12 of 20 on the first production batch.
     """
     _respond_with(monkeypatch, _Response(text=json.dumps({"name": name})))
+    reason = ai_naming.name_puzzle(facts()).reason
+    assert reason and reason.startswith("name_states_the_tactic:")
+
+
+def test_naming_the_tactic_obliquely_is_fine(monkeypatch):
+    """The rule is about the WORD, not about the idea. A name may be entirely
+    about the fork so long as it does not say "fork"."""
+    _respond_with(
+        monkeypatch, _Response(text=json.dumps({"name": "Queen Backed Off Too Soon"}))
+    )
     assert ai_naming.name_puzzle(facts()).usable
 
 

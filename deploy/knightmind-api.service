@@ -30,7 +30,9 @@ WorkingDirectory=/home/lauureal/apps/knightmind
 # ".env" for ${POSTGRES_*} interpolation, and this project uses .env.docker.
 ExecStart=/usr/bin/docker compose --env-file /home/lauureal/apps/knightmind/.env.docker up -d
 ExecStop=/usr/bin/docker compose --env-file /home/lauureal/apps/knightmind/.env.docker down
-ExecReload=/usr/bin/docker compose --env-file /home/lauureal/apps/knightmind/.env.docker up -d --build api
+# No service argument: `--build api` rebuilds only that one, and the worker
+# would keep running whatever it was built with last.
+ExecReload=/usr/bin/docker compose --env-file /home/lauureal/apps/knightmind/.env.docker up -d --build
 TimeoutStartSec=120
 
 # Restart policy handled by docker compose (restart: unless-stopped),

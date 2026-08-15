@@ -53,6 +53,7 @@ from services.api.models import Puzzle, PuzzleStats
 from services.api.puzzles.identity import assign_primary_motif
 from services.api.puzzles.position_names import (
     PositionFacts,
+    answer_square_of,
     compose_position_name,
     disambiguate,
 )
@@ -134,7 +135,8 @@ def reclassify_motifs(
         new_title = compose_position_name(
             PositionFacts(
                 fen=puzzle.fen or "",
-                best_move_uci=puzzle.best_move_uci or "",
+                played_move_uci=puzzle.played_move_uci or "",
+                answer_square=answer_square_of(puzzle.best_move_uci),
                 primary_motif=new_motif,
                 move_number=move_number,
             )

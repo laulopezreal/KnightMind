@@ -203,6 +203,31 @@ def test_dynamic_rate_limit_names_are_documented():
     )
 
 
+def test_known_limiters_matches_the_registered_routes():
+    """`ratelimit.KNOWN_LIMITERS` must not drift from the code.
+
+    It is a THIRD list, beside this file's RATE_LIMITERS and the actual
+    `rate_limit(...)` call sites, and until now nothing checked it — a comment
+    beside it claimed this test did, which was simply false.
+
+    It is not decorative: `_longest_configured_window()` uses it to decide how
+    long the hourly purge must keep rate-limit rows. A limiter missing from it
+    is invisible to that calculation, so a window longer than the floor would
+    have its live hits deleted every hour and its limit silently reset.
+    """
+    from services.api.ratelimit import KNOWN_LIMITERS
+
+    sources = "\n".join(p.read_text() for p in _source_files())
+    in_code = {
+        m.group(1)
+        for m in re.finditer(r"""rate_limit\(\s*["']([a-z_]+)["']""", sources)
+    }
+    assert set(KNOWN_LIMITERS) == in_code, (
+        f"KNOWN_LIMITERS is stale: code registers {sorted(in_code)}, "
+        f"the list has {sorted(KNOWN_LIMITERS)}"
+    )
+
+
 def test_env_example_documents_nothing_the_code_dropped():
     """A documented variable nothing reads is a stale promise.
 

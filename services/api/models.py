@@ -736,3 +736,75 @@ class OpeningExplorerCache(Base):
     fetched_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(timezone.utc), nullable=False
     )
+
+
+class WorkerHeartbeat(Base):
+    """Liveness for a job worker that no longer runs inside the API.
+
+    Before the worker was extracted, ``/ops/health`` answered "is the worker
+    up?" from an in-process flag. Once it runs in its own container the API
+    cannot see it at all -- and the naive version of that move leaves the API
+    reporting ``disabled`` (because KNIGHTMIND_WORKER_DISABLED is set on the API)
+    while the worker is running fine next door. The deploy gate probes that same
+    endpoint, so worker health would have gone dark exactly where it is checked.
+
+    One row per worker, rewritten on its own timer (not per job-loop
+    iteration -- a long job would otherwise look like death). Staleness, not
+    presence, is what makes it meaningful: a crashed worker stops updating and
+    its row ages out, which is the same mechanism the per-job ``heartbeat_at``
+    lease already uses for crash recovery.
+    """
+
+    __tablename__ = "worker_heartbeats"
+    __table_args__ = {"extend_existing": True}
+
+    # Identifies the process. Defaults to the container hostname, so a second
+    # worker replica gets its own row rather than fighting over one.
+    worker_id: Mapped[str] = mapped_column(String, primary_key=True)
+    # Naive UTC defaults, matching the column. An AWARE default on a naive
+    # column is the same anti-pattern the heartbeat write had: Postgres casts it
+    # through the session TimeZone and stores local time. Production supplies
+    # both explicitly, but any ORM-constructed row would reproduce it.
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc).replace(tzinfo=None),
+        nullable=False,
+    )
+    beat_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc).replace(tzinfo=None),
+        nullable=False,
+    )
+
+
+class RateLimitHit(Base):
+    """One recorded request against a rate-limited route, shared across processes.
+
+    The in-process limiter is correct for a single uvicorn worker and wrong the
+    moment there are two: each process keeps its own window, so the effective
+    limit multiplies by the worker count. That is the constraint that kept the
+    API pinned to ``--workers 1``.
+
+    A row per hit rather than a counter per window: it preserves the in-process
+    limiter's sliding-window-log semantics exactly, so both stores answer
+    identically. A fixed-window counter would be one cheap upsert instead of
+    three statements, but it lets a caller spend the whole limit at the end of
+    one window and again at the start of the next -- double the intended rate,
+    precisely at the burst these routes are protected from.
+
+    Volume is negligible: every limited route is an expensive one, capped
+    between 5 and 60 requests a minute.
+    """
+
+    __tablename__ = "rate_limit_hits"
+    __table_args__ = (
+        # The only query shape: hits for one key inside a window, and the sweep
+        # of everything already aged out.
+        Index("ix_rate_limit_hits_key_hit_at", "key", "hit_at"),
+        {"extend_existing": True},
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    # "<limiter name>:<principal>" -- the account when auth is on, else client IP.
+    key: Mapped[str] = mapped_column(String, nullable=False)
+    hit_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)

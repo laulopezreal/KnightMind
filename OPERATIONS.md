@@ -73,7 +73,116 @@ Live containers:
   - image: `knightmind-api`
   - command: `uvicorn services.api.main:app --host 0.0.0.0 --port 8000 --workers 1`
   - host mapping: `127.0.0.1:8000 -> 8000/tcp`
-  - Docker healthcheck: `curl -f http://localhost:8000/ops/health || exit 1`
+  - Docker healthcheck: `curl -f http://localhost:8000/ops/ready || exit 1`
+    - **`/ops/ready`, not `/ops/health`.** This container's status describes
+      THIS container: database reachable and Stockfish available. A dead queue
+      does NOT mark the API unhealthy, deliberately — the worker is a separate
+      container, and stopping it should not make the API look broken while it
+      is serving traffic perfectly.
+    - the **deploy gate** curls `/ops/health` directly, so a dead queue is
+      still caught there. `/ops/health` adds the `worker` field, read from the
+      heartbeat rows: `stale` = up but stopped looping, `not_running` = no
+      worker has ever beaten, `stalled` = beating but the queue is not moving,
+      `unknown` = the heartbeat table could not be read. All return 503.
+    - so: **a 503 from `/ops/health` does not mean the API is down**, and a
+      healthy API container does not mean jobs are running. They answer
+      different questions on purpose.
+  - `--workers 1` is deliberate, and the reason is the connection budget.
+
+    Postgres allows **97** non-superuser connections (`max_connections=100`
+    minus 3 reserved). Current demand:
+
+    | consumer | ceiling | why |
+    |---|---|---|
+    | API | 50 | `POOL_SIZE 10 + MAX_OVERFLOW 40`, matching anyio's 40-thread pool — each thread can hold a session |
+    | worker | 10 | sized down in compose; it runs one job at a time |
+    | deploys / operators | ~10 | `alembic upgrade`, `compose run` one-offs, `psql` |
+    | **total** | **70** | 27 spare |
+
+    A second uvicorn worker adds another 50 and does not fit. It is also not the
+    concurrency lever it appears to be: the 40-thread pool already gives 40-way
+    concurrency for blocking handlers inside one process, so more processes
+    mostly buy more connections.
+
+    If request concurrency genuinely runs out, in order: raise the threadpool
+    and the DB pool together in one process; then put PgBouncer (transaction
+    mode) in front so app-side pooling stops mapping 1:1 onto server
+    connections; raise `max_connections` last, since each connection is a
+    backend process with its own memory.
+- `knightmind-worker-1`
+  - image: `knightmind-api` — the *same tag* as the API, set explicitly on both
+    services. Without that, compose builds a second image and a deploy that
+    rebuilds only `api` leaves this container on stale code indefinitely.
+  - command: `python -m services.api.worker_main`
+  - host mapping: none — it serves nothing
+  - liveness: it writes a row to `worker_heartbeats` on its own timer (every 5s,
+    independent of the job loop, so a long job does not read as death); the API
+    reports that as the `worker` field of `/ops/health`. The image's HTTP
+    healthcheck is explicitly disabled for this container — it serves no HTTP,
+    so it would curl a dead port and sit permanently `unhealthy`.
+  - it also runs the hourly housekeeping loop: abandoned-session cleanup, the
+    AI audit retention sweep, the rate-limit hit purge and the dead-heartbeat
+    purge. That lives with whichever process runs the worker, so there is
+    exactly one of it. `KNIGHTMIND_WORKER_DISABLED=true` is honoured by both
+    containers: the API stops judging worker health and the worker idles
+    without claiming anything. **Housekeeping keeps running while it idles** —
+    it is started before the switch is read, deliberately. Sweeping is not job
+    claiming, and the switch documented for a spend incident used to be the
+    same switch that stopped the rate-limit purge while the API kept writing to
+    that table.
+  - **the worker idles rather than exits when disabled.** `restart:
+    unless-stopped` restarts a container on ANY exit status, including 0, so
+    exiting cleanly here produced a crash loop rather than a quiet container.
+
+    **The two ways to stop it differ, and neither is strictly better.**
+
+    | | housekeeping | `/ops/health` | deploy gate |
+    |---|---|---|---|
+    | `KNIGHTMIND_WORKER_DISABLED=true` | keeps running | `disabled`, **200 OK** | passes |
+    | `docker compose stop worker` | **stops** | `not_running`, 503 | fails |
+
+    The flag keeps the four sweeps alive — including the AI-audit retention
+    sweep and the `rate_limit_hits` purge, which the API keeps feeding
+    regardless. The cost is that health reports `disabled` as healthy, so a
+    paused queue is invisible to the gate and to monitoring. Stopping the
+    container is louder but silently stops collecting.
+
+    Use the flag for a long pause you are watching (a spend incident); use
+    `stop worker` when you want the outage to be obvious. Either way the queue
+    is not being served — `/ops/health` alone will not remind you.
+  - **green health does not mean jobs are completing.** `/ops/health` reads the
+    freshest heartbeat, and the beat is written ~0.6s after the process starts,
+    before any job is attempted. `worker: "stalled"` (HTTP 503) catches the
+    case where jobs have been QUEUED for over five minutes and no job holds a
+    live lease — a worker that is beating and polling but getting nothing done.
+
+    What it does NOT tell you is when a job last *finished*. Nothing does: no
+    endpoint reports time-since-last-terminal-state. If throughput is the
+    question, ask `/ops/status` for `active_job` and `recent_jobs` and read the
+    timestamps yourself.
+
+    A job orphaned in RUNNING (worker OOM-killed or SIGKILLed mid-job) no
+    longer hides a stalled queue — the stall check ignores RUNNING rows whose
+    15-minute lease has expired, the same lease crash recovery reclaims on.
+    Recovery itself now runs hourly with the other sweeps, not only at worker
+    startup, so an orphan is reclaimed without restarting the container.
+
+  - **there is no operator command to clear a stuck queue, and the wait is up
+    to ~75 minutes.** Recovery needs the 15-minute lease to expire AND the
+    hourly housekeeping sweep to come round — and the sweep runs its passes
+    then sleeps 3600s, so a job orphaned just after one runs waits nearly the
+    full hour on top of the lease. The worker's startup sweep does not help: it
+    fires at t=0, when the orphan is still fresh. Restarting the worker is the
+    only way to force it sooner. Earlier wording said 15 minutes; that is the
+    lease alone, not the latency.
+  - the 120s grace period covers a typical job, not every job: `max_games` goes
+    to 2000, and a large generation will exceed it and be killed, leaving the
+    job for the 15-minute crash-recovery lease.
+  - restart: `docker compose --env-file .env.docker restart worker`
+  - logs: `docker compose --env-file .env.docker logs -f worker`
+  - stopping it is safe mid-job: it handles SIGTERM and finishes the running job
+    first, with a 120s grace period. Killing it instead leaves the job for crash
+    recovery, which reclaims it only after the lease expires.
 - `knightmind-db-1`
   - image: `postgres:16-alpine`
   - host mapping: `127.0.0.1:5432 -> 5432/tcp`
@@ -89,14 +198,20 @@ Known live database contents at restoration time:
 
 ## Outbound dependencies
 
-The API makes egress calls to exactly three third parties. All are best-effort:
-a failure degrades one feature and never takes the API down.
+Three third parties, and **which container reaches them now matters**: the job
+worker runs in its own container, so everything reachable from a job handler
+egresses from `knightmind-worker-1`, not from the API. Both containers get the
+proxy env from `docker-compose.override.yml`. All are best-effort: a failure
+degrades one feature and never takes the service down.
 
-| Host | Used by | On failure |
-| --- | --- | --- |
-| `api.chess.com` | game import, rating snapshots | the import or snapshot fails and is reported to the caller |
-| `explorer.lichess.ovh` | `/openings/baseline` | serves a stale cached row if one exists, else 503; the Openings page simply omits the comparison |
-| `api.anthropic.com` | AI diagnosis prose | diagnosis falls back to the rules-based cause; the written explanation is simply absent |
+| Host | Container | Used by | On failure |
+| --- | --- | --- | --- |
+| `api.chess.com` | **api** | game import, rating snapshots | the import or snapshot fails and is reported to the caller |
+| `explorer.lichess.ovh` | **api** | `/openings/baseline` | serves a stale cached row if one exists, else 503; the Openings page simply omits the comparison |
+| `api.anthropic.com` | **worker** | AI diagnosis prose, AI puzzle naming | diagnosis falls back to the rules-based cause; naming leaves the puzzle pending and retries later |
+
+Debugging "AI stopped working" therefore means checking the **worker**'s proxy
+env, not the API's — the API no longer calls Anthropic at all.
 
 This table must stay in step with `ALLOWED_HOST_SUFFIXES` in
 `deploy/egress-proxy/connect_proxy.py`, currently
@@ -120,13 +235,17 @@ Notes for the Anthropic API:
 - **Chess data does leave the box here**, unlike the explorer: the prompt carries
   position and game context so the model can explain the mistake. No account
   credentials are sent.
-- **Kill switch**: `KNIGHTMIND_AI_DIAGNOSIS=0` stops the model call entirely — no
-  request, no audit row, diagnosis falls back to rules.
+- **Kill switches, plural**: `KNIGHTMIND_AI_DIAGNOSIS=0` stops the *diagnosis*
+  model call — no request, no audit row, diagnosis falls back to rules. It does
+  **not** stop AI puzzle naming, which has its own `KNIGHTMIND_AI_NAMING` flag.
+  Pulling only the first lever during a spend incident leaves naming calling
+  Anthropic.
 - **Absent key is safe.** `ANTHROPIC_API_KEY` is read at call time, never at
   startup, so an unset key degrades to rules-only instead of blocking boot.
 - **Spend ceilings** are counted from `diagnosis_audit_log`:
   `KNIGHTMIND_AI_DAILY_CAP_USER` (bounds one backfill) and
-  `KNIGHTMIND_AI_DAILY_CAP_GLOBAL` (backstop against a runaway loop).
+  `KNIGHTMIND_AI_DAILY_CAP_GLOBAL` (backstop against a runaway loop). Naming has
+  its own pair, `KNIGHTMIND_AI_NAMING_CAP_USER` / `_CAP_GLOBAL`.
 - **Prompts and responses are retained** in `diagnosis_audit_log` for incident
   review and swept by the session-cleanup loop.
 - **Blocking egress to it is a supported configuration**, same as the explorer:
@@ -396,6 +515,26 @@ Verification after Lau ran the root helper on 2026-07-10:
 
 Host-local API is repaired. Public API ingress is repaired as of 2026-07-10: `https://api.guessme.world/ops/ping` returns JSON.
 
+## `rate_limit_failures` is not always a fault
+
+`/ops/status` exposes `rate_limit_failures`, and the Ops page renders it as an
+amber "N requests passed unchecked" banner. The limiter fails open, so this is
+the only signal that it broke.
+
+It is also incremented by the **hourly rate-limit purge**. The purge deletes
+rows older than an hour; a live check deletes rows older than its window and
+then counts. They overlap, so a check that lands during the purge waits out its
+2s `lock_timeout` and fails open — correctly, and for a request that was going
+to be allowed anyway.
+
+So a small count that grows by roughly the number of concurrent limited
+requests, about once an hour, is the purge. A count that climbs continuously,
+or whose `rate_limit_last_error` is not a lock timeout, is the limiter. Read
+`rate_limit_last_error` before concluding anything; it carries the exception
+class and SQLSTATE.
+
+The counter is per-process and resets when the API container restarts.
+
 ## Public surface status after Caddy deploy
 
 Frontend:
@@ -465,6 +604,29 @@ records its `model_version` and drops out of the query. Re-running is how a
 rejected response gets retried — that is deliberately a manual decision, since
 a standing rule would re-attempt a persistently-rejected puzzle every day.
 
+## KNIGHTMIND_AI_NAMING stays unset on the deployed stack
+
+Naming has only ever been run from the operator CLI, deliberately, against a
+database someone was watching. **Do not set `KNIGHTMIND_AI_NAMING=1` in
+`.env.docker`.**
+
+Setting it arms the background naming pass inside the diagnosis job, and the
+job chain re-queues while `naming_pass.pending_count > 0`. The circuit breaker
+that bounds that loop opens on a failure streak — but three conditions produce
+`skipped` rather than a failure, and a skip is not billed, so the daily cap
+cannot bound it either:
+
+- no `ANTHROPIC_API_KEY` (never self-heals)
+- the daily cap exhausted (the corpus is larger than one day's allowance)
+- a puzzle that is skipped on every run — a missing FEN, say — when nothing
+  else in the pass answers either. One bad row among good ones does not spin:
+  the pass still names something, so pending falls and the streak resets.
+
+`skipped` now counts toward the breaker, so the loop is damped to one attempt
+per cooldown window rather than one every two seconds. That makes it survivable,
+not desirable. Run naming from `scripts/ai_name_puzzles.py` and read what it
+wrote.
+
 ## Unsafe without explicit approval
 
 Do not run these without a fresh DB backup and Lau's explicit approval:
@@ -476,6 +638,54 @@ docker compose --env-file .env.docker up -d --build
 docker compose --env-file .env.docker exec api alembic -c services/api/alembic.ini upgrade head
 docker volume rm knightmind_pgdata
 ```
+
+## Rolling back a deploy
+
+There is **no automated rollback**. The deploy applies migrations and replaces
+containers before the health check runs, so a red workflow means the change
+shipped and then failed its check — not that it was prevented.
+
+Three things make this harder than a tag swap, and all three have bitten:
+
+- **No versioned image.** Both services pin `image: knightmind-api` with no
+  tag. The previous build survives only as a dangling image reachable by ID
+  until something prunes it, so rolling back means a full rebuild.
+- **The worker becomes an orphan.** Rolling the compose file back to a revision
+  without the `worker` service leaves `knightmind-worker-1` running NEW code
+  beside the rolled-back API's in-process worker. `--remove-orphans` is not
+  optional here.
+- **Do not downgrade the migrations.** All three of `a335ae9eeced`,
+  `399a35540403` and `d1e2f3a4b5c6` are additive or no-ops, and old code
+  ignores them. Downgrading below `a335ae9eeced` while any worker container
+  survives breaks it mid-write.
+
+```bash
+cd /home/lauureal/apps/knightmind
+COMPOSE="docker compose --env-file .env.docker"
+
+# 1. Stop the worker FIRST, before the schema moves under it.
+$COMPOSE stop worker
+
+# 2. Back to the previous main commit, and rebuild — there is no tagged
+#    previous image to swap to.
+git reset --hard <previous-main-sha>
+$COMPOSE build api
+
+# 3. Restore the old topology AND remove the worker, which no longer exists
+#    in the rolled-back compose file.
+$COMPOSE up -d --remove-orphans
+
+# 4. Verify. Leave the migrations alone.
+curl --noproxy '*' http://127.0.0.1:8000/ops/health
+```
+
+If only the worker is misbehaving, the fastest mitigation is not a rollback:
+
+- `$COMPOSE stop worker` — loud. `/ops/health` reports `not_running` (503) and
+  **every subsequent deploy gate fails** until it is back.
+- `KNIGHTMIND_WORKER_DISABLED=true` + restart the worker — quiet. Housekeeping
+  keeps running and health reports `disabled`, which counts as healthy, so the
+  paused queue is invisible to the gate. See the trade table above.
 
 ## Migration downgrade preconditions
 

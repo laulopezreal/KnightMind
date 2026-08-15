@@ -19,6 +19,8 @@ name. Nothing here raises into a caller.
 
 import logging
 from collections import Counter
+from dataclasses import replace
+from datetime import timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -35,6 +37,7 @@ from services.api.puzzles import ai_naming
 from services.api.puzzles.identity import assign_primary_motif
 from services.api.puzzles.position_names import (
     PositionFacts,
+    answer_square_of,
     compose_position_name,
     disambiguate,
 )
@@ -56,6 +59,17 @@ AVOID_WINDOW = 25
 # diagnosis and must not turn into an unbounded model-call loop; the job is
 # re-queued while work remains, so the corpus still converges.
 NAMING_BATCH_MAX = 25
+
+# How many failed calls in a row mean the provider is down rather than one call
+# being unlucky. A single failure at the tail of an otherwise fine run is not
+# worth pausing for; three with no answer between them is not bad luck.
+ERROR_STREAK_LIMIT = 3
+
+# How long a tripped breaker holds the re-queue chain off. Matched to the
+# worker's stuck-job lease (worker.py) so the two timeouts that decide "is this
+# thing alive?" agree, and short enough that a blip costs one paused chain
+# rather than an afternoon of unnamed puzzles.
+ERROR_STREAK_COOLDOWN = timedelta(minutes=15)
 
 
 def _evidence_value(evidence, item_id: str) -> str | None:
@@ -88,21 +102,6 @@ def _user_won(game, username: str) -> bool | None:
     return None
 
 
-def _answer_square(puzzle) -> str | None:
-    """The square the winning move lands on, e.g. ``"f7"``.
-
-    Used only to reject a name that gives it away. An unparseable move yields
-    None, which just means the gate has one fewer thing to check.
-    """
-    uci = puzzle.best_move_uci or ""
-    if len(uci) < 4:
-        return None
-    square = uci[2:4]
-    if square[0] in "abcdefgh" and square[1] in "12345678":
-        return square
-    return None
-
-
 def build_facts(
     puzzle, diagnosis, game, motif: str | None = None
 ) -> ai_naming.NameFacts:
@@ -126,7 +125,7 @@ def build_facts(
         # Gate input: the square the winning move lands on, so a name that
         # arrives at it is rejected. Not withheld from the model — the move
         # itself is in the prompt — just parsed into the form the check needs.
-        answer_square=_answer_square(puzzle),
+        answer_square=answer_square_of(puzzle.best_move_uci),
     )
 
 
@@ -177,14 +176,31 @@ def name_puzzles(
     # against whichever handle happened to be asked for — leaving the per-user
     # cap unenforced for everyone else.
     budgets: dict[str, Budget] = {}
+    # Billable calls this pass has made, across EVERY user. The global cap
+    # cannot be kept any other way here: the ledger read below counts rows, and
+    # the session is created with autoflush=False (db.py) with nothing committed
+    # until the pass ends — so a COUNT taken for the second user cannot see the
+    # rows written for the first. Measured with the global cap at 3 and two
+    # users: six billable calls, the cap doubled. Per-user was already safe
+    # because `spend` keeps that side locally; only the shared ceiling needs a
+    # shared counter. The diagnosis job avoids the same trap by re-reading its
+    # budget every COMMIT_INTERVAL rows; this pass commits once, so it counts.
+    billed = 0
 
     def budget_for(handle: str) -> Budget:
         key = canonical_username(handle)
         if key not in budgets:
             budgets[key] = audit.budget_last_24h(key, call_type=ai_naming.CALL_TYPE)
-        return budgets[key]
+        stored = budgets[key]
+        # `stored` holds what the ledger had plus this user's own spend. The
+        # global side is whatever was committed when it was read, plus every
+        # call this pass has since made for anyone.
+        return replace(stored, global_used=stored.global_used + billed)
 
     outcomes: Counter = Counter()
+    # Budget-exhausted audit rows written so far, per user. Keyed the same way
+    # as `budgets`, because it bounds the same thing.
+    exhausted_rows: Counter = Counter()
 
     # The names already spoken for, per user. Two things changed here and both
     # matter.
@@ -241,7 +257,8 @@ def name_puzzles(
         fallback = compose_position_name(
             PositionFacts(
                 fen=puzzle.fen or "",
-                best_move_uci=puzzle.best_move_uci or "",
+                played_move_uci=puzzle.played_move_uci or "",
+                answer_square=answer_square_of(puzzle.best_move_uci),
                 primary_motif=motif,
                 move_number=(puzzle.ply or 0) // 2 + 1,
             )
@@ -263,22 +280,51 @@ def name_puzzles(
         elif budget_for(puzzle.username).exhausted:
             name, title_source = fallback, "position"
             outcomes["budget_exhausted"] += 1
-            audit.record(
-                AuditWrite(
-                    username=puzzle.username,
-                    call_type=ai_naming.CALL_TYPE,
-                    puzzle_id=puzzle.id,
-                    status=ai_naming.SKIPPED,
-                    reason="budget_exhausted",
+            # Enough rows to open this user's breaker, then stop writing them.
+            #
+            # One row per remaining puzzle is pure noise: the answer cannot
+            # change within this run, and a large corpus turns one capped pass
+            # into hundreds of identical rows. Writing only the FIRST is worse
+            # still — the streak stays under ERROR_STREAK_LIMIT, the breaker
+            # never opens, and the worker re-queues immediately: cheaper rows,
+            # same loop. Exactly the threshold is what makes the next run defer.
+            #
+            # Counted PER USER, and capped rather than used to leave the loop.
+            # Budgets are per user, so a global count let one exhausted tenant
+            # end the pass for everyone else, and a streak split across two
+            # users opened NEITHER breaker — the same loop the threshold exists
+            # to stop. Leaving the loop was also wrong for the puzzle in hand:
+            # the fallback name is written below, so breaking here denied a name
+            # to the very row that triggered it, and it would be denied again on
+            # every subsequent run.
+            if exhausted_rows[owner] < ERROR_STREAK_LIMIT:
+                exhausted_rows[owner] += 1
+                audit.record(
+                    AuditWrite(
+                        username=puzzle.username,
+                        call_type=ai_naming.CALL_TYPE,
+                        puzzle_id=puzzle.id,
+                        status=ai_naming.SKIPPED,
+                        reason="budget_exhausted",
+                    )
                 )
-            )
+                if exhausted_rows[owner] == ERROR_STREAK_LIMIT:
+                    logger.info(
+                        "Naming budget exhausted for %s; backing off", puzzle.username
+                    )
         else:
             facts = build_facts(puzzle, diagnosis, game, motif=motif)
             outcome = ai_naming.name_puzzle(facts, avoid=recent[-AVOID_WINDOW:])
 
             if outcome.status in (ai_naming.ACCEPTED, ai_naming.REJECTED):
                 key = canonical_username(puzzle.username)
-                budgets[key] = budgets[key].spend(1)
+                # The user side only. `spend` moves both, which would double-
+                # count this call for this user once `billed` is added back in
+                # budget_for.
+                budgets[key] = replace(
+                    budgets[key], user_used=budgets[key].user_used + 1
+                )
+                billed += 1
             audit.record(
                 AuditWrite(
                     username=puzzle.username,
@@ -329,8 +375,10 @@ def name_puzzles(
             continue
 
         if stats is None:
-            # 88 puzzles in the live corpus have no stats row at all. Without
-            # this they would be permanently unnameable.
+            # A puzzle can exist with no stats row: 88 did before this pass
+            # first ran, and the row is created on demand rather than at
+            # puzzle creation. Without this branch such a puzzle would be
+            # permanently unnameable — there is nowhere to put the title.
             db.add(
                 PuzzleStats(
                     puzzle_id=puzzle.id,
@@ -438,3 +486,54 @@ def pending_count(db: Session, username: str) -> int:
         )
         or 0
     )
+
+
+def retry_is_backed_off(db: Session, username: str) -> bool:
+    """True while the provider looks down and the chain must stop re-queuing.
+
+    ``pending_count`` answers "does this work still need doing?" and keeps
+    saying yes through an outage, on purpose: an error is not an answer and a
+    blip must not mark a puzzle permanently unnamed. But the worker re-queues a
+    diagnosis job on that number and claims the new job about two seconds later,
+    so "yes, still" plus "then go again" is a spin loop — one that an
+    unreachable provider can hold open indefinitely, because an error costs no
+    budget either. It writes an audit row and a job row per turn, and since the
+    worker became its own container (#374) it burns that container whole.
+
+    This is the damping term, and it is deliberately a *separate* question
+    asked by the scheduler rather than a fudge inside ``pending_count``. The
+    work really is still pending; what has changed is that right now there is no
+    point doing it. Folding "we cannot do this at the moment" into "this does
+    not need doing" is how a transient outage would come to look like a
+    permanent decision.
+
+    Read from the audit ledger rather than a counter in the worker, for the
+    reason the daily budget is: it survives a worker restart, it is per user,
+    and it cannot drift from what actually happened. The loop writes the rows
+    that stop it.
+
+    Not a latch. The streak resets on the first call the model answers, and
+    expires on its own after ``ERROR_STREAK_COOLDOWN`` so the next natural
+    trigger — a fresh import, a diagnosis run, the operator CLI — gets a clean
+    attempt rather than inheriting yesterday's outage.
+    """
+    from services.api.ai import config
+
+    if not config.naming_is_enabled():
+        # The branch every deployment takes today. pending_count is 0 here
+        # anyway, so there is nothing to back off from and no reason to pay for
+        # the query.
+        return False
+
+    streak = AIAuditRepository(db).failing_streak(
+        username, ai_naming.CALL_TYPE, within=ERROR_STREAK_COOLDOWN
+    )
+    if streak < ERROR_STREAK_LIMIT:
+        return False
+
+    logger.warning(
+        "Naming paused for %s: %d calls failed with no answer between them",
+        username,
+        streak,
+    )
+    return True

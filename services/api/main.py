@@ -40,8 +40,7 @@ from services.api.identity import (
     require_account,
 )
 from services.api.jobs.cleanup_sessions import (
-    cleanup_abandoned_sessions,
-    purge_expired_ai_audit,
+    run_session_cleanup,
 )
 from services.api.models import (
     Account,
@@ -75,8 +74,6 @@ from services.ingest import (
     ImportError as ChessComImportError,
 )
 
-CLEANUP_INTERVAL_SECONDS = 3600
-
 # Commit imported games in batches instead of once per game: a full import can
 # span tens of thousands of games, and per-game commits hammer Postgres.
 IMPORT_COMMIT_BATCH_SIZE = 200
@@ -88,36 +85,26 @@ RATE_LIMIT_IMPORT_CHESSCOM = 5  # heavy Chess.com fetch + bulk DB writes
 RATE_LIMIT_DIAGNOSE = 5  # enqueues a whole-corpus analysis job
 
 
-async def run_session_cleanup():
-    """Background task for periodic housekeeping.
+def _worker_runs_elsewhere() -> bool:
+    """Whether this process should skip starting the worker and cleanup loop.
 
-    Session cleanup and AI-audit retention run in separate try blocks on
-    purpose: a failure in one must not skip the other, and a stalled retention
-    sweep would let prompt/response blobs accumulate past their window
-    silently.
+    Two different reasons, deliberately separate env vars: DISABLED means there
+    is no worker in this deployment at all, EXTERNAL means it runs in its own
+    container. /ops/health has to tell them apart -- see the comment there.
     """
-    while True:
-        try:
-            # Run cleanup
-            with SessionLocal() as db:
-                await asyncio.to_thread(cleanup_abandoned_sessions, db)
-        except Exception as e:
-            print(f"Error in session cleanup: {e}")
-
-        try:
-            with SessionLocal() as db:
-                await asyncio.to_thread(purge_expired_ai_audit, db)
-        except Exception as e:
-            print(f"Error in AI audit purge: {e}")
-
-        # Sleep for defined interval
-        await asyncio.sleep(CLEANUP_INTERVAL_SECONDS)
+    return (
+        os.environ.get("KNIGHTMIND_WORKER_DISABLED") == "true"
+        or os.environ.get("KNIGHTMIND_WORKER_EXTERNAL") == "true"
+    )
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Prevent worker startup in tests or if explicitly disabled
-    if os.environ.get("KNIGHTMIND_WORKER_DISABLED") != "true":
+    # Prevent worker startup in tests, if explicitly disabled, or when the
+    # worker runs as its own service (docker-compose `worker`). Starting it here
+    # as well would put Stockfish back on the request path -- the thing
+    # separating them was for -- while both processes competed for one queue.
+    if not _worker_runs_elsewhere():
         worker.start()
 
     # Backfill identity (title/motif) for any existing puzzles missing them.
@@ -136,8 +123,13 @@ async def lifespan(app: FastAPI):
     await anyio.to_thread.run_sync(warm_eco)
 
     # Start session cleanup background task if not disabled
+    # Housekeeping runs wherever the worker runs -- one process, whichever it
+    # is. Widening this guard to cover EXTERNAL without moving the loop into the
+    # worker is how it stopped running at all: the API skipped it because the
+    # worker was elsewhere, and the worker never started it. Abandoned sessions
+    # accumulated and AI audit rows outlived their retention window, silently.
     cleanup_task = None
-    if os.environ.get("KNIGHTMIND_WORKER_DISABLED") != "true":
+    if not _worker_runs_elsewhere():
         cleanup_task = asyncio.create_task(run_session_cleanup())
 
     yield
@@ -150,7 +142,15 @@ async def lifespan(app: FastAPI):
         except asyncio.CancelledError:
             pass
 
-    await worker.stop()
+    # Symmetric with the guarded start above. stop() now ends by DELETEing this
+    # process's heartbeat row, and worker_id defaults to the hostname but is
+    # overridable with KNIGHTMIND_WORKER_ID — which .env.docker sets for BOTH
+    # services, because they share one env_file. An operator naming the worker
+    # per the runbook would therefore have every API restart delete the live
+    # worker's beat, and /ops/health would report not_running (503) until the
+    # next beat landed. Do not stop a worker this process never started.
+    if not _worker_runs_elsewhere():
+        await worker.stop()
 
 
 app = FastAPI(title="KnightMind API", version="0.1.0", lifespan=lifespan)

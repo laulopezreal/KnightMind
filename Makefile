@@ -131,7 +131,8 @@ docker-down: ## Stop Docker Compose services
 
 docker-build: ## Rebuild the API Docker image
 	@echo "$(GREEN)Building API image...$(NC)"
-	$(COMPOSE) build api
+	# No service argument: building only `api` leaves the worker on stale code.
+	$(COMPOSE) build
 
 docker-logs: ## Tail Docker Compose logs
 	$(COMPOSE) logs -f

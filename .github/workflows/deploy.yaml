@@ -155,7 +155,13 @@ jobs:
     needs: ci-gate
     runs-on: ubuntu-latest
     environment: production
-    timeout-minutes: 10
+    # 20, not 10. `compose build` with no service argument builds api and
+    # worker in parallel from the same Dockerfile, so an uncached build is
+    # roughly twice the work; and from the second deploy onward `up -d` can
+    # spend the worker's full 120s stop_grace_period draining a job before it
+    # swaps containers. Ten minutes covered neither, and the failure mode is a
+    # SIGKILLed worker mid-job — which orphans the job for up to ~75 minutes.
+    timeout-minutes: 20
 
     steps:
       # GitHub-hosted runners are not on the tailnet, and the server's public
@@ -207,7 +213,12 @@ jobs:
             echo "Deploying ${SHA} ($(git log -1 --format=%s))"
 
             echo "--- Building new image ---"
-            ${COMPOSE} build api
+            # No service argument. The worker is a second container from the
+            # same image, and `build api` never touched it -- so every deploy
+            # after the first left it running the previous deploy's code while
+            # the schema and the API moved on. Silently: a stale worker keeps
+            # beating, so /ops/health stays green and this gate passes.
+            ${COMPOSE} build
 
             echo "--- Running migrations (new image, before switching traffic) ---"
             # One-off container on the freshly built image; set -e aborts the
@@ -216,6 +227,26 @@ jobs:
             # healthcheck via depends_on) so deploys self-heal from a stopped
             # stack (fresh server, or after systemctl stop knightmind-api).
             ${COMPOSE} run --rm api alembic -c services/api/alembic.ini upgrade head
+
+            echo "--- Checking the deployed schema against the models ---"
+            # CI already runs `alembic check`, but only against a database it
+            # built from the migration chain -- which is correct by
+            # construction. It can never see PRODUCTION drift.
+            #
+            # That gap hid a real one: ix_jobs_active_username sat in its
+            # pre-f3a4b5c6d7e8 shape (username, not username+type) while
+            # Alembic recorded the widening as applied, so a user with any
+            # active job could not enqueue another KIND of job -- and the
+            # endpoint reported success. Nothing would ever have corrected it,
+            # because the migration that should have will never run again.
+            #
+            # A warning, not a gate: this runs AFTER the upgrade, so failing
+            # here would report red on a deploy that has already landed,
+            # without rolling anything back. Promote it to `exit 1` once it has
+            # been seen clean across a few deploys.
+            if ! ${COMPOSE} run --rm api alembic -c services/api/alembic.ini check; then
+              echo "::warning::Deployed schema does not match the models -- drift, or a migration that did not take. Compare pg_indexes and information_schema.columns against a database built from the chain."
+            fi
 
             echo "--- Restarting with new code ---"
             ${COMPOSE} up -d
@@ -229,21 +260,59 @@ jobs:
             # healthy internally. Use 127.0.0.1 explicitly (not 'localhost',
             # which resolves to ::1/IPv6 first while the publish is IPv4-only)
             # and a per-attempt timeout so a wedged socket fails fast.
+            #
+            # Keep the BODY as well as the code. /ops/health answers for three
+            # subsystems, and since the job worker moved to its own container a
+            # dead queue makes this endpoint 503 -- a reachable API, not an
+            # unreachable one. Reporting every failure as "api not reachable,
+            # check the iptables FORWARD rule" sends the operator to the one
+            # place that is definitely fine, and dumping only the api logs hides
+            # the container that would explain it.
             ok=0
+            body=""
+            code=""
             for i in $(seq 1 10); do
-              code=$(curl -s -o /dev/null -m 5 -w "%{http_code}" http://127.0.0.1:8000/ops/health || true)
+              body=$(curl -s -m 5 -w '\n%{http_code}' http://127.0.0.1:8000/ops/health || true)
+              code=$(printf '%s' "${body}" | tail -n1)
+              body=$(printf '%s' "${body}" | sed '$d')
               if [ "${code}" = "200" ]; then
                 echo "Health check passed (attempt ${i}, HTTP 200)"
                 ok=1
                 break
               fi
-              echo "Health check attempt ${i}: HTTP ${code:-000}; retrying in 3s..."
+              echo "Health check attempt ${i}: HTTP ${code:-000} ${body}; retrying in 3s..."
               sleep 3
             done
             if [ "${ok}" -ne 1 ]; then
-              echo "Health check FAILED: api not reachable on host 127.0.0.1:8000 (the path Caddy uses for public ingress)."
-              echo "The container can be healthy internally while host->container forwarding is broken; check the docker port publish / iptables FORWARD rule for the api bridge."
-              ${COMPOSE} logs --tail=50 api
+              if [ -z "${code}" ] || [ "${code}" = "000" ]; then
+                # Nothing answered: this really is the ingress path.
+                echo "Health check FAILED: api not reachable on host 127.0.0.1:8000 (the path Caddy uses for public ingress)."
+                echo "The container can be healthy internally while host->container forwarding is broken; check the docker port publish / iptables FORWARD rule for the api bridge."
+              else
+                # It answered and said no. The body names the subsystem.
+                echo "Health check FAILED: the API answered HTTP ${code} and reported itself unhealthy."
+                echo "Body: ${body}"
+                echo "Read the field that is not \"ok\": db, worker or stockfish."
+                echo "  worker=not_running  no worker has ever beaten -- did the worker container start?"
+                echo "  worker=stale        it beat once and stopped -- check the worker logs below."
+                echo "  worker=stalled      it IS beating and finding nothing to claim, but jobs are"
+                echo "                      queued. The logs below will look perfectly healthy -- the"
+                echo "                      problem is the queue, not the process. Check"
+                echo "                      /ops/status for active_job, and look for a job stuck in"
+                echo "                      RUNNING whose lease has expired."
+                echo "  worker=unknown      the heartbeat table could not be read -- part-way through"
+                echo "                      a downgrade?"
+                echo "Ingress is fine: something answered on 127.0.0.1:8000."
+              fi
+              echo "--- api logs ---"
+              ${COMPOSE} logs --tail=50 api || true
+              # The worker is a separate container now, and it is the likeliest
+              # cause of a 503 that is not the database.
+              echo "--- worker logs ---"
+              # `|| true`: this runs under `set -euo pipefail`, so a non-zero exit
+              # here (missing service, daemon hiccup) would kill the script
+              # before printing the logs this branch exists to print.
+              ${COMPOSE} logs --tail=50 worker || true
               exit 1
             fi
 

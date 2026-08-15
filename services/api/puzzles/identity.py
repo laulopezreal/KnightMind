@@ -207,6 +207,7 @@ def backfill_puzzle_identity(db: Session):
     # title_registry imports position_names, so it inherits the same rule.
     from services.api.puzzles.position_names import (
         PositionFacts,
+        answer_square_of,
         compose_position_name,
         disambiguate,
     )
@@ -236,7 +237,8 @@ def backfill_puzzle_identity(db: Session):
         title = compose_position_name(
             PositionFacts(
                 fen=getattr(puzzle, "fen", "") or "",
-                best_move_uci=getattr(puzzle, "best_move_uci", "") or "",
+                played_move_uci=getattr(puzzle, "played_move_uci", "") or "",
+                answer_square=answer_square_of(getattr(puzzle, "best_move_uci", None)),
                 primary_motif=motif,
                 move_number=move_number,
             )

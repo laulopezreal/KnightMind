@@ -194,7 +194,9 @@ def test_save_puzzle_creates_identity_stats(repository, db_session):
     assert stats.primary_motif == motif
     # The creation path names from the position, never from the model: an API
     # call here would put provider latency inside puzzle generation.
-    assert stats.title == "The Queen to d5"
+    # Named from the played move (a2a3). Naming from best_move_uci put the
+    # winning square in every creation-time title.
+    assert stats.title == "Pawn to a3"
     assert stats.title_source == "position"
     assert stats.attempts == 0
     assert stats.pass_count == 0

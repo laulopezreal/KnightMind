@@ -164,13 +164,23 @@ def run_diagnosis(ctx) -> dict:
         budget = audit.budget_last_24h(username)
 
         for index, puzzle_id in enumerate(pending):
-            # Bounded cadence: the lease still refreshes often enough that
-            # crash recovery cannot mistake a live run for a dead one.
+            # Heartbeat EVERY puzzle, progress on the interval.
+            #
+            # These were batched together at one every 25, which is fine for
+            # progress (cosmetic) and wrong for the heartbeat (a liveness
+            # lease). Each iteration makes one blocking model call — 60s
+            # timeout, 2 retries — so 25 of them against a degraded provider is
+            # up to 75 minutes between bumps, five times the 15-minute lease.
+            # Crash recovery then treats a working job as abandoned, and the
+            # queue-stall check treats the run as no work at all.
+            #
+            # The extra cost is one UPDATE per puzzle against an iteration that
+            # already spends seconds in a model call.
+            if ctx.heartbeat():
+                canceled = True
+                logger.info("Diagnosis canceled for %s", username)
+                break
             if index % HEARTBEAT_INTERVAL == 0:
-                if ctx.heartbeat():
-                    canceled = True
-                    logger.info("Diagnosis canceled for %s", username)
-                    break
                 ctx.progress(index, total)
 
             outcome, budget, used_ai = _diagnose_one(
@@ -225,6 +235,20 @@ def _name_new_puzzles(db: Session, username: str, canceled: bool = False) -> int
     if canceled or not ai_config.naming_is_enabled():
         # Cheap exit before touching the database. Naming ships off, so this is
         # the branch almost every deployment and every test takes.
+        return 0
+
+    if naming_pass.retry_is_backed_off(db, username):
+        # The provider is failing every call. The worker already stops
+        # re-queuing on this signal, but diagnosis has its own reasons to run —
+        # a backfill converges on its own — and each of those runs would
+        # otherwise spend a batch of connection timeouts to learn what the
+        # ledger already knows. Skipping keeps the diagnosis job doing the work
+        # it can actually do; naming resumes when the streak expires.
+        #
+        # Only the automatic caller defers. scripts/ai_name_puzzles.py goes
+        # through name_puzzles directly, so an operator retrying by hand is
+        # never blocked by a breaker they are trying to test.
+        logger.info("Puzzle naming deferred for %s: provider failing", username)
         return 0
 
     try:

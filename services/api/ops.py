@@ -1,3 +1,4 @@
+import logging
 import os
 from datetime import datetime, timedelta, timezone
 
@@ -6,15 +7,110 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
+from services.api import ratelimit as ratelimit_module
 from services.api.ai import config as ai_config
 from services.api.auth import require_operator
 from services.api.db import get_db
 from services.api.engine import is_engine_available
-from services.api.models import Job, JobStatus
+from services.api.models import Job, JobStatus, WorkerHeartbeat
 from services.api.storage.ai_audit_repository import AIAuditRepository
 from services.api.worker import worker
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/ops", tags=["ops"])
+
+
+# The worker beats every BEAT_INTERVAL_SECONDS (5s) on its OWN task, so this is
+# six missed beats. It is deliberately not tied to job duration: the beat used
+# to be a step in the job loop, which made any job longer than this threshold
+# report a working worker as dead.
+WORKER_HEARTBEAT_STALE_AFTER = timedelta(seconds=30)
+
+
+# How long a job may sit QUEUED with nothing running before the queue is
+# treated as stalled. Generous: a job is normally claimed within one poll
+# (~2s), so five minutes is far past "busy" and squarely in "nobody is taking
+# these". Only consulted when NO job is RUNNING, so a long generation with work
+# queued behind it is not a stall.
+QUEUE_STALL_AFTER = timedelta(minutes=5)
+
+# The liveness lease a RUNNING job must hold to count as genuinely in progress.
+# Same value crash recovery reclaims on (worker.cleanup_stuck_jobs), and
+# deliberately so: a job this endpoint treats as alive is exactly a job
+# recovery would not yet reclaim, so the two cannot disagree about whether the
+# worker is doing anything.
+JOB_LEASE = timedelta(minutes=15)
+
+
+def _queue_is_stalled(db: Session) -> bool:
+    """True when jobs are waiting and no worker is taking them.
+
+    The heartbeat attests to a PROCESS, not to the queue. A worker that boots,
+    beats, claims a job and dies executing it is restarted by
+    `restart: unless-stopped`, beats again, claims again, dies again — a stable
+    green health check with zero throughput, because the beat is written 0.6s
+    after start and never depended on any work succeeding.
+
+    That is the same failure the deploy's `compose build` fix removed at the
+    image layer, one layer down: a worker that keeps beating while the queue
+    goes nowhere. Health has to ask the queue, not the process.
+
+    Scoped to "and nothing is RUNNING" so this cannot fire on a busy worker:
+    puzzle generation legitimately runs for minutes with jobs queued behind it.
+    """
+    # Only a job with a LIVE lease masks the stall.
+    #
+    # Counting every RUNNING row made this check disarm itself against the
+    # exact failure it was written for. A worker that dies mid-job (OOM-kill,
+    # SIGKILL, the engine taking the process down) leaves its row in RUNNING
+    # with a fresh lease. `restart: unless-stopped` restarts it, it beats
+    # within a second, claims the next job, dies again — and that abandoned
+    # RUNNING row short-circuited the query before it ever looked at the queue.
+    # Reproduced: a job orphaned in RUNNING for 24h plus another QUEUED for 24h
+    # reported `{"worker": "ok"}`, 200.
+    #
+    # Crash recovery already decides liveness this way (worker.py's
+    # cleanup_stuck_jobs, same COALESCE and same 15-minute lease), so if this
+    # predicate is wrong then recovery has been wrong in the same way all
+    # along. It is also why a busy worker cannot trip it: both handlers bump
+    # the lease per unit of work — generation per game, diagnosis per puzzle —
+    # so a job that is genuinely progressing is never 15 minutes without one.
+    liveness = func.coalesce(Job.heartbeat_at, Job.updated_at, Job.created_at)
+    lease_floor = datetime.now(timezone.utc).replace(tzinfo=None) - JOB_LEASE
+    running = db.execute(
+        select(func.count())
+        .select_from(Job)
+        .where(Job.status == JobStatus.RUNNING.value, liveness >= lease_floor)
+    ).scalar_one()
+    if running:
+        return False
+
+    oldest_queued = db.execute(
+        select(func.min(Job.created_at)).where(Job.status == JobStatus.QUEUED.value)
+    ).scalar_one_or_none()
+    if oldest_queued is None:
+        return False
+
+    age = datetime.now(timezone.utc).replace(tzinfo=None) - oldest_queued
+    return age > QUEUE_STALL_AFTER
+
+
+def _worker_status_from_heartbeat(db: Session) -> str:
+    """Worker liveness: ok / stalled / stale / not_running.
+
+    ``stalled`` means the process is beating but the queue is not moving, which
+    a heartbeat alone reports as ``ok``.
+    """
+    latest = db.execute(select(func.max(WorkerHeartbeat.beat_at))).scalar_one_or_none()
+    if latest is None:
+        return "not_running"
+    # Stored naive-UTC (the column is DateTime without timezone), so compare
+    # against a naive now -- mixing the two raises rather than misreporting.
+    age = datetime.now(timezone.utc).replace(tzinfo=None) - latest
+    if age > WORKER_HEARTBEAT_STALE_AFTER:
+        return "stale"
+    return "stalled" if _queue_is_stalled(db) else "ok"
 
 
 @router.get("/ping")
@@ -37,9 +133,40 @@ def get_health(db: Session = Depends(get_db)):
         db_status = "error"
 
     # 2. Check Worker
-    worker_disabled = os.environ.get("KNIGHTMIND_WORKER_DISABLED") == "true"
-    if worker_disabled:
+    #
+    # Three distinct states, and collapsing any two of them reports a lie:
+    #
+    #   DISABLED  no worker in this deployment at all (tests, or a deliberately
+    #             queue-less deploy). Nothing to be unhealthy about.
+    #   EXTERNAL  the worker runs in its own container. `worker.is_running` is an
+    #             in-process flag and is always False here, so liveness has to
+    #             come from the heartbeat rows it writes. Reporting "disabled"
+    #             for this -- which is what reusing the DISABLED flag would do --
+    #             would claim a healthy system while the queue was dead, and the
+    #             deploy gate probes this endpoint.
+    #   otherwise the legacy in-process worker; ask it directly.
+    if os.environ.get("KNIGHTMIND_WORKER_DISABLED") == "true":
         worker_status = "disabled"
+    elif os.environ.get("KNIGHTMIND_WORKER_EXTERNAL") == "true":
+        # Only meaningful if the DB answered above; a failed probe already makes
+        # the response unhealthy, and a second query would just raise.
+        # Guarded. `SELECT 1` succeeding does not mean these tables exist: an
+        # operator part-way through `alembic downgrade` past a335ae9eeced has a
+        # reachable database with no worker_heartbeats, and the raise escaped
+        # the endpoint as a bare HTTP 500 with no body — losing the db /
+        # worker / stockfish breakdown at exactly the moment it is needed.
+        # 503 with "unknown" is still unhealthy; it just says which part.
+        if db_status != "ok":
+            worker_status = "unknown"
+        else:
+            try:
+                worker_status = _worker_status_from_heartbeat(db)
+            except Exception:
+                logger.exception("Could not read worker liveness")
+                # A failed read must not roll the whole request's session back
+                # into a broken transaction for the queries after it.
+                db.rollback()
+                worker_status = "unknown"
     else:
         worker_status = "ok" if worker.is_running else "not_running"
 
@@ -165,7 +292,19 @@ def get_ops_status(db: Session = Depends(get_db)):
         "version": version,
         "active_job": active_job,
         "recent_jobs": recent_jobs,
-        "last_recovery": worker.recovery_stats,
+        # In-process only, so this is permanently empty when the worker
+        # runs elsewhere -- the recoveries happen in that container. Reported
+        # as None rather than a zeroed dict, because "0 recoveries" is a claim
+        # and this process has no basis for making it.
+        # Fail-open means a broken limiter looks exactly like a working one
+        # from outside. This is the only place that difference is visible.
+        "rate_limit_failures": ratelimit_module.FAILURES["count"],
+        "rate_limit_last_error": ratelimit_module.FAILURES["last_error"],
+        "last_recovery": (
+            None
+            if os.environ.get("KNIGHTMIND_WORKER_EXTERNAL") == "true"
+            else worker.recovery_stats
+        ),
         # Rule/model agreement over the last week. This is the earliest signal
         # that a prompt or model change regressed — the feature ships with the
         # AI flag ON, so there was no quiet period in which to measure it.

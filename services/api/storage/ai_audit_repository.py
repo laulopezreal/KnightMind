@@ -180,6 +180,86 @@ class AIAuditRepository:
             global_cap=caps[1],
         )
 
+    def failing_streak(self, username: str, call_type: str, within: timedelta) -> int:
+        """Failed calls since the last one the model actually answered.
+
+        The counterpart to :meth:`budget_last_24h`, and needed for the same
+        reason that method exists: the daily cap is what stops a working
+        provider being called too much, and this is what stops a *broken* one
+        being called too often. An ``error`` row is not billed, so the budget
+        never engages during an outage — the ledger has to answer "is this
+        provider currently down?" some other way, and the streak is it.
+
+        Measured since the last ``accepted``/``rejected`` row rather than over a
+        fixed window, so a run that half-succeeded before the provider died
+        reports the failures that followed rather than being excused by the
+        successes that preceded them. Any answer at all resets it to zero, which
+        is what makes recovery automatic: nothing has to remember to close a
+        breaker that a working call closes by itself.
+
+        ``skipped`` counts as a failure here, not just ``error``. Only ``error``
+        did, and that left three ways to spin: a missing API key, an exhausted
+        daily cap, and a puzzle that is skipped on every run. Each writes
+        ``skipped``, which neither tripped this breaker nor reduced
+        ``naming_pass.pending_count`` — so the worker re-queued, the pass
+        skipped again, and the cycle repeated every ~2 seconds with no spend to
+        bound it, because a skip is not billed. A skip means "this cannot
+        proceed right now", which is exactly the condition a breaker is for;
+        whether the model refused or was never asked does not change that.
+
+        What spins is a pass in which NOTHING answers, not one bad row among
+        good ones. The streak is measured since the last answer, so a skip
+        followed by an accepted call counts zero — and rightly: that pass named
+        something, so it reduced ``pending_count`` and the chain is making
+        progress. Only when every puzzle in reach skips does the third case
+        above hold, which is the state that needs the brake.
+
+        ``no_position`` is included deliberately, and the temptation to exclude
+        it is worth naming. It reads like a per-puzzle data defect rather than a
+        provider condition, so counting it pauses good rows behind one broken
+        one for ``ERROR_STREAK_COOLDOWN``. That is a real cost, but excluding it
+        here does not pay it — it is the third of the three spins above.
+        ``pending_count`` credits a puzzle only once the model has ANSWERED for
+        it, and a puzzle with no FEN is never asked, so it stays pending
+        forever; this breaker is the only thing standing between that and a
+        re-queue every ~2 seconds. Excluding it needs ``pending_count`` to count
+        such a puzzle as answered FIRST. Until then the pause is the cheaper
+        failure, and it is bounded where the loop is not.
+
+        Failures older than ``within`` report 0. Without that a streak would
+        latch — the only thing that clears it is a successful call, and the
+        caller's whole purpose is to stop making calls.
+
+        Returns 0 rather than raising for a user with no rows at all.
+        """
+        scope = (
+            DiagnosisAuditLog.username == canonical_username(username),
+            DiagnosisAuditLog.call_type == call_type,
+        )
+
+        last_answer = self.db.scalar(
+            select(func.max(DiagnosisAuditLog.created_at)).where(
+                *scope, DiagnosisAuditLog.status.in_(("accepted", "rejected"))
+            )
+        )
+
+        # MAX rather than an ORDER BY over the rows: a pass writes its rows in
+        # one transaction, and two of them can land on the same microsecond, so
+        # "the last N rows" is not a well-defined set. An aggregate is.
+        streak = select(func.count(), func.max(DiagnosisAuditLog.created_at)).where(
+            *scope,
+            DiagnosisAuditLog.status.in_(("error", "skipped")),
+        )
+        if last_answer is not None:
+            streak = streak.where(DiagnosisAuditLog.created_at > last_answer)
+
+        failures, newest = self.db.execute(streak).one()
+        if not failures or newest is None:
+            return 0
+        if newest < _utcnow_naive() - within:
+            return 0
+        return int(failures)
+
     def purge_older_than(self, days: int | None = None) -> int:
         """Delete audit rows past the retention window. Returns rows removed."""
         cutoff = _utcnow_naive() - timedelta(

@@ -54,10 +54,24 @@ export interface OpsStatusResponse {
     now: string;
     active_job: RecentJob | null;
     recent_jobs: RecentJob[];
+    /**
+     * Null whenever the worker runs as its own service, which is the deployed
+     * configuration — recovery is in-process, so this API has no basis for
+     * claiming a count. Typed non-nullable until now while the server had
+     * already started sending null; every read site used `?.`, so nothing
+     * crashed and nothing said the type was wrong.
+     */
     last_recovery: {
         recovered_count: number;
         last_recovery_at: string | null;
-    };
+    } | null;
+    /**
+     * The rate limiter fails OPEN, so a broken one is indistinguishable from a
+     * working one by observing traffic. This counter is the only signal, which
+     * is why it is surfaced rather than left to curl.
+     */
+    rate_limit_failures: number;
+    rate_limit_last_error: string | null;
     metrics: {
         last_24h: {
             jobs_succeeded: number;

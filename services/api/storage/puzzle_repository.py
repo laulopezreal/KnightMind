@@ -11,7 +11,11 @@ from services.api.day_boundary import utc_today
 from services.api.models import Puzzle as PuzzleModel
 from services.api.models import PuzzleStats
 from services.api.puzzles.identity import assign_primary_motif
-from services.api.puzzles.position_names import PositionFacts, compose_position_name
+from services.api.puzzles.position_names import (
+    PositionFacts,
+    answer_square_of,
+    compose_position_name,
+)
 from services.api.puzzles.title_registry import is_duplicate_title, unique_title
 from services.api.usernames import canonical_username
 
@@ -189,7 +193,8 @@ class PuzzleRepository:
             stats_title = compose_position_name(
                 PositionFacts(
                     fen=fen,
-                    best_move_uci=best_move_uci,
+                    played_move_uci=played_move_uci,
+                    answer_square=answer_square_of(best_move_uci),
                     primary_motif=motif,
                     move_number=move_number,
                 )
