@@ -23,8 +23,14 @@ repos:
     hooks:
       - id: black
 
-  - repo: https://github.com/pre-commit/mirrors-prettier
-    rev: v3.1.0
-    hooks:
-      - id: prettier
-        types_or: [javascript, jsx, ts, tsx, css, json, markdown]
+  # NO PRETTIER HOOK, deliberately. The frontend has never been
+  # prettier-formatted: prettier is not a dependency in apps/web/package.json,
+  # there is no config file, and ci-frontend.yaml runs `npm run lint` (eslint)
+  # and nothing else. Running prettier here rewrote 225 files -- 189 even when
+  # configured to match the codebase's single quotes -- into a style nothing
+  # enforces, so installing the hooks and committing produced an enormous
+  # unrelated diff.
+  #
+  # Adopting prettier is a fine idea and a separate decision: it needs a config,
+  # a devDependency, a CI check, and one deliberate ~200-file reformat. Add the
+  # hook back as part of that, not before it.
