@@ -314,7 +314,23 @@ def _validate(parsed: PuzzleName, facts: NameFacts) -> str | None:
     words = {w.strip(".!?'\"").lower() for w in name.split()}
 
     # The square is the hard spoiler: "Nf7 Was There" hands over the move.
-    if facts.answer_square and facts.answer_square.lower() in words:
+    #
+    # Matched as a SUBSTRING of the whole name, not against the tokens above.
+    # Tokenising strips only `.!?'"`, so every other way of writing the square
+    # walked straight through — measured, all of these were accepted against an
+    # answer square of f7:
+    #
+    #     Nf7 Was There        (the SAN prefix — this docstring's own example)
+    #     Knight to f7, Finally  (one comma is legal, and `,` is not stripped)
+    #     Knight to f7's Square
+    #     Knight (f7) Waited
+    #     The e5f7 Moment      (san_or_uci falls back to raw UCI)
+    #
+    # A substring test has no false positives to trade against: a square is a
+    # letter a-h followed by a digit 1-8, and no English word contains a
+    # letter-digit pair. Anything spelling "f7" in a chess puzzle's name is the
+    # square, whatever punctuation or piece letter is welded to it.
+    if facts.answer_square and facts.answer_square.lower() in name.lower():
         return f"name_reveals_answer_square:{facts.answer_square}"
 
     # Naming the tactic is refused again, but for a different reason than the

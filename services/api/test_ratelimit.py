@@ -683,3 +683,25 @@ def test_the_purge_leaves_a_fresh_hit_alone(db_session):
         .all()
     }
     assert remaining == {"engine_eval:ip:9.9.9.9"}
+
+
+@pytest.mark.postgres
+def test_a_no_op_purge_does_not_leave_a_transaction_open(db_session):
+    """The common path on a healthy stack, and the one that used to leak.
+
+    The DELETE opens a transaction before its rowcount can be read, so a sweep
+    that returns without committing leaves that transaction idle with its
+    snapshot pinned — on an hourly job over a table that is usually already
+    clean, nearly every time. Nothing downstream fails loudly, which is why it
+    needs a test rather than a rollback in the logs.
+    """
+    from services.api.jobs.cleanup_sessions import purge_stale_rate_limit_hits
+    from services.api.models import RateLimitHit
+
+    db_session.query(RateLimitHit).delete()
+    db_session.commit()
+
+    removed = purge_stale_rate_limit_hits(db_session)
+
+    assert removed == 0
+    assert db_session.in_transaction() is False

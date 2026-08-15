@@ -698,3 +698,42 @@ class TestBudgetExhausted:
 
         assert naming_pass.retry_is_backed_off(db_session, USER) is True
         assert naming_pass.retry_is_backed_off(db_session, OTHER_USER) is True
+
+    def test_the_global_cap_holds_across_users_in_one_pass(
+        self, db_session, monkeypatch, naming_on
+    ):
+        """The shared ceiling is the backstop against a runaway loop, and a
+        single pass could walk straight through it.
+
+        Each user's budget is read with a COUNT over the audit ledger. The
+        session is created with ``autoflush=False`` and this pass commits once
+        at the end, so the COUNT taken for the second user cannot see the rows
+        written for the first: every user starts from the same stale global
+        total and spends the whole allowance again. With N users the cap is
+        effectively N times what it says.
+
+        The per-user cap was never affected — ``spend`` keeps that side in
+        memory — which is what made this invisible: the number that is wrong is
+        the one no single user's ledger disagrees with.
+        """
+        monkeypatch.setattr(config, "NAMING_DAILY_CAP_PER_USER", 100)
+        monkeypatch.setattr(config, "NAMING_DAILY_CAP_GLOBAL", 3)
+        for i in range(4):
+            _seed(db_session, f"p{i}", source="position")
+            _seed(db_session, f"q{i}", username=OTHER_USER, source="position")
+        calls = 0
+
+        def _count_the_call(facts, avoid=None):
+            nonlocal calls
+            calls += 1
+            return ai_naming.NameOutcome(
+                ai_naming.ACCEPTED,
+                name=f"Knight Wandered {calls}",
+                model_version="test",
+            )
+
+        monkeypatch.setattr(ai_naming, "name_puzzle", _count_the_call)
+
+        naming_pass.name_puzzles(db_session)
+
+        assert calls == 3
