@@ -176,6 +176,46 @@ def test_a_name_landing_on_the_answer_square_is_rejected(monkeypatch):
 @pytest.mark.parametrize(
     "name",
     [
+        "Ng4 Was There",
+        "Knight to g4, Finally",
+        "Knight to g4's Square",
+        "Knight (g4) Waited",
+        "The h3g4 Moment",
+        "Everything Ends g4.",
+        "G4 Was Always It",
+    ],
+)
+def test_the_answer_square_is_caught_however_it_is_written(monkeypatch, name):
+    """The first five were accepted before; the last two already worked.
+
+    The check tokenised on whitespace and stripped only ``.!?'"``, so a SAN
+    piece letter, a comma, a possessive, a bracket or a raw UCI move each
+    carried the square straight past it — including ``Ng4 Was There``, which
+    the gate's own comment used as its example of what it catches. The spoiler
+    is the two characters, not the word they happen to sit in.
+
+    A trailing period and a capital were handled by the old strip-and-lower, so
+    they are here as regression cover rather than as fixes.
+    """
+    _respond_with(monkeypatch, _Response(text=json.dumps({"name": name})))
+    assert ai_naming.name_puzzle(facts()).reason == "name_reveals_answer_square:g4"
+
+
+def test_a_square_that_is_not_the_answer_is_still_allowed(monkeypatch):
+    """The substring test must not become a ban on coordinates.
+
+    The deterministic namer names the ORIGIN square, and the model is shown the
+    played move; only the square the winning move lands on is withheld.
+    """
+    _respond_with(
+        monkeypatch, _Response(text=json.dumps({"name": "The h3 Hesitation"}))
+    )
+    assert ai_naming.name_puzzle(facts()).usable
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
         "Missed Fork Again",
         "Pinned and Sorry",
         "Six Seconds of Free Knight",

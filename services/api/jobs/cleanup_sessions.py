@@ -157,11 +157,23 @@ def purge_stale_rate_limit_hits(db: Session, keep_seconds: int | None = None) ->
             {"keep": f"{keep_seconds} seconds", "batch": _PURGE_BATCH},
         )
         batch = cast(CursorResult, result).rowcount
-        if batch:
-            # Only when there is work. The previous version committed
-            # unconditionally, so a no-op sweep committed a caller-supplied
-            # session — a contract change nothing asked for.
-            db.commit()
+        # Unconditionally, including on a no-op sweep.
+        #
+        # Gating this on `if batch` looks tidier — why commit when nothing was
+        # deleted? — but the DELETE has already opened a transaction by the time
+        # its rowcount is read, so skipping the commit returns with that
+        # transaction idle and its snapshot pinned. On a quiet stack the no-op
+        # IS the common path, so the tidier version holds a snapshot open on
+        # almost every sweep.
+        #
+        # The objection it was meant to answer — that committing a
+        # caller-supplied session is a contract change — does not hold: this
+        # function commits once per batch by design, so it already owns the
+        # transaction boundary on any sweep that finds work. A no-op is the one
+        # case where it would pretend otherwise. `db.rollback()` would end the
+        # transaction too, but it would also discard whatever the caller had
+        # pending, which is the worse of the two ways to be surprising.
+        db.commit()
         removed += batch
         if batch < _PURGE_BATCH:
             break

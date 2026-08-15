@@ -19,6 +19,7 @@ name. Nothing here raises into a caller.
 
 import logging
 from collections import Counter
+from dataclasses import replace
 from datetime import timedelta
 
 from sqlalchemy import func, select
@@ -175,12 +176,26 @@ def name_puzzles(
     # against whichever handle happened to be asked for — leaving the per-user
     # cap unenforced for everyone else.
     budgets: dict[str, Budget] = {}
+    # Billable calls this pass has made, across EVERY user. The global cap
+    # cannot be kept any other way here: the ledger read below counts rows, and
+    # the session is created with autoflush=False (db.py) with nothing committed
+    # until the pass ends — so a COUNT taken for the second user cannot see the
+    # rows written for the first. Measured with the global cap at 3 and two
+    # users: six billable calls, the cap doubled. Per-user was already safe
+    # because `spend` keeps that side locally; only the shared ceiling needs a
+    # shared counter. The diagnosis job avoids the same trap by re-reading its
+    # budget every COMMIT_INTERVAL rows; this pass commits once, so it counts.
+    billed = 0
 
     def budget_for(handle: str) -> Budget:
         key = canonical_username(handle)
         if key not in budgets:
             budgets[key] = audit.budget_last_24h(key, call_type=ai_naming.CALL_TYPE)
-        return budgets[key]
+        stored = budgets[key]
+        # `stored` holds what the ledger had plus this user's own spend. The
+        # global side is whatever was committed when it was read, plus every
+        # call this pass has since made for anyone.
+        return replace(stored, global_used=stored.global_used + billed)
 
     outcomes: Counter = Counter()
     # Budget-exhausted audit rows written so far, per user. Keyed the same way
@@ -303,7 +318,13 @@ def name_puzzles(
 
             if outcome.status in (ai_naming.ACCEPTED, ai_naming.REJECTED):
                 key = canonical_username(puzzle.username)
-                budgets[key] = budgets[key].spend(1)
+                # The user side only. `spend` moves both, which would double-
+                # count this call for this user once `billed` is added back in
+                # budget_for.
+                budgets[key] = replace(
+                    budgets[key], user_used=budgets[key].user_used + 1
+                )
+                billed += 1
             audit.record(
                 AuditWrite(
                     username=puzzle.username,
