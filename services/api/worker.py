@@ -220,10 +220,11 @@ class JobWorker:
             await asyncio.sleep(DIAGNOSIS_SWEEP_INTERVAL_SECONDS)
             try:
                 await asyncio.to_thread(self._sweep_once)
-            except Exception as exc:  # noqa: BLE001 - maintenance must not kill the worker
-                # Deliberately swallowed. This is a background nicety; a
-                # database blip here must not take down a worker that can still
-                # run the jobs it already has. The next tick retries.
+            except Exception as exc:  # noqa: BLE001
+                # Deliberately swallowed: maintenance must not kill the worker.
+                # This is a background nicety, and a database blip here must not
+                # take down a process that can still run the jobs it already
+                # has. The next tick retries.
                 logger.warning("Diagnosis sweep failed: %s", exc)
 
     def _sweep_once(self) -> int:
