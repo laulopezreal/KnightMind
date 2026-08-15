@@ -1,16 +1,25 @@
 # Design: puzzle identity, and what may be seen before an attempt
 
-Status: draft, revision 5. Two adversarial reviews have run against it; §12
-records what each changed, because the deltas are most of the argument.
+Status: draft, revision 6. Three adversarial reviews have run against it; §12
+records what the first two changed, because the deltas are most of the argument.
 Supersedes the naming half of `#364`'s plan. Nothing here is implemented.
 
-Revision 5 reconciles the document against `dev` at `b691baf` and against live
+Revision 5 reconciled the document against `dev` at `b691baf` and against live
 production on 2026-08-15, after `#377`, `#378`, `#384` and `#385` shipped. Every
 code reference below was re-resolved against that tree; the naming
 implementation moved under those PRs and revision 4's line numbers no longer
 pointed at what they claimed. The substantive change is in §7: **when this was
 written every title in production was deterministic, and now 320 of 348 are
-AI-written**, which inverts what step 1 clears.
+AI-written**, which inverts what the clear touches.
+
+Revision 6 is review 3's response, and it found that revision 5 had reconciled
+too narrowly. Scoping the pass to §§6–7 left §§1, 3.1 and 11 asserting a
+production state that no longer exists — most importantly **the zero diagnosis
+rows that §1's whole argument was built on, which is now 30 of 30.** Every
+production figure in this document was re-measured for revision 6 and is dated.
+Two weaknesses in revision 5's own §7.2 are also now stated rather than
+implied: the grandfather decision depends on §4 shipping first, and it widens
+§6's population.
 
 ## 1. The problem, measured per tenant
 
@@ -19,23 +28,39 @@ The complaint was "all the puzzles have the same name". The cause:
 names was the ceiling however large the corpus.
 
 Revision 1 of this document measured one user and called the result settled.
-There are two, and they are not alike. Measured against **live production**:
+There are two, and they are not alike. Measured against **live production**,
+with the 2026-08-12 column kept because the argument was built on it:
 
 ```
-                        lauureal   alfi3sr
-puzzles                      318        30
-ever attempted                23         1
-failed at least once          20         0
-primary_motif='blunder'      156         —
-puzzle_diagnoses rows        318         0     <-- 0%, not "missing", zero
+                        lauureal   alfi3sr      lauureal   alfi3sr
+                         (12 Aug)  (12 Aug)     (15 Aug)  (15 Aug)
+puzzles                      318        30           318        30
+ever attempted                23         1            23         1
+failed at least once          20         0            20         0
+primary_motif='blunder'      156         —            204        19
+puzzle_diagnoses rows        318         0            318        30   <-- was 0
 ```
 
-`alfi3sr`'s library is `The Missed Win` ×19, `The Fork` ×7. That is the reported
-bug in its purest form, and it belongs to the tenant with **no diagnosis rows at
-all** — so any design deriving identity from `puzzle_diagnoses` fixes nothing
-for the user who most has the problem. Revision 1 did exactly that.
+On 12 August `alfi3sr`'s library was `The Missed Win` ×19, `The Fork` ×7 — the
+reported bug in its purest form — and it belonged to the tenant with **no
+diagnosis rows at all**, so any design deriving identity from `puzzle_diagnoses`
+fixed nothing for the user who most had the problem. Revision 1 did exactly
+that.
 
-### 1.1 The zero is a backfill gap, not missing data
+**Both halves of that have since changed, and the design has to be read against
+what is true now rather than what motivated it.** The diagnosis backfill has run
+in production (§1.1) and that tenant is at 30/30. The naming pass has run too,
+so the duplicate titles are gone as well (§7.2).
+
+The argument survives the loss of its motivating zero, but on a weaker and more
+general footing: **provenance must not depend on `puzzle_diagnoses` because
+diagnosis is asynchronous**, so a puzzle generated a minute ago has no diagnosis
+row whatever the backfill state. That was always the load-bearing reason. The
+zero made it vivid; it was never the whole argument. What the zero *did*
+uniquely establish — that a tenant can sit permanently at 0% — is now a
+statement about the mechanism rather than about the data, and §1.1 keeps it.
+
+### 1.1 The zero was a backfill gap, not missing data — and it has now been run
 
 Worth separating, because it changes what to build versus what to run. Measured:
 
@@ -44,8 +69,8 @@ alfi3sr   161 games,  161 with pgn_blob,  161 with time_control
            30 puzzles, 0 with a NULL fen / best move / played move
 ```
 
-Nothing is missing. The rules-only diagnosis job was run against a copy of
-production for that user and completed cleanly:
+Nothing was missing. On 12 August the rules-only diagnosis job was run against a
+copy of production for that user and completed cleanly:
 
 ```
 {'diagnosed': 30, 'unchanged': 0, 'unavailable': 0, 'canceled': False}
@@ -54,25 +79,35 @@ puzzle_diagnoses:  30 rows,  30 with opening_name,  0 unavailable
 ```
 
 **30 of 30**, no model calls, no failures — `Sicilian Defense B27`,
-`Horwitz Defense A40`, `Nimzowitsch Defense B00`. The old schema is not the
+`Horwitz Defense A40`, `Nimzowitsch Defense B00`. The old schema was not the
 obstacle.
 
-Note what it does *not* buy: provenance distinctness for that user moves from
-27/30 (date + move) to 28/30 (date + opening + move). The backfill is worth
-running for the cause chips, the post-mortem panel and motif recall — not for
-naming, which the date already carries.
+**It has since been run against production itself.** Measured 2026-08-15:
+`alfi3sr` 30 rows / 30 with `opening_name`, `lauureal` 318 / 318. Both tenants
+are at full coverage, and the rehearsal's prediction below has come true rather
+than remaining a forecast.
 
-The diagnosis job simply never ran for that user. It auto-chains only from
-puzzle generation (`worker.py:531`), and those puzzles predate the diagnosis
-feature — so **any user who stopped importing games before diagnosis shipped has
-no diagnosis rows, and nothing will ever give them any.** There is no
-backfill-on-deploy for it, and `POST /users/{u}/diagnose` is manual.
+Note what it did *not* buy: provenance distinctness for that user moves from
+27/30 (date + move) to 28/30 (date + opening + move) — **now measured at 28/30
+in production**, exactly as projected. The backfill was worth running for the
+cause chips, the post-mortem panel and motif recall, not for naming, which the
+date already carries.
 
-That is a defect in its own right, independent of naming, and §11 schedules it.
-The design still does not *depend* on opening coverage — a freshly generated
-puzzle has no diagnosis row either, because diagnosis is asynchronous — but the
-coverage argument in §3.1 is now about timing rather than about a tenant being
-permanently unreachable.
+**The data is fixed; the mechanism is not, and that is the part this design
+still has to care about.** Diagnosis auto-chains only from puzzle generation
+(`worker.py:531`), those puzzles predated the diagnosis feature, and nothing has
+changed that: there is still no backfill-on-deploy (`main.py`'s `lifespan` runs
+`backfill_puzzle_identity` only), and `POST /users/{u}/diagnose` is still
+manual. So **any user who stops importing games remains permanently
+un-diagnosable, and today's 100% coverage is the residue of a manual run rather
+than a property the system maintains.**
+
+That is a defect in its own right, independent of naming, and §11 step 0
+schedules it — as mechanism work only, since the data half is already done. The
+design still does not *depend* on opening coverage — a freshly generated puzzle
+has no diagnosis row either, because diagnosis is asynchronous — so the coverage
+argument in §3.1 is about timing, not about a tenant being permanently
+unreachable.
 
 A third fact came from the UI. `Puzzles.tsx` renders the motif chip beside the
 title *while the player is solving* (`:1139` mobile, `:1337` desktop, neither
@@ -111,24 +146,39 @@ game with a usable timestamp; zero manual puzzles exist.
 So the base is **date + move number**, available for 100% of both tenants. The
 opening is *added when a diagnosis row exists*, never depended upon.
 
-Distinctness of `(date, opening, move)`, per tenant, measured:
+Distinctness of `(date, opening, move)`, per tenant, measured 2026-08-15 — after
+the §1.1 backfill, which is why the second row improved:
 
 ```
 lauureal   318 / 318   100%
-alfi3sr     27 /  30    3 collisions (no opening, so effectively date+move)
+alfi3sr     28 /  30    2 collisions  (was 27/30 before openings existed)
 ```
+
+For contrast, the bare base without the opening component:
+
+```
+lauureal   276 / 318   date + move alone
+alfi3sr     28 /  30   date + move alone
+```
+
+The opening is what carries `lauureal` from 276 to 318, so it is doing real work
+where it exists. It is still never depended upon: the two remaining `alfi3sr`
+collisions, and the 42 `lauureal` rows that need the opening, both fall through
+to the `(source_game_id, ply)` tiebreak below.
 
 When two puzzles still collide, they are disambiguated by their position within
 that day's games — `(source_game_id, ply)` is unique per user by existing
 constraint, so a deterministic tiebreak always exists.
 
 Revision 1 used opening + move and measured 272/318 on one tenant. That is worse
-*and*, until the backfill in §1.1 runs, unavailable for the other.
+than date + opening + move, and at the time it was also unavailable for the
+other tenant.
 
-The base stays date + move even after that backfill, because the gap is not only
-historical: diagnosis is asynchronous, so a puzzle generated a minute ago has no
-opening either. Provenance must be answerable at insert time, and only date and
-move number are.
+The base stays date + move now that the §1.1 backfill has run, because the gap
+was never only historical: diagnosis is asynchronous, so a puzzle generated a
+minute ago has no opening either, and the mechanism that would keep coverage at
+100% still does not exist. Provenance must be answerable at insert time, and
+only date and move number are.
 
 ## 4. The gate is the puzzle's state, not the session's mode
 
@@ -325,7 +375,27 @@ So the clear splits in two, and the halves are not equally settled:
 puzzle is resolved. An unearned nickname on an unattempted puzzle is therefore
 invisible, and becomes visible only at the moment §3 wants a nickname to exist.
 Clearing costs a user-visible regression to buy a definitional property nobody
-can observe. The names are also gate-clean. Measured against production on
+can observe.
+
+> **This argument has a hard dependency: §4's gate must already be live.** §4 is
+> not implemented, and until it is, a grandfathered nickname is served
+> pre-attempt — which is the spoiler bug §4 exists to prevent, on 320 rows.
+> §11 orders the gate at step 3 and this decision at step 6, so the rollout
+> satisfies the dependency, but only because of that ordering. **Grandfathering
+> must not ship before step 3, and reverting step 3 while leaving step 6 in
+> place re-opens the leak.** If the gate is ever abandoned, revisit this
+> decision rather than inheriting it.
+
+**What grandfathering also does, stated plainly.** It is not merely "keep
+invisible rows until they are wanted". §6 earns a nickname only when a *failed*
+puzzle is scheduled to return — 20 rows today. Keeping 320 means that after step
+6 a user resolving a puzzle they have never failed sees a nickname §6's own
+trigger would never have written. That is a real widening of the nickname
+population beyond what §6 specifies, and it is accepted here rather than
+overlooked: a passed puzzle still returns for review, and a recall cue on it is
+useful rather than wrong. But it means §6 describes how nicknames are *created
+from now on*, not an invariant over the whole corpus, and §10's tests should
+assert the former rather than the latter. The names are also gate-clean. Measured against production on
 2026-08-15, applying `#385`'s own rule (substring match on the best move's
 destination square, chars 3-4 of `best_move_uci` so promotions do not skew it):
 **0 of 320 AI titles contain their answer square, and 0 of 320 have an
@@ -425,11 +495,13 @@ revision 4's `"The Queen to d5"` no longer appears anywhere.
 
 Each step ships and reverts independently.
 
-0. **Diagnose the un-diagnosed** (§1.1). Independent of everything below, and
-   worth doing whether or not the rest ships: it is rules-only, costs no model
-   calls, and turns one tenant's opening coverage from 0% to whatever the
-   classifier can reach. Needs a mechanism, not just one manual call — a user
-   who stops importing games must not become permanently un-diagnosable.
+0. **Give diagnosis a mechanism** (§1.1). The *data* half of this step is
+   already done: the backfill has been run against production and both tenants
+   sit at 100% coverage. What is left is the part that was always the point —
+   diagnosis auto-chains only from puzzle generation, so a user who stops
+   importing games becomes permanently un-diagnosable and today's 100% decays
+   the moment a new tenant arrives. Still independent of everything below,
+   still rules-only, still no model calls.
 
 1. `display_name` + provenance helper; every puzzle route through one
    serializer. Nickname still wins wherever it exists — nothing visibly changes.
@@ -443,13 +515,22 @@ Each step ships and reverts independently.
    the 320 AI ones); move the naming trigger; delete the content gate (§6, §7).
    The clear must not ship *before* the write is removed, or the boot backfill
    re-fills it (§7.3).
-7. `blunder` stops rendering as a motif — `usable_motif()` already exists in
-   `diagnosis/clusters.py` and is used in exactly one place.
+7. `blunder` stops rendering as a motif — `usable_motif()` already exists
+   (`diagnosis/clusters.py:85`) with one external consumer
+   (`puzzles_routes.py:1736`) plus its own internal use at `clusters.py:121`.
 
-Step 6 is the only irreversible one. It runs last, once 1–5 have shown the
-gate holds.
+**Step 6 is no longer the irreversible one, and that is a consequence of §7.2.**
+Revision 4 called it irreversible because it cleared all 348 titles including
+the AI-written ones, which cannot be regenerated without spending model calls
+again. Grandfathering leaves those 320 in place, so the clear touches only the
+28 `position` rows — and `position_names.py` composes those deterministically
+from the played move, so re-running the composer reproduces them exactly.
 
-## 12. What the two reviews changed
+It should still run last, once 1–5 have shown the gate holds. The reason is now
+blast radius rather than permanence: step 6 removes the title-writing paths that
+every earlier step still assumes are populating rows.
+
+## 12. What the first two reviews changed
 
 **Review 1** (self, with the repo open): provenance is not free — the session
 payload has no diagnosis join; enforcement belongs in the payload, not the
@@ -462,8 +543,10 @@ cost a migration. The hint-rung correction was itself corrected: the motif sorts
 - **The gating axis was wrong** — per-session mode cannot cover a per-puzzle
   leak spread over five endpoints, and `/puzzles/due` runs before the session
   exists. Now §4.
-- **Single-tenant measurement.** `alfi3sr` has 0 diagnosis rows, so revision 1's
-  provenance was unreachable for the tenant with the worst duplication. Now §3.1.
+- **Single-tenant measurement.** `alfi3sr` **had** 0 diagnosis rows, so revision
+  1's provenance was unreachable for the tenant with the worst duplication. Now
+  §3.1 — and the zero itself is gone as of 2026-08-15 (§1.1), which is why §1
+  now rests on diagnosis being asynchronous rather than on the zero.
 - **The migration did not stick** — `backfill_puzzle_identity` runs every boot
   and rewrites exactly what was cleared. Now §7.3.
 - **The naming trigger had no path** — nothing a review does enqueues naming.
