@@ -1,8 +1,20 @@
 # Design: puzzle identity, and what may be seen before an attempt
 
-Status: draft, revision 6. Three adversarial reviews have run against it; §12
+Status: draft, revision 7. Four adversarial reviews have run against it; §12
 records what the first two changed, because the deltas are most of the argument.
 Supersedes the naming half of `#364`'s plan. Nothing here is implemented.
+
+**Revision 7 is review 4's response, and it is the one that found real design
+defects rather than stale numbers.** Two are open and block rollout steps:
+**§4.1** — the gate is monotonic, so every spaced-repetition *repeat* attempt is
+pre-spoiled, which is most of what the gate exists to prevent. **§6** — the
+narrowed trigger plus §7.3's `save_puzzle` change makes `pending_count`
+permanently positive with no breaker, producing a two-second worker spin loop,
+not the fifteen-minute drip revision 6 costed. Neither is fixed here; both are
+written up with a candidate resolution, because choosing is Lau's call. Review 4
+also found four smaller defects (§6's re-fire, §7.3's lost `user` path and
+unbounded boot backfill, §11 step 1's unbudgeted scope) which are corrected in
+place.
 
 Revision 5 reconciled the document against `dev` at `b691baf` and against live
 production on 2026-08-15, after `#377`, `#378`, `#384` and `#385` shipped. Every
@@ -220,6 +232,48 @@ rather than the request asking for it.
 `PuzzleStats.attempts` is already selected into the very response that leaks the
 title (`puzzles_routes.py:1378`) and no handler consults it.
 
+### 4.1 The gate as stated is monotonic, and that breaks the repeat attempt
+
+**This is a hole in the central invariant, found by review 3, and it is not yet
+fixed.** It is written here rather than quietly patched because the resolution
+is a design choice.
+
+`attempts > 0` never goes back to false. Combine that with §6 and the two rules
+collide exactly where the product lives:
+
+- §6 writes a nickname **only** for a puzzle that has been failed and
+  rescheduled. So every puzzle that *has* a nickname necessarily has
+  `attempts > 0`.
+- §4 opens the gate permanently at `attempts > 0`. So for every puzzle that has
+  a nickname, the gate is already open.
+
+Therefore `/puzzles/due` serves the motif and a deliberately recall-optimised
+nickname — "Bishop Had Bigger Plans" — on the review card **immediately before
+the repeat attempt.** This is a spaced-repetition library: the second attempt is
+the whole point, and it is the one the design spoils. §1 cites
+`LibraryPuzzle.tsx:54` to condemn precisely this, and §10's test 1 cannot catch
+it, because it seeds an *unresolved* puzzle and the failure needs a resolved one.
+
+§2's framing hid it. "Recall is valuable *after* the attempt" is true of attempt
+1 and false of every attempt after, because after attempt 1 *is* before attempt
+2.
+
+**Candidate resolution, not yet chosen.** Make resolution per-exposure rather
+than lifetime: a puzzle is resolved while the user is looking at the outcome,
+and closes again when it is next scheduled to return. Mechanically that is
+comparing the last attempt against `next_due_at` rather than testing
+`attempts > 0` — the gate reads "resolved since it last came due" instead of
+"ever resolved". `attempts > 0` stays as the cheap first term.
+
+That keeps §4's one-predicate-in-one-serializer property and every
+by-construction benefit above; it changes only what the predicate says. It also
+means §10's test 1 must be parametrised over *puzzle state* (never attempted,
+resolved and current, re-due after a prior attempt) rather than over routes
+alone, which is the shape that would have caught this.
+
+Until this is settled, §11 must not ship step 3 — turning the gate on while it
+is monotonic delivers most of the spoiler surface it exists to remove.
+
 This also settles a contradiction revision 1 carried: it claimed nicknames are
 "never shown before an attempt" while its own mode table showed them in the
 Library. Under a per-puzzle gate the Library obeys the same rule as the trainer,
@@ -282,6 +336,16 @@ So this design adds the path explicitly:
   `next_due_at` on a puzzle with `fail_count > 0` and no nickname — the same
   shape as `_enqueue_diagnosis` (`worker.py:480`), wrapped so a follow-up
   failure cannot fail the review that already succeeded.
+
+  **"No nickname" is not a safe trigger condition on its own.** §6.1 makes NULL
+  the *permanent* resting state of a puzzle whose name the gate rejected, and
+  the audit-log exclusion that would stop a retry lives in `pending_count`, not
+  in the pass: `name_puzzles` skips only `title_source` of `"ai"` or `"user"`
+  (`naming_pass.py:238-254`), so a NULL-source row with a rejected audit row
+  falls straight through to a fresh model call. Every subsequent review of that
+  puzzle then buys another billed call — the per-review cost this section opens
+  by refusing. The trigger must consult the audit log for an accepted-or-
+  rejected row, exactly as `pending_count` does.
 - **Narrowing selection must not strand the re-queue predicate.** Revision 4
   asked for one shared expression of "needs a nickname", because `name_puzzles`
   and `pending_count` each carried their own. That is no longer the failure
@@ -296,9 +360,28 @@ So this design adds the path explicitly:
   the trigger narrows to, an excluded puzzle must be excluded from
   `pending_count` too, or written into the audit log.** A puzzle that the new
   trigger will never select, that has no audit row, and whose `title_source` is
-  outside `("ai", "user")` is counted pending forever — one pass plus N audit
-  rows every 15 minutes, indefinitely. That is the residual loop already
-  recorded as accepted on `dev`, and this design must not widen it.
+  outside `("ai", "user")` is counted pending forever.
+
+  **Revision 6 costed that at "one pass plus N audit rows every 15 minutes".
+  That was wrong by more than two orders of magnitude, and the error mattered.**
+  The 15-minute figure is `ERROR_STREAK_COOLDOWN`, and it only bounds anything
+  because *failures write audit rows* — `retry_is_backed_off`
+  (`naming_pass.py:495`) opens the breaker off `failing_streak`, a count of
+  calls that errored. A pass that selects nothing makes no calls, so it writes
+  no rows, so the streak stays 0 and the breaker never opens. Meanwhile
+  `pending_count` stays positive and `worker.py:574-585` re-queues on it. The
+  worker claims the next job **about two seconds later** — the cadence the
+  breaker's own docstring describes as "a spin loop… it burns that container
+  whole" since `#374` gave the worker its own container.
+
+  So this is not a residual-loop widening. It is a **hard prerequisite**:
+  §7.3's change to `save_puzzle` makes NULL/NULL the birth state of every new
+  puzzle, and §6's narrowing means most of them never earn an audit row.
+  Shipping either without a matching `pending_count` predicate produces a
+  silent two-second spin, not a slow drip. **§11 step 6 must change
+  `pending_count` in the same commit as the narrowing**, and §10 needs a test
+  that asserts `pending_count` reaches zero for a corpus the trigger will never
+  select.
 
 ~20 puzzles today rather than 348, scaling with engagement rather than corpus.
 Measured on production 2026-08-15: `fail_count > 0` is **20 rows for `lauureal`
@@ -421,13 +504,31 @@ inside rollout step 6 rather than as its own operation.
 
 ### 7.3 The three code changes that make it stick
 
-1. **`save_puzzle` stops writing a title.** A puzzle is born with provenance.
+1. **`save_puzzle` stops writing a *generated* title** — the emphasis matters.
+   It must keep writing an **explicitly supplied** one. `puzzle_repository.py:190-202`
+   stores a caller-provided title as `title_source='user'`, reached from the
+   manual-save route (`puzzles_routes.py:460` → `:532`), and that is the **only
+   writer of `user` anywhere in the codebase.** §7 keeps `user` as one of the
+   two legal values, so deleting the branch wholesale would both drop the name
+   the user typed and orphan a value the model still declares. A puzzle is born
+   with provenance *unless the caller named it*.
 2. **`backfill_puzzle_identity` stops writing titles.** This is the one that
    makes the others real. It runs in `lifespan` on **every API boot**
    (`main.py:110-116`), selects exactly the rows §7.2 clears
    (`identity.py:190`, `title IS NULL`) and rewrites them with
    `title_source='position'` (`:257-258`). Without this, clearing titles is
    undone by the next deploy.
+
+   **It also needs a new selector, and revision 6 missed this.** `title IS NULL`
+   is today a shrinking set that converges to zero. Under §6.1 it becomes the
+   steady state of most of the corpus, so the same query would match nearly
+   every row on **every boot** — a `get_puzzle`, an `assign_primary_motif` and
+   a `taken_titles` per row plus a commit, awaited in `lifespan` before the API
+   serves its first request, growing with the corpus forever. It is
+   simultaneously *under*-selective for the job it keeps: motif backfill now
+   skips the 320 grandfathered rows precisely because they have titles. The
+   replacement should select on what it actually still fixes —
+   `primary_motif IS NULL` — and stop keying off `title` at all.
 3. **`scripts/reclassify_motifs.py` stops writing titles.** The same treatment,
    for the operator-run path. It re-runs `generate_puzzle_title` over existing
    rows by design, so leaving it alone hands an operator a one-command undo of
@@ -452,10 +553,17 @@ Two consumers currently assume a non-null title and must move to it:
 
 - `GET /{username}/puzzles/tricky` (`dashboard.py:454`) declares `title: str`
   **non-null** (`:111`) and survives only via `title=stat.title or "Untitled
-  Puzzle"` (`:499`). It filters `fail_count >= 2` — precisely the puzzles that
-  earn nicknames, and precisely the ones that will not have one yet. Without
-  `display_name` the Dashboard's "Recently Tricky" card becomes a column of
-  `Untitled Puzzle`: the original bug, on the surface dedicated to it.
+  Puzzle"` (`:499`). It filters `fail_count >= 2` (`:480`).
+
+  Revision 6 justified the move by calling those "precisely the puzzles that
+  earn nicknames, and precisely the ones that will not have one yet", which
+  contradicts §6: a row at `fail_count >= 2` has been failed and rescheduled at
+  least twice, so it has already passed §6's trigger and is among the *most*
+  likely to carry a nickname. The real exposure is narrower and still
+  sufficient — `tricky` shows a puzzle the moment it reaches two failures, the
+  nickname is written asynchronously by a job, and a row whose naming call was
+  rejected stays NULL permanently (§6.1). The card renders `Untitled Puzzle` for
+  every gap in that race: the original bug, on the surface dedicated to it.
 - Library search is `lower(title) LIKE …` (`puzzles_routes.py:1249`). With
   titles NULL it silently degrades to hex-id search while the placeholder still
   says "Search by title or ID" (`Library.tsx:319`). Search must cover
@@ -481,12 +589,22 @@ puzzle" — is an invariant over (route × puzzle state). Revision 1 could only
 have been tested per endpoint, which is the shape that lets a sixth endpoint be
 added later without failing anything.
 
-Under §4 it becomes two tests:
+Under §4 it becomes three tests. Revision 6 had two, and §4.1 shows why the
+first was not enough:
 
-1. A parametrised test over every puzzle-returning route: seed one unresolved
-   puzzle, assert none of the revealing fields appear in any response.
+1. A parametrised test over every puzzle-returning route **× every puzzle
+   state** — never attempted, resolved and current, and **re-due after a prior
+   attempt** — asserting none of the revealing fields appear where the gate
+   should be shut. Revision 6 parametrised over routes only and seeded a single
+   *unresolved* puzzle, which is exactly why it could not have caught §4.1: the
+   spoiler lives on a puzzle that is resolved and due again.
 2. A registry test: every route returning puzzle data goes through the shared
    serializer. This is the one that catches the endpoint added next year.
+3. **A termination test for `pending_count`**: seed a corpus the naming trigger
+   will never select, run the chain, assert the count reaches zero and the
+   worker stops re-queuing. §6's spin loop is invisible to any test that only
+   checks naming *output*, because the failure is that nothing is produced,
+   forever, at high frequency.
 
 Note `puzzles/test_generator.py:661-662` asserts `stats.title == "Pawn to a3"`
 and `title_source == "position"` directly on the creation path §7 removes. It is
@@ -511,6 +629,16 @@ Each step ships and reverts independently.
 
 1. `display_name` + provenance helper; every puzzle route through one
    serializer. Nickname still wins wherever it exists — nothing visibly changes.
+
+   **This step is much larger than "nothing visibly changes" suggests, and
+   revisions 4-6 costed it as free.** Puzzle payloads are built across at least
+   five response models in two routers: `PuzzleListItem` constructed inline at
+   two separate call sites (`puzzles_routes.py:1364` and `:1467`),
+   `SimilarPuzzleItem` (`:1627`), `DiagnosisResponse`, `DailyPuzzlesResponse`
+   and `dashboard.py`'s `TrickyPuzzle`. Worst, `DuePuzzlesResponse.puzzles` is
+   declared `list[dict]` (`:114-118`) — untyped, and it is the route §4 calls
+   the one that matters most. §10's test 2 cannot pass until all of those are
+   unified, so the unification *is* the step rather than a precondition of it.
 2. Move `tricky` and Library search onto it (§8).
 3. Turn on the resolution gate (§4). Motif, nickname, queue-reason pattern and
    diagnosis prose become post-resolution.
@@ -521,9 +649,12 @@ Each step ships and reverts independently.
    the 320 AI ones); move the naming trigger; delete the content gate (§6, §7).
    The clear must not ship *before* the write is removed, or the boot backfill
    re-fills it (§7.3).
-7. `blunder` stops rendering as a motif — `usable_motif()` already exists
-   (`diagnosis/clusters.py:85`) with one external consumer
-   (`puzzles_routes.py:1736`) plus its own internal use at `clusters.py:121`.
+7. `blunder` stops rendering as a motif. `usable_motif()` already exists
+   (`diagnosis/clusters.py:85`), but this is a **three-site** change, not the
+   one-site change revisions 4-6 claimed: it is called at `clusters.py:121` and
+   `puzzles_routes.py:1736`, while the raw `stats.primary_motif` is still served
+   unfiltered at `puzzles_routes.py:1367` (`/puzzles/list`) and `:1470`
+   (`/puzzles/{id}`) — the two routes §4 already names as leaking.
 
 **Step 6 is no longer the irreversible one, and that is a consequence of §7.2.**
 Revision 4 called it irreversible because it cleared all 348 titles including
@@ -592,8 +723,15 @@ empty population, which is why §7.2 grandfathers rather than clears.
    titles, clear only the 28 deterministic ones.** Revision 4 left this open
    when every title was deterministic and the choice was all-or-nothing. It is
    no longer that: the AI titles are gate-clean and, under §4, invisible until
-   the moment a nickname is wanted. Still reversible, and §7.2 records the
-   argument against.
+   the moment a nickname is wanted.
+
+   **Reversible, but not cheaply — revision 6 oversold this as "a one-paragraph
+   edit".** Those 320 rows are the main reason `pending_count` is small today,
+   because `title_source='ai'` is what reads as done. Clearing them makes 320
+   rows NULL with no audit row, which drops them straight into the permanent
+   pending population §6 describes — so flipping this decision is a scheduler
+   change, not a prose change. Reverse it only together with the
+   `pending_count` predicate §6 now requires.
 3. **Whether hinted solves should schedule differently** (§9). Needs usage data
    that does not exist.
 4. ~~Whether `alfi3sr` having no diagnosis rows is a bug in its own right.~~
@@ -601,5 +739,20 @@ empty population, which is why §7.2 grandfathers rather than clears.
    the opening derives from 8 of 8 real samples. The job never ran, and nothing
    would ever run it. Fixed as rollout step 0 rather than routed around.
 
+5. **How resolution is scoped** (§4.1). Open, and it blocks rollout step 3.
+   Lifetime `attempts > 0` spoils every repeat attempt; per-exposure
+   ("resolved since it last came due") fixes it at the cost of a slightly
+   richer predicate. The candidate is written up; the choice is not made.
+6. **Whether `pending_count` is narrowed in the same commit as the trigger**
+   (§6). Not really a judgement call — the answer is yes — but it is recorded
+   here because shipping the two apart is a two-second spin loop rather than a
+   degradation, and that is the kind of thing a rollout splits by accident.
+
 Everything else is settled by measurement against production, or by a decision
 already made in the codebase.
+
+**Two of the six above are open defects rather than open questions.** Items 5
+and 6 were found by review 4 against a document that had already survived three
+reviews and read as finished. That is the pattern this codebase keeps
+reproducing: the seventh consecutive fix commit still introduced a defect, and a
+design doc is no more exempt than a patch.
