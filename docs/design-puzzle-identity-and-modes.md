@@ -269,7 +269,7 @@ section wants. The half of §7's target model that concerns `title_source` is
 therefore already expressed on `dev`; what is missing is that the write path
 still populates `position`.
 
-## 7. Data model and the migrations this costs
+## 7. Data model, and what this actually costs
 
 - `puzzle_stats.title` — the nickname. NULL until earned. Unique per user
   (`uq_puzzle_stats_username_title`, already built in `#366`).
@@ -313,7 +313,7 @@ CLI naming pass — which is precisely what makes the clear contentious, because
 under §6 none of those 320 names were earned. A corpus-wide CLI pass is not "a
 failed puzzle scheduled to return".
 
-So step 1 splits, and the two halves are not equally settled:
+So the clear splits in two, and the halves are not equally settled:
 
 1. **Clear the 28 `position` rows.** Uncontested. They are generated
    identifiers, the thing §3 replaces with provenance, and no argument in this
@@ -325,8 +325,13 @@ So step 1 splits, and the two halves are not equally settled:
 puzzle is resolved. An unearned nickname on an unattempted puzzle is therefore
 invisible, and becomes visible only at the moment §3 wants a nickname to exist.
 Clearing costs a user-visible regression to buy a definitional property nobody
-can observe. The names are also gate-clean: **0 of 320 contain their answer
-square**, measured after `#385` closed the punctuation bypass.
+can observe. The names are also gate-clean. Measured against production on
+2026-08-15, applying `#385`'s own rule (substring match on the best move's
+destination square, chars 3-4 of `best_move_uci` so promotions do not skew it):
+**0 of 320 AI titles contain their answer square, and 0 of 320 have an
+unparseable best move.** That second zero matters because the gate is disabled
+outright when `answer_square` is `None`, so it is the population where a leak
+could hide unchecked.
 
 **The case against, recorded so it can be re-opened.** §12 concluded that names
 generated before the content gate existed "should be re-earned rather than
@@ -338,16 +343,19 @@ gate-clean measurement covers the concern the re-earn rule was protecting.
 Grandfathering makes the migration **28 rows, not 348** — small enough to run
 inside rollout step 6 rather than as its own operation.
 
-### 7.3 The two code changes that make it stick
+### 7.3 The three code changes that make it stick
 
 1. **`save_puzzle` stops writing a title.** A puzzle is born with provenance.
 2. **`backfill_puzzle_identity` stops writing titles.** This is the one that
-   makes the other real. It runs in `lifespan` on **every API boot**
-   (`main.py:110-116`), selects exactly the rows step 1 clears
+   makes the others real. It runs in `lifespan` on **every API boot**
+   (`main.py:110-116`), selects exactly the rows §7.2 clears
    (`identity.py:190`, `title IS NULL`) and rewrites them with
    `title_source='position'` (`:257-258`). Without this, clearing titles is
-   undone by the next deploy. `scripts/reclassify_motifs.py` needs the same
-   treatment for its operator-run path.
+   undone by the next deploy.
+3. **`scripts/reclassify_motifs.py` stops writing titles.** The same treatment,
+   for the operator-run path. It re-runs `generate_puzzle_title` over existing
+   rows by design, so leaving it alone hands an operator a one-command undo of
+   the other two.
 
 Note the ordering hazard the boot backfill creates: clearing 28 rows and
 deploying are the same operation, and the backfill would re-fill them before
@@ -406,12 +414,12 @@ Under §4 it becomes two tests:
 
 Note `puzzles/test_generator.py:661-662` asserts `stats.title == "Pawn to a3"`
 and `title_source == "position"` directly on the creation path §7 removes. It is
-a spec, not a fixture, and it changes with the design — **24** assertions of
-that shape exist across `services/api/`, up from 19 as of revision 4. (The
-expected string moved too: `#384` changed the fallback to name the move the
-player *played*, so the old `"The Queen to d5"` is gone. The count grows every
-time naming is touched, which is the argument for changing the spec once rather
-than chasing it.)
+a spec, not a fixture, and it changes with the design. Measured on `dev` at
+`b691baf`: **24** assertions matching `title ==` or `title_source ==` across
+`services/api/**/test_*.py`. Revision 4 said 19 without recording its pattern,
+so treat 24 as a fresh count rather than as a trend. The expected string moved
+too — `#384` changed the fallback to name the move the player *played*, so
+revision 4's `"The Queen to d5"` no longer appears anywhere.
 
 ## 11. Rollout
 
@@ -481,7 +489,8 @@ column shipped in `b1c2d3e4f5a6` and production now holds **320 `ai` rows**
 substantive point — that 24 of those trial names contained their own answer
 square — was closed by `#377`, `#384` and `#385`: the gate now matches squares
 by substring rather than by whitespace token, and **0 of the 320 shipped AI
-titles contain their answer square**. So "names generated before the content
+titles contain their answer square** (measured 2026-08-15; see §7.2 for the
+rule applied). So "names generated before the content
 gate existed should be re-earned rather than kept" is a rule with a measured
 empty population, which is why §7.2 grandfathers rather than clears.
 
