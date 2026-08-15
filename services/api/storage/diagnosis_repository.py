@@ -140,6 +140,34 @@ class DiagnosisRepository:
             PuzzleDiagnosis.rule_version != RULE_VERSION,
         )
 
+    def usernames_with_pending(self) -> list[str]:
+        """Every user holding at least one puzzle that still needs diagnosing.
+
+        The per-user :meth:`pending_count` answers "how much is left for this
+        person", which presumes you already know who to ask about. The periodic
+        sweep does not: its whole job is finding the users nobody is asking
+        about, because diagnosis auto-chains only from puzzle generation, so a
+        user who stops importing games is otherwise never revisited.
+
+        One query rather than a fold over every known username. The tenant set
+        is small today, but the per-user loop costs a query each *forever*,
+        including for the majority with nothing pending — the shape that makes
+        a maintenance task quietly expensive as the corpus grows.
+
+        Usernames come back already folded: they are stored canonical and this
+        reads them rather than accepting one from a caller.
+        """
+        join = (PuzzleDiagnosis.puzzle_id == Puzzle.id) & (
+            PuzzleDiagnosis.username == Puzzle.username
+        )
+        stmt = (
+            select(Puzzle.username)
+            .outerjoin(PuzzleDiagnosis, join)
+            .where(or_(PuzzleDiagnosis.puzzle_id.is_(None), self._stale_clause()))
+            .group_by(Puzzle.username)
+        )
+        return list(self.db.scalars(stmt).all())
+
     def _pending_query(self, username: str) -> Select:
         # Private: callers below have already folded.
         join = (PuzzleDiagnosis.puzzle_id == Puzzle.id) & (
