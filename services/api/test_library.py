@@ -883,6 +883,9 @@ class TestGetPuzzleDetail:
         expected_keys = {
             "id",
             "title",
+            # What the client renders. Equal to `title` while every row has
+            # one; diverges when titles become NULL by default (design §7).
+            "display_name",
             "primary_motif",
             "difficulty",
             "swing",
@@ -901,6 +904,9 @@ class TestGetPuzzleDetail:
             "diagnosis_summary",
         }
         assert set(data.keys()) == expected_keys
+        # Step 1 is explicitly a no-op for what the user sees: a nickname wins
+        # wherever one exists, and today one always does.
+        assert data["display_name"] == data["title"] == "Shape Test"
 
     def test_detail_diagnosis_summary_is_null(self, client, db_session):
         """Detail endpoint always returns null for diagnosis_summary.
