@@ -47,6 +47,7 @@ from services.api.models import (
 )
 from services.api.models import Game as GameModel
 from services.api.models import Puzzle as PuzzleModel
+from services.api.puzzles.provenance import resolve_display_name
 from services.api.ratelimit import rate_limit
 from services.api.storage import PuzzleRepository, normalized_position
 from services.api.storage.diagnosis_repository import DiagnosisRepository
@@ -136,6 +137,12 @@ class PuzzleDiagnosisSummary(BaseModel):
 class PuzzleListItem(BaseModel):
     id: str
     title: str | None
+    # What the client should render. Equal to `title` wherever one exists,
+    # which is everywhere today; it diverges once titles become NULL by
+    # default (design §7). Optional for now so the list route -- which does not
+    # yet join a game -- can omit it until step 1 finishes; the detail route
+    # below always sets it.
+    display_name: str | None = None
     primary_motif: str | None
     difficulty: str  # "easy" | "medium" | "hard"
     swing: float
@@ -1464,9 +1471,22 @@ def get_puzzle_detail(
         raise HTTPException(status_code=404, detail="Puzzle not found")
 
     puzzle, stats, computed_status = row
+    # One row, so the game is a primary-key lookup rather than a join rewrite.
+    # Provenance needs its end_time; a missing game degrades the label to the
+    # move number instead of failing the request.
+    game = (
+        db.get(GameModel, (puzzle.source_game_id, puzzle.username))
+        if puzzle.source_game_id
+        else None
+    )
     return PuzzleListItem(
         id=puzzle.id,
         title=stats.title if stats else None,
+        display_name=resolve_display_name(
+            title=stats.title if stats else None,
+            end_time=game.end_time if game else None,
+            ply=puzzle.ply,
+        ),
         primary_motif=stats.primary_motif if stats else None,
         difficulty=_swing_to_difficulty(puzzle.swing),
         swing=puzzle.swing,

@@ -23,7 +23,15 @@ from services.api.analytics_confidence import (
 from services.api.day_boundary import day_expr, day_key, utc_today
 from services.api.db import get_db
 from services.api.identity import assert_owns_username, require_account
-from services.api.models import Account, PuzzleReview, PuzzleStats, TrainingSession
+from services.api.models import (
+    Account,
+    Game,
+    Puzzle,
+    PuzzleReview,
+    PuzzleStats,
+    TrainingSession,
+)
+from services.api.puzzles.provenance import resolve_display_name
 from services.api.storage.spaced_repetition import (
     get_next_due_date,
     get_scheduled_within_count,
@@ -109,6 +117,11 @@ class TrickyPuzzle(BaseModel):
 
     puzzle_id: str
     title: str
+    # What the client should render. Equal to `title` today, because every row
+    # still has one; it diverges once titles become NULL by default (design
+    # §7). Added here rather than swapping `title` outright so this step
+    # changes nothing visible -- moving this consumer over is step 2.
+    display_name: str
     fail_count: int
     last_attempted_at: datetime
 
@@ -486,21 +499,49 @@ def get_tricky_puzzles(
         db.scalar(select(func.count()).select_from(base_query.subquery())) or 0
     )
 
-    # Get paginated and sorted results
-    stats = db.scalars(
-        base_query.order_by(
-            desc(PuzzleStats.fail_count), desc(PuzzleStats.last_reviewed_at)
-        ).limit(limit)
+    # Get paginated and sorted results. Puzzle and Game ride in on the join so
+    # provenance can be composed without a query per row; both are OUTER joins
+    # so a missing row degrades the label rather than dropping the puzzle from
+    # a list the count above already promised.
+    #
+    # Safe to widen here and not in the count query: this one is bounded by
+    # `limit` (max 20), and joining into the count could change the number.
+    rows = db.execute(
+        select(PuzzleStats, Puzzle, Game)
+        .select_from(PuzzleStats)
+        .outerjoin(
+            Puzzle,
+            # Both halves of the ownership key -- see #360.
+            (Puzzle.id == PuzzleStats.puzzle_id)
+            & (Puzzle.username == PuzzleStats.username),
+        )
+        .outerjoin(
+            Game,
+            (Game.game_id == Puzzle.source_game_id)
+            & (Game.username == Puzzle.username),
+        )
+        .where(
+            PuzzleStats.username == username,
+            PuzzleStats.fail_count >= 2,
+            PuzzleStats.last_reviewed_at.isnot(None),
+        )
+        .order_by(desc(PuzzleStats.fail_count), desc(PuzzleStats.last_reviewed_at))
+        .limit(limit)
     ).all()
 
     puzzles = [
         TrickyPuzzle(
             puzzle_id=stat.puzzle_id,
             title=stat.title or "Untitled Puzzle",
+            display_name=resolve_display_name(
+                title=stat.title,
+                end_time=game.end_time if game else None,
+                ply=puzzle.ply if puzzle else None,
+            ),
             fail_count=stat.fail_count,
             last_attempted_at=stat.last_reviewed_at,
         )
-        for stat in stats
+        for stat, puzzle, game in rows
     ]
 
     return TrickyPuzzlesResponse(puzzles=puzzles, total_count=total_count)
