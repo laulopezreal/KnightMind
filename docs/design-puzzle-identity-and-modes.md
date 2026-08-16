@@ -1,8 +1,33 @@
 # Design: puzzle identity, and what may be seen before an attempt
 
-Status: draft, revision 8. Five adversarial reviews have run against it; §12
+Status: draft, revision 9. Six adversarial reviews have run against it; §12
 records what the first two changed, because the deltas are most of the argument.
 Supersedes the naming half of `#364`'s plan. Nothing here is implemented.
+
+**Revision 9 is review 6's response, and it found that two of this document's
+own proposals do not survive contact with the schema.**
+
+**§4's gate cannot be implemented as written.** "Resolved" is defined as
+`attempts > 0` *or the solution was explicitly revealed*, and nothing persists a
+reveal: the endpoint writes nothing and `puzzle_stats` has no column for it. So
+the second disjunct is unimplementable, and backing it needs a migration —
+which falsifies §7.1's headline "this costs no new migration". That claim was
+true of the naming half and false of the gate; §7.1 now says which.
+
+**§4.1's candidate fix was never true.** Revision 7 proposed comparing the last
+attempt against `next_due_at`. Those two are written in the same statement with
+an interval floored at one day, so `last_reviewed_at < next_due_at` holds for
+every attempted puzzle in both states the predicate must separate. An
+implementer following it literally ships a gate that never opens. The predicate
+has to read the clock: `attempts > 0 AND now() < next_due_at`.
+
+Review 6 also caught revision 8 fixing the stale 27/30 in §1.1 while leaving it
+in §3.1, four sections apart, in the same revision that boasted of correcting
+it. Plus: the audit-log guard belongs in `name_puzzles` rather than only in the
+trigger, since the chained job reaches the pass independently; "each step ships
+and reverts independently" contradicted two constraints this document puts in
+bold; the reversibility claim for step 6 is wrong twice over; and §8's search
+fix needs the gate on the `WHERE` clause, not just the payload.
 
 **Revision 8 is review 5's response.** Two findings are structural. **§7.3 was
 missing a fourth title writer** — `spaced_repetition.py` writes a `MOTIF_TITLES`
@@ -193,13 +218,18 @@ provenance helper in rollout step 1 must special-case a missing or zero
 So the base is **date + move number**, available for 100% of both tenants. The
 opening is *added when a diagnosis row exists*, never depended upon.
 
-Distinctness of `(date, opening, move)`, per tenant, measured 2026-08-15 — after
-the §1.1 backfill, which is why the second row improved:
+Distinctness of `(date, opening, move)`, per tenant, measured 2026-08-15, after
+the §1.1 backfill:
 
 ```
 lauureal   318 / 318   100%
-alfi3sr     28 /  30    2 collisions  (was 27/30 before openings existed)
+alfi3sr     28 /  30    2 collisions
 ```
+
+The backfill did **not** move the second row. Revision 8 retracted that claim in
+§1.1 and left it standing here; both are corrected now. `alfi3sr` measures 28/30
+with openings and 28/30 without, so the opening component buys that tenant
+nothing at all.
 
 For contrast, the bare base without the opening component:
 
@@ -267,6 +297,23 @@ unforgeable — revision 1 claimed it did.
 > reason — are served only when that `(user, puzzle)` is **resolved**:
 > `attempts > 0`, or the solution was explicitly revealed.
 
+**The second disjunct is not implementable as written, and this costs a
+migration.** Nothing persists a reveal. `POST /puzzles/{id}/reveal`
+(`puzzles_routes.py:2076-2100`) checks ownership, reads the puzzle and returns
+the solution — it writes nothing — and `PuzzleStats` (`models.py:234-255`) has
+`attempts`, `last_reviewed_at` and `last_result` but no reveal column. So a user
+who hits reveal, reads the solution and opens the step-5 post-mortem panel still
+sees everything withheld, because `attempts` is 0 and the reveal left no trace.
+
+Backing it needs a `revealed_at` column and a write in that endpoint, which
+**falsifies §7.1's "this costs no new migration"** — that claim is true of the
+naming half of this design and false of the gate. §7.1 is corrected accordingly.
+
+Note also that §5's table lists "Explicit reveal / solved" as a *request-level
+override*, which contradicts this section's "property of the puzzle, not the
+request". Persisting the reveal is what resolves that contradiction rather than
+papering over it: once stored, it is a property of the puzzle like the rest.
+
 One predicate, applied in one serializer that every puzzle-returning route uses.
 It survives deep links, a second tab, back-navigation, and a session resumed
 days later *by construction*, because it describes the thing being protected
@@ -277,7 +324,7 @@ title (`puzzles_routes.py:1378`) and no handler consults it.
 
 ### 4.1 The gate as stated is monotonic, and that breaks the repeat attempt
 
-**This is a hole in the central invariant, found by review 3, and it is not yet
+**This is a hole in the central invariant, found by review 4, and it is not yet
 fixed.** It is written here rather than quietly patched because the resolution
 is a design choice.
 
@@ -303,10 +350,24 @@ it, because it seeds an *unresolved* puzzle and the failure needs a resolved one
 
 **Candidate resolution, not yet chosen.** Make resolution per-exposure rather
 than lifetime: a puzzle is resolved while the user is looking at the outcome,
-and closes again when it is next scheduled to return. Mechanically that is
-comparing the last attempt against `next_due_at` rather than testing
-`attempts > 0` — the gate reads "resolved since it last came due" instead of
-"ever resolved". `attempts > 0` stays as the cheap first term.
+and closes again when it is next scheduled to return. The gate reads "resolved
+since it last came due" instead of "ever resolved", with `attempts > 0` kept as
+the cheap first term.
+
+**Mechanically it must compare *now* against `next_due_at`, not the last
+attempt.** Revision 7 said the latter and it is never true:
+`spaced_repetition.py:260,262` sets `next_due_at = reviewed_at + interval` and
+`last_reviewed_at = reviewed_at` in the same write, and `calculate_next_interval`
+floors the interval at 1 day, so `last_reviewed_at < next_due_at` holds for
+*every* attempted puzzle — in both of the states the predicate has to tell
+apart. The previous due timestamp is overwritten and stored nowhere. So the
+predicate is:
+
+    attempts > 0 AND now() < next_due_at
+
+which is genuinely the "slightly richer predicate" §13.5 promises, but only
+because it reads the clock; an implementer following revision 7 literally would
+have shipped a gate that never opens.
 
 That keeps §4's one-predicate-in-one-serializer property and every
 by-construction benefit above; it changes only what the predicate says. It also
@@ -387,8 +448,18 @@ So this design adds the path explicitly:
   (`naming_pass.py:238-254`), so a NULL-source row with a rejected audit row
   falls straight through to a fresh model call. Every subsequent review of that
   puzzle then buys another billed call — the per-review cost this section opens
-  by refusing. The trigger must consult the audit log for an accepted-or-
-  rejected row, exactly as `pending_count` does.
+  by refusing.
+
+  **The fix belongs in `name_puzzles`, not only in the trigger.** The pass is
+  also reached by the chained diagnosis job (`worker.py:574-585`), entirely
+  independently of the review trigger, so guarding only the trigger leaves the
+  same billed re-send arriving by the job path: one genuinely-pending puzzle
+  keeps `pending_count > 0`, the chain runs a pass, and every previously
+  rejected puzzle in scope goes back to the model on that pass and every pass
+  after. Selection must consult the audit log for an accepted-or-rejected row,
+  exactly as `pending_count` does — which is the same "one expression of needs
+  a nickname" this section has been circling since revision 4, now located in
+  the pass rather than duplicated across its callers.
 - **Narrowing selection must not strand the re-queue predicate.** Revision 4
   asked for one shared expression of "needs a nickname", because `name_puzzles`
   and `pending_count` each carried their own. That is no longer the failure
@@ -463,7 +534,7 @@ still populates `position`.
 - `puzzle_stats.title_source` — `ai | user` only.
 - Provenance is **derived, never stored**.
 
-### 7.1 This costs no new migration
+### 7.1 The naming half costs no new migration; the gate costs one
 
 Revision 4 budgeted for schema work that has since shipped. Both columns and
 the index exist in production, and the deployed head is `d1e2f3a4b5c6`:
@@ -480,6 +551,12 @@ The last three are the release this document is being rebased over. **None of
 them touch identity**, so nothing in §7 conflicts with what shipped — the
 reconcile confirms the section rather than changing it. What remains here is a
 data change and four code changes, not DDL.
+
+**Scope of that claim, corrected after review 6.** It holds for the *naming*
+half of this design. It does not hold for the gate: §4's "or the solution was
+explicitly revealed" has no backing store, so implementing the gate as written
+needs a `revealed_at` column on `puzzle_stats` — one additive nullable column,
+but a migration, and it belongs to rollout step 3 rather than to step 6.
 
 ### 7.2 What the data change actually clears
 
@@ -640,7 +717,17 @@ Two consumers currently assume a non-null title and must move to it:
   every gap in that race: the original bug, on the surface dedicated to it.
 - Library search is `lower(title) LIKE …` (`puzzles_routes.py:1249`). With
   titles NULL it silently degrades to hex-id search while the placeholder still
-  says "Search by title or ID" (`Library.tsx:319`). Search must cover
+  says "Search by title or ID" (`Library.tsx:319`).
+
+  **The gate has to reach the search predicate, not just the payload.** §4
+  withholds a nickname from the response; the `WHERE` clause still answers
+  questions about it. With the gate on and §7.2's 320 nicknames sitting on a
+  mostly-unattempted corpus, typing "bishop" returns precisely the unattempted
+  puzzles whose hidden nickname contains "bishop" — the field is invisible and
+  perfectly queryable, which is a slower version of showing it. Moving search
+  onto `display_name` in step 2 does not fix this by itself: gated nicknames
+  must be excluded from the predicate, not merely from the payload. Search must
+  cover
   provenance, or say what it covers.
 
 ## 9. Scoring: decided and deliberately open
@@ -691,7 +778,15 @@ revision 4's `"The Queen to d5"` no longer appears anywhere.
 
 ## 11. Rollout
 
-Each step ships and reverts independently.
+Each step ships independently. **They do not all revert independently**, and
+the two exceptions are both stated in bold elsewhere in this document, so the
+preamble was actively misleading: §7.2 requires that grandfathering must not
+ship before step 3 and that **reverting step 3 while leaving step 6 in place
+re-opens the leak** on 320 nicknames, and step 6's `pending_count` change must
+land in the same commit as the narrowing. An operator who hits trouble after
+step 6, reads "reverts independently" and rolls back step 3 alone gets exactly
+the spoiler §4 exists to prevent. Steps 0-2, 5 and 7 do revert cleanly on their
+own.
 
 0. **Give diagnosis a mechanism** (§1.1). The *data* half of this step is
    already done: the backfill has been run against production and both tenants
@@ -755,7 +850,22 @@ Each step ships and reverts independently.
    `puzzles_routes.py:1367` (`/puzzles/list`) and `:1470`
    (`/puzzles/{id}`) — the two routes §4 already names as leaking.
 
-**Step 6 is no longer the irreversible one, and that is a consequence of §7.2.**
+**Step 6 is cheaper to reverse than revision 4 thought, but revision 7 then
+overstated it in the other direction, and review 6 was right to push back.**
+Two things are wrong with "`position_names.py` regenerates them deterministically
+so the clear is reversible". First, **step 6 deletes every caller that could
+regenerate them**: §7.3 removes the composed-title write from `save_puzzle`,
+`backfill_puzzle_identity`, `spaced_repetition` and `reclassify_motifs`, and
+§6.1 stops the naming fallback writing one — after which no code path writes a
+composed title to an existing row at all, so reversal means writing new code
+that the same commit removed. Second, `identity.py:252` runs the composer's
+output through `disambiguate` against `taken_titles`, and the clear itself
+changes that set, so the suffixes need not come back the same. "Reproduces them
+exactly" is wrong on uniqueness as well as on reachability.
+
+The honest statement is narrower: the *information* is recoverable, because the
+composer is deterministic given a position, but recovering it is a code change
+rather than a re-run. That is still a real improvement on revision 4, which
 Revision 4 called it irreversible because it cleared all 348 titles including
 the AI-written ones, which cannot be regenerated without spending model calls
 again. Grandfathering leaves those 320 in place, so the clear touches only the
@@ -850,7 +960,14 @@ empty population, which is why §7.2 grandfathers rather than clears.
    Lifetime `attempts > 0` spoils every repeat attempt; per-exposure
    ("resolved since it last came due") fixes it at the cost of a slightly
    richer predicate. The candidate is written up; the choice is not made.
-6. **Whether `pending_count` is narrowed in the same commit as the trigger**
+6. **How the "explicitly revealed" disjunct is backed** (§4). Open, and it
+   gates rollout step 3 alongside item 5. Either add a `revealed_at` column to
+   `puzzle_stats` and write it from `POST /puzzles/{id}/reveal` — one additive
+   nullable column, but it makes §7.1 false as originally stated — or drop the
+   disjunct and accept that a user who reveals without reviewing sees nothing
+   unlocked until they record a result. The second is free and slightly worse
+   for the user; the first is a migration and matches what §4 already claims.
+7. **Whether `pending_count` is narrowed in the same commit as the trigger**
    (§6). Not really a judgement call — the answer is yes — but it is recorded
    here because shipping the two apart is a two-second spin loop rather than a
    degradation, and that is the kind of thing a rollout splits by accident.
@@ -858,8 +975,15 @@ empty population, which is why §7.2 grandfathers rather than clears.
 Everything else is settled by measurement against production, or by a decision
 already made in the codebase.
 
-**Two of the six above are open defects rather than open questions.** Items 5
-and 6 were found by review 4 against a document that had already survived three
-reviews and read as finished. That is the pattern this codebase keeps
-reproducing: the seventh consecutive fix commit still introduced a defect, and a
-design doc is no more exempt than a patch.
+**Three of the seven above are open defects rather than open questions.** Items
+5 and 7 came from review 4, item 6 from review 6 — the latter against a document
+that had by then survived five reviews and read as finished, and which had used
+its own opening paragraph to boast about correcting the previous round.
+
+That is the pattern this codebase keeps reproducing, and it is now reproduced in
+prose as reliably as in patches: seven consecutive fix commits each introduced a
+defect during the naming work, and six consecutive reviews of this document have
+each found something real. Review 6's two headline findings were both cases of
+this document proposing something the schema does not support. A design doc is
+no more exempt than a patch, and the count of reviews it has survived predicts
+nothing.
