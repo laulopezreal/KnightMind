@@ -38,9 +38,9 @@ kill-backends = "scripts.kill_backends:main"
 
 [project.optional-dependencies]
 dev = [
-    "black~=26.5",
+    "black~=26.5.1",
     "flake8",
-    # Three components on purpose, like ruff~=0.15.20: `~=1.19` would still
+    # Three components on purpose, like ruff~=0.16.3: `~=1.19` would still
     # admit 1.20 and 1.30. mypy does not use SemVer -- new checks land in minor
     # releases by upstream policy (1.20's better narrowing can even mark code
     # unreachable and stop checking it), so a minor bump can move this baseline
@@ -48,7 +48,12 @@ dev = [
     "mypy~=1.19.1",
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
-    "ruff~=0.15.20",
+    # Same policy, same reason. ruff is pre-1.0 and uses the minor as its
+    # breaking slot, so new lint rules land in 0.16 rather than in 0.15.x.
+    # Crossing a minor is a deliberate baseline move: 0.15.20 -> 0.16.3 was
+    # taken after confirming `ruff check .` still passes clean on this tree.
+    # Patch bumps inside 0.16 stay automatic.
+    "ruff~=0.16.3",
 ]
 
 [tool.pytest.ini_options]
