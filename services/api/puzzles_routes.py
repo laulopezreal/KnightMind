@@ -28,6 +28,7 @@ from pydantic import BaseModel
 from sqlalchemy import and_, case, func, literal, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from sqlalchemy.sql.elements import ColumnElement
 
 from services.api.db import get_db
 from services.api.diagnosis.causes import CAUSE_LABELS
@@ -48,6 +49,10 @@ from services.api.models import (
 from services.api.models import Game as GameModel
 from services.api.models import Puzzle as PuzzleModel
 from services.api.puzzles.provenance import resolve_display_name
+from services.api.puzzles.resolution import (
+    is_resolved,
+    resolution_gate_enabled,
+)
 from services.api.ratelimit import rate_limit
 from services.api.storage import PuzzleRepository, normalized_position
 from services.api.storage.diagnosis_repository import DiagnosisRepository
@@ -637,7 +642,8 @@ def create_daily_puzzle_session(
     for p in updated_puzzles:
         p_dict = asdict(p)
         stats = all_stats.get(p.id)
-        if stats:
+        resolved = is_resolved(stats)
+        if stats and resolved:
             p_dict["primary_motif"] = stats.primary_motif
             p_dict["title"] = stats.title
         else:
@@ -647,6 +653,7 @@ def create_daily_puzzle_session(
             title=stats.title if stats else None,
             end_time=end_times.get(p.id),
             ply=getattr(p, "ply", None),
+            resolved=resolved,
         )
         # SCORED training path (post-generation warm-up): strip the solution so
         # it can't be pre-read before an attempt (audit gate 13).
@@ -686,7 +693,13 @@ def _end_times_by_puzzle(db: Session, username: str, puzzles) -> dict[str, int]:
     }
 
 
-def _queue_reason(stats, in_focus: bool, focus_name: str | None, now: datetime) -> dict:
+def _queue_reason(
+    stats,
+    in_focus: bool,
+    focus_name: str | None,
+    now: datetime,
+    resolved: bool = True,
+) -> dict:
     """Why this puzzle is in today's queue.
 
     Reported per puzzle so the queue is inspectable rather than a black box:
@@ -716,13 +729,19 @@ def _queue_reason(stats, in_focus: bool, focus_name: str | None, now: datetime) 
     # A focus never replaces the scheduling reason — it explains the *order*,
     # not the presence. Saying "matches your focus" about a puzzle that is here
     # because it came due would misrepresent why it was served.
-    if in_focus and focus_name:
+    #
+    # Both the sentence and the `pattern` field name the DIAGNOSED CAUSE, so
+    # they are revealing fields inside a scored pre-attempt payload (§4) --
+    # which is exactly why a strip list naming only "motif and nickname" would
+    # have missed them. Withheld for an unresolved puzzle; the scheduling half
+    # of the explanation, which says only when it came due, always stays.
+    if in_focus and focus_name and resolved:
         explanation = (
             f"{explanation} Matches the pattern you are training: {focus_name}."
         )
 
     payload = {"reason": reason, "explanation": explanation}
-    if in_focus and focus_name:
+    if in_focus and focus_name and resolved:
         payload["pattern"] = focus_name
     if stats is not None and stats.fail_count:
         # Surfaced because a repeat failure is the strongest signal in the
@@ -875,6 +894,10 @@ def get_due_puzzles_endpoint(
     for pid, puzzle in loaded:
         p_dict = asdict(puzzle)
         stats = all_stats.get(pid)
+        # /puzzles/due is the scored pre-attempt payload -- §4 calls it the
+        # request that matters most, because it is the one the trainer reads
+        # immediately before the user plays.
+        due_resolved = is_resolved(stats)
         if stats:
             p_dict.update(
                 {
@@ -886,12 +909,13 @@ def get_due_puzzles_endpoint(
                     "fail_count": stats.fail_count,
                     "last_reviewed_at": stats.last_reviewed_at,
                     "last_result": stats.last_result,
-                    "title": stats.title,
-                    "primary_motif": stats.primary_motif,
+                    "title": stats.title if due_resolved else None,
+                    "primary_motif": (stats.primary_motif if due_resolved else None),
                     "display_name": resolve_display_name(
                         title=stats.title,
                         end_time=end_times.get(pid),
                         ply=getattr(puzzle, "ply", None),
+                        resolved=due_resolved,
                     ),
                 }
             )
@@ -917,7 +941,11 @@ def get_due_puzzles_endpoint(
                 }
             )
         p_dict["queue_reason"] = _queue_reason(
-            stats, pid in focus_ids, focus_name, datetime.now(timezone.utc)
+            stats,
+            pid in focus_ids,
+            focus_name,
+            datetime.now(timezone.utc),
+            resolved=due_resolved,
         )
         # SCORED training path: never ship the solution up front.
         result_puzzles.append(_strip_solution(p_dict))
@@ -1329,15 +1357,30 @@ def list_puzzles(
     # keeps the feature meaningful, and the placeholder says what is covered
     # rather than implying more.
     #
-    # NOTE for step 3: when the gate lands it has to reach this predicate, not
-    # just the payload. A withheld nickname that is still matchable here lets a
-    # user confirm what a puzzle is called without being shown it, which is a
-    # slower version of showing it.
+    # The gate reaches this predicate, not just the payload. A withheld
+    # nickname that is still matchable lets a user confirm what a puzzle is
+    # called without being shown it -- a slower version of showing it. So the
+    # title term applies only to resolved rows.
+    #
+    # Expressed in SQL rather than by filtering afterwards, because this runs
+    # before LIMIT: post-filtering would return short pages and a wrong total.
+    # The opening and id terms stay ungated on purpose -- the opening IS
+    # provenance, which is never withheld, and an id reveals nothing.
     if q:
         q_pattern = f"%{q.lower()}%"
+        title_match: ColumnElement[bool] = func.lower(PuzzleStats.title).like(q_pattern)
+        if resolution_gate_enabled():
+            title_match = and_(
+                title_match,
+                PuzzleStats.attempts > 0,
+                or_(
+                    PuzzleStats.next_due_at.is_(None),
+                    PuzzleStats.next_due_at > datetime.now(timezone.utc),
+                ),
+            )
         base_stmt = base_stmt.where(
             or_(
-                func.lower(PuzzleStats.title).like(q_pattern),
+                title_match,
                 func.lower(PuzzleDiagnosis.opening_name).like(q_pattern),
                 func.lower(PuzzleModel.id).like(q_pattern),
             )
@@ -1452,17 +1495,25 @@ def list_puzzles(
     rows = db.execute(base_stmt).all()
     result_puzzles = []
     for puzzle, stats, diagnosis, game, row_status in rows:
+        row_resolved = is_resolved(stats)
         result_puzzles.append(
             PuzzleListItem(
                 id=puzzle.id,
-                title=stats.title if stats else None,
+                # `title` is gated identically to display_name. Gating only
+                # display_name would withhold the nickname from the field the
+                # client renders while still shipping it in the field beside
+                # it -- the gate would be decorative.
+                title=(stats.title if (stats and row_resolved) else None),
                 display_name=resolve_display_name(
                     title=stats.title if stats else None,
                     end_time=game.end_time if game else None,
                     ply=puzzle.ply,
                     opening_name=diagnosis.opening_name if diagnosis else None,
+                    resolved=row_resolved,
                 ),
-                primary_motif=stats.primary_motif if stats else None,
+                primary_motif=(
+                    stats.primary_motif if (stats and row_resolved) else None
+                ),
                 difficulty=_swing_to_difficulty(puzzle.swing),
                 swing=puzzle.swing,
                 fen=puzzle.fen,
@@ -1570,15 +1621,17 @@ def get_puzzle_detail(
         if puzzle.source_game_id
         else None
     )
+    resolved = is_resolved(stats)
     return PuzzleListItem(
         id=puzzle.id,
-        title=stats.title if stats else None,
+        title=(stats.title if (stats and resolved) else None),
         display_name=resolve_display_name(
             title=stats.title if stats else None,
             end_time=game.end_time if game else None,
             ply=puzzle.ply,
+            resolved=resolved,
         ),
-        primary_motif=stats.primary_motif if stats else None,
+        primary_motif=(stats.primary_motif if (stats and resolved) else None),
         difficulty=_swing_to_difficulty(puzzle.swing),
         swing=puzzle.swing,
         fen=puzzle.fen,
@@ -1617,6 +1670,11 @@ class DiagnosisResponse(BaseModel):
     * ``unclear``     — analysed, but no rule found a supported cause
     * ``pending``     — not analysed yet; a job will get to it
     * ``unavailable`` — this puzzle cannot be analysed at all
+    * ``withheld``    — there may well be one, but this puzzle has not been
+      attempted in its current exposure, and the prose names the cause and the
+      solution (§4). A distinct state rather than reusing ``pending``, which
+      would claim the analysis has not happened; the honest statement is that
+      it is not being shown yet.
 
     No cause is ever invented to avoid ``unclear``. There is deliberately no
     numeric confidence: the rule strength is an ordering prior, not a
@@ -1624,7 +1682,7 @@ class DiagnosisResponse(BaseModel):
     what the rules know.
     """
 
-    state: Literal["ready", "unclear", "pending", "unavailable"]
+    state: Literal["ready", "unclear", "pending", "unavailable", "withheld"]
     puzzle_id: str
     primary_motif: str | None = None
     primary_cause: str | None = None
@@ -1646,6 +1704,16 @@ class DiagnosisResponse(BaseModel):
 
 class DiagnosisConfirmRequest(BaseModel):
     cause: str
+
+
+def _unresolved_diagnosis(puzzle_id: str) -> DiagnosisResponse:
+    """The gate's answer for a puzzle the user has not attempted yet.
+
+    Every revealing field is simply absent rather than emptied-but-present, so
+    there is nothing to infer from the shape of the response: an unresolved
+    puzzle with a diagnosis and one without are byte-identical here.
+    """
+    return DiagnosisResponse(state="withheld", puzzle_id=puzzle_id)
 
 
 def _diagnosis_response(
@@ -1730,6 +1798,25 @@ def get_puzzle_diagnosis(
     # evidence is always included, so this deploys without breaking anything;
     # when it is ON, ?reveal=true is required.
     reveal_solution = reveal or not _strip_puzzle_solutions_enabled()
+
+    # The resolution gate is a SECOND, independent question, and this endpoint
+    # is the only one that has to load stats to answer it -- the existence
+    # check above reads Puzzle, not PuzzleStats. One extra indexed read on a
+    # single-row endpoint. Diagnosis prose names the cause and the solution in
+    # sentences, so it is the most revealing payload in the app.
+    # NOT db.get: PuzzleStats is keyed on puzzle_id ALONE, so a get() by id
+    # would happily return another user's row. Both halves of the ownership
+    # key go in the predicate -- the same rule the joins elsewhere follow
+    # (#360).
+    stats = db.scalars(
+        select(PuzzleStats).where(
+            PuzzleStats.puzzle_id == puzzle_id,
+            PuzzleStats.username == username,
+        )
+    ).first()
+    if not is_resolved(stats):
+        return _unresolved_diagnosis(puzzle_id)
+
     return _diagnosis_response(
         puzzle_id, DiagnosisRepository(db).get(username, puzzle_id), reveal_solution
     )
