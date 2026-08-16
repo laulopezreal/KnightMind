@@ -136,6 +136,7 @@ def _create_diagnosis(
     insufficient_evidence: bool = False,
     status: str = DiagnosisStatus.OK,
     error: str | None = None,
+    opening_name: str | None = None,
 ):
     db.add(
         PuzzleDiagnosis(
@@ -155,6 +156,7 @@ def _create_diagnosis(
                     "value": "Best move Qxd5 from d1 to d5, PV d1d5",
                 }
             ],
+            opening_name=opening_name,
             explanation="The solution is Qxd5.",
             training_recommendation="Look for the queen move Qxd5.",
             updated_at=datetime(2026, 1, 2, 12, 0),
@@ -892,6 +894,66 @@ class TestDisplayNameOnListRoutes:
             _create_stats(db_session, pid, title=None, primary_motif="Pin")
 
         assert count_for(12) == count_for(3)
+
+
+class TestLibrarySearchCoversProvenance:
+    """Rollout step 2, §8: search must cover provenance, or say what it covers.
+
+    Puzzle ids here are deliberately opaque (`pzl-a1`, not `p-sicilian`): the
+    predicate also matches on id, so an id containing the search term makes
+    these tests pass whether or not the opening term exists. Verified -- with
+    descriptive ids, removing the opening term left all four green.
+
+    It does both, partially by necessity. Provenance is derived and never
+    stored, so the composed string is not matchable in SQL; the opening is the
+    one component that IS stored, and the one a user would type. The
+    placeholder was changed to name what is actually searched rather than
+    promising more.
+    """
+
+    def test_search_matches_the_opening(self, client, db_session):
+        _create_puzzle(db_session, "pzl-a1")
+        _create_stats(db_session, "pzl-a1", title=None, primary_motif="Pin")
+        _create_diagnosis(db_session, "pzl-a1", opening_name="Sicilian Defense B27")
+        _create_puzzle(db_session, "pzl-a2")
+        _create_stats(db_session, "pzl-a2", title=None, primary_motif="Pin")
+
+        body = client.get("/puzzles/list?username=testuser&q=sicilian").json()
+
+        assert [p["id"] for p in body["puzzles"]] == ["pzl-a1"]
+
+    def test_search_still_matches_a_nickname(self, client, db_session):
+        _create_puzzle(db_session, "pzl-b1")
+        _create_stats(db_session, "pzl-b1", title="Bishop Had Bigger Plans")
+
+        body = client.get("/puzzles/list?username=testuser&q=bishop").json()
+
+        assert [p["id"] for p in body["puzzles"]] == ["pzl-b1"]
+
+    def test_a_null_title_no_longer_makes_search_id_only(self, client, db_session):
+        """The degradation §8 names. Before the opening term, a corpus with
+        NULL titles could only be searched by hex id, while the box invited a
+        name."""
+        _create_puzzle(db_session, "pzl-c1")
+        _create_stats(db_session, "pzl-c1", title=None, primary_motif="Pin")
+        _create_diagnosis(db_session, "pzl-c1", opening_name="Najdorf Variation")
+
+        body = client.get("/puzzles/list?username=testuser&q=najdorf").json()
+
+        assert [p["id"] for p in body["puzzles"]] == ["pzl-c1"]
+
+    def test_a_puzzle_with_no_diagnosis_is_simply_not_matched(self, client, db_session):
+        """The diagnosis join is OUTER, so a missing row must not drop the
+        puzzle from unfiltered listings -- only from opening searches."""
+        _create_puzzle(db_session, "pzl-d1")
+        _create_stats(db_session, "pzl-d1", title=None, primary_motif="Pin")
+
+        assert (
+            client.get("/puzzles/list?username=testuser&q=sicilian").json()["puzzles"]
+            == []
+        )
+        listed = client.get("/puzzles/list?username=testuser").json()["puzzles"]
+        assert "pzl-d1" in [p["id"] for p in listed]
 
 
 class TestGetPuzzleDetail:

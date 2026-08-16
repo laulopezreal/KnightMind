@@ -132,7 +132,7 @@ describe('Library', () => {
 
     it('should render search input', async () => {
         render(<Library />);
-        expect(screen.getByPlaceholderText(/Search by title or ID/i)).toBeInTheDocument();
+        expect(screen.getByPlaceholderText(/Search by name, opening, or ID/i)).toBeInTheDocument();
     });
 
     it('should render filter dropdowns', async () => {
@@ -429,7 +429,7 @@ describe('Library', () => {
             expect(mockGetLibraryPuzzles).toHaveBeenCalledTimes(1);
         });
 
-        const searchInput = screen.getByPlaceholderText(/Search by title or ID/i);
+        const searchInput = screen.getByPlaceholderText(/Search by name, opening, or ID/i);
         fireEvent.change(searchInput, { target: { value: 'fork' } });
 
         // Should not call immediately (debounce pending)

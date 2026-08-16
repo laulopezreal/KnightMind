@@ -32,9 +32,13 @@ export function RecentlyTrickyCard({ puzzles, totalCount }: RecentlyTrickyCardPr
               index !== puzzles.length - 1 ? 'border-b border-primary/5' : ''
             }`}
           >
-            {/* Puzzle name */}
+            {/* Puzzle name. `display_name`, not `title`: this card filters on
+                fail_count >= 2 and the nickname is written asynchronously, so
+                `title` is null for every gap in that race -- which rendered a
+                column of "Untitled Puzzle" on the surface dedicated to naming
+                puzzles. display_name falls back to provenance instead. */}
             <p className="font-serif text-primary mb-1">
-              {puzzle.title}
+              {puzzle.display_name || puzzle.title}
             </p>
 
             {/* Metadata */}

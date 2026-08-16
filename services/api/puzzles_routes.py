@@ -1315,12 +1315,30 @@ def list_puzzles(
         .where(PuzzleModel.username == username_lower)
     )
 
-    # Search filter
+    # Search filter.
+    #
+    # Title, opening and id -- NOT the composed provenance string. Provenance
+    # is derived, never stored (design §3), so matching "12 Mar · Sicilian ·
+    # move 18" as text would mean composing it in SQL. The opening is the one
+    # provenance component that IS stored, and it is the one worth searching:
+    # "sicilian" is a thing a user types, "move 18" is not.
+    #
+    # This matters more after rollout step 6 than it does today. With titles
+    # NULL by default, a title-only predicate silently degrades to hex-id
+    # search while the box still invites a name -- so the opening term is what
+    # keeps the feature meaningful, and the placeholder says what is covered
+    # rather than implying more.
+    #
+    # NOTE for step 3: when the gate lands it has to reach this predicate, not
+    # just the payload. A withheld nickname that is still matchable here lets a
+    # user confirm what a puzzle is called without being shown it, which is a
+    # slower version of showing it.
     if q:
         q_pattern = f"%{q.lower()}%"
         base_stmt = base_stmt.where(
             or_(
                 func.lower(PuzzleStats.title).like(q_pattern),
+                func.lower(PuzzleDiagnosis.opening_name).like(q_pattern),
                 func.lower(PuzzleModel.id).like(q_pattern),
             )
         )
