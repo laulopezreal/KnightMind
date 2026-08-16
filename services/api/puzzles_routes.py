@@ -632,6 +632,7 @@ def create_daily_puzzle_session(
     all_stats = get_all_puzzle_stats(db, username)
 
     # Convert to dict format for response and merge with stats
+    end_times = _end_times_by_puzzle(db, username, updated_puzzles)
     puzzles_dict = []
     for p in updated_puzzles:
         p_dict = asdict(p)
@@ -642,11 +643,47 @@ def create_daily_puzzle_session(
         else:
             p_dict["primary_motif"] = None
             p_dict["title"] = None
+        p_dict["display_name"] = resolve_display_name(
+            title=stats.title if stats else None,
+            end_time=end_times.get(p.id),
+            ply=getattr(p, "ply", None),
+        )
         # SCORED training path (post-generation warm-up): strip the solution so
         # it can't be pre-read before an attempt (audit gate 13).
         puzzles_dict.append(_strip_solution(p_dict))
 
     return DailyPuzzlesResponse(puzzles=puzzles_dict, count=len(puzzles_dict))
+
+
+def _end_times_by_puzzle(db: Session, username: str, puzzles) -> dict[str, int]:
+    """``{puzzle_id: game end_time}`` for a batch, in one query.
+
+    The two dict-shaped payloads (`/puzzles/due` and the daily session) build
+    their rows by iterating puzzles and looking stats up in a preloaded map,
+    so provenance needs the same treatment: one query for the whole batch
+    rather than a game fetch per puzzle. `/puzzles/due` is the scored training
+    request, and an N+1 there is paid on every session start.
+
+    Puzzles whose game is missing are simply absent from the map, and
+    ``compose_provenance`` drops the date component for them.
+    """
+    game_ids = {p.source_game_id for p in puzzles if getattr(p, "source_game_id", None)}
+    if not game_ids:
+        return {}
+    end_times: dict[str, int] = {
+        game_id: end_time
+        for game_id, end_time in db.execute(
+            select(GameModel.game_id, GameModel.end_time).where(
+                GameModel.username == username,
+                GameModel.game_id.in_(game_ids),
+            )
+        ).all()
+    }
+    return {
+        p.id: end_times[p.source_game_id]
+        for p in puzzles
+        if getattr(p, "source_game_id", None) in end_times
+    }
 
 
 def _queue_reason(stats, in_focus: bool, focus_name: str | None, now: datetime) -> dict:
@@ -820,12 +857,22 @@ def get_due_puzzles_endpoint(
     )
 
     # 3. Load content and merge with stats
-    result_puzzles = []
-    for pid in due_ids:
-        puzzle = puzzle_repository.get_puzzle(username, pid)
-        if not puzzle:
-            continue
+    #
+    # Loaded up front rather than inside the loop so provenance can resolve
+    # every game in one query. The per-id fetches below were already happening;
+    # this only reorders them so the batch is knowable before the payload is
+    # built. Missing puzzles are dropped here exactly as they were before.
+    loaded = [
+        (pid, puzzle)
+        for pid, puzzle in (
+            (pid, puzzle_repository.get_puzzle(username, pid)) for pid in due_ids
+        )
+        if puzzle is not None
+    ]
+    end_times = _end_times_by_puzzle(db, username, [p for _, p in loaded])
 
+    result_puzzles = []
+    for pid, puzzle in loaded:
         p_dict = asdict(puzzle)
         stats = all_stats.get(pid)
         if stats:
@@ -841,6 +888,11 @@ def get_due_puzzles_endpoint(
                     "last_result": stats.last_result,
                     "title": stats.title,
                     "primary_motif": stats.primary_motif,
+                    "display_name": resolve_display_name(
+                        title=stats.title,
+                        end_time=end_times.get(pid),
+                        ply=getattr(puzzle, "ply", None),
+                    ),
                 }
             )
         else:
@@ -857,6 +909,11 @@ def get_due_puzzles_endpoint(
                     "last_result": None,
                     "title": None,
                     "primary_motif": None,
+                    "display_name": resolve_display_name(
+                        title=None,
+                        end_time=end_times.get(pid),
+                        ply=getattr(puzzle, "ply", None),
+                    ),
                 }
             )
         p_dict["queue_reason"] = _queue_reason(
@@ -1242,9 +1299,19 @@ def list_puzzles(
     computed_status = status_case.label("computed_status")
 
     base_stmt = (
-        select(PuzzleModel, PuzzleStats, PuzzleDiagnosis, computed_status)
+        select(PuzzleModel, PuzzleStats, PuzzleDiagnosis, GameModel, computed_status)
         .outerjoin(PuzzleStats, join_cond)
         .outerjoin(PuzzleDiagnosis, diagnosis_join_cond)
+        # Provenance needs the game's end_time. On the join rather than a
+        # lookup per row: this route is paginated but still returns N rows, and
+        # a per-row `db.get` would be an N+1 on the Library's main list.
+        # OUTER, so a puzzle whose game is missing keeps its place in a page
+        # whose total was counted separately -- it just loses the date.
+        .outerjoin(
+            GameModel,
+            (GameModel.game_id == PuzzleModel.source_game_id)
+            & (GameModel.username == PuzzleModel.username),
+        )
         .where(PuzzleModel.username == username_lower)
     )
 
@@ -1366,11 +1433,17 @@ def list_puzzles(
     # --- 7. Build response ---
     rows = db.execute(base_stmt).all()
     result_puzzles = []
-    for puzzle, stats, diagnosis, row_status in rows:
+    for puzzle, stats, diagnosis, game, row_status in rows:
         result_puzzles.append(
             PuzzleListItem(
                 id=puzzle.id,
                 title=stats.title if stats else None,
+                display_name=resolve_display_name(
+                    title=stats.title if stats else None,
+                    end_time=game.end_time if game else None,
+                    ply=puzzle.ply,
+                    opening_name=diagnosis.opening_name if diagnosis else None,
+                ),
                 primary_motif=stats.primary_motif if stats else None,
                 difficulty=_swing_to_difficulty(puzzle.swing),
                 swing=puzzle.swing,
@@ -1656,6 +1729,9 @@ class SimilarPuzzleItem(BaseModel):
 
     id: str
     title: str | None = None
+    # See PuzzleListItem.display_name: equal to `title` today, and the single
+    # field a client should render once titles become NULL by default.
+    display_name: str | None = None
     primary_motif: str | None = None
     difficulty: str
     swing: float
@@ -1724,11 +1800,19 @@ def get_similar_puzzles(
     # keyed on puzzle_id alone, so the username predicate belongs in the ON
     # clause — the same shape GET /puzzles/{id} uses.
     rows = db.execute(
-        select(PuzzleModel, PuzzleStats)
+        select(PuzzleModel, PuzzleStats, GameModel)
         .outerjoin(
             PuzzleStats,
             (PuzzleModel.id == PuzzleStats.puzzle_id)
             & (PuzzleStats.username == username_lower),
+        )
+        # Same reason as the list route: provenance needs end_time, and the
+        # sibling set is N rows, so this must be a join rather than a lookup
+        # per row.
+        .outerjoin(
+            GameModel,
+            (GameModel.game_id == PuzzleModel.source_game_id)
+            & (GameModel.username == PuzzleModel.username),
         )
         .where(
             PuzzleModel.username == username_lower,
@@ -1740,17 +1824,22 @@ def get_similar_puzzles(
     # promise one, and re-sorting here would quietly discard the ranking. A
     # diagnosis whose puzzle row is missing is skipped, so the list can be
     # shorter than n.
-    by_id = {puzzle.id: (puzzle, stats) for puzzle, stats in rows}
+    by_id = {puzzle.id: (puzzle, stats, game) for puzzle, stats, game in rows}
     items = []
     for pid in sibling_ids:
         found = by_id.get(pid)
         if found is None:
             continue
-        row, stats = found
+        row, stats, game = found
         items.append(
             SimilarPuzzleItem(
                 id=row.id,
                 title=stats.title if stats else None,
+                display_name=resolve_display_name(
+                    title=stats.title if stats else None,
+                    end_time=game.end_time if game else None,
+                    ply=row.ply,
+                ),
                 # "blunder" means no motif was identified; tagging a row with it
                 # says nothing and contradicts the reason line, which omits it.
                 primary_motif=usable_motif(stats.primary_motif) if stats else None,

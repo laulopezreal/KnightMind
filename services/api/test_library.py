@@ -820,6 +820,80 @@ class TestAvailableMotifs:
         assert response.json()["available_motifs"] == ["Fork", "Pin"]
 
 
+class TestDisplayNameOnListRoutes:
+    """Step 1's list half: every puzzle-returning route resolves one name.
+
+    The property that matters here is not the string -- `test_provenance.py`
+    covers composition -- it is that resolving it for N puzzles costs a join
+    rather than a query per row.
+    """
+
+    def test_the_list_route_serves_display_name(self, client, db_session):
+        _create_puzzle(db_session, "p-list")
+        _create_stats(db_session, "p-list", title="Named", primary_motif="Pin")
+
+        body = client.get("/puzzles/list?username=testuser").json()
+        item = next(p for p in body["puzzles"] if p["id"] == "p-list")
+
+        # Invisible by design while every row still has a title.
+        assert item["display_name"] == item["title"] == "Named"
+
+    def test_a_puzzle_with_no_title_falls_back_to_provenance(self, client, db_session):
+        """The state the corpus reaches after rollout step 6. Without a
+        fallback the Library would render a column of blanks."""
+        _create_puzzle(db_session, "p-bare")
+        _create_stats(db_session, "p-bare", title=None, primary_motif="Pin")
+
+        body = client.get("/puzzles/list?username=testuser").json()
+        item = next(p for p in body["puzzles"] if p["id"] == "p-bare")
+
+        assert item["title"] is None
+        assert item["display_name"]
+        assert "move " in item["display_name"]
+
+    def test_resolving_n_names_does_not_cost_n_queries(self, client, db_session):
+        """The regression this PR exists to avoid.
+
+        A `db.get` per row for the game would satisfy every other assertion
+        here and quietly scale with the page. Asserting *invariance* rather
+        than a magic budget: the same request over 3 puzzles and over 12 must
+        issue the same number of statements. A budget would have to be
+        re-tuned whenever an unrelated query is added; this would not.
+        """
+        from sqlalchemy import event
+
+        statements: list[str] = []
+        engine = db_session.get_bind()
+
+        def record(conn, cursor, statement, *args):
+            statements.append(statement.strip().split()[0].upper())
+
+        def count_for(n: int) -> int:
+            statements.clear()
+            # Cold identity map, or this test cannot fail. `db.get` answers
+            # from the session's identity map without emitting SQL, and the
+            # fixture created these rows in the very session the route reuses
+            # -- so a per-row `db.get` would issue zero extra statements here
+            # while being a true N+1 in production, where every request gets a
+            # fresh session. Verified: without this line the N+1 mutant passes.
+            db_session.expire_all()
+            event.listen(engine, "before_cursor_execute", record)
+            try:
+                body = client.get(f"/puzzles/list?username=testuser&limit={n}").json()
+            finally:
+                event.remove(engine, "before_cursor_execute", record)
+            assert len(body["puzzles"]) == n
+            assert all(p["display_name"] for p in body["puzzles"])
+            return len(statements)
+
+        for i in range(12):
+            pid = f"p-many-{i:02d}"
+            _create_puzzle(db_session, pid)
+            _create_stats(db_session, pid, title=None, primary_motif="Pin")
+
+        assert count_for(12) == count_for(3)
+
+
 class TestGetPuzzleDetail:
     """Tests for GET /puzzles/{puzzle_id}."""
 
