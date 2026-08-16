@@ -297,17 +297,33 @@ unforgeable — revision 1 claimed it did.
 > reason — are served only when that `(user, puzzle)` is **resolved**:
 > `attempts > 0`, or the solution was explicitly revealed.
 
-**The second disjunct is not implementable as written, and this costs a
-migration.** Nothing persists a reveal. `POST /puzzles/{id}/reveal`
+> **Resolved by `#391`: the disjunct is now redundant and costs no migration.**
+> The trainer records the self-reported fail inside its reveal handler, matching
+> what `LibraryPuzzle` always did, so revealing sets `attempts > 0` immediately
+> and the first disjunct already covers the case. The second is kept in the
+> prose only as intent; nothing needs to read it. The analysis that led there is
+> below, unchanged, because the option that was *not* taken is the interesting
+> part.
+
+**The second disjunct was not implementable as written, and backing it would
+have cost a migration.** Nothing persists a reveal. `POST /puzzles/{id}/reveal`
 (`puzzles_routes.py:2076-2100`) checks ownership, reads the puzzle and returns
 the solution — it writes nothing — and `PuzzleStats` (`models.py:234-255`) has
 `attempts`, `last_reviewed_at` and `last_result` but no reveal column. So a user
 who hits reveal, reads the solution and opens the step-5 post-mortem panel still
 sees everything withheld, because `attempts` is 0 and the reveal left no trace.
 
-Backing it needs a `revealed_at` column and a write in that endpoint, which
-**falsifies §7.1's "this costs no new migration"** — that claim is true of the
-naming half of this design and false of the gate. §7.1 is corrected accordingly.
+Backing it would need a `revealed_at` column and a write in that endpoint, which
+would falsify §7.1's "this costs no new migration".
+
+**`#391` took the third option instead, which nobody had listed.** Rather than
+storing that a reveal happened, record the review the reveal already implies:
+the reveal is destined to be a self-reported fail, and `LibraryPuzzle` has
+always written it in its own reveal handler. Moving the trainer to the same
+shape closes the window without a column — and closes a data-loss bug that was
+never part of this design's remit, since a user who revealed and then closed the
+tab previously had the attempt recorded **nowhere**, seeing the answer for free
+while the scheduler kept the old interval.
 
 Note also that §5's table lists "Explicit reveal / solved" as a *request-level
 override*, which contradicts this section's "property of the puzzle, not the
@@ -552,11 +568,13 @@ them touch identity**, so nothing in §7 conflicts with what shipped — the
 reconcile confirms the section rather than changing it. What remains here is a
 data change and four code changes, not DDL.
 
-**Scope of that claim, corrected after review 6.** It holds for the *naming*
-half of this design. It does not hold for the gate: §4's "or the solution was
-explicitly revealed" has no backing store, so implementing the gate as written
-needs a `revealed_at` column on `puzzle_stats` — one additive nullable column,
-but a migration, and it belongs to rollout step 3 rather than to step 6.
+**Scope of that claim, litigated across reviews 6 and 7 and now settled: it
+holds.** Review 6 was right that it did not, at the time — §4's "or the solution
+was explicitly revealed" had no backing store, so the gate as written needed a
+`revealed_at` column. `#391` removed the need by recording the review at reveal
+time instead of storing the reveal, so `attempts > 0` covers the case and no
+column is required. The heading is accurate again for the whole design, not just
+its naming half.
 
 ### 7.2 What the data change actually clears
 
@@ -960,13 +978,13 @@ empty population, which is why §7.2 grandfathers rather than clears.
    Lifetime `attempts > 0` spoils every repeat attempt; per-exposure
    ("resolved since it last came due") fixes it at the cost of a slightly
    richer predicate. The candidate is written up; the choice is not made.
-6. **How the "explicitly revealed" disjunct is backed** (§4). Open, and it
-   gates rollout step 3 alongside item 5. Either add a `revealed_at` column to
-   `puzzle_stats` and write it from `POST /puzzles/{id}/reveal` — one additive
-   nullable column, but it makes §7.1 false as originally stated — or drop the
-   disjunct and accept that a user who reveals without reviewing sees nothing
-   unlocked until they record a result. The second is free and slightly worse
-   for the user; the first is a migration and matches what §4 already claims.
+6. ~~**How the "explicitly revealed" disjunct is backed**~~ **Decided and
+   shipped in `#391`.** Neither of the two options this item first listed. The
+   trainer now records the self-reported fail in its reveal handler, as
+   `LibraryPuzzle` always has, so `attempts > 0` is true the moment the solution
+   appears: no column, no migration, and the disjunct is redundant rather than
+   dropped. It also closed a data-loss bug outside this design's remit — reveal
+   then abandon previously recorded the attempt nowhere.
 7. **Whether `pending_count` is narrowed in the same commit as the trigger**
    (§6). Not really a judgement call — the answer is yes — but it is recorded
    here because shipping the two apart is a two-second spin loop rather than a
@@ -975,8 +993,8 @@ empty population, which is why §7.2 grandfathers rather than clears.
 Everything else is settled by measurement against production, or by a decision
 already made in the codebase.
 
-**Three of the seven above are open defects rather than open questions.** Items
-5 and 7 came from review 4, item 6 from review 6 — the latter against a document
+**Two of the seven above remain open defects rather than open questions.** Items
+5 and 7 came from review 4; item 6 came from review 6 and is now closed — the latter against a document
 that had by then survived five reviews and read as finished, and which had used
 its own opening paragraph to boast about correcting the previous round.
 
