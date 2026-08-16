@@ -133,7 +133,10 @@ export interface TrendsResponse {
 
 export interface TrickyPuzzle {
     puzzle_id: string;
+    /** @deprecated Render `display_name`. Kept until the API drops it. */
     title: string;
+    /** Nickname when the puzzle has one, provenance otherwise. Never empty. */
+    display_name: string;
     fail_count: number;
     last_attempted_at: string;
 }

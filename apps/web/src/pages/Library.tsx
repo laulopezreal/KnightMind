@@ -316,8 +316,8 @@ export default function Library() {
                 {/* Search */}
                 <input
                     type="text"
-                    placeholder="Search by title or ID..."
-                    aria-label="Search puzzles by title or ID"
+                    placeholder="Search by name, opening, or ID..."
+                    aria-label="Search puzzles by name, opening, or ID"
                     value={search}
                     onChange={(e) => setSearch(e.target.value)}
                     className="w-full bg-transparent border-b border-primary/20 py-2 text-primary font-sans placeholder:text-primary/70 focus:outline-none focus:border-primary/60 transition-colors"
