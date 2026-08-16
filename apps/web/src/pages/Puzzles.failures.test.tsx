@@ -244,6 +244,91 @@ describe('Puzzles — honest failure handling', () => {
         expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     });
 
+    describe('a revealed solution is recorded at reveal, not at move-on', () => {
+        // LibraryPuzzle has always recorded the fail inside its own reveal
+        // handler. The trainer deferred it to move-on, so a user who revealed
+        // and closed the tab had the attempt recorded nowhere: the answer seen
+        // for free, and the scheduler never told the puzzle was failed.
+
+        it('records the fail as soon as the solution is revealed', async () => {
+            const user = userEvent.setup();
+            render(<Puzzles />);
+
+            await user.click(screen.getByRole('button', { name: /reveal/i }));
+
+            await waitFor(() => expect(mockHandleReviewPuzzle).toHaveBeenCalledWith('fail'));
+            // Before moving on: the write has already happened.
+            expect(mockSetCurrentIndex).not.toHaveBeenCalled();
+        });
+
+        it('does not record a second fail when the user then moves on', async () => {
+            // The regression that matters. handleReviewPuzzle rotates its
+            // idempotency key on success, so a second call banks a SECOND fail
+            // and moves ease_factor twice for one attempt.
+            const user = userEvent.setup();
+            render(<Puzzles />);
+
+            await user.click(screen.getByRole('button', { name: /reveal/i }));
+            await waitFor(() => expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(1));
+
+            await user.click(screen.getByRole('button', { name: /next puzzle/i }));
+
+            await waitFor(() => expect(mockSetCurrentIndex).toHaveBeenCalledWith(1));
+            expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(1);
+        });
+
+        it('retries at move-on when the reveal-time write did not land', async () => {
+            mockHandleReviewPuzzle.mockResolvedValue(false);
+            const user = userEvent.setup();
+            render(<Puzzles />);
+
+            await user.click(screen.getByRole('button', { name: /reveal/i }));
+            await waitFor(() => expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(1));
+
+            // The write failed, so moving on must try again rather than treat
+            // the puzzle as recorded and advance past it.
+            await user.click(screen.getByRole('button', { name: /next puzzle/i }));
+
+            await waitFor(() => expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(2));
+            expect(mockSetCurrentIndex).not.toHaveBeenCalled();
+            expect(screen.getByRole('alert')).toHaveTextContent(/couldn't save that result/i);
+        });
+
+        it('records each revealed puzzle, not just the first', async () => {
+            // Asserts per-puzzle recording, NOT the ref reset. Deleting the
+            // reset leaves this green, which is the honest position: the reveal
+            // handler writes the flag on every reveal, so the reset is
+            // defensive rather than load-bearing. Naming it after the reset
+            // would have made it the seventh unfalsifiable test in this repo.
+            const user = userEvent.setup();
+            render(<Puzzles />);
+
+            await user.click(screen.getByRole('button', { name: /reveal/i }));
+            await waitFor(() => expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(1));
+            await user.click(screen.getByRole('button', { name: /next puzzle/i }));
+            await waitFor(() => expect(mockSetCurrentIndex).toHaveBeenCalledWith(1));
+
+            await user.click(screen.getByRole('button', { name: /reveal/i }));
+
+            await waitFor(() => expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(2));
+        });
+
+        it('records nothing when the solution could not be loaded', async () => {
+            // The existing guard, restated against the new write: a failed
+            // request must not become a failed attempt.
+            vi.mocked(revealPuzzle).mockRejectedValue(new Error('network down'));
+            const user = userEvent.setup();
+            render(<Puzzles />);
+
+            await user.click(screen.getByRole('button', { name: /reveal/i }));
+
+            await waitFor(() =>
+                expect(screen.getByRole('alert')).toHaveTextContent(/couldn't load the solution/i),
+            );
+            expect(mockHandleReviewPuzzle).not.toHaveBeenCalled();
+        });
+    });
+
     it('renders a motif filter with its display name, plus a way to clear it', async () => {
         mockSearchParams = new URLSearchParams('motif=back_rank_mate');
         render(<Puzzles />);

@@ -98,6 +98,20 @@ export default function Puzzles() {
     } = insights;
 
     const statusRef = useRef(status);
+    // Did this puzzle's reveal already record its fail? Read by
+    // `handleAdvancePuzzle` so a revealed puzzle is reviewed exactly once: the
+    // reveal succeeded and move-on skips it, or the reveal failed to reach the
+    // server and move-on retries with the same idempotency key.
+    //
+    // The resets below are hygiene, not correctness, and mutation testing said
+    // so: deleting them changes no observable behaviour. The flag can only be
+    // read down the `status === 'revealed'` branch, and the only way into that
+    // status is `handleRevealSolution`, which writes the flag on the way in. So
+    // it is always freshly written for the puzzle being advanced past. Kept
+    // anyway, because a future path that sets 'revealed' without going through
+    // that handler would turn a stale `true` into a silently dropped result —
+    // but do not mistake it for the thing that makes this correct.
+    const revealRecordedRef = useRef(false);
     const [previousSessionId, setPreviousSessionId] = useState<string | null>(null);
     useEffect(() => {
         statusRef.current = status;
@@ -187,6 +201,7 @@ export default function Puzzles() {
                 setPuzzles(res.puzzles);
                 setCurrentIndex(0);
                 setStatus('solving');
+                revealRecordedRef.current = false;
                 setUserMove('');
                 if (res.puzzles.length > 0) {
                     setSessionState('active');
@@ -515,6 +530,21 @@ export default function Puzzles() {
             // puzzles) rather than teleporting one move and printing the rest.
             playSolutionLine(currentPuzzle.fen, pv.length ? pv : [bestMove]);
         }
+        // Record the fail NOW rather than when the user moves on. LibraryPuzzle
+        // has always done this — `handleRecordResult('fail')` sits in its own
+        // reveal handler — and the trainer deferring it cost two things.
+        //
+        // A user who revealed and then closed the tab had the attempt recorded
+        // NOWHERE: they saw the answer and the scheduler never learned the
+        // puzzle was failed, so it kept its old interval. And `attempts` stayed
+        // 0 for the entire window in which the solution is on screen, which is
+        // exactly the window the post-resolution panel exists to fill.
+        //
+        // The visual reveal above does not wait on this, matching the rule the
+        // hint ladder already follows: the reveal never depends on a write
+        // succeeding. If it does not land, `handleNextPuzzle` retries with the
+        // same idempotency key.
+        revealRecordedRef.current = await handleReviewPuzzle('fail');
     };
 
     // One graduated hint ladder, identical with or without an active session:
@@ -640,6 +670,7 @@ export default function Puzzles() {
         if (currentIndex < puzzles.length - 1) {
             setCurrentIndex(currentIndex + 1);
             setStatus('solving');
+            revealRecordedRef.current = false;
             setUserMove('');
             setLastFeedback('');
             setLinePlyIndex(0);
@@ -667,7 +698,14 @@ export default function Puzzles() {
                 recorded = await handleReviewPuzzle('pass', undefined, solvedLine);
             } else if (status === 'revealed') {
                 // Revealed solution: a self-reported fail, no move to verify.
-                recorded = await handleReviewPuzzle('fail');
+                // Already recorded by `handleRevealSolution` in the normal case
+                // — re-sending here would rotate to a fresh idempotency key and
+                // bank a SECOND fail, moving ease_factor twice for one attempt.
+                // Only retry when the reveal-time write did not reach the
+                // server; the key it kept makes that retry idempotent.
+                recorded = revealRecordedRef.current
+                    ? true
+                    : await handleReviewPuzzle('fail');
             }
 
             // A review that failed to reach the server must NOT advance the
