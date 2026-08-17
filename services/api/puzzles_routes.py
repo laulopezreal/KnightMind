@@ -45,6 +45,7 @@ from services.api.models import (
     PuzzleResult,
     PuzzleReview,
     PuzzleStats,
+    TrainingSession,
 )
 from services.api.models import Game as GameModel
 from services.api.models import Puzzle as PuzzleModel
@@ -1870,6 +1871,91 @@ def get_puzzle_diagnosis(
 
     return _diagnosis_response(
         puzzle_id, DiagnosisRepository(db).get(username, puzzle_id), reveal_solution
+    )
+
+
+class MotifHintRequest(BaseModel):
+    username: Username
+    # Optional: a hint asked outside a session still returns the motif, it just
+    # has no counter to record against. The Library's own board is exactly that
+    # case, and refusing there would make the gate inescapable on that surface.
+    session_id: str | None = None
+
+
+class MotifHintResponse(BaseModel):
+    """Rung 0 of the hint ladder."""
+
+    puzzle_id: str
+    # None when the puzzle genuinely has no usable motif -- `blunder` means "no
+    # motif was identified", so returning it would spend a hint on nothing.
+    primary_motif: str | None
+    hints_used: int | None = None
+
+
+@router.post("/puzzles/{puzzle_id}/hint/motif", response_model=MotifHintResponse)
+def use_motif_hint(
+    puzzle_id: str,
+    request: MotifHintRequest,
+    db: Session = Depends(get_db),
+    account: Account | None = Depends(require_account),
+):
+    """Ask for the motif. This is the gate's exit, and it is meant to be.
+
+    §4 withholds the motif before an attempt, which without an exit turns a
+    hint ladder into a wall: the existing rungs are "name the piece to move",
+    "highlight the destination", "reveal the solution", and the motif reveals
+    strictly less than the first of those. So it sorts *before* them as a new
+    rung 0.
+
+    Deliberately a POST on a puzzle-scoped path rather than a widening of
+    ``POST /sessions/{id}/hint``, which takes a session and a username and has
+    no ``puzzle_id`` at all -- it cannot say which puzzle was hinted, and once
+    §4 strips the motif from the payload the client has nowhere else to get it.
+
+    The ask is recorded, which is the point of routing it through an endpoint
+    instead of relaxing the serializer: a motif that arrives this way is a hint
+    the user spent, and §9 keeps the distinction so the scheduler can use it
+    later. Reuses the existing counter rather than adding a second one.
+    """
+    puzzle = db.scalars(
+        select(PuzzleModel).where(
+            PuzzleModel.id == puzzle_id,
+            PuzzleModel.username == request.username,
+        )
+    ).first()
+    if not puzzle:
+        raise HTTPException(status_code=404, detail="Puzzle not found")
+    assert_owns_username(account, request.username, db)
+
+    stats = db.scalars(
+        select(PuzzleStats).where(
+            PuzzleStats.puzzle_id == puzzle_id,
+            PuzzleStats.username == request.username,
+        )
+    ).first()
+    # `usable_motif` drops "blunder", which means no motif was identified.
+    # Spending a hint to be told nothing was identified is worse than being
+    # told there is nothing to tell.
+    motif = usable_motif(stats.primary_motif) if stats else None
+
+    hints_used = None
+    if request.session_id:
+        session = db.scalars(
+            select(TrainingSession).where(TrainingSession.id == request.session_id)
+        ).first()
+        # A bad or foreign session id must not cost the user their hint: the
+        # motif is returned either way, and only the recording is skipped.
+        if (
+            session
+            and session.username == request.username
+            and session.completed_at is None
+        ):
+            session.hints_used += 1
+            db.commit()
+            hints_used = session.hints_used
+
+    return MotifHintResponse(
+        puzzle_id=puzzle_id, primary_motif=motif, hints_used=hints_used
     )
 
 
