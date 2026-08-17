@@ -104,8 +104,27 @@ def _create_stats(
     last_reviewed_at: datetime | None = None,
     last_result: str | None = None,
     next_due_at: datetime | None = None,
+    resolved: bool = True,
 ):
-    """Helper: create a PuzzleStats row."""
+    """Helper: create a PuzzleStats row.
+
+    Defaults to a RESOLVED row -- attempted, not yet due again -- so a test
+    asserting a revealing field passes with the resolution gate both on and
+    off. Pass ``resolved=False`` (or set attempts/next_due_at directly) for a
+    test whose subject IS the gate.
+
+    Without this the suite could only ever be run with the gate off, which is
+    exactly how three ungated routes and two dead overrides shipped green.
+    Callers that set `attempts` or `next_due_at` explicitly keep their values.
+    """
+    if resolved and attempts == 0 and next_due_at is None:
+        attempts = 1
+        next_due_at = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(
+            days=3
+        )
+        last_reviewed_at = last_reviewed_at or datetime.now(timezone.utc).replace(
+            tzinfo=None
+        )
     if title is _FROM_PUZZLE_ID:
         title = f"Test Puzzle {puzzle_id}"
     db.add(
@@ -316,6 +335,10 @@ class TestListPuzzlesBasic:
 
     def test_user_confirmed_cause_wins_in_list_summary(self, client, db_session):
         _create_puzzle(db_session, "p-confirmed")
+        # Resolved: this test is about the summary's CONTENT, not the
+        # gate, and a puzzle with no stats row is unresolved by
+        # definition -- so the summary would be withheld.
+        _create_stats(db_session, "p-confirmed")
         _create_diagnosis(
             db_session,
             "p-confirmed",
@@ -334,6 +357,10 @@ class TestListPuzzlesBasic:
     def test_unclear_state_with_cause_reports_unclear(self, client, db_session):
         """insufficient_evidence=True forces state='unclear' even when primary_cause is set."""
         _create_puzzle(db_session, "p-unclear")
+        # Resolved: this test is about the summary's CONTENT, not the
+        # gate, and a puzzle with no stats row is unresolved by
+        # definition -- so the summary would be withheld.
+        _create_stats(db_session, "p-unclear")
         _create_diagnosis(
             db_session,
             "p-unclear",
@@ -353,6 +380,10 @@ class TestListPuzzlesBasic:
     def test_unavailable_diagnosis_omits_error_field(self, client, db_session):
         """UNAVAILABLE rows carry an error reason that must never reach the client."""
         _create_puzzle(db_session, "p-unavail")
+        # Resolved: this test is about the summary's CONTENT, not the
+        # gate, and a puzzle with no stats row is unresolved by
+        # definition -- so the summary would be withheld.
+        _create_stats(db_session, "p-unavail")
         _create_diagnosis(
             db_session,
             "p-unavail",

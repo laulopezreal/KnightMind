@@ -94,6 +94,42 @@ def is_resolved(stats, *, now: datetime | None = None) -> bool:
     return moment < next_due_at
 
 
+def _named_by(value: str | None, requested: str | None) -> bool:
+    """Did the caller name this value?
+
+    Shared by both overrides because they are the same question. Two things
+    the first version got wrong, both found with the gate on:
+
+    * ``requested`` may be a COMMA-SEPARATED list. The Library documents
+      ``?motif=`` as "comma-separated for OR" and splits it for the SQL filter,
+      so comparing the whole string meant ``fork == "fork,pin"`` was False and
+      a two-motif browse hid both motifs it had just filtered on.
+    * ``requested`` may be a SLUG while ``value`` is its display label.
+      ``?focus_cause=loose_piece_awareness`` becomes "Loose Piece Syndrome" by
+      the time it reaches the payload, so a literal comparison never matched
+      and the focus override was dead code. Matching on the slugified form of
+      both sides makes the two spellings equal without the caller having to
+      know which one it holds.
+    """
+    if not requested or not value:
+        return False
+
+    wanted = {_slug(part) for part in requested.split(",") if part.strip()}
+    return _slug(value) in wanted
+
+
+def _slug(text: str) -> str:
+    """Lowercase, with separators flattened, so a label matches its key.
+
+    "Loose Piece Syndrome" and "loose_piece_awareness" do NOT collapse to the
+    same thing -- and must not, since they are different causes. What this
+    fixes is "Back Rank Neglect" vs "back_rank_neglect", which are the same
+    cause spelled two ways. The route is responsible for passing comparable
+    values; this only removes case and separator noise.
+    """
+    return " ".join(text.replace("_", " ").replace("-", " ").lower().split())
+
+
 def motif_is_visible(
     *,
     resolved: bool,
@@ -120,25 +156,32 @@ def motif_is_visible(
     """
     if resolved:
         return True
-    if not requested_motif or not puzzle_motif:
-        return False
-    return puzzle_motif.strip().lower() == requested_motif.strip().lower()
+    return _named_by(puzzle_motif, requested_motif)
 
 
 def focus_is_visible(
     *,
     resolved: bool,
-    focus_name: str | None,
-    requested_focus: str | None,
+    focus_requested: bool,
+    in_focus: bool,
 ) -> bool:
     """Whether ``queue_reason``'s diagnosed cause/opening may be named.
 
-    Same rule as the motif, for the same reason: the focus is in the request,
-    so echoing it back reveals nothing the caller did not supply. And the same
-    limit -- it names one cause, so it unlocks one cause.
+    Membership, NOT string matching, and the first version got this wrong in a
+    way that made the override dead code. It compared the human label the
+    payload carries ("Loose Piece Syndrome") against the slug the caller sent
+    (``loose_piece_awareness``); those are different strings for the same
+    cause, so the comparison was always False and every focused session lost
+    the pattern it had asked for. Four existing tests go red under the gate
+    because of it. Slugifying does not rescue that -- the two spellings are not
+    variants of one another -- so the comparison has to go.
+
+    ``focus_ids`` is already computed FROM the requested focus, so "this puzzle
+    is in the focus set" is exactly "this puzzle matches what the caller named",
+    with no strings involved. It keeps the §5 scope property intact: a puzzle
+    outside the set stays gated, so a forged parameter still grants only the
+    puzzles it actually selects.
     """
     if resolved:
         return True
-    if not requested_focus or not focus_name:
-        return False
-    return focus_name.strip().lower() == requested_focus.strip().lower()
+    return focus_requested and in_focus

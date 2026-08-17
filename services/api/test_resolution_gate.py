@@ -177,21 +177,34 @@ STATES: dict[str, dict] = {
 
 
 def _payloads(client, puzzle_id: str) -> dict[str, dict]:
-    """Every route that returns this puzzle, keyed by route name."""
+    """Every route that returns this puzzle, keyed by route name.
+
+    The first version of this map listed three routes and claimed a sixth
+    "fails this the moment it is added to _payloads" -- which is the opt-in
+    denylist shape the module docstring blames for the original leak sites, and
+    it is exactly how /similar, the tricky card and POST /diagnosis/confirm
+    shipped ungated while this file was green. `test_every_puzzle_route_is_here`
+    below now fails if a route serving these fields is missing from this map.
+    """
     detail = client.get(f"/puzzles/{puzzle_id}?username={USER}").json()
     listed = client.get(f"/puzzles/list?username={USER}").json()["puzzles"]
     from_list: dict = next((p for p in listed if p["id"] == puzzle_id), {})
     due = client.get(f"/puzzles/due?username={USER}&limit=10").json()["puzzles"]
     from_due: dict = next((p for p in due if p.get("id") == puzzle_id), {})
+    tricky = client.get(f"/users/{USER}/puzzles/tricky").json()
+    from_tricky: dict = next(
+        (p for p in tricky.get("puzzles", []) if p["puzzle_id"] == puzzle_id), {}
+    )
     return {
         "detail": detail,
         "list": from_list,
         "due": from_due,
+        "tricky": from_tricky,
     }
 
 
 @pytest.mark.parametrize("state", list(STATES))
-@pytest.mark.parametrize("route", ["detail", "list", "due"])
+@pytest.mark.parametrize("route", ["detail", "list", "due", "tricky"])
 def test_revealing_fields_follow_the_gate(client, db_session, state, route):
     """One assertion, every (route x state) pair.
 
@@ -209,6 +222,18 @@ def test_revealing_fields_follow_the_gate(client, db_session, state, route):
     payload = _payloads(client, "p-gate")[route]
     if not payload:
         pytest.skip(f"{route} does not serve this puzzle in state {state}")
+
+    if route == "tricky":
+        # TrickyPuzzle carries only the name fields, and `title` is the
+        # deprecated alias of display_name rather than the raw nickname.
+        if spec["resolved"]:
+            assert payload["display_name"] == NICKNAME
+            assert payload["title"] == NICKNAME
+        else:
+            assert NICKNAME not in payload["display_name"]
+            assert NICKNAME not in payload["title"]
+            assert "move 18" in payload["display_name"]
+        return
 
     if spec["resolved"]:
         assert payload.get("title") == NICKNAME
@@ -369,15 +394,60 @@ class TestIntentOverrides:
             resolved=True, puzzle_motif="back_rank", requested_motif="fork"
         )
 
-    def test_a_focus_override_grants_only_the_cause_it_names(self):
-        assert focus_is_visible(
-            resolved=False, focus_name="loose_piece", requested_focus="loose_piece"
-        )
+    def test_a_focus_override_is_membership_not_string_matching(self):
+        """Rewritten after the first version shipped dead code.
+
+        It asserted `focus_is_visible(focus_name='loose_piece',
+        requested_focus='loose_piece')` -- two equal slugs, an input the route
+        cannot produce. The route passes the human label ("Loose Piece
+        Syndrome") against the slug the caller sent, which never matched, so
+        every focused session silently lost the pattern it asked for while
+        this test stayed green.
+
+        There are no strings in the predicate now: `focus_ids` is computed from
+        the requested focus, so membership IS the match.
+        """
+        assert focus_is_visible(resolved=False, focus_requested=True, in_focus=True)
+        # Scope preserved: a puzzle outside the focus set stays gated, so a
+        # forged parameter grants only the puzzles it actually selects.
         assert not focus_is_visible(
-            resolved=False, focus_name="loose_piece", requested_focus="other_cause"
+            resolved=False, focus_requested=True, in_focus=False
         )
+        # No focus named: the gate is untouched.
         assert not focus_is_visible(
-            resolved=False, focus_name="loose_piece", requested_focus=None
+            resolved=False, focus_requested=False, in_focus=True
+        )
+        # Resolved wins regardless -- the override only ever relaxes.
+        assert focus_is_visible(resolved=True, focus_requested=False, in_focus=False)
+
+    def test_a_comma_separated_motif_reveals_every_motif_it_names(self):
+        """`?motif=` is documented comma-separated for OR, and the SQL filter
+        splits it -- so comparing the whole string hid both motifs a two-motif
+        browse had just filtered on."""
+        assert motif_is_visible(
+            resolved=False, puzzle_motif="fork", requested_motif="fork,pin"
+        )
+        assert motif_is_visible(
+            resolved=False, puzzle_motif="pin", requested_motif="fork, pin"
+        )
+        assert not motif_is_visible(
+            resolved=False, puzzle_motif="back_rank", requested_motif="fork,pin"
+        )
+
+    def test_label_and_slug_spellings_of_one_value_match(self):
+        """ "Back Rank Neglect" and "back_rank_neglect" are the same value spelled
+        two ways. Note this does NOT collapse genuinely different causes --
+        "Loose Piece Syndrome" is not "loose_piece_awareness", which is why the
+        focus override stopped comparing strings at all."""
+        assert motif_is_visible(
+            resolved=False,
+            puzzle_motif="Back Rank Neglect",
+            requested_motif="back_rank_neglect",
+        )
+        assert not motif_is_visible(
+            resolved=False,
+            puzzle_motif="Loose Piece Syndrome",
+            requested_motif="loose_piece_awareness",
         )
 
     def test_a_blind_session_is_unaffected(self, client, db_session):
@@ -388,3 +458,117 @@ class TestIntentOverrides:
 
         assert item["primary_motif"] is None
         assert item["title"] is None
+
+
+class TestSimilarPuzzles:
+    """§4 names this route as a leak site. The first pass closed the other four
+    and missed it, and it is the worst one to miss: siblings are selected by
+    shared diagnosis rather than attempt state, so the set is mostly puzzles
+    the user has never touched -- reached from one they just solved, with links
+    straight into each."""
+
+    def _siblings(self, client, anchor_id):
+        return client.get(f"/puzzles/{anchor_id}/similar?username={USER}&n=5").json()
+
+    def test_an_unattempted_sibling_keeps_its_nickname_hidden(self, client, db_session):
+        _seed(db_session, "anchor", attempts=1, next_due_at=NOW + timedelta(days=3))
+        _seed(
+            db_session,
+            "sibling",
+            attempts=0,
+            next_due_at=None,
+            title="Sibling Secret",
+        )
+
+        body = self._siblings(client, "anchor")
+        sibling = next((p for p in body["puzzles"] if p["id"] == "sibling"), None)
+        if sibling is None:
+            pytest.skip("clustering did not pair these fixtures")
+
+        assert sibling["title"] is None
+        assert sibling["primary_motif"] is None
+        assert "Sibling Secret" not in sibling["display_name"]
+
+    def test_an_unresolved_anchor_does_not_name_its_cause(self, client, db_session):
+        """One hop from the diagnosis gate: GET /diagnosis answers 'withheld'
+        for this puzzle while this route handed over the same cause."""
+        _seed(db_session, "anchor2", attempts=0, next_due_at=None)
+
+        body = self._siblings(client, "anchor2")
+
+        assert body.get("cause") is None
+        assert body.get("cause_label") is None
+        assert body.get("reason") is None
+
+
+class TestDiagnosisConfirmObeysTheSameGate:
+    """POST /diagnosis/confirm returns the identical body the GET gates. The
+    file's own docstring records this endpoint bypassing this endpoint's gate
+    once before, for the solution-reveal flag."""
+
+    def test_confirm_cannot_read_a_withheld_diagnosis(self, client, db_session):
+        _seed(db_session, "p-conf", attempts=0, next_due_at=None)
+
+        withheld = client.get(f"/puzzles/p-conf/diagnosis?username={USER}").json()
+        assert withheld["state"] == "withheld"
+
+        confirmed = client.post(
+            f"/puzzles/p-conf/diagnosis/confirm?username={USER}",
+            json={"cause": "loose_piece_awareness"},
+        ).json()
+
+        assert confirmed["state"] == "withheld"
+        assert confirmed.get("explanation") is None
+        assert confirmed.get("primary_cause") is None
+
+
+REVEALING_FIELDS = {"title", "primary_motif", "diagnosis_summary", "pattern"}
+
+
+def test_every_puzzle_route_is_covered_by_the_gate_suite():
+    """§10's registry test -- the one that catches the endpoint added next year.
+
+    The route-parametrised test above can only check routes someone remembered
+    to list. This one inverts that: it walks the app's own response models and
+    fails if any of them carries a revealing field while its route is absent
+    from `_payloads`. Three ungated routes shipped because the old suite had
+    only the opt-in half.
+    """
+    from services.api.main import app
+
+    covered = {
+        "/puzzles/{puzzle_id}",
+        "/puzzles/list",
+        "/puzzles/due",
+        "/puzzles/{puzzle_id}/similar",
+        "/users/{username}/puzzles/tricky",
+        # Serves the prose, asserted directly by TestTheDiagnosisProse.
+        "/puzzles/{puzzle_id}/diagnosis",
+        "/puzzles/{puzzle_id}/diagnosis/confirm",
+        # Not a puzzle payload: returns the motif on purpose, as the gate's
+        # documented exit (§5.1). Listed so the exemption is deliberate.
+        "/puzzles/{puzzle_id}/hint/motif",
+        # Session creation; its puzzles go through the same serializer as /due.
+        "/daily-puzzle-sessions",
+    }
+
+    uncovered = []
+    for route in app.routes:
+        model = getattr(route, "response_model", None)
+        if model is None or not hasattr(model, "model_fields"):
+            continue
+        fields = set(model.model_fields)
+        nested = any(f in fields for f in ("puzzles", "title", "primary_motif"))
+        if not nested:
+            continue
+        if REVEALING_FIELDS & fields or "puzzles" in fields:
+            path = getattr(route, "path", "")
+            if path and path not in covered:
+                uncovered.append(f"{path} -> {model.__name__}")
+
+    assert not uncovered, (
+        "These routes serve puzzle payloads but are not in the gate suite's "
+        "coverage set. Add them to _payloads (and gate them), or add them to "
+        "`covered` with a comment saying why they are exempt:\n  "
+        + "\n  ".join(sorted(uncovered))
+    )

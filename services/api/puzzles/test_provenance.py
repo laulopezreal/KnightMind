@@ -52,11 +52,17 @@ class TestComposeProvenance:
 
     @pytest.mark.parametrize(
         ("ply", "expected"),
-        [(0, "move 1"), (1, "move 1"), (2, "move 2"), (35, "move 18"), (36, "move 19")],
+        [(0, "move 1"), (1, "move 1"), (2, "move 1"), (35, "move 18"), (36, "move 18")],
     )
-    def test_move_number_follows_chess_convention(self, ply, expected):
-        """Ply 0 and 1 are both move 1 -- White then Black. This matches
-        identity.py and spaced_repetition.py, which compute it the same way."""
+    def test_move_number_matches_the_board(self, ply, expected):
+        """Plies 2N-1 and 2N are both move N -- White then Black.
+
+        Pinned against `chess.Board.fullmove_number`, not against the other
+        copies in the repo: identity.py and spaced_repetition.py both compute
+        `ply // 2 + 1`, which is off by one for every even ply, and this test
+        previously pinned that wrong answer (`36 -> move 19`) while
+        diagnosis/test_evidence.py pinned the right one for the same column.
+        """
         assert compose_provenance(end_time=None, ply=ply) == expected
 
     def test_the_day_has_no_leading_zero(self):
@@ -82,7 +88,10 @@ class TestResolveDisplayName:
         today, so display_name equals it everywhere."""
         assert (
             resolve_display_name(
-                title="Bishop Had Bigger Plans", end_time=MAR_12, ply=35
+                title="Bishop Had Bigger Plans",
+                end_time=MAR_12,
+                ply=35,
+                resolved=True,
             )
             == "Bishop Had Bigger Plans"
         )
@@ -92,16 +101,36 @@ class TestResolveDisplayName:
         """NULL is the steady state after rollout step 6, and a whitespace-only
         title would otherwise render as an invisible name."""
         assert (
-            resolve_display_name(title=empty, end_time=MAR_12, ply=35)
+            resolve_display_name(title=empty, end_time=MAR_12, ply=35, resolved=True)
             == "12 Mar · move 18"
         )
 
-    def test_it_does_not_gate_yet(self):
-        """Deliberate: withholding a nickname until the puzzle is resolved is
-        rollout step 3. Step 1 only routes every surface through this function
-        so that change lands in one place instead of six. If this test starts
-        failing, step 3 arrived and this expectation should move with it."""
+    def test_the_gate_withholds_the_nickname(self):
+        """The single line every route's withholding runs through.
+
+        Replaces `test_it_does_not_gate_yet`, which was a self-declared
+        tripwire that could not trip: it only ever exercised the old
+        `resolved=True` default, so it stayed green through steps 3 and 4 while
+        claiming to certify that neither had arrived.
+        """
         assert (
-            resolve_display_name(title="Spoiler Name", end_time=MAR_12, ply=35)
-            == "Spoiler Name"
+            resolve_display_name(
+                title="Spoiler Name", end_time=MAR_12, ply=35, resolved=False
+            )
+            == "12 Mar · move 18"
         )
+
+    def test_provenance_is_never_withheld(self):
+        """Only the nickname is gated. Provenance is the identify half and
+        reveals nothing about the tactic, which is the whole reason the label
+        was split in two -- so a gated puzzle still gets a name."""
+        gated = resolve_display_name(
+            title="Spoiler Name",
+            end_time=MAR_12,
+            ply=35,
+            opening_name="Sicilian",
+            resolved=False,
+        )
+
+        assert gated == "12 Mar · Sicilian · move 18"
+        assert "Spoiler" not in gated

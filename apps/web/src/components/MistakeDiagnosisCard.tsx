@@ -48,6 +48,20 @@ export function MistakeDiagnosisCard({
 
     if (!diagnosis) return null;
 
+    if (diagnosis.state === 'withheld') {
+        // The gate is shut for this puzzle. Without this branch the state fell
+        // through to the 'ready' render and produced a framed card with an
+        // empty heading -- deterministically, on the wrong-answer path, and
+        // never refetched for that page visit.
+        return (
+            <Shell>
+                <p className="font-sans text-sm text-primary/70">
+                    Attempt this puzzle to see why the move was a mistake.
+                </p>
+            </Shell>
+        );
+    }
+
     if (diagnosis.state === 'pending') {
         return (
             <Shell>

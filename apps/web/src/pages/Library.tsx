@@ -110,7 +110,7 @@ function PuzzleRow({ puzzle }: { puzzle: LibraryPuzzle }) {
                             that limit; they are position- and model-derived now,
                             so they can. */}
                         <span className="font-serif text-primary truncate min-w-0">
-                            {puzzle.title || puzzle.id.slice(0, 8)}
+                            {puzzle.display_name}
                         </span>
                         <StatusBadge status={puzzle.status} />
                         <DifficultyBadge difficulty={puzzle.difficulty} />

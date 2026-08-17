@@ -42,7 +42,7 @@ const EMPTY_RESPONSE = {
 const MOCK_PUZZLES = [
     {
         id: 'p-1',
-        title: 'Poison Pawn Trap',
+        title: 'Poison Pawn Trap', display_name: 'Poison Pawn Trap',
         primary_motif: 'Fork',
         difficulty: 'medium' as const,
         swing: 3.0,
@@ -67,7 +67,7 @@ const MOCK_PUZZLES = [
     },
     {
         id: 'p-2',
-        title: 'Knight Outpost',
+        title: 'Knight Outpost', display_name: 'Knight Outpost',
         primary_motif: null,
         difficulty: 'easy' as const,
         swing: 1.0,

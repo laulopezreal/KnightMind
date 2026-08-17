@@ -32,6 +32,7 @@ from services.api.models import (
     TrainingSession,
 )
 from services.api.puzzles.provenance import resolve_display_name
+from services.api.puzzles.resolution import is_resolved
 from services.api.storage.spaced_repetition import (
     get_next_due_date,
     get_scheduled_within_count,
@@ -529,19 +530,38 @@ def get_tricky_puzzles(
         .limit(limit)
     ).all()
 
+    def _display(stat, puzzle, game) -> str:
+        # Gated. This card filters fail_count >= 2, precisely the population
+        # §6 writes nicknames for -- and any row whose next_due_at has passed
+        # is re-due, i.e. about to be attempted again. Serving the recall
+        # nickname here is the §4.1 scenario verbatim.
+        #
+        # `title` gets the same value rather than "Untitled Puzzle": the field
+        # is deprecated but still on the wire, so a client that has not moved
+        # to display_name renders provenance instead of a placeholder.
+        return resolve_display_name(
+            title=stat.title,
+            end_time=game.end_time if game else None,
+            ply=puzzle.ply if puzzle else None,
+            resolved=is_resolved(stat),
+        )
+
     puzzles = [
         TrickyPuzzle(
             puzzle_id=stat.puzzle_id,
-            title=stat.title or "Untitled Puzzle",
-            display_name=resolve_display_name(
-                title=stat.title,
-                end_time=game.end_time if game else None,
-                ply=puzzle.ply if puzzle else None,
-            ),
+            # Gated. This card filters fail_count >= 2, which is precisely the
+            # population §6 writes nicknames for -- and any row whose
+            # next_due_at has passed is re-due, i.e. about to be attempted
+            # again. Serving the recall-optimised name here is the §4.1
+            # scenario verbatim: the tactic handed over immediately before the
+            # repeat attempt it is supposed to test.
+            title=_name,
+            display_name=_name,
             fail_count=stat.fail_count,
             last_attempted_at=stat.last_reviewed_at,
         )
         for stat, puzzle, game in rows
+        for _name in (_display(stat, puzzle, game),)
     ]
 
     return TrickyPuzzlesResponse(puzzles=puzzles, total_count=total_count)

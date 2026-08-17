@@ -1804,7 +1804,11 @@ def test_tricky_puzzles_includes_at_threshold(client_with_db, db_session):
     data = response.json()
     assert len(data["puzzles"]) == 1
     assert data["puzzles"][0]["puzzle_id"] == "p-2fail"
-    assert data["puzzles"][0]["title"] == "Fork Tactic"
+    # Not asserting the nickname: this factory schedules next_due_at = now, so
+    # the puzzle is RE-DUE and the resolution gate withholds its name. The
+    # subject here is threshold inclusion, so assert identity instead -- and
+    # display_name is never empty either way.
+    assert data["puzzles"][0]["display_name"]
     assert data["puzzles"][0]["fail_count"] == 2
     assert data["total_count"] == 1
 
@@ -1893,7 +1897,14 @@ def test_tricky_puzzles_scoped_to_username(client_with_db, db_session):
 
 
 def test_tricky_puzzles_title_fallback(client_with_db, db_session):
-    """Puzzles with no title get 'Untitled Puzzle' as fallback."""
+    """A puzzle with no title falls back to PROVENANCE, not a placeholder.
+
+    This test used to pin "Untitled Puzzle", which design §8 names as the bug:
+    the card filters fail_count >= 2, the nickname is written asynchronously,
+    and a rejected naming call leaves title NULL permanently -- so the surface
+    dedicated to naming puzzles rendered a column of placeholders. It now gets
+    "17 Aug . move 5" instead.
+    """
     _create_puzzle_stats(
         db_session,
         "p-no-title",
@@ -1905,4 +1916,8 @@ def test_tricky_puzzles_title_fallback(client_with_db, db_session):
 
     response = client_with_db.get("/users/testuser/puzzles/tricky")
     assert response.status_code == 200
-    assert response.json()["puzzles"][0]["title"] == "Untitled Puzzle"
+    item = response.json()["puzzles"][0]
+    assert item["title"] != "Untitled Puzzle"
+    assert "move " in item["title"]
+    # Both fields agree: `title` is the deprecated alias of display_name.
+    assert item["display_name"] == item["title"]

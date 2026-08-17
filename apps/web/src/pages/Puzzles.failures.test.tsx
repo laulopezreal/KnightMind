@@ -287,11 +287,20 @@ describe('Puzzles — honest failure handling', () => {
 
             // The write failed, so moving on must try again rather than treat
             // the puzzle as recorded and advance past it.
+            // Move-on awaits the reveal's OWN write rather than firing a
+            // second one, so this click surfaces that failure and stays put --
+            // one click, one attempt.
             await user.click(screen.getByRole('button', { name: /next puzzle/i }));
 
-            await waitFor(() => expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(2));
+            await waitFor(() =>
+                expect(screen.getByRole('alert')).toHaveTextContent(/couldn't save that result/i),
+            );
             expect(mockSetCurrentIndex).not.toHaveBeenCalled();
-            expect(screen.getByRole('alert')).toHaveTextContent(/couldn't save that result/i);
+            expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(1);
+
+            // The next click is the retry, with the key the hook kept.
+            await user.click(screen.getByRole('button', { name: /next puzzle/i }));
+            await waitFor(() => expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(2));
         });
 
         it('records each revealed puzzle, not just the first', async () => {
@@ -311,6 +320,27 @@ describe('Puzzles — honest failure handling', () => {
             await user.click(screen.getByRole('button', { name: /reveal/i }));
 
             await waitFor(() => expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(2));
+        });
+
+        it('does not advance on a reveal whose write never landed', async () => {
+            // The race the flag ordering fixes. The flag is claimed before the
+            // await, so a failed reveal-time write clears it and move-on
+            // retries -- rather than reading a stale `false`, hitting the
+            // session hook's in-flight guard (which returns true without
+            // posting) and advancing on a write that never happened.
+            mockHandleReviewPuzzle.mockResolvedValue(false);
+            const user = userEvent.setup();
+            render(<Puzzles />);
+
+            await user.click(screen.getByRole('button', { name: /reveal/i }));
+            await waitFor(() => expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(1));
+
+            await user.click(screen.getByRole('button', { name: /next puzzle/i }));
+
+            await waitFor(() =>
+                expect(screen.getByRole('alert')).toHaveTextContent(/couldn't save that result/i),
+            );
+            expect(mockSetCurrentIndex).not.toHaveBeenCalled();
         });
 
         it('records nothing when the solution could not be loaded', async () => {

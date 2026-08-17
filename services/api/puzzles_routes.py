@@ -951,6 +951,8 @@ def get_due_puzzles_endpoint(
                         title=None,
                         end_time=end_times.get(pid),
                         ply=getattr(puzzle, "ply", None),
+                        # No stats row at all, so nothing has been attempted.
+                        resolved=False,
                     ),
                 }
             )
@@ -964,8 +966,8 @@ def get_due_puzzles_endpoint(
             # one cause or opening it names.
             resolved=focus_is_visible(
                 resolved=due_resolved,
-                focus_name=focus_name,
-                requested_focus=focus_cause or focus_opening,
+                focus_requested=bool(focus_cause or focus_opening),
+                in_focus=pid in focus_ids,
             ),
         )
         # SCORED training path: never ship the solution up front.
@@ -1396,7 +1398,15 @@ def list_puzzles(
                 PuzzleStats.attempts > 0,
                 or_(
                     PuzzleStats.next_due_at.is_(None),
-                    PuzzleStats.next_due_at > datetime.now(timezone.utc),
+                    # NAIVE, matching the column. An aware bound makes Postgres
+                    # reinterpret the naive column through the session
+                    # TimeZone, shifting the boundary by the offset -- the rule
+                    # spaced_repetition documents and the bug the worker
+                    # heartbeat already paid for once. This function computed
+                    # `now = _utcnow_naive()` 150 lines up for exactly this and
+                    # the first version of this predicate ignored it, so the
+                    # SQL and Python halves of one gate could disagree.
+                    PuzzleStats.next_due_at > now,
                 ),
             )
         base_stmt = base_stmt.where(
@@ -1931,16 +1941,36 @@ def get_similar_puzzles(
     if owns is None:
         raise HTTPException(status_code=404, detail="Puzzle not found")
 
+    # The ANCHOR's own resolution decides whether this response may name its
+    # diagnosed cause. Without this the route is a one-hop bypass of the
+    # diagnosis gate: GET /puzzles/{id}/diagnosis answers "withheld" while
+    # GET /puzzles/{id}/similar hands over the same cause for the same puzzle.
+    anchor_stats = db.scalars(
+        select(PuzzleStats).where(
+            PuzzleStats.puzzle_id == puzzle_id,
+            PuzzleStats.username == username_lower,
+        )
+    ).first()
+    anchor_resolved = is_resolved(anchor_stats)
+
     repo = DiagnosisRepository(db)
     key = repo.cluster_key_for(username_lower, puzzle_id)
     if key is None:
         return SimilarPuzzlesResponse()
 
+    cluster = key  # narrowed for the closure below
+
+    def _cause_fields() -> dict:
+        if not anchor_resolved:
+            return {}
+        return {
+            "cause": cluster.cause,
+            "cause_label": humanise_cause(cluster.cause),
+        }
+
     sibling_ids, tier = repo.similar_puzzle_ids(username_lower, puzzle_id, key, n)
     if not sibling_ids or tier is None:
-        return SimilarPuzzlesResponse(
-            cause=key.cause, cause_label=humanise_cause(key.cause)
-        )
+        return SimilarPuzzlesResponse(**_cause_fields())
 
     # Stats ride in on the join rather than a second round trip. PuzzleStats is
     # keyed on puzzle_id alone, so the username predicate belongs in the ON
@@ -1977,18 +2007,29 @@ def get_similar_puzzles(
         if found is None:
             continue
         row, stats, game = found
+        # Siblings are selected by shared diagnosis, NOT by attempt state, so
+        # this set is mostly puzzles the user has never touched -- and it is
+        # reached from a puzzle they just solved, with links straight into
+        # each one. §4 names this route as a leak site and the first pass
+        # closed the other four and missed it.
+        sibling_resolved = is_resolved(stats)
         items.append(
             SimilarPuzzleItem(
                 id=row.id,
-                title=stats.title if stats else None,
+                title=stats.title if (stats and sibling_resolved) else None,
                 display_name=resolve_display_name(
                     title=stats.title if stats else None,
                     end_time=game.end_time if game else None,
                     ply=row.ply,
+                    resolved=sibling_resolved,
                 ),
                 # "blunder" means no motif was identified; tagging a row with it
                 # says nothing and contradicts the reason line, which omits it.
-                primary_motif=usable_motif(stats.primary_motif) if stats else None,
+                primary_motif=(
+                    usable_motif(stats.primary_motif)
+                    if (stats and sibling_resolved)
+                    else None
+                ),
                 difficulty=_swing_to_difficulty(row.swing),
                 swing=row.swing,
                 fen=row.fen,
@@ -2000,10 +2041,10 @@ def get_similar_puzzles(
         )
 
     return SimilarPuzzlesResponse(
-        cause=key.cause,
-        cause_label=humanise_cause(key.cause),
+        **_cause_fields(),
         match=tier.value,
-        reason=describe(key, tier),
+        # `describe` names the cause in prose, so it follows the cause.
+        reason=describe(key, tier) if anchor_resolved else None,
         puzzles=items,
     )
 
@@ -2037,7 +2078,24 @@ def confirm_puzzle_diagnosis(
     if row is None:
         raise HTTPException(status_code=404, detail="No diagnosis for this puzzle")
     db.commit()
-    # Same gate as the read: this returns the identical body, evidence and all.
+
+    # BOTH gates as the read, not just the reveal one. This returns the
+    # identical body, so the resolution gate has to be mirrored here or the
+    # endpoint is a one-POST bypass: the GET answers "withheld" while this
+    # hands over the prose and the evidence naming the solution move.
+    #
+    # _diagnosis_response's docstring already records this endpoint bypassing
+    # the GET's reveal gate once before. The confirmation itself is still
+    # recorded above -- only the body is withheld.
+    stats = db.scalars(
+        select(PuzzleStats).where(
+            PuzzleStats.puzzle_id == puzzle_id,
+            PuzzleStats.username == username,
+        )
+    ).first()
+    if not is_resolved(stats):
+        return _unresolved_diagnosis(puzzle_id)
+
     return _diagnosis_response(
         puzzle_id, row, reveal or not _strip_puzzle_solutions_enabled()
     )
