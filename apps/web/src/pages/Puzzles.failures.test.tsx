@@ -244,6 +244,58 @@ describe('Puzzles — honest failure handling', () => {
         expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     });
 
+    describe('a solve is recorded at the solve, not at move-on', () => {
+        // The prerequisite for the post-resolution panel. The diagnosis gate
+        // keys on attempts > 0, so a panel shown between the solve and the
+        // move-on -- which is exactly when it should be on screen -- would
+        // have asked for a diagnosis the server still considered withheld.
+
+        it('records the pass as soon as the puzzle is solved', async () => {
+            const user = userEvent.setup();
+            render(<Puzzles />);
+
+            await typeAndCheck(user, 'e2e4');
+
+            await waitFor(() =>
+                expect(mockHandleReviewPuzzle).toHaveBeenCalledWith(
+                    'pass', undefined, expect.any(String),
+                ),
+            );
+            expect(mockSetCurrentIndex).not.toHaveBeenCalled();
+        });
+
+        it('does not record a second pass when the user moves on', async () => {
+            // handleReviewPuzzle rotates its idempotency key on success, so a
+            // second call banks a SECOND pass and moves ease_factor twice.
+            const user = userEvent.setup();
+            render(<Puzzles />);
+
+            await typeAndCheck(user, 'e2e4');
+            await waitFor(() => expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(1));
+
+            await user.click(screen.getByRole('button', { name: /next puzzle/i }));
+
+            await waitFor(() => expect(mockSetCurrentIndex).toHaveBeenCalledWith(1));
+            expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(1);
+        });
+
+        it('stays put when the solve write did not land', async () => {
+            mockHandleReviewPuzzle.mockResolvedValue(false);
+            const user = userEvent.setup();
+            render(<Puzzles />);
+
+            await typeAndCheck(user, 'e2e4');
+            await waitFor(() => expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(1));
+
+            await user.click(screen.getByRole('button', { name: /next puzzle/i }));
+
+            await waitFor(() =>
+                expect(screen.getByRole('alert')).toHaveTextContent(/couldn't save that result/i),
+            );
+            expect(mockSetCurrentIndex).not.toHaveBeenCalled();
+        });
+    });
+
     describe('a revealed solution is recorded at reveal, not at move-on', () => {
         // LibraryPuzzle has always recorded the fail inside its own reveal
         // handler. The trainer deferred it to move-on, so a user who revealed
