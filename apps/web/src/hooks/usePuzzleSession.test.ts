@@ -38,7 +38,7 @@ const mockPuzzle = {
     eval_after: -0.5,
     swing: 0.8,
     created_at: '2025-01-01',
-    used_on: null,
+    display_name: 'Test Puzzle', used_on: null,
 };
 
 const mockPuzzle2 = { ...mockPuzzle, id: 'p2', best_move_uci: 'd2d4' };
