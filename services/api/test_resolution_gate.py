@@ -41,6 +41,10 @@ from services.api.models import (  # noqa: E402
     PuzzleStats,
 )
 from services.api.models import Puzzle as PuzzleModel  # noqa: E402
+from services.api.puzzles.resolution import (  # noqa: E402
+    focus_is_visible,
+    motif_is_visible,
+)
 
 USER = "gateuser"
 FEN = "6k1/pp3ppp/8/3q4/8/8/PP3PPP/3Q2K1 w - - 0 1"
@@ -73,7 +77,19 @@ def _gate_on(monkeypatch):
     monkeypatch.setenv("KNIGHTMIND_RESOLUTION_GATE", "true")
 
 
-def _seed(db, puzzle_id: str, *, attempts: int, next_due_at: datetime | None):
+def _seed(
+    db,
+    puzzle_id: str,
+    *,
+    attempts: int,
+    next_due_at: datetime | None,
+    title: str = NICKNAME,
+    motif: str = MOTIF,
+):
+    # `title` is a parameter because uq_puzzle_stats_username_title (#366)
+    # forbids two puzzles sharing a nickname for one user -- seeding a second
+    # row with the default raises IntegrityError rather than failing an
+    # assertion, which is the constraint doing its job.
     game_id = f"g-{puzzle_id}"
     if not db.get(Game, (game_id, USER)):
         db.add(
@@ -119,9 +135,9 @@ def _seed(db, puzzle_id: str, *, attempts: int, next_due_at: datetime | None):
             fail_count=2 if attempts else 0,
             ease_factor=2.0,
             interval_days=1,
-            title=NICKNAME,
+            title=title,
             title_source="ai",
-            primary_motif=MOTIF,
+            primary_motif=motif,
             next_due_at=_naive(next_due_at) if next_due_at else None,
             last_reviewed_at=_naive(datetime.now(timezone.utc)) if attempts else None,
             last_result="fail" if attempts else None,
@@ -132,7 +148,7 @@ def _seed(db, puzzle_id: str, *, attempts: int, next_due_at: datetime | None):
             puzzle_id=puzzle_id,
             username=USER,
             status=DiagnosisStatus.OK.value,
-            primary_motif=MOTIF,
+            primary_motif=motif,
             primary_cause="loose_piece_awareness",
             opening_name=OPENING,
             explanation="The solution is Qxd5.",
@@ -205,6 +221,10 @@ def test_revealing_fields_follow_the_gate(client, db_session, state, route):
         assert payload.get("display_name")
         assert NICKNAME not in payload["display_name"]
         assert "move 18" in payload["display_name"]
+        # The browse payload's diagnosis summary carries the diagnosed cause.
+        # Found by printing a real response, not by reading the field list --
+        # which is why this assertion exists rather than a comment.
+        assert payload.get("diagnosis_summary") is None
 
 
 class TestTheDiagnosisProse:
@@ -285,3 +305,86 @@ class TestTheFlagIsOffByDefault:
 
         assert detail["title"] == NICKNAME
         assert detail["primary_motif"] == MOTIF
+
+
+class TestIntentOverrides:
+    """§5: intent relaxes the gate rather than defining it.
+
+    The property that makes this safe is scope. A per-session mode would have
+    unlocked the session; naming a motif unlocks THAT motif, so a forged
+    parameter or a shared link is worth exactly one field on the puzzles that
+    already had it.
+    """
+
+    def test_a_themed_session_shows_the_motif_it_was_asked_for(
+        self, client, db_session
+    ):
+        _seed(db_session, "p-themed", attempts=0, next_due_at=None)
+
+        body = client.get(f"/puzzles/list?username={USER}&motif={MOTIF}").json()
+        item = next(p for p in body["puzzles"] if p["id"] == "p-themed")
+
+        assert item["primary_motif"] == MOTIF
+
+    def test_the_nickname_stays_gated_in_a_themed_session(self, client, db_session):
+        """The line §5 draws. A theme categorises the tactic; the nickname
+        describes it, so "practise your forks" must not hand over "Bishop Had
+        Bigger Plans" on a puzzle the user has not attempted."""
+        _seed(db_session, "p-themed2", attempts=0, next_due_at=None)
+
+        body = client.get(f"/puzzles/list?username={USER}&motif={MOTIF}").json()
+        item = next(p for p in body["puzzles"] if p["id"] == "p-themed2")
+
+        assert item["primary_motif"] == MOTIF  # the override worked
+        assert item["title"] is None  # and stopped exactly there
+        assert NICKNAME not in item["display_name"]
+
+    def test_an_override_grants_only_the_motif_it_names(self):
+        """The forged-parameter / shared-link property, tested on the helper.
+
+        Not through the route, and that is deliberate: `?motif=` FILTERS the
+        list, so a puzzle with a different motif is never in the response and
+        a route-level assertion about it can never run. The first version of
+        this test did exactly that and passed while asserting nothing.
+
+        The helper is where the scope rule lives, and it is what protects the
+        next route to accept intent -- one that themes without filtering.
+        """
+        assert motif_is_visible(
+            resolved=False, puzzle_motif="fork", requested_motif="fork"
+        )
+        assert not motif_is_visible(
+            resolved=False, puzzle_motif="back_rank", requested_motif="fork"
+        )
+        # Case and whitespace are the user's, not a reason to withhold.
+        assert motif_is_visible(
+            resolved=False, puzzle_motif="Fork", requested_motif=" fork "
+        )
+        # No intent named: the gate is untouched.
+        assert not motif_is_visible(
+            resolved=False, puzzle_motif="fork", requested_motif=None
+        )
+        # Resolved wins regardless -- the override only ever relaxes.
+        assert motif_is_visible(
+            resolved=True, puzzle_motif="back_rank", requested_motif="fork"
+        )
+
+    def test_a_focus_override_grants_only_the_cause_it_names(self):
+        assert focus_is_visible(
+            resolved=False, focus_name="loose_piece", requested_focus="loose_piece"
+        )
+        assert not focus_is_visible(
+            resolved=False, focus_name="loose_piece", requested_focus="other_cause"
+        )
+        assert not focus_is_visible(
+            resolved=False, focus_name="loose_piece", requested_focus=None
+        )
+
+    def test_a_blind_session_is_unaffected(self, client, db_session):
+        _seed(db_session, "p-blind", attempts=0, next_due_at=None)
+
+        body = client.get(f"/puzzles/list?username={USER}").json()
+        item = next(p for p in body["puzzles"] if p["id"] == "p-blind")
+
+        assert item["primary_motif"] is None
+        assert item["title"] is None

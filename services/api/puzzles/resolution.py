@@ -92,3 +92,53 @@ def is_resolved(stats, *, now: datetime | None = None) -> bool:
         next_due_at = next_due_at.astimezone(timezone.utc).replace(tzinfo=None)
 
     return moment < next_due_at
+
+
+def motif_is_visible(
+    *,
+    resolved: bool,
+    puzzle_motif: str | None,
+    requested_motif: str | None,
+) -> bool:
+    """Whether a puzzle's motif may be shown, after §5's intent overrides.
+
+    Themed practice and spoiler-freeness are the same knob: "practise your
+    forks" and "don't tell me it's a fork" cannot both hold. So naming a motif
+    relaxes the gate for **that motif**, on the grounds that the user just
+    typed it and cannot be spoiled by being told what they asked for.
+
+    The override grants **only what it names**, which is the property a
+    per-session mode could never give. `?motif=fork` reveals `fork` on the
+    puzzles that have it; every other puzzle in the same session stays gated,
+    so a forged parameter or a shared link is worth exactly one motif rather
+    than unlocking the queue.
+
+    It does NOT reveal the nickname, and no intent in §5 does. The nickname is
+    the recall label -- it exists to be distinctive about what happened, which
+    is the answer -- so unlocking it on a themed session would hand over the
+    tactic the theme merely categorises. Only resolution reveals a nickname.
+    """
+    if resolved:
+        return True
+    if not requested_motif or not puzzle_motif:
+        return False
+    return puzzle_motif.strip().lower() == requested_motif.strip().lower()
+
+
+def focus_is_visible(
+    *,
+    resolved: bool,
+    focus_name: str | None,
+    requested_focus: str | None,
+) -> bool:
+    """Whether ``queue_reason``'s diagnosed cause/opening may be named.
+
+    Same rule as the motif, for the same reason: the focus is in the request,
+    so echoing it back reveals nothing the caller did not supply. And the same
+    limit -- it names one cause, so it unlocks one cause.
+    """
+    if resolved:
+        return True
+    if not requested_focus or not focus_name:
+        return False
+    return focus_name.strip().lower() == requested_focus.strip().lower()
