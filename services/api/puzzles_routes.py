@@ -50,7 +50,9 @@ from services.api.models import Game as GameModel
 from services.api.models import Puzzle as PuzzleModel
 from services.api.puzzles.provenance import resolve_display_name
 from services.api.puzzles.resolution import (
+    focus_is_visible,
     is_resolved,
+    motif_is_visible,
     resolution_gate_enabled,
 )
 from services.api.ratelimit import rate_limit
@@ -910,7 +912,19 @@ def get_due_puzzles_endpoint(
                     "last_reviewed_at": stats.last_reviewed_at,
                     "last_result": stats.last_result,
                     "title": stats.title if due_resolved else None,
-                    "primary_motif": (stats.primary_motif if due_resolved else None),
+                    # §5: naming a motif reveals THAT motif, on the puzzles
+                    # that have it. The nickname stays gated -- no intent in §5
+                    # unlocks it, because a theme categorises the tactic while
+                    # the nickname describes it.
+                    "primary_motif": (
+                        stats.primary_motif
+                        if motif_is_visible(
+                            resolved=due_resolved,
+                            puzzle_motif=stats.primary_motif,
+                            requested_motif=motif,
+                        )
+                        else None
+                    ),
                     "display_name": resolve_display_name(
                         title=stats.title,
                         end_time=end_times.get(pid),
@@ -945,7 +959,14 @@ def get_due_puzzles_endpoint(
             pid in focus_ids,
             focus_name,
             datetime.now(timezone.utc),
-            resolved=due_resolved,
+            # The focus arrived in the request, so echoing it back reveals
+            # nothing the caller did not supply -- and it unlocks exactly the
+            # one cause or opening it names.
+            resolved=focus_is_visible(
+                resolved=due_resolved,
+                focus_name=focus_name,
+                requested_focus=focus_cause or focus_opening,
+            ),
         )
         # SCORED training path: never ship the solution up front.
         result_puzzles.append(_strip_solution(p_dict))
@@ -1511,8 +1532,20 @@ def list_puzzles(
                     opening_name=diagnosis.opening_name if diagnosis else None,
                     resolved=row_resolved,
                 ),
+                # §5: the Library's motif filter is themed intent, so a
+                # filtered browse shows the motif it was filtered by, and
+                # nothing else.
                 primary_motif=(
-                    stats.primary_motif if (stats and row_resolved) else None
+                    stats.primary_motif
+                    if (
+                        stats
+                        and motif_is_visible(
+                            resolved=row_resolved,
+                            puzzle_motif=stats.primary_motif,
+                            requested_motif=motif,
+                        )
+                    )
+                    else None
                 ),
                 difficulty=_swing_to_difficulty(puzzle.swing),
                 swing=puzzle.swing,
@@ -1531,7 +1564,15 @@ def list_puzzles(
                 last_result=stats.last_result if stats else None,
                 next_due_at=stats.next_due_at if stats else None,
                 created_at=puzzle.created_at,
-                diagnosis_summary=_puzzle_diagnosis_summary(diagnosis),
+                # The summary carries `primary_cause` and its label -- the
+                # diagnosed cause, in the browse payload. §4 lists diagnosis
+                # prose as a revealing field and this is the short form of it,
+                # so it follows the same gate. Missed on the first pass through
+                # step 3: the leak was found by printing an actual response
+                # rather than by reading the list of fields.
+                diagnosis_summary=(
+                    _puzzle_diagnosis_summary(diagnosis) if row_resolved else None
+                ),
             )
         )
 
