@@ -102,6 +102,7 @@ def resolve_display_name(
     end_time: int | None,
     ply: int | None,
     opening_name: str | None = None,
+    resolved: bool = True,
 ) -> str:
     """What the API serves as a puzzle's name: nickname when it has one.
 
@@ -110,12 +111,15 @@ def resolve_display_name(
     trusted not to render. Both a Pydantic model and a bare ``dict`` payload can
     call it, which matters while ``/puzzles/due`` is still typed ``list[dict]``.
 
-    Note what this does NOT do yet: it does not gate. Under §4 of the design a
-    nickname is withheld until the puzzle is resolved, and wiring that in is
-    rollout step 3. Step 1 only routes every surface through one function, so
-    that later change lands in one place instead of six. Today a nickname wins
-    wherever one exists, which is everywhere, so nothing visibly changes.
+    ``resolved=False`` withholds the nickname and serves provenance instead --
+    this is rollout step 3's gate (§4), and routing every surface through one
+    function in step 1 is what made it a single change rather than six.
+    Callers get the decision from ``resolution.is_resolved``, which returns
+    True for everything while the rollout flag is off.
+
+    Provenance is never withheld. It is the identify half and reveals nothing
+    about the tactic, which is the entire reason for splitting the label in two.
     """
-    if title and title.strip():
+    if resolved and title and title.strip():
         return title
     return compose_provenance(end_time=end_time, ply=ply, opening_name=opening_name)
