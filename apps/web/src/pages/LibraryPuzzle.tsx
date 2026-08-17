@@ -374,7 +374,7 @@ export default function LibraryPuzzle() {
                     ← Back to Library
                 </Link>
                 <h1 className="text-3xl md:text-4xl font-serif text-primary">
-                    {puzzle.title || 'Puzzle'}
+                    {puzzle.display_name}
                 </h1>
                 <p className="mt-2 text-sm font-sans text-primary/70">
                     Exploration mode — the solution is shown on request and results here

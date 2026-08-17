@@ -32,13 +32,24 @@ SEPARATOR = " · "
 
 
 def _move_number(ply: int | None) -> int:
-    """Full-move number from a half-move index, matching the rest of the app.
+    """Full-move number from a half-move index, matching the BOARD.
 
-    ``identity.py`` and ``spaced_repetition.py`` both compute this as
-    ``ply // 2 + 1``; duplicating the expression a third time is how the three
-    drift apart, so callers should come here.
+    ``(ply + 1) // 2``, which is what ``diagnosis/evidence.py:435`` computes --
+    the only copy in the repo derived from an actual ``chess.Board``, and the
+    one whose output the diagnosis panel prints as "Move number".
+
+    The first version used ``ply // 2 + 1``, copied from ``identity.py`` and
+    ``spaced_repetition.py``, and was off by one for every EVEN ply. Puzzles
+    store ply 1-based (``generator.py`` increments before examining the move),
+    so ply 36 is Black's half of move 18; the old formula called it move 19.
+    Verified against python-chess: at ply 36 ``board.fullmove_number`` is 18.
+
+    That is roughly half the corpus -- every puzzle from a game the user played
+    as Black -- and after rollout step 6 this string IS the puzzle's name, so
+    the Library would have said "move 19" directly above a diagnosis card
+    saying "Move number 18".
     """
-    return (ply or 0) // PLY_PER_MOVE + 1
+    return max(1, ((ply or 0) + 1) // PLY_PER_MOVE)
 
 
 def _format_date(end_time: int | None) -> str | None:
@@ -102,7 +113,7 @@ def resolve_display_name(
     end_time: int | None,
     ply: int | None,
     opening_name: str | None = None,
-    resolved: bool = True,
+    resolved: bool,
 ) -> str:
     """What the API serves as a puzzle's name: nickname when it has one.
 
@@ -110,6 +121,14 @@ def resolve_display_name(
     then never branch on "is there a title", and never receive a value they are
     trusted not to render. Both a Pydantic model and a bare ``dict`` payload can
     call it, which matters while ``/puzzles/due`` is still typed ``list[dict]``.
+
+    ``resolved`` is REQUIRED, with no default, and that is the fix for how the
+    first version of this gate leaked. It defaulted to True, so a route that
+    forgot the gate and a route that had decided the puzzle was resolved were
+    byte-identical -- and with the rollout flag off, both were also identical
+    at runtime, so neither review nor the test suite could tell them apart.
+    Three routes shipped ungated that way. A required keyword turns each of
+    those into a TypeError at import time instead.
 
     ``resolved=False`` withholds the nickname and serves provenance instead --
     this is rollout step 3's gate (§4), and routing every surface through one

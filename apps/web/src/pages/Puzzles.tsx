@@ -98,20 +98,13 @@ export default function Puzzles() {
     } = insights;
 
     const statusRef = useRef(status);
-    // Did this puzzle's reveal already record its fail? Read by
-    // `handleAdvancePuzzle` so a revealed puzzle is reviewed exactly once: the
-    // reveal succeeded and move-on skips it, or the reveal failed to reach the
-    // server and move-on retries with the same idempotency key.
-    //
-    // The resets below are hygiene, not correctness, and mutation testing said
-    // so: deleting them changes no observable behaviour. The flag can only be
-    // read down the `status === 'revealed'` branch, and the only way into that
-    // status is `handleRevealSolution`, which writes the flag on the way in. So
-    // it is always freshly written for the puzzle being advanced past. Kept
-    // anyway, because a future path that sets 'revealed' without going through
-    // that handler would turn a stale `true` into a silently dropped result —
-    // but do not mistake it for the thing that makes this correct.
-    const revealRecordedRef = useRef(false);
+    // The reveal's in-flight review write, or null. Move-on awaits THIS rather
+    // than a boolean, because during the flight no boolean is correct: the
+    // outcome is not known yet, and both orderings of a flag lose a result in
+    // one direction or the other (advance on an unlanded write, or skip a
+    // retry after a failed one). Cleared on failure so move-on retries with
+    // the idempotency key the session hook kept.
+    const revealWriteRef = useRef<Promise<boolean> | null>(null);
     const [previousSessionId, setPreviousSessionId] = useState<string | null>(null);
     useEffect(() => {
         statusRef.current = status;
@@ -201,7 +194,7 @@ export default function Puzzles() {
                 setPuzzles(res.puzzles);
                 setCurrentIndex(0);
                 setStatus('solving');
-                revealRecordedRef.current = false;
+                revealWriteRef.current = null;
                 setUserMove('');
                 if (res.puzzles.length > 0) {
                     setSessionState('active');
@@ -544,7 +537,20 @@ export default function Puzzles() {
         // hint ladder already follows: the reveal never depends on a write
         // succeeding. If it does not land, `handleNextPuzzle` retries with the
         // same idempotency key.
-        revealRecordedRef.current = await handleReviewPuzzle('fail');
+        // Keep the PROMISE, not a boolean. `setStatus('revealed')` above has
+        // already made the advance control clickable, so there is a window in
+        // which move-on runs while this write is still in flight -- and no
+        // flag can be correct during it, because the outcome is not known yet.
+        //
+        // A boolean written after the await read false in that window and
+        // triggered a second call, which hit the session hook's in-flight
+        // guard (`return true` WITHOUT posting), so the session advanced on a
+        // write that had not landed. A boolean written before the await had
+        // the opposite bug: move-on skipped, and a later failure was never
+        // retried. Awaiting the same promise has neither -- it yields the real
+        // outcome exactly once, with no second post.
+        revealWriteRef.current = handleReviewPuzzle('fail');
+        await revealWriteRef.current;
     };
 
     // One graduated hint ladder, identical with or without an active session:
@@ -670,7 +676,7 @@ export default function Puzzles() {
         if (currentIndex < puzzles.length - 1) {
             setCurrentIndex(currentIndex + 1);
             setStatus('solving');
-            revealRecordedRef.current = false;
+            revealWriteRef.current = null;
             setUserMove('');
             setLastFeedback('');
             setLinePlyIndex(0);
@@ -703,9 +709,15 @@ export default function Puzzles() {
                 // bank a SECOND fail, moving ease_factor twice for one attempt.
                 // Only retry when the reveal-time write did not reach the
                 // server; the key it kept makes that retry idempotent.
-                recorded = revealRecordedRef.current
-                    ? true
+                // Await the reveal's own write rather than guessing at it.
+                // If it is still in flight this blocks on the real outcome; if
+                // it already failed, this retries with the key the hook kept.
+                recorded = revealWriteRef.current
+                    ? await revealWriteRef.current
                     : await handleReviewPuzzle('fail');
+                if (!recorded) {
+                    revealWriteRef.current = null;
+                }
             }
 
             // A review that failed to reach the server must NOT advance the
@@ -1362,7 +1374,7 @@ export default function Puzzles() {
                                     <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
                                         <div className="flex items-center gap-2 min-w-0">
                                             <span className="font-serif text-xl text-primary">
-                                                {currentPuzzle.title || "Puzzle"}
+                                                {currentPuzzle.display_name}
                                                 {/* text-primary/70, not opacity-50: axe measured the
                                                     latter at 3.56:1 on the card tint (needs 4.5).
                                                     Same fix the sidebar nav already made — an alpha

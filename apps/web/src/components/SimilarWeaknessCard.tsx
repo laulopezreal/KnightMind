@@ -54,7 +54,7 @@ export function SimilarWeaknessCard({ data, currentPuzzleId }: SimilarWeaknessCa
                             }`}
                         >
                             <p className="font-serif text-primary mb-1">
-                                {puzzle.title ?? 'Untitled position'}
+                                {puzzle.display_name}
                             </p>
                             <p className="text-xs text-primary/70 font-sans">
                                 {puzzle.primary_motif && <>{formatMotifName(puzzle.primary_motif)} · </>}

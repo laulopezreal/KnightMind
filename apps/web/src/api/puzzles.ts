@@ -15,6 +15,13 @@ export interface ManualPuzzleResult {
 }
 
 export interface Puzzle {
+    /**
+     * What to render as this puzzle's name. Nickname when the gate permits and
+     * one exists, provenance ("12 Mar · Sicilian · move 18") otherwise. Never
+     * empty, so render it directly -- do NOT fall back to `title`, which the
+     * resolution gate nulls for unattempted puzzles.
+     */
+    display_name: string;
     id: string;
     username: string;
     source_game_id: string;
@@ -189,6 +196,13 @@ export interface PuzzleDiagnosisSummary {
 }
 
 export interface LibraryPuzzle {
+    /**
+     * What to render as this puzzle's name. Nickname when the gate permits and
+     * one exists, provenance ("12 Mar · Sicilian · move 18") otherwise. Never
+     * empty, so render it directly -- do NOT fall back to `title`, which the
+     * resolution gate nulls for unattempted puzzles.
+     */
+    display_name: string;
     id: string;
     title: string | null;
     primary_motif: string | null;
@@ -261,6 +275,13 @@ export async function getLibraryPuzzle(
 export type SimilarMatch = 'exact' | 'cause_and_motif' | 'cause_and_phase' | 'cause_only';
 
 export interface SimilarPuzzle {
+    /**
+     * What to render as this puzzle's name. Nickname when the gate permits and
+     * one exists, provenance ("12 Mar · Sicilian · move 18") otherwise. Never
+     * empty, so render it directly -- do NOT fall back to `title`, which the
+     * resolution gate nulls for unattempted puzzles.
+     */
+    display_name: string;
     id: string;
     title?: string | null;
     primary_motif?: string | null;
@@ -422,7 +443,13 @@ export async function createManualPuzzle(
 
 // --- Mistake diagnosis ---
 
-export type DiagnosisState = 'ready' | 'unclear' | 'pending' | 'unavailable';
+export type DiagnosisState =
+    | 'ready'
+    | 'unclear'
+    | 'pending'
+    | 'unavailable'
+    /** Gated: the puzzle has not been attempted in its current exposure. */
+    | 'withheld';
 
 export interface DiagnosisEvidenceItem {
     id: string;
