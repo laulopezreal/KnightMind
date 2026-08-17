@@ -31,7 +31,12 @@ export function getSessionDetailsA11yCopy(showSessionDetails: boolean, screenRea
     } as const;
 }
 
+// Rung 0 is the MOTIF (§5.1). It sorts first because it reveals strictly less
+// than naming the piece does -- and once the resolution gate strips the motif
+// from the payload it is the only way to ask for it, so a ladder without it
+// starts at a bigger nudge than the user may want.
 const HINT_RUNG_DESCRIPTIONS = [
+    'name the kind of tactic',
     'name the piece to move',
     'highlight the destination square',
     'reveal the full solution',
@@ -46,7 +51,7 @@ export function getPuzzleActionA11yCopy(clueStage: number) {
         // Announcing the next rung (and what it reveals) keeps screen-reader
         // users on equal footing with the visual "Hint (n/3)" affordance.
         hintLabel: rungDescription
-            ? `Hint ${nextRung} of 3: ${rungDescription}`
+            ? `Hint ${nextRung} of ${HINT_RUNG_DESCRIPTIONS.length}: ${rungDescription}`
             : 'All hints revealed for this puzzle',
         revealLabel: 'Reveal best move solution',
         showSolutionLabel: 'Show full solution and board continuation',

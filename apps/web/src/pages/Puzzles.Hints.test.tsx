@@ -16,7 +16,7 @@ import { render, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import Puzzles from './Puzzles';
 import { setupMockLocalStorage } from '../test/helpers';
-import { useHint } from '../api';
+import { useHint, revealPuzzle, requestMotifHint } from '../api';
 import type { UsePuzzleSessionReturn } from '../hooks/usePuzzleSession';
 
 // ── Module mocks (real useClue + real chess.js are intentionally NOT mocked) ──
@@ -56,6 +56,7 @@ vi.mock('../api', () => ({
     reviewPuzzle: vi.fn().mockResolvedValue({}),
     checkPuzzle: vi.fn().mockResolvedValue({ correct: true, result: 'pass' }),
     revealPuzzle: vi.fn().mockResolvedValue({ best_move_uci: 'e2e4', solution_pv: ['e2e4'] }),
+    requestMotifHint: vi.fn().mockResolvedValue({ puzzle_id: 'p1', primary_motif: null, hints_used: null }),
     getSession: vi.fn().mockRejectedValue(new Error('No session')),
     useHint: vi.fn().mockResolvedValue({ hints_used: 1 }),
     getUserStatus: vi.fn().mockResolvedValue({ games_count: 10, puzzles_count: 5, due_count: 3, has_new_games: false }),
@@ -133,8 +134,15 @@ vi.mock('../hooks/usePuzzleSession', () => ({
 
 // ── Fixture ──────────────────────────────────────────────────────────
 
+let servedPuzzle: typeof puzzle;
+
 const puzzle = {
     id: 'p1',
+    // Present, because with the resolution gate OFF -- the default these tests
+    // run under -- the payload carries the motif and rung 0 is correctly
+    // skipped. A fixture without it made the ladder start one press later than
+    // production does. TestTheMotifRung below covers the gated case.
+    primary_motif: 'fork',
     username: 'testplayer',
     source_game_id: 'g1',
     ply: 10,
@@ -162,7 +170,7 @@ function makeSessionReturn(overrides: Partial<UsePuzzleSessionReturn> = {}): Use
         hintsUsed: 0,
         reviewedCount: 0,
         performanceHistory: [],
-        puzzles: [puzzle],
+        puzzles: [servedPuzzle],
         currentIndex: 0,
         isLoading: false,
         error: null,
@@ -190,6 +198,7 @@ function makeSessionReturn(overrides: Partial<UsePuzzleSessionReturn> = {}): Use
 describe('Puzzle hint ladder', () => {
     beforeEach(() => {
         setupMockLocalStorage();
+        servedPuzzle = puzzle;
         mockHandleUseHint.mockClear();
         vi.mocked(useHint).mockClear();
         capturedSessionProps = undefined;
@@ -201,17 +210,17 @@ describe('Puzzle hint ladder', () => {
         render(<Puzzles />);
 
         const hintButton = () => screen.getByRole('button', { name: /hint/i });
-        expect(hintButton()).toHaveTextContent('Hint 0/3');
+        expect(hintButton()).toHaveTextContent('Hint 0/4');
 
         // Rung 1: name the piece to move.
         await user.click(hintButton());
         await waitFor(() => expect(screen.getByText('Move the pawn')).toBeInTheDocument());
-        expect(hintButton()).toHaveTextContent('Hint 1/3');
+        expect(hintButton()).toHaveTextContent('Hint 1/4');
 
         // Rung 2: name the destination square.
         await user.click(hintButton());
         await waitFor(() => expect(screen.getByText('Move the pawn to e4')).toBeInTheDocument());
-        expect(hintButton()).toHaveTextContent('Hint 2/3');
+        expect(hintButton()).toHaveTextContent('Hint 2/4');
     });
 
     it('reveals the full solution on the third press', async () => {
@@ -270,3 +279,55 @@ describe('Puzzle hint ladder', () => {
         expect(screen.queryByTestId('session-summary')).not.toBeInTheDocument();
     });
 });
+
+describe('the motif rung (design §5.1)', () => {
+    beforeEach(() => {
+        setupMockLocalStorage();
+        servedPuzzle = puzzle;
+        vi.mocked(revealPuzzle).mockResolvedValue({
+            best_move_uci: 'e2e4',
+            solution_pv: ['e2e4'],
+        } as never);
+    });
+
+    it('asks for the motif first when the payload does not carry one', async () => {
+        // The gate-on shape: primary_motif is withheld, so the cheapest rung
+        // is unreachable without this endpoint and the ladder would start at
+        // "name the piece", which reveals strictly more.
+        vi.mocked(requestMotifHint).mockResolvedValue({
+            puzzle_id: 'p1',
+            primary_motif: 'fork',
+            hints_used: 1,
+        } as never);
+        servedPuzzle = { ...puzzle, primary_motif: null as unknown as string };
+        const user = userEvent.setup();
+        render(<Puzzles />);
+
+        await user.click(screen.getByRole('button', { name: /hint/i }));
+
+        await waitFor(() =>
+            expect(screen.getByText(/look for a fork/i)).toBeInTheDocument(),
+        );
+        // Rung 0 only: the piece has not been named yet.
+        expect(screen.queryByText(/move the/i)).not.toBeInTheDocument();
+    });
+
+    it('falls through to the ladder when no motif was identified', async () => {
+        // `blunder` comes back as null -- spending the rung to be told nothing
+        // was identified would be worse than moving straight on.
+        vi.mocked(requestMotifHint).mockResolvedValue({
+            puzzle_id: 'p1',
+            primary_motif: null,
+            hints_used: 1,
+        } as never);
+        servedPuzzle = { ...puzzle, primary_motif: null as unknown as string };
+        const user = userEvent.setup();
+        render(<Puzzles />);
+
+        await user.click(screen.getByRole('button', { name: /hint/i }));
+
+        await waitFor(() => expect(requestMotifHint).toHaveBeenCalled());
+        expect(screen.queryByText(/look for a/i)).not.toBeInTheDocument();
+    });
+});
+

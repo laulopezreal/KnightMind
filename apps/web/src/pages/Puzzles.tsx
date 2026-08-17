@@ -5,7 +5,7 @@ import { AccessibleChessboard } from '../components/AccessibleChessboard';
 import { PageHeader } from '../components/PageHeader';
 import { ConnectAccountEmpty } from '../components/ConnectAccountEmpty';
 import { Chess } from 'chess.js';
-import { generatePuzzles, getDailyPuzzles, cancelJob, checkPuzzle, revealPuzzle, ApiError } from '../api';
+import { generatePuzzles, getDailyPuzzles, cancelJob, checkPuzzle, revealPuzzle, requestMotifHint, ApiError } from '../api';
 import { JobStatusCard } from '../components/JobStatusCard';
 import { SessionSummaryCard } from '../components/SessionSummaryCard';
 import { WarmupSummary } from '../components/WarmupSummary';
@@ -105,6 +105,12 @@ export default function Puzzles() {
     // retry after a failed one). Cleared on failure so move-on retries with
     // the idempotency key the session hook kept.
     const revealWriteRef = useRef<Promise<boolean> | null>(null);
+    // Rung 0 of the hint ladder (§5.1): the motif, asked for explicitly.
+    // Held here rather than in `useClue` because that hook is shared with
+    // Engine analysis, which has no motif and no gate -- renumbering its rungs
+    // would change a surface this feature has nothing to do with.
+    const [motifHint, setMotifHint] = useState<string | null>(null);
+    const [motifHintAsked, setMotifHintAsked] = useState(false);
     const [previousSessionId, setPreviousSessionId] = useState<string | null>(null);
     useEffect(() => {
         statusRef.current = status;
@@ -195,6 +201,10 @@ export default function Puzzles() {
                 setCurrentIndex(0);
                 setStatus('solving');
                 revealWriteRef.current = null;
+                setMotifHint(null);
+                setMotifHintAsked(false);
+            setMotifHint(null);
+            setMotifHintAsked(false);
                 setUserMove('');
                 if (res.puzzles.length > 0) {
                     setSessionState('active');
@@ -559,7 +569,36 @@ export default function Puzzles() {
     // In a session we also record each rung server-side (an honest hint tally),
     // but the visual reveal never depends on that write succeeding.
     const handleHint = async () => {
-        if (!currentPuzzle || clue.isExhausted) return;
+        if (!currentPuzzle) return;
+
+        // Rung 0: the motif, before the ladder starts. Only offered while the
+        // payload does not already carry it -- with the gate off the chip is
+        // on screen and spending a hint to be told what is visible would be
+        // absurd.
+        if (!motifHintAsked && !currentPuzzle.primary_motif) {
+            setMotifHintAsked(true);
+            try {
+                const { primary_motif } = await requestMotifHint(
+                    currentPuzzle.id,
+                    username.trim(),
+                    activeSessionId || undefined,
+                );
+                // null means no motif was identified. The rung is still spent
+                // -- the user asked -- but there is nothing to show, so fall
+                // through to rung 1 rather than leaving them with nothing.
+                if (primary_motif) {
+                    setMotifHint(primary_motif);
+                    return;
+                }
+            } catch {
+                // A failed request must not cost the rung: let the next press
+                // try the ladder rather than stranding the user.
+                setMotifHintAsked(false);
+                return;
+            }
+        }
+
+        if (clue.isExhausted) return;
         const stage = clue.clueStage;
         // Rung 1 needs the solution in hand so the piece name / squares resolve.
         // Bail if the fetch fails — advancing with nothing to show would be a lie.
@@ -677,6 +716,8 @@ export default function Puzzles() {
             setCurrentIndex(currentIndex + 1);
             setStatus('solving');
             revealWriteRef.current = null;
+            setMotifHint(null);
+            setMotifHintAsked(false);
             setUserMove('');
             setLastFeedback('');
             setLinePlyIndex(0);
@@ -717,6 +758,10 @@ export default function Puzzles() {
                     : await handleReviewPuzzle('fail');
                 if (!recorded) {
                     revealWriteRef.current = null;
+                setMotifHint(null);
+                setMotifHintAsked(false);
+            setMotifHint(null);
+            setMotifHintAsked(false);
                 }
             }
 
@@ -1401,9 +1446,13 @@ export default function Puzzles() {
                         {/* Status Area */}
                         <div className="min-h-[60px] md:min-h-[100px] flex items-center justify-center text-center p-4 md:p-6 border border-primary/10 rounded-sm relative overflow-hidden" role="status" aria-live="polite">
                             {status === 'solving' && clue.clueStage === 0 && (
-                                linePlyIndex > 0
-                                    ? <p className="text-positive font-serif text-lg italic">Good move — now find the next move in the line.</p>
-                                    : <p className="text-primary/70 font-serif text-lg italic">Find the best move...</p>
+                                motifHint
+                                    ? <p className="text-primary/80 font-sans text-sm">
+                                        Look for a {formatMotifName(motifHint).toLowerCase()}.
+                                    </p>
+                                    : linePlyIndex > 0
+                                        ? <p className="text-positive font-serif text-lg italic">Good move — now find the next move in the line.</p>
+                                        : <p className="text-primary/70 font-serif text-lg italic">Find the best move...</p>
                             )}
                             {status === 'solving' && clue.clueStage === 1 && (
                                 <p className="text-primary/80 font-sans text-sm">
@@ -1514,7 +1563,9 @@ export default function Puzzles() {
                                         {/* Short enough to stay on one line in the
                                             three-up action grid; the full "Hint 1 of 3:
                                             …" phrasing lives in the aria-label. */}
-                                        {clue.isExhausted ? 'Hints used' : `Hint ${clue.clueStage}/3`}
+                                        {clue.isExhausted && motifHintAsked
+                                            ? 'Hints used'
+                                            : `Hint ${clue.clueStage + (motifHintAsked ? 1 : 0)}/4`}
                                     </button>
                                     <button
                                         type="button"

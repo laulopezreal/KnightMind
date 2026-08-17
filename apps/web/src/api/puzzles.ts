@@ -403,6 +403,38 @@ export async function revealPuzzle(
     );
 }
 
+export interface MotifHintResponse {
+    puzzle_id: string;
+    /** null when no motif was identified -- see the endpoint's docstring. */
+    primary_motif: string | null;
+    hints_used: number | null;
+}
+
+/**
+ * Rung 0 of the hint ladder: ask what kind of tactic this is.
+ *
+ * The resolution gate withholds the motif from every pre-attempt payload, and
+ * the rest of the ladder starts at "name the piece to move" -- which reveals
+ * strictly more. Without this the cheapest nudge is unreachable and the gate
+ * is a wall.
+ */
+// NOT `useMotifHint`: eslint's rules-of-hooks treats any `use*` identifier as
+// a React hook and rejects calling it from an event handler.
+export async function requestMotifHint(
+    puzzleId: string,
+    username: string,
+    sessionId?: string
+): Promise<MotifHintResponse> {
+    return await request<MotifHintResponse>(
+        `/puzzles/${encodeURIComponent(puzzleId)}/hint/motif`,
+        {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, session_id: sessionId }),
+        }
+    );
+}
+
 export async function reviewPuzzle(
     puzzleId: string,
     username: string,
