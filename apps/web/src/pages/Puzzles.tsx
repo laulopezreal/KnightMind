@@ -199,6 +199,12 @@ export default function Puzzles() {
     currentUsernameRef.current = username;
     const puzzleInstanceRef = useRef<typeof currentPuzzle>(currentPuzzle);
     const puzzleEpochRef = useRef(0);
+    // Diagnosis ownership crosses identity boundaries independently from the
+    // durable terminal-outcome owner. A username round-trip on the same puzzle
+    // must never revive a previous user's result or let its finalizer clear a
+    // current request, but it must not reopen or duplicate the review write.
+    const diagnosisEpochRef = useRef(0);
+    const diagnosisUsernameRef = useRef(username);
     const diagnosisRequestRef = useRef<PuzzleInstanceOwner | null>(null);
     // The terminal decision is durable for this puzzle instance, while its
     // persistence promise is retryable. A failed write must not reopen the
@@ -213,9 +219,17 @@ export default function Puzzles() {
     if (puzzleInstanceRef.current !== currentPuzzle) {
         puzzleInstanceRef.current = currentPuzzle;
         puzzleEpochRef.current += 1;
+        diagnosisEpochRef.current += 1;
         checkingPuzzleRef.current = null;
         outcomeDecisionRef.current = null;
         outcomeWriteRef.current = null;
+        setDiagnosisResult(null);
+        setDiagnosisLoadingOwner(null);
+    }
+    if (diagnosisUsernameRef.current !== username) {
+        diagnosisUsernameRef.current = username;
+        diagnosisEpochRef.current += 1;
+        diagnosisRequestRef.current = null;
         setDiagnosisResult(null);
         setDiagnosisLoadingOwner(null);
     }
@@ -224,20 +238,20 @@ export default function Puzzles() {
     const activeDiagnosis =
         diagnosisOwner &&
         diagnosisOwner.puzzleId === currentPuzzle?.id &&
-        diagnosisOwner.epoch === puzzleEpochRef.current &&
+        diagnosisOwner.epoch === diagnosisEpochRef.current &&
         diagnosisOwner.username === username
             ? diagnosisResult?.diagnosis ?? null
             : null;
     const diagnosisLoading =
         !!diagnosisLoadingOwner &&
         diagnosisLoadingOwner.puzzleId === currentPuzzle?.id &&
-        diagnosisLoadingOwner.epoch === puzzleEpochRef.current &&
+        diagnosisLoadingOwner.epoch === diagnosisEpochRef.current &&
         diagnosisLoadingOwner.username === username;
 
     const requestDiagnosisForResolvedOutcome = (owner: PuzzleInstanceOwner) => {
         if (
             currentPuzzleIdRef.current !== owner.puzzleId ||
-            puzzleEpochRef.current !== owner.epoch ||
+            diagnosisEpochRef.current !== owner.epoch ||
             currentUsernameRef.current !== owner.username
         ) return;
         const existingRequest = diagnosisRequestRef.current;
@@ -257,7 +271,7 @@ export default function Puzzles() {
             .then((diagnosis) => {
                 if (
                     currentPuzzleIdRef.current === owner.puzzleId &&
-                    puzzleEpochRef.current === owner.epoch &&
+                    diagnosisEpochRef.current === owner.epoch &&
                     currentUsernameRef.current === owner.username
                 ) {
                     setDiagnosisResult({ owner, diagnosis });
@@ -267,7 +281,7 @@ export default function Puzzles() {
             .finally(() => {
                 if (
                     currentPuzzleIdRef.current === owner.puzzleId &&
-                    puzzleEpochRef.current === owner.epoch &&
+                    diagnosisEpochRef.current === owner.epoch &&
                     currentUsernameRef.current === owner.username
                 ) {
                     setDiagnosisLoadingOwner(null);
@@ -297,7 +311,7 @@ export default function Puzzles() {
         outcomeWriteRef.current = writePromise;
         void writePromise.then((recorded) => {
             if (recorded && decision.requestDiagnosis) {
-                requestDiagnosisForResolvedOutcome({ puzzleId, epoch, username });
+                requestDiagnosisForResolvedOutcome({ puzzleId, epoch: diagnosisEpochRef.current, username });
             }
         });
         return writePromise;
@@ -1847,7 +1861,16 @@ export default function Puzzles() {
                                                     setActionError(null);
                                                     // Don't close the session on an unrecorded
                                                     // review — the summary would be missing it.
-                                                    if (!await handleReviewPuzzle('fail')) {
+                                                    let recorded = await recordPuzzleOutcome('fail', undefined, true);
+                                                    // The timeout write may already have settled false
+                                                    // before Finish Session is clicked. Retry through the
+                                                    // same terminal decision and diagnosis owner, rather
+                                                    // than bypassing it with a raw review call.
+                                                    if (!recorded) {
+                                                        outcomeWriteRef.current = null;
+                                                        recorded = await recordPuzzleOutcome('fail', undefined, true);
+                                                    }
+                                                    if (!recorded) {
                                                         setActionError("We couldn't save that result — the session is still open. Check your connection and try again.");
                                                         return;
                                                     }

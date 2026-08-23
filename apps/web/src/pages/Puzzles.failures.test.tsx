@@ -21,6 +21,7 @@ import { checkPuzzle, getPuzzleDiagnosis, revealPuzzle } from '../api';
 import type { UsePuzzleSessionReturn } from '../hooks/usePuzzleSession';
 
 let mockSearchParams = new URLSearchParams();
+let mockUsername = 'testplayer';
 let timedOut: (() => void) | null = null;
 let currentSessionReturn: UsePuzzleSessionReturn | null = null;
 
@@ -33,7 +34,7 @@ vi.mock('react-router-dom', () => ({
 }));
 
 vi.mock('../context/ChessUsernameContext', () => ({
-    useChessUsername: () => ({ username: 'testplayer', setEditorOpen: vi.fn() }),
+    useChessUsername: () => ({ username: mockUsername, setEditorOpen: vi.fn() }),
 }));
 
 vi.mock('../context/PuzzleModeContext', () => ({
@@ -190,6 +191,7 @@ describe('Puzzles — honest failure handling', () => {
     beforeEach(() => {
         setupMockLocalStorage();
         mockSearchParams = new URLSearchParams();
+        mockUsername = 'testplayer';
         timedOut = null;
         currentSessionReturn = null;
         mockHandleReviewPuzzle.mockReset().mockResolvedValue(true);
@@ -546,6 +548,32 @@ describe('Puzzles — honest failure handling', () => {
             );
         });
 
+        it('retries a failed final-puzzle timeout write through the diagnosis owner without blocking completion on diagnosis failure', async () => {
+            mockHandleReviewPuzzle
+                .mockResolvedValueOnce(false)
+                .mockResolvedValueOnce(true);
+            vi.mocked(getPuzzleDiagnosis).mockRejectedValue(new Error('diagnosis unavailable'));
+            currentSessionReturn = {
+                ...makeSessionReturn(),
+                puzzles: [puzzle],
+            };
+            const user = userEvent.setup();
+            render(<Puzzles />);
+
+            act(() => timedOut?.());
+            await waitFor(() => expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(1));
+            expect(getPuzzleDiagnosis).not.toHaveBeenCalled();
+
+            await user.click(screen.getByRole('button', { name: /finish session/i }));
+
+            await waitFor(() => expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(2));
+            await waitFor(() =>
+                expect(getPuzzleDiagnosis).toHaveBeenCalledWith('p1', 'testplayer', true),
+            );
+            expect(getPuzzleDiagnosis).toHaveBeenCalledTimes(1);
+            expect(mockHandleCompleteSession).toHaveBeenCalledTimes(1);
+        });
+
         it('does not request diagnosis after a rejected write, then requests it once after the safe retry succeeds', async () => {
             mockHandleReviewPuzzle
                 .mockResolvedValueOnce(false)
@@ -635,6 +663,23 @@ describe('Puzzles — honest failure handling', () => {
             });
 
             await waitFor(() => expect(screen.queryByText('Stale diagnosis')).not.toBeInTheDocument());
+        });
+
+        it('does not resurrect a diagnosis when the same puzzle crosses an A-to-B-to-A identity boundary', async () => {
+            const user = userEvent.setup();
+            const { rerender } = render(<Puzzles />);
+
+            await typeAndCheck(user, 'e2e4');
+            expect(await screen.findByText('Loose piece awareness')).toBeInTheDocument();
+
+            mockUsername = 'otherplayer';
+            rerender(<Puzzles />);
+            expect(screen.queryByText('Loose piece awareness')).not.toBeInTheDocument();
+
+            mockUsername = 'testplayer';
+            rerender(<Puzzles />);
+            expect(screen.queryByText('Loose piece awareness')).not.toBeInTheDocument();
+            expect(getPuzzleDiagnosis).toHaveBeenCalledTimes(1);
         });
     });
 
