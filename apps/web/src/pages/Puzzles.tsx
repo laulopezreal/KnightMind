@@ -181,6 +181,12 @@ export default function Puzzles() {
 
     const startPuzzleTimer = timer.startPuzzleTimer;
     const currentPuzzle = puzzles[currentIndex];
+    // A solve check owns one puzzle at a time. The same action is reachable
+    // through typed input, Enter, click-to-move, drag, and keyboard movement;
+    // disable rendering alone cannot close that race before React re-renders.
+    const checkingPuzzleRef = useRef<string | null>(null);
+    const currentPuzzleIdRef = useRef<string | null>(currentPuzzle?.id ?? null);
+    currentPuzzleIdRef.current = currentPuzzle?.id ?? null;
     // The clue/board work off the on-demand-fetched solution, never a pre-sent
     // one — so the hint machinery only has the answer once the user asks for it.
     const clue = useClue(revealedMove ?? '', currentPuzzle?.fen ?? '', { maxStage: 3 });
@@ -444,6 +450,9 @@ export default function Puzzles() {
     // end-to-end on review. `boardAfterMove` already has the user's move applied.
     const processUserMove = async (boardAfterMove: Chess, uciMove: string, fenBefore: string) => {
         if (!currentPuzzle) return;
+        const puzzleId = currentPuzzle.id;
+        if (checkingPuzzleRef.current === puzzleId) return;
+        checkingPuzzleRef.current = puzzleId;
         const normalized = uciMove.toLowerCase();
         // Reflect the user's move immediately.
         setGame(new Chess(boardAfterMove.fen()));
@@ -451,6 +460,10 @@ export default function Puzzles() {
         setActionError(null);
         try {
             const res = await checkPuzzle(currentPuzzle.id, username, normalized, linePlyIndex);
+            // A refresh or rotation may have replaced the puzzle while its
+            // request was in flight. Its result must not become the current
+            // puzzle's status or outcome write.
+            if (currentPuzzleIdRef.current !== puzzleId) return;
             if (!res.correct) {
                 setStatus('incorrect');
                 return;
@@ -485,13 +498,17 @@ export default function Puzzles() {
                 // needs the review to have landed before it asks for a
                 // diagnosis the gate keys on attempts > 0.
                 const solvedLine = [...attemptedLine, normalized].join(' ');
-                outcomeWriteRef.current = handleReviewPuzzle(
+                outcomeWriteRef.current = Promise.resolve(handleReviewPuzzle(
                     'pass',
                     undefined,
                     solvedLine || undefined,
-                );
+                )).catch((err) => {
+                    console.error('Failed to record solved puzzle:', err);
+                    return false;
+                });
             }
         } catch (err) {
+            if (currentPuzzleIdRef.current !== puzzleId) return;
             // A failed REQUEST is not a failed ATTEMPT. Marking it 'incorrect'
             // told the user they blundered when the network dropped, broke
             // their streak, and offered "Mark as Failed & Try Again" — which
@@ -501,6 +518,10 @@ export default function Puzzles() {
             setGame(new Chess(fenBefore));
             setUserMove('');
             setActionError("We couldn't check that move — your attempt wasn't recorded. Check your connection and try again.");
+        } finally {
+            if (checkingPuzzleRef.current === puzzleId) {
+                checkingPuzzleRef.current = null;
+            }
         }
     };
 

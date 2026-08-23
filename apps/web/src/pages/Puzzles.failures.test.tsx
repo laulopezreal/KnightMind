@@ -170,6 +170,16 @@ const typeAndCheck = async (user: ReturnType<typeof userEvent.setup>, move: stri
     await user.click(screen.getByRole('button', { name: /check entered move/i }));
 };
 
+function deferred<T>() {
+    let resolve!: (value: T) => void;
+    let reject!: (reason?: unknown) => void;
+    const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+        resolve = resolvePromise;
+        reject = rejectPromise;
+    });
+    return { promise, resolve, reject };
+}
+
 describe('Puzzles — honest failure handling', () => {
     beforeEach(() => {
         setupMockLocalStorage();
@@ -293,6 +303,54 @@ describe('Puzzles — honest failure handling', () => {
                 expect(screen.getByRole('alert')).toHaveTextContent(/couldn't save that result/i),
             );
             expect(mockSetCurrentIndex).not.toHaveBeenCalled();
+        });
+
+        it('ignores a duplicate solving submission and waits for its owner write before advancing', async () => {
+            const pendingCheck = deferred<{ correct: boolean; result: string }>();
+            const pendingReview = deferred<boolean>();
+            vi.mocked(checkPuzzle).mockReturnValue(pendingCheck.promise as never);
+            mockHandleReviewPuzzle.mockReturnValue(pendingReview.promise);
+            const user = userEvent.setup();
+            render(<Puzzles />);
+            const checkCallsBeforeSubmit = vi.mocked(checkPuzzle).mock.calls.length;
+
+            await typeAndCheck(user, 'e2e4');
+            await user.click(screen.getByRole('button', { name: /check entered move/i }));
+
+            expect(checkPuzzle).toHaveBeenCalledTimes(checkCallsBeforeSubmit + 1);
+            pendingCheck.resolve({ correct: true, result: 'pass' });
+            await waitFor(() => expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(1));
+
+            await user.click(screen.getByRole('button', { name: /next puzzle/i }));
+            expect(mockSetCurrentIndex).not.toHaveBeenCalled();
+
+            pendingReview.resolve(true);
+            await waitFor(() => expect(mockSetCurrentIndex).toHaveBeenCalledWith(1));
+            expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(1);
+        });
+
+        it('stays on the puzzle when the owner write rejects, then retries safely', async () => {
+            const pendingReview = deferred<boolean>();
+            mockHandleReviewPuzzle
+                .mockReturnValueOnce(pendingReview.promise)
+                .mockResolvedValueOnce(true);
+            const user = userEvent.setup();
+            render(<Puzzles />);
+
+            await typeAndCheck(user, 'e2e4');
+            await waitFor(() => expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(1));
+
+            await user.click(screen.getByRole('button', { name: /next puzzle/i }));
+            pendingReview.reject(new Error('review unavailable'));
+
+            await waitFor(() =>
+                expect(screen.getByRole('alert')).toHaveTextContent(/couldn't save that result/i),
+            );
+            expect(mockSetCurrentIndex).not.toHaveBeenCalled();
+
+            await user.click(screen.getByRole('button', { name: /next puzzle/i }));
+            await waitFor(() => expect(mockSetCurrentIndex).toHaveBeenCalledWith(1));
+            expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(2);
         });
     });
 
