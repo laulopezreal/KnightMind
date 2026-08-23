@@ -17,7 +17,7 @@ import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import Puzzles from './Puzzles';
 import { setupMockLocalStorage } from '../test/helpers';
-import { checkPuzzle, getPuzzleDiagnosis, revealPuzzle } from '../api';
+import { checkPuzzle, confirmPuzzleDiagnosis, getPuzzleDiagnosis, revealPuzzle } from '../api';
 import type { UsePuzzleSessionReturn } from '../hooks/usePuzzleSession';
 
 let mockSearchParams = new URLSearchParams();
@@ -61,6 +61,7 @@ vi.mock('../api', () => ({
     checkPuzzle: vi.fn().mockResolvedValue({ correct: true, result: 'pass' }),
     revealPuzzle: vi.fn().mockResolvedValue({ best_move_uci: 'e2e4', solution_pv: ['e2e4'] }),
     getPuzzleDiagnosis: vi.fn(),
+    confirmPuzzleDiagnosis: vi.fn(),
     getSession: vi.fn().mockRejectedValue(new Error('No session')),
     useHint: vi.fn().mockResolvedValue({ hints_used: 1 }),
     getUserStatus: vi.fn().mockResolvedValue({ games_count: 10, puzzles_count: 5, due_count: 3, has_new_games: false }),
@@ -202,11 +203,31 @@ describe('Puzzles — honest failure handling', () => {
         vi.mocked(getPuzzleDiagnosis).mockReset().mockResolvedValue({
             state: 'ready',
             puzzle_id: 'p1',
+            primary_cause: 'loose_piece_awareness',
             primary_cause_label: 'Loose piece awareness',
             secondary_causes: [],
             secondary_cause_labels: [],
             evidence: [{ id: 'best.move', label: 'Best move', value: 'Qxd5' }],
             evidence_withheld: false,
+            cause_options: [
+                { value: 'loose_piece_awareness', label: 'Loose piece awareness' },
+                { value: 'king_safety_blindness', label: 'King safety blindness' },
+            ],
+        } as never);
+        vi.mocked(confirmPuzzleDiagnosis).mockReset().mockResolvedValue({
+            state: 'ready',
+            puzzle_id: 'p1',
+            primary_cause: 'loose_piece_awareness',
+            primary_cause_label: 'Loose piece awareness',
+            secondary_causes: [],
+            secondary_cause_labels: [],
+            evidence: [],
+            evidence_withheld: false,
+            cause_options: [
+                { value: 'loose_piece_awareness', label: 'Loose piece awareness' },
+                { value: 'king_safety_blindness', label: 'King safety blindness' },
+            ],
+            user_confirmed_cause: 'loose_piece_awareness',
         } as never);
     });
 
@@ -662,6 +683,72 @@ describe('Puzzles — honest failure handling', () => {
             expect(diagnosis).toHaveClass('min-w-0');
             expect(nextPuzzle).toHaveClass('w-full');
             expect(diagnosis.compareDocumentPosition(nextPuzzle) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+        });
+
+        it('confirms a ready diagnosis after persistence without blocking move-on', async () => {
+            const user = userEvent.setup();
+            render(<Puzzles />);
+
+            await typeAndCheck(user, 'e2e4');
+            await screen.findByRole('button', { name: /this fits/i });
+            await user.click(screen.getByRole('button', { name: /this fits/i }));
+
+            await waitFor(() =>
+                expect(confirmPuzzleDiagnosis).toHaveBeenCalledWith(
+                    'p1',
+                    'testplayer',
+                    'loose_piece_awareness',
+                ),
+            );
+            expect(await screen.findByText('Your label')).toBeInTheDocument();
+            expect(screen.getByRole('button', { name: /next puzzle/i })).toBeEnabled();
+        });
+
+        it('keeps move-on usable after a retryable confirmation failure', async () => {
+            vi.mocked(confirmPuzzleDiagnosis).mockRejectedValue(new Error('confirmation unavailable'));
+            const user = userEvent.setup();
+            render(<Puzzles />);
+
+            await typeAndCheck(user, 'e2e4');
+            await screen.findByRole('button', { name: /this fits/i });
+            await user.click(screen.getByRole('button', { name: /this fits/i }));
+
+            await waitFor(() =>
+                expect(screen.getByRole('alert')).toHaveTextContent(/couldn’t save your label/i),
+            );
+            expect(screen.getByRole('button', { name: /next puzzle/i })).toBeEnabled();
+        });
+
+        it('ignores a stale confirmation response after same-ID rehydration', async () => {
+            const pendingConfirmation = deferred<unknown>();
+            vi.mocked(confirmPuzzleDiagnosis).mockReturnValue(pendingConfirmation.promise as never);
+            currentSessionReturn = makeSessionReturn();
+            const user = userEvent.setup();
+            const { rerender } = render(<Puzzles />);
+
+            await typeAndCheck(user, 'e2e4');
+            await screen.findByRole('button', { name: /this fits/i });
+            await user.click(screen.getByRole('button', { name: /this fits/i }));
+            await waitFor(() => expect(confirmPuzzleDiagnosis).toHaveBeenCalledTimes(1));
+
+            currentSessionReturn = {
+                ...currentSessionReturn,
+                puzzles: [{ ...puzzle }, { ...puzzle, id: 'p2' }],
+            };
+            rerender(<Puzzles />);
+            pendingConfirmation.resolve({
+                state: 'ready',
+                puzzle_id: 'p1',
+                primary_cause_label: 'Stale confirmation',
+                secondary_causes: [],
+                secondary_cause_labels: [],
+                evidence: [],
+                evidence_withheld: false,
+                cause_options: [],
+            });
+
+            await waitFor(() => expect(screen.queryByText('Stale confirmation')).not.toBeInTheDocument());
+            expect(screen.queryByRole('button', { name: /saving/i })).not.toBeInTheDocument();
         });
 
         it('ignores a stale diagnosis response after same-ID puzzle rehydration', async () => {

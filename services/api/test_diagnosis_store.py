@@ -10,7 +10,7 @@ import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 from services.api.diagnosis import job as services_job  # noqa: E402
-from services.api.diagnosis.causes import RULE_VERSION  # noqa: E402
+from services.api.diagnosis.causes import CAUSE_LABELS, RULE_VERSION  # noqa: E402
 from services.api.diagnosis.evidence import EXTRACTION_VERSION  # noqa: E402
 from services.api.diagnosis.job import run_diagnosis  # noqa: E402
 from services.api.main import app, get_db  # noqa: E402
@@ -737,6 +737,53 @@ class TestConfirm:
         stored = DiagnosisRepository(db_session).get(USER, "p1")
         assert stored is not None
         assert stored.primary_cause == "loose_piece_awareness"
+
+    def test_ready_diagnosis_exposes_the_supported_safe_cause_options(
+        self, client, db_session, monkeypatch
+    ):
+        self._diagnose(db_session, monkeypatch)
+
+        body = client.get(f"/puzzles/p1/diagnosis?username={USER}").json()
+
+        assert body["state"] == "ready"
+        assert body["cause_options"] == [
+            {"value": cause, "label": label} for cause, label in CAUSE_LABELS.items()
+        ]
+        assert "Qxd5" not in str(body["cause_options"])
+
+    def test_confirming_the_current_cause_marks_it_as_the_users_label(
+        self, client, db_session, monkeypatch
+    ):
+        self._diagnose(db_session, monkeypatch)
+
+        body = client.post(
+            f"/puzzles/p1/diagnosis/confirm?username={USER}",
+            json={"cause": "loose_piece_awareness"},
+        ).json()
+
+        assert body["primary_cause"] == "loose_piece_awareness"
+        assert body["user_confirmed_cause"] == "loose_piece_awareness"
+
+    def test_withheld_confirm_response_omits_cause_options_and_solution_fields(
+        self, client, db_session, monkeypatch
+    ):
+        self._diagnose(db_session, monkeypatch)
+        monkeypatch.setenv("KNIGHTMIND_RESOLUTION_GATE", "true")
+        stats = (
+            db_session.query(PuzzleStats).filter_by(puzzle_id="p1", username=USER).one()
+        )
+        stats.attempts = 0
+        stats.next_due_at = None
+        db_session.commit()
+
+        body = client.post(
+            f"/puzzles/p1/diagnosis/confirm?username={USER}",
+            json={"cause": "king_safety_blindness"},
+        ).json()
+
+        assert body["state"] == "withheld"
+        assert "cause_options" not in body
+        assert "Qxd5" not in str(body)
 
     def test_an_unknown_cause_is_rejected(self, client, db_session, monkeypatch):
         self._diagnose(db_session, monkeypatch)

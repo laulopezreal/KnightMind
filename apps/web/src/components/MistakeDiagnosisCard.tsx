@@ -5,6 +5,9 @@ interface MistakeDiagnosisCardProps {
     /** False while the puzzle is still being solved — see the note below. */
     revealed: boolean;
     loading?: boolean;
+    savingConfirmation?: boolean;
+    confirmationError?: string | null;
+    onConfirm?: (cause: string) => void;
 }
 
 /**
@@ -32,6 +35,9 @@ export function MistakeDiagnosisCard({
     diagnosis,
     revealed,
     loading = false,
+    savingConfirmation = false,
+    confirmationError = null,
+    onConfirm,
 }: MistakeDiagnosisCardProps) {
     // Solution-bearing content stays hidden until the puzzle is done with.
     if (!revealed) return null;
@@ -93,7 +99,16 @@ export function MistakeDiagnosisCard({
         );
     }
 
-    const { primary_cause_label, secondary_cause_labels, evidence, phase } = diagnosis;
+    const {
+        primary_cause,
+        primary_cause_label,
+        secondary_cause_labels,
+        evidence,
+        phase,
+        cause_options = [],
+    } = diagnosis;
+    const alternativeCauses = cause_options.filter((option) => option.value !== primary_cause);
+    const canConfirm = !!onConfirm && !!primary_cause && cause_options.length > 0;
 
     return (
         <Shell>
@@ -119,6 +134,44 @@ export function MistakeDiagnosisCard({
                         <p className="font-sans text-sm text-primary/80">
                             {diagnosis.training_recommendation}
                         </p>
+                    </div>
+                )}
+
+                {canConfirm && (
+                    <div className="border-t border-primary/10 pt-3 space-y-3">
+                        <div className="flex flex-wrap items-center gap-2">
+                            <button
+                                type="button"
+                                onClick={() => onConfirm(primary_cause)}
+                                disabled={savingConfirmation}
+                                className="px-3 py-2 bg-primary text-bg-primary rounded-sm font-serif text-sm transition-colors km-focus-visible"
+                            >
+                                {savingConfirmation ? 'Saving…' : 'This fits'}
+                            </button>
+                            {alternativeCauses.length > 0 && (
+                                <details className="font-sans text-sm text-primary/70">
+                                    <summary className="cursor-pointer km-focus-visible">Choose a different cause</summary>
+                                    <div className="mt-2 flex flex-wrap gap-2">
+                                        {alternativeCauses.map((option) => (
+                                            <button
+                                                key={option.value}
+                                                type="button"
+                                                onClick={() => onConfirm(option.value)}
+                                                disabled={savingConfirmation}
+                                                className="px-2 py-1 border border-primary/20 text-primary rounded-sm font-sans font-normal text-xs km-focus-visible"
+                                            >
+                                                {option.label}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </details>
+                            )}
+                        </div>
+                        {confirmationError && (
+                            <p className="font-sans text-sm text-negative" role="alert">
+                                {confirmationError}
+                            </p>
+                        )}
                     </div>
                 )}
 
