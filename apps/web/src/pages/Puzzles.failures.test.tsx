@@ -665,6 +665,52 @@ describe('Puzzles — honest failure handling', () => {
             await waitFor(() => expect(screen.queryByText('Stale diagnosis')).not.toBeInTheDocument());
         });
 
+        it('ignores an in-flight diagnosis when its owner crosses an A-to-B-to-A identity boundary', async () => {
+            const pendingReview = deferred<boolean>();
+            const pendingDiagnosis = deferred<unknown>();
+            mockHandleReviewPuzzle.mockReturnValue(pendingReview.promise);
+            vi.mocked(getPuzzleDiagnosis).mockReturnValue(pendingDiagnosis.promise as never);
+            const user = userEvent.setup();
+            const { rerender } = render(<Puzzles />);
+
+            await typeAndCheck(user, 'e2e4');
+            await waitFor(() => expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(1));
+            pendingReview.resolve(true);
+            await waitFor(() =>
+                expect(getPuzzleDiagnosis).toHaveBeenCalledWith('p1', 'testplayer', true),
+            );
+            expect(screen.getByTestId('post-resolution-diagnosis')).toBeInTheDocument();
+
+            // The terminal write remains A-owned, but its supplementary
+            // diagnosis must not survive an identity round-trip on this exact
+            // puzzle object. In particular, the old A finalizer cannot mutate
+            // the returning A boundary after B has become active in between.
+            mockUsername = 'otherplayer';
+            rerender(<Puzzles />);
+            mockUsername = 'testplayer';
+            rerender(<Puzzles />);
+
+            await act(async () => {
+                pendingDiagnosis.resolve({
+                    state: 'ready',
+                    puzzle_id: 'p1',
+                    primary_cause_label: 'Stale in-flight diagnosis',
+                    secondary_causes: [],
+                    secondary_cause_labels: [],
+                    evidence: [],
+                    evidence_withheld: false,
+                });
+                await pendingDiagnosis.promise;
+            });
+
+            await waitFor(() => {
+                expect(screen.queryByText('Stale in-flight diagnosis')).not.toBeInTheDocument();
+                expect(screen.queryByTestId('post-resolution-diagnosis')).not.toBeInTheDocument();
+            });
+            expect(getPuzzleDiagnosis).toHaveBeenCalledTimes(1);
+            expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(1);
+        });
+
         it('does not resurrect a diagnosis when the same puzzle crosses an A-to-B-to-A identity boundary', async () => {
             const user = userEvent.setup();
             const { rerender } = render(<Puzzles />);
