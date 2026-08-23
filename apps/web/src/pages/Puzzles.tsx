@@ -5,12 +5,13 @@ import { AccessibleChessboard } from '../components/AccessibleChessboard';
 import { PageHeader } from '../components/PageHeader';
 import { ConnectAccountEmpty } from '../components/ConnectAccountEmpty';
 import { Chess } from 'chess.js';
-import { generatePuzzles, getDailyPuzzles, cancelJob, checkPuzzle, revealPuzzle, requestMotifHint, ApiError } from '../api';
+import { generatePuzzles, getDailyPuzzles, cancelJob, checkPuzzle, getPuzzleDiagnosis, revealPuzzle, requestMotifHint, type PuzzleDiagnosis, ApiError } from '../api';
 import { JobStatusCard } from '../components/JobStatusCard';
 import { SessionSummaryCard } from '../components/SessionSummaryCard';
 import { WarmupSummary } from '../components/WarmupSummary';
 import { AchievementsList } from '../components/AchievementsList';
 import { RecentSessionsCard } from '../components/RecentSessionsCard';
+import { MistakeDiagnosisCard } from '../components/MistakeDiagnosisCard';
 import { useJobPolling } from '../hooks/useJobPolling';
 import { useChessUsername } from '../context/ChessUsernameContext';
 import { usePuzzleMode } from '../context/PuzzleModeContext';
@@ -36,6 +37,12 @@ const MOTIF_RANK_STYLE = {
 
 const motifRankStyle = (rank: string) =>
     MOTIF_RANK_STYLE[rank as keyof typeof MOTIF_RANK_STYLE] ?? MOTIF_RANK_STYLE.needs_work;
+
+type PuzzleInstanceOwner = {
+    puzzleId: string;
+    epoch: number;
+    username: string;
+};
 
 export default function Puzzles() {
     const { username } = useChessUsername();
@@ -70,6 +77,8 @@ export default function Puzzles() {
     // reveal, record a review). Deliberately separate from the puzzle `status`:
     // a failed request is NOT a wrong answer and must never be scored as one.
     const [actionError, setActionError] = useState<string | null>(null);
+    const [diagnosisResult, setDiagnosisResult] = useState<{ owner: PuzzleInstanceOwner; diagnosis: PuzzleDiagnosis } | null>(null);
+    const [diagnosisLoadingOwner, setDiagnosisLoadingOwner] = useState<PuzzleInstanceOwner | null>(null);
 
     // Get motif filter and warmup mode from URL query params
     const [searchParams] = useSearchParams();
@@ -133,7 +142,7 @@ export default function Puzzles() {
         }
     }
 
-    const recordPuzzleOutcomeRef = useRef<(result: 'pass' | 'fail', attemptedMove?: string) => Promise<boolean>>(async () => false);
+    const recordPuzzleOutcomeRef = useRef<(result: 'pass' | 'fail', attemptedMove?: string, requestDiagnosis?: boolean) => Promise<boolean>>(async () => false);
     const isAdvancingPuzzle = useRef(false);
 
     const timer = usePuzzleTimer({
@@ -141,7 +150,7 @@ export default function Puzzles() {
         activeSessionId,
         onPuzzleTimeout: () => {
             if (statusRef.current === 'solving') {
-                void recordPuzzleOutcomeRef.current('fail');
+                void recordPuzzleOutcomeRef.current('fail', undefined, true);
                 setStatus('incorrect');
             }
         },
@@ -186,8 +195,11 @@ export default function Puzzles() {
     // disable rendering alone cannot close that race before React re-renders.
     const checkingPuzzleRef = useRef<{ puzzleId: string; epoch: number } | null>(null);
     const currentPuzzleIdRef = useRef<string | null>(currentPuzzle?.id ?? null);
+    const currentUsernameRef = useRef(username);
+    currentUsernameRef.current = username;
     const puzzleInstanceRef = useRef<typeof currentPuzzle>(currentPuzzle);
     const puzzleEpochRef = useRef(0);
+    const diagnosisRequestRef = useRef<PuzzleInstanceOwner | null>(null);
     // The terminal decision is durable for this puzzle instance, while its
     // persistence promise is retryable. A failed write must not reopen the
     // decision to a delayed solve-check response.
@@ -196,6 +208,7 @@ export default function Puzzles() {
         epoch: number;
         result: 'pass' | 'fail';
         attemptedMove?: string;
+        requestDiagnosis: boolean;
     } | null>(null);
     if (puzzleInstanceRef.current !== currentPuzzle) {
         puzzleInstanceRef.current = currentPuzzle;
@@ -203,17 +216,73 @@ export default function Puzzles() {
         checkingPuzzleRef.current = null;
         outcomeDecisionRef.current = null;
         outcomeWriteRef.current = null;
+        setDiagnosisResult(null);
+        setDiagnosisLoadingOwner(null);
     }
     currentPuzzleIdRef.current = currentPuzzle?.id ?? null;
+    const diagnosisOwner = diagnosisResult?.owner;
+    const activeDiagnosis =
+        diagnosisOwner &&
+        diagnosisOwner.puzzleId === currentPuzzle?.id &&
+        diagnosisOwner.epoch === puzzleEpochRef.current &&
+        diagnosisOwner.username === username
+            ? diagnosisResult?.diagnosis ?? null
+            : null;
+    const diagnosisLoading =
+        !!diagnosisLoadingOwner &&
+        diagnosisLoadingOwner.puzzleId === currentPuzzle?.id &&
+        diagnosisLoadingOwner.epoch === puzzleEpochRef.current &&
+        diagnosisLoadingOwner.username === username;
 
-    const recordPuzzleOutcome = (result: 'pass' | 'fail', attemptedMove?: string): Promise<boolean> => {
+    const requestDiagnosisForResolvedOutcome = (owner: PuzzleInstanceOwner) => {
+        if (
+            currentPuzzleIdRef.current !== owner.puzzleId ||
+            puzzleEpochRef.current !== owner.epoch ||
+            currentUsernameRef.current !== owner.username
+        ) return;
+        const existingRequest = diagnosisRequestRef.current;
+        if (
+            existingRequest?.puzzleId === owner.puzzleId &&
+            existingRequest.epoch === owner.epoch &&
+            existingRequest.username === owner.username
+        ) return;
+
+        diagnosisRequestRef.current = owner;
+        setDiagnosisLoadingOwner(owner);
+        // Keep this supplementary request behind the successful review write.
+        // It is deliberately isolated from play/session control flow: an API
+        // failure leaves the completed puzzle usable and move-on untouched.
+        void Promise.resolve()
+            .then(() => getPuzzleDiagnosis(owner.puzzleId, owner.username, true))
+            .then((diagnosis) => {
+                if (
+                    currentPuzzleIdRef.current === owner.puzzleId &&
+                    puzzleEpochRef.current === owner.epoch &&
+                    currentUsernameRef.current === owner.username
+                ) {
+                    setDiagnosisResult({ owner, diagnosis });
+                }
+            })
+            .catch(() => undefined)
+            .finally(() => {
+                if (
+                    currentPuzzleIdRef.current === owner.puzzleId &&
+                    puzzleEpochRef.current === owner.epoch &&
+                    currentUsernameRef.current === owner.username
+                ) {
+                    setDiagnosisLoadingOwner(null);
+                }
+            });
+    };
+
+    const recordPuzzleOutcome = (result: 'pass' | 'fail', attemptedMove?: string, requestDiagnosis = false): Promise<boolean> => {
         if (!currentPuzzle) return Promise.resolve(false);
         const puzzleId = currentPuzzle.id;
         const epoch = puzzleEpochRef.current;
         const existingDecision = outcomeDecisionRef.current;
         const decision = existingDecision?.puzzleId === puzzleId && existingDecision.epoch === epoch
             ? existingDecision
-            : { puzzleId, epoch, result, attemptedMove };
+            : { puzzleId, epoch, result, attemptedMove, requestDiagnosis };
         if (decision !== existingDecision) outcomeDecisionRef.current = decision;
         if (outcomeWriteRef.current) return outcomeWriteRef.current;
 
@@ -226,6 +295,11 @@ export default function Puzzles() {
                 return false;
             });
         outcomeWriteRef.current = writePromise;
+        void writePromise.then((recorded) => {
+            if (recorded && decision.requestDiagnosis) {
+                requestDiagnosisForResolvedOutcome({ puzzleId, epoch, username });
+            }
+        });
         return writePromise;
     };
     recordPuzzleOutcomeRef.current = recordPuzzleOutcome;
@@ -543,7 +617,7 @@ export default function Puzzles() {
                 // needs the review to have landed before it asks for a
                 // diagnosis the gate keys on attempts > 0.
                 const solvedLine = [...attemptedLine, normalized].join(' ');
-                void recordPuzzleOutcome('pass', solvedLine || undefined);
+                void recordPuzzleOutcome('pass', solvedLine || undefined, true);
             }
         } catch (err) {
             if (currentPuzzleIdRef.current !== puzzleId || puzzleEpochRef.current !== puzzleEpoch) return;
@@ -637,7 +711,7 @@ export default function Puzzles() {
         // the opposite bug: move-on skipped, and a later failure was never
         // retried. Awaiting the same promise has neither -- it yields the real
         // outcome exactly once, with no second post.
-        outcomeWriteRef.current = recordPuzzleOutcome('fail');
+        outcomeWriteRef.current = recordPuzzleOutcome('fail', undefined, true);
         await outcomeWriteRef.current;
     };
 
@@ -1572,6 +1646,16 @@ export default function Puzzles() {
                                 </div>
                             )}
                         </div>
+
+                        {(activeDiagnosis || diagnosisLoading) && (
+                            <div data-testid="post-resolution-diagnosis" className="min-w-0">
+                                <MistakeDiagnosisCard
+                                    diagnosis={activeDiagnosis}
+                                    revealed
+                                    loading={diagnosisLoading}
+                                />
+                            </div>
+                        )}
 
                         {/* Connectivity/action failures. Sits outside the status
                             region (which is polite and describes the puzzle) and

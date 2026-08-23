@@ -17,7 +17,7 @@ import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import Puzzles from './Puzzles';
 import { setupMockLocalStorage } from '../test/helpers';
-import { checkPuzzle, revealPuzzle } from '../api';
+import { checkPuzzle, getPuzzleDiagnosis, revealPuzzle } from '../api';
 import type { UsePuzzleSessionReturn } from '../hooks/usePuzzleSession';
 
 let mockSearchParams = new URLSearchParams();
@@ -59,6 +59,7 @@ vi.mock('../api', () => ({
     reviewPuzzle: vi.fn().mockResolvedValue({}),
     checkPuzzle: vi.fn().mockResolvedValue({ correct: true, result: 'pass' }),
     revealPuzzle: vi.fn().mockResolvedValue({ best_move_uci: 'e2e4', solution_pv: ['e2e4'] }),
+    getPuzzleDiagnosis: vi.fn(),
     getSession: vi.fn().mockRejectedValue(new Error('No session')),
     useHint: vi.fn().mockResolvedValue({ hints_used: 1 }),
     getUserStatus: vi.fn().mockResolvedValue({ games_count: 10, puzzles_count: 5, due_count: 3, has_new_games: false }),
@@ -196,6 +197,15 @@ describe('Puzzles — honest failure handling', () => {
         mockSetCurrentIndex.mockClear();
         vi.mocked(revealPuzzle).mockResolvedValue({ best_move_uci: 'e2e4', solution_pv: ['e2e4'] } as never);
         vi.mocked(checkPuzzle).mockResolvedValue({ correct: true, result: 'pass' } as never);
+        vi.mocked(getPuzzleDiagnosis).mockReset().mockResolvedValue({
+            state: 'ready',
+            puzzle_id: 'p1',
+            primary_cause_label: 'Loose piece awareness',
+            secondary_causes: [],
+            secondary_cause_labels: [],
+            evidence: [{ id: 'best.move', label: 'Best move', value: 'Qxd5' }],
+            evidence_withheld: false,
+        } as never);
     });
 
     it('does not score a network failure as a wrong answer', async () => {
@@ -495,6 +505,136 @@ describe('Puzzles — honest failure handling', () => {
             checkB.resolve({ correct: true, result: 'pass' });
             await waitFor(() => expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(1));
             expect(screen.getByText('Correct! Excellent.')).toBeInTheDocument();
+        });
+    });
+
+    describe('post-resolution diagnosis', () => {
+        it('waits for a solved outcome write, then requests and renders diagnosis exactly once', async () => {
+            const pendingReview = deferred<boolean>();
+            mockHandleReviewPuzzle.mockReturnValue(pendingReview.promise);
+            const user = userEvent.setup();
+            render(<Puzzles />);
+
+            await typeAndCheck(user, 'e2e4');
+            await waitFor(() => expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(1));
+            expect(getPuzzleDiagnosis).not.toHaveBeenCalled();
+            expect(screen.queryByRole('region', { name: /mistake diagnosis/i })).not.toBeInTheDocument();
+
+            pendingReview.resolve(true);
+
+            await waitFor(() =>
+                expect(getPuzzleDiagnosis).toHaveBeenCalledWith('p1', 'testplayer', true),
+            );
+            expect(await screen.findByText('Loose piece awareness')).toBeInTheDocument();
+            expect(getPuzzleDiagnosis).toHaveBeenCalledTimes(1);
+        });
+
+        it('waits for a timeout outcome write before requesting diagnosis', async () => {
+            const pendingReview = deferred<boolean>();
+            mockHandleReviewPuzzle.mockReturnValue(pendingReview.promise);
+            render(<Puzzles />);
+
+            expect(timedOut).not.toBeNull();
+            act(() => timedOut?.());
+            await waitFor(() => expect(mockHandleReviewPuzzle).toHaveBeenCalledWith('fail'));
+            expect(getPuzzleDiagnosis).not.toHaveBeenCalled();
+
+            pendingReview.resolve(true);
+
+            await waitFor(() =>
+                expect(getPuzzleDiagnosis).toHaveBeenCalledWith('p1', 'testplayer', true),
+            );
+        });
+
+        it('does not request diagnosis after a rejected write, then requests it once after the safe retry succeeds', async () => {
+            mockHandleReviewPuzzle
+                .mockResolvedValueOnce(false)
+                .mockResolvedValueOnce(true);
+            const user = userEvent.setup();
+            render(<Puzzles />);
+
+            await typeAndCheck(user, 'e2e4');
+            await waitFor(() => expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(1));
+            expect(getPuzzleDiagnosis).not.toHaveBeenCalled();
+
+            await user.click(screen.getByRole('button', { name: /next puzzle/i }));
+            await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/couldn't save that result/i));
+            expect(getPuzzleDiagnosis).not.toHaveBeenCalled();
+
+            await user.click(screen.getByRole('button', { name: /next puzzle/i }));
+            await waitFor(() => expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(2));
+            await waitFor(() => expect(getPuzzleDiagnosis).toHaveBeenCalledTimes(1));
+        });
+
+        it('does not request diagnosis for an intermediate correct ply', async () => {
+            vi.mocked(checkPuzzle).mockResolvedValue({
+                correct: true,
+                result: 'pass',
+                reply: 'e7e5',
+                next_ply_index: 2,
+            } as never);
+            const user = userEvent.setup();
+            render(<Puzzles />);
+
+            await typeAndCheck(user, 'e2e4');
+
+            await waitFor(() => expect(screen.getByText(/now find the next move in the line/i)).toBeInTheDocument());
+            expect(mockHandleReviewPuzzle).not.toHaveBeenCalled();
+            expect(getPuzzleDiagnosis).not.toHaveBeenCalled();
+        });
+
+        it('keeps the primary move-on action usable when diagnosis loading fails', async () => {
+            vi.mocked(getPuzzleDiagnosis).mockRejectedValue(new Error('diagnosis unavailable'));
+            const user = userEvent.setup();
+            render(<Puzzles />);
+
+            await typeAndCheck(user, 'e2e4');
+
+            await waitFor(() => expect(getPuzzleDiagnosis).toHaveBeenCalledTimes(1));
+            const nextPuzzle = screen.getByRole('button', { name: /next puzzle/i });
+            expect(nextPuzzle).toBeEnabled();
+            expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+        });
+
+        it('keeps diagnosis compact and above the full-width primary move-on action', async () => {
+            const user = userEvent.setup();
+            render(<Puzzles />);
+
+            await typeAndCheck(user, 'e2e4');
+
+            const diagnosis = await screen.findByTestId('post-resolution-diagnosis');
+            const nextPuzzle = screen.getByRole('button', { name: /next puzzle/i });
+            expect(diagnosis).toHaveClass('min-w-0');
+            expect(nextPuzzle).toHaveClass('w-full');
+            expect(diagnosis.compareDocumentPosition(nextPuzzle) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+        });
+
+        it('ignores a stale diagnosis response after same-ID puzzle rehydration', async () => {
+            const pendingDiagnosis = deferred<unknown>();
+            vi.mocked(getPuzzleDiagnosis).mockReturnValue(pendingDiagnosis.promise as never);
+            currentSessionReturn = makeSessionReturn();
+            const user = userEvent.setup();
+            const { rerender } = render(<Puzzles />);
+
+            await typeAndCheck(user, 'e2e4');
+            await waitFor(() => expect(getPuzzleDiagnosis).toHaveBeenCalledTimes(1));
+
+            currentSessionReturn = {
+                ...currentSessionReturn,
+                puzzles: [{ ...puzzle }, { ...puzzle, id: 'p2' }],
+            };
+            rerender(<Puzzles />);
+            pendingDiagnosis.resolve({
+                state: 'ready',
+                puzzle_id: 'p1',
+                primary_cause_label: 'Stale diagnosis',
+                secondary_causes: [],
+                secondary_cause_labels: [],
+                evidence: [],
+                evidence_withheld: false,
+            });
+
+            await waitFor(() => expect(screen.queryByText('Stale diagnosis')).not.toBeInTheDocument());
         });
     });
 
