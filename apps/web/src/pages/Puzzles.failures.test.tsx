@@ -531,6 +531,33 @@ describe('Puzzles — honest failure handling', () => {
             expect(getPuzzleDiagnosis).toHaveBeenCalledTimes(1);
         });
 
+        it('does not schedule diagnosis from a deferred terminal write after an A-to-B-to-A identity boundary', async () => {
+            const pendingReview = deferred<boolean>();
+            mockHandleReviewPuzzle.mockReturnValue(pendingReview.promise);
+            const user = userEvent.setup();
+            const { rerender } = render(<Puzzles />);
+
+            await typeAndCheck(user, 'e2e4');
+            await waitFor(() => expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(1));
+            expect(getPuzzleDiagnosis).not.toHaveBeenCalled();
+
+            mockUsername = 'otherplayer';
+            rerender(<Puzzles />);
+            mockUsername = 'testplayer';
+            rerender(<Puzzles />);
+
+            await act(async () => {
+                pendingReview.resolve(true);
+                await pendingReview.promise;
+                await Promise.resolve();
+                await Promise.resolve();
+            });
+
+            expect(getPuzzleDiagnosis).not.toHaveBeenCalled();
+            expect(screen.queryByText('Loading diagnosis…')).not.toBeInTheDocument();
+            expect(screen.queryByTestId('post-resolution-diagnosis')).not.toBeInTheDocument();
+        });
+
         it('waits for a timeout outcome write before requesting diagnosis', async () => {
             const pendingReview = deferred<boolean>();
             mockHandleReviewPuzzle.mockReturnValue(pendingReview.promise);

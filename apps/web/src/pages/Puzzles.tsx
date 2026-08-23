@@ -44,6 +44,13 @@ type PuzzleInstanceOwner = {
     username: string;
 };
 
+type TerminalDiagnosisOwner = {
+    puzzleId: string;
+    puzzleEpoch: number;
+    diagnosisEpoch: number;
+    username: string;
+};
+
 export default function Puzzles() {
     const { username } = useChessUsername();
     const { sessionType, targetAccuracy, setTargetAccuracy, targetTimeMinutes, setTargetTimeMinutes } = usePuzzleMode();
@@ -215,6 +222,7 @@ export default function Puzzles() {
         result: 'pass' | 'fail';
         attemptedMove?: string;
         requestDiagnosis: boolean;
+        diagnosisOwner: TerminalDiagnosisOwner;
     } | null>(null);
     if (puzzleInstanceRef.current !== currentPuzzle) {
         puzzleInstanceRef.current = currentPuzzle;
@@ -248,41 +256,47 @@ export default function Puzzles() {
         diagnosisLoadingOwner.epoch === diagnosisEpochRef.current &&
         diagnosisLoadingOwner.username === username;
 
-    const requestDiagnosisForResolvedOutcome = (owner: PuzzleInstanceOwner) => {
+    const requestDiagnosisForResolvedOutcome = (owner: TerminalDiagnosisOwner) => {
         if (
             currentPuzzleIdRef.current !== owner.puzzleId ||
-            diagnosisEpochRef.current !== owner.epoch ||
+            puzzleEpochRef.current !== owner.puzzleEpoch ||
+            diagnosisEpochRef.current !== owner.diagnosisEpoch ||
             currentUsernameRef.current !== owner.username
         ) return;
+        const diagnosisOwner: PuzzleInstanceOwner = {
+            puzzleId: owner.puzzleId,
+            epoch: owner.diagnosisEpoch,
+            username: owner.username,
+        };
         const existingRequest = diagnosisRequestRef.current;
         if (
-            existingRequest?.puzzleId === owner.puzzleId &&
-            existingRequest.epoch === owner.epoch &&
-            existingRequest.username === owner.username
+            existingRequest?.puzzleId === diagnosisOwner.puzzleId &&
+            existingRequest.epoch === diagnosisOwner.epoch &&
+            existingRequest.username === diagnosisOwner.username
         ) return;
 
-        diagnosisRequestRef.current = owner;
-        setDiagnosisLoadingOwner(owner);
+        diagnosisRequestRef.current = diagnosisOwner;
+        setDiagnosisLoadingOwner(diagnosisOwner);
         // Keep this supplementary request behind the successful review write.
         // It is deliberately isolated from play/session control flow: an API
         // failure leaves the completed puzzle usable and move-on untouched.
         void Promise.resolve()
-            .then(() => getPuzzleDiagnosis(owner.puzzleId, owner.username, true))
+            .then(() => getPuzzleDiagnosis(diagnosisOwner.puzzleId, diagnosisOwner.username, true))
             .then((diagnosis) => {
                 if (
-                    currentPuzzleIdRef.current === owner.puzzleId &&
-                    diagnosisEpochRef.current === owner.epoch &&
-                    currentUsernameRef.current === owner.username
+                    currentPuzzleIdRef.current === diagnosisOwner.puzzleId &&
+                    diagnosisEpochRef.current === diagnosisOwner.epoch &&
+                    currentUsernameRef.current === diagnosisOwner.username
                 ) {
-                    setDiagnosisResult({ owner, diagnosis });
+                    setDiagnosisResult({ owner: diagnosisOwner, diagnosis });
                 }
             })
             .catch(() => undefined)
             .finally(() => {
                 if (
-                    currentPuzzleIdRef.current === owner.puzzleId &&
-                    diagnosisEpochRef.current === owner.epoch &&
-                    currentUsernameRef.current === owner.username
+                    currentPuzzleIdRef.current === diagnosisOwner.puzzleId &&
+                    diagnosisEpochRef.current === diagnosisOwner.epoch &&
+                    currentUsernameRef.current === diagnosisOwner.username
                 ) {
                     setDiagnosisLoadingOwner(null);
                 }
@@ -296,7 +310,19 @@ export default function Puzzles() {
         const existingDecision = outcomeDecisionRef.current;
         const decision = existingDecision?.puzzleId === puzzleId && existingDecision.epoch === epoch
             ? existingDecision
-            : { puzzleId, epoch, result, attemptedMove, requestDiagnosis };
+            : {
+                puzzleId,
+                epoch,
+                result,
+                attemptedMove,
+                requestDiagnosis,
+                diagnosisOwner: {
+                    puzzleId,
+                    puzzleEpoch: epoch,
+                    diagnosisEpoch: diagnosisEpochRef.current,
+                    username,
+                },
+            };
         if (decision !== existingDecision) outcomeDecisionRef.current = decision;
         if (outcomeWriteRef.current) return outcomeWriteRef.current;
 
@@ -311,7 +337,7 @@ export default function Puzzles() {
         outcomeWriteRef.current = writePromise;
         void writePromise.then((recorded) => {
             if (recorded && decision.requestDiagnosis) {
-                requestDiagnosisForResolvedOutcome({ puzzleId, epoch: diagnosisEpochRef.current, username });
+                requestDiagnosisForResolvedOutcome(decision.diagnosisOwner);
             }
         });
         return writePromise;
