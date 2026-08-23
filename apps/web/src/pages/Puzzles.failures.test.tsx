@@ -13,7 +13,7 @@
  * end to end.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import Puzzles from './Puzzles';
 import { setupMockLocalStorage } from '../test/helpers';
@@ -21,6 +21,8 @@ import { checkPuzzle, revealPuzzle } from '../api';
 import type { UsePuzzleSessionReturn } from '../hooks/usePuzzleSession';
 
 let mockSearchParams = new URLSearchParams();
+let timedOut: (() => void) | null = null;
+let currentSessionReturn: UsePuzzleSessionReturn | null = null;
 
 vi.mock('react-router-dom', () => ({
     useNavigate: () => vi.fn(),
@@ -94,7 +96,10 @@ vi.mock('../hooks/usePuzzleTimer', () => {
         puzzleStartTime: null,
         timeRemaining: 0,
     };
-    return { usePuzzleTimer: () => stub };
+    return { usePuzzleTimer: (options: { onPuzzleTimeout?: () => void }) => {
+        timedOut = options.onPuzzleTimeout ?? null;
+        return stub;
+    } };
 });
 
 vi.mock('../components/JobStatusCard', () => ({ JobStatusCard: () => null }));
@@ -161,7 +166,7 @@ function makeSessionReturn(): UsePuzzleSessionReturn {
 }
 
 vi.mock('../hooks/usePuzzleSession', () => ({
-    usePuzzleSession: () => makeSessionReturn(),
+    usePuzzleSession: () => currentSessionReturn ?? makeSessionReturn(),
 }));
 
 const typeAndCheck = async (user: ReturnType<typeof userEvent.setup>, move: string) => {
@@ -184,6 +189,8 @@ describe('Puzzles — honest failure handling', () => {
     beforeEach(() => {
         setupMockLocalStorage();
         mockSearchParams = new URLSearchParams();
+        timedOut = null;
+        currentSessionReturn = null;
         mockHandleReviewPuzzle.mockReset().mockResolvedValue(true);
         mockHandleCompleteSession.mockClear();
         mockSetCurrentIndex.mockClear();
@@ -351,6 +358,51 @@ describe('Puzzles — honest failure handling', () => {
             await user.click(screen.getByRole('button', { name: /next puzzle/i }));
             await waitFor(() => expect(mockSetCurrentIndex).toHaveBeenCalledWith(1));
             expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(2);
+        });
+
+        it('lets timeout own a delayed solve and never advances on the synthetic pass', async () => {
+            const pendingCheck = deferred<{ correct: boolean; result: string }>();
+            const pendingTimeoutReview = deferred<boolean>();
+            vi.mocked(checkPuzzle).mockReturnValue(pendingCheck.promise as never);
+            mockHandleReviewPuzzle.mockReturnValue(pendingTimeoutReview.promise);
+            const user = userEvent.setup();
+            render(<Puzzles />);
+
+            await typeAndCheck(user, 'e2e4');
+            expect(timedOut).not.toBeNull();
+            act(() => timedOut?.());
+            expect(mockHandleReviewPuzzle).toHaveBeenCalledWith('fail');
+
+            pendingCheck.resolve({ correct: true, result: 'pass' });
+            await Promise.resolve();
+            await Promise.resolve();
+            expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(1);
+            expect(mockHandleReviewPuzzle).not.toHaveBeenCalledWith('pass', expect.anything(), expect.anything());
+            expect(mockSetCurrentIndex).not.toHaveBeenCalled();
+
+            pendingTimeoutReview.resolve(false);
+            await Promise.resolve();
+            expect(mockSetCurrentIndex).not.toHaveBeenCalled();
+        });
+
+        it('ignores a delayed same-ID check response after the puzzle is rehydrated', async () => {
+            const pendingCheck = deferred<{ correct: boolean; result: string }>();
+            vi.mocked(checkPuzzle).mockReturnValue(pendingCheck.promise as never);
+            currentSessionReturn = makeSessionReturn();
+            const user = userEvent.setup();
+            const { rerender } = render(<Puzzles />);
+
+            await typeAndCheck(user, 'e2e4');
+            currentSessionReturn = {
+                ...currentSessionReturn,
+                puzzles: [{ ...puzzle }, { ...puzzle, id: 'p2' }],
+            };
+            rerender(<Puzzles />);
+            pendingCheck.resolve({ correct: true, result: 'pass' });
+
+            await waitFor(() => expect(mockHandleReviewPuzzle).not.toHaveBeenCalled());
+            expect(screen.queryByText('Correct! Excellent.')).not.toBeInTheDocument();
+            expect(mockSetCurrentIndex).not.toHaveBeenCalled();
         });
     });
 

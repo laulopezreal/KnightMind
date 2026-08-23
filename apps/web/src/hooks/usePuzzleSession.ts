@@ -363,20 +363,17 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
     }, [activeSessionId, checkSessionAchievements, refreshMotifPerformance, refreshRecentSessions, setActiveSessionId, timer.cleanup, username]);
 
     // ── handleReviewPuzzle ──
-    // In-flight guard: a fast double-click must not fire two concurrent POSTs.
-    const isReviewingRef = useRef(false);
+    // Concurrent callers must await the owner's real write, not a synthetic
+    // success. Timer, reveal, and solve paths can overlap before React renders.
+    const reviewOwnerPromiseRef = useRef<Promise<boolean> | null>(null);
     // Idempotency key for the current submission. Held across an error so a
     // manual retry of the *same* submission replays idempotently on the server;
     // cleared after success so the next distinct submission gets a fresh key.
     const reviewKeyRef = useRef<string | null>(null);
     const currentPuzzle = puzzles[currentIndex];
-    const handleReviewPuzzle = useCallback(async (result: 'pass' | 'fail', timeMs?: number, attemptedMove?: string): Promise<boolean> => {
-        if (!currentPuzzle || !username.trim()) return false;
-        // A concurrent submission already owns this review (e.g. the timer fired
-        // as the user clicked). Report success so the caller still advances —
-        // the review IS being recorded, just not by this call.
-        if (isReviewingRef.current) return true;
-        isReviewingRef.current = true;
+    const handleReviewPuzzle = useCallback((result: 'pass' | 'fail', timeMs?: number, attemptedMove?: string): Promise<boolean> => {
+        if (!currentPuzzle || !username.trim()) return Promise.resolve(false);
+        if (reviewOwnerPromiseRef.current) return reviewOwnerPromiseRef.current;
 
         if (!reviewKeyRef.current) {
             reviewKeyRef.current = generateReviewKey();
@@ -388,8 +385,7 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
             timeSpent = Date.now() - timer.puzzleStartTime;
         }
 
-        try {
-            const response = await reviewPuzzle(
+        const ownerPromise = reviewPuzzle(
                 currentPuzzle.id,
                 username.trim(),
                 result,
@@ -397,7 +393,7 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
                 activeSessionId || undefined,
                 clientReviewId,
                 attemptedMove,
-            );
+            ).then((response) => {
 
             // Success: rotate the key so the next distinct review gets a new one.
             reviewKeyRef.current = null;
@@ -434,14 +430,16 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
             // puzzle) inflate the count and end the session before the last
             // puzzle, stranding a dead "Next Puzzle" button.
             return true;
-        } catch (err) {
+        }).catch((err) => {
             console.error('Failed to review puzzle:', err);
             setError(err instanceof Error ? err.message : 'Failed to review puzzle');
             // Keep reviewKeyRef so a manual retry replays idempotently server-side.
             return false;
-        } finally {
-            isReviewingRef.current = false;
-        }
+        }).finally(() => {
+            reviewOwnerPromiseRef.current = null;
+        });
+        reviewOwnerPromiseRef.current = ownerPromise;
+        return ownerPromise;
     }, [
         activeSessionId,
         bestStreak,

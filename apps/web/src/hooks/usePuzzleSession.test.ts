@@ -456,6 +456,63 @@ describe('usePuzzleSession', () => {
         expect(mockedReviewPuzzle).toHaveBeenCalledTimes(1);
     });
 
+    it('makes concurrent callers await the owner promise instead of synthetic success', async () => {
+        const opts = makeOpts({ activeSessionId: 's1' });
+        const { result } = renderHook(() => usePuzzleSession(opts));
+        act(() => {
+            result.current.setPuzzles([mockPuzzle]);
+        });
+
+        let resolveReview: (value: ReviewPuzzleResponse) => void = () => {};
+        mockedReviewPuzzle.mockReturnValue(new Promise<ReviewPuzzleResponse>((resolve) => {
+            resolveReview = resolve;
+        }));
+
+        let concurrentSettled = false;
+        let ownerPromise!: Promise<boolean>;
+        let concurrentPromise!: Promise<boolean>;
+        act(() => {
+            ownerPromise = result.current.handleReviewPuzzle('fail');
+            concurrentPromise = result.current.handleReviewPuzzle('pass');
+            void concurrentPromise.then(() => { concurrentSettled = true; });
+        });
+
+        expect(concurrentPromise).toBe(ownerPromise);
+        await Promise.resolve();
+        expect(concurrentSettled).toBe(false);
+        expect(mockedReviewPuzzle).toHaveBeenCalledTimes(1);
+        expect(mockedReviewPuzzle).toHaveBeenCalledWith(
+            mockPuzzle.id, 'testuser', 'fail', expect.any(Number), 's1', expect.any(String), undefined,
+        );
+
+        await act(async () => {
+            resolveReview(makeReviewResponse({ result: 'fail' }));
+            await ownerPromise;
+        });
+        expect(await concurrentPromise).toBe(true);
+    });
+
+    it('releases a failed owner for an idempotent retry', async () => {
+        const opts = makeOpts({ activeSessionId: 's1' });
+        const { result } = renderHook(() => usePuzzleSession(opts));
+        act(() => {
+            result.current.setPuzzles([mockPuzzle]);
+        });
+        mockedReviewPuzzle.mockRejectedValueOnce(new Error('network down'));
+        mockedReviewPuzzle.mockResolvedValueOnce(makeReviewResponse({ result: 'fail' }));
+
+        await act(async () => {
+            const owner = result.current.handleReviewPuzzle('fail');
+            expect(result.current.handleReviewPuzzle('pass')).toBe(owner);
+            expect(await owner).toBe(false);
+        });
+        await act(async () => {
+            expect(await result.current.handleReviewPuzzle('fail')).toBe(true);
+        });
+        expect(mockedReviewPuzzle).toHaveBeenCalledTimes(2);
+        expect(mockedReviewPuzzle.mock.calls[0][5]).toBe(mockedReviewPuzzle.mock.calls[1][5]);
+    });
+
     it('should call checkAchievements with correct params on review', async () => {
         const checkAchievements = vi.fn();
         const opts = makeOpts({ activeSessionId: 's1', checkAchievements });
