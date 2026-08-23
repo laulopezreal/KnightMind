@@ -1809,7 +1809,7 @@ def _diagnosis_response(
     # /puzzles/{id}: withheld unless the caller reveals. The cause and its label
     # stay, because "loose piece awareness" is a coaching label, not the move.
     evidence = row.evidence_json or [] if reveal_solution else []
-    state = "unclear" if unclear else "ready"
+    state: Literal["ready", "unclear"] = "unclear" if unclear else "ready"
     return DiagnosisResponse(
         state=state,
         puzzle_id=puzzle_id,
