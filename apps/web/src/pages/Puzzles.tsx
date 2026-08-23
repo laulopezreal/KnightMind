@@ -5,12 +5,13 @@ import { AccessibleChessboard } from '../components/AccessibleChessboard';
 import { PageHeader } from '../components/PageHeader';
 import { ConnectAccountEmpty } from '../components/ConnectAccountEmpty';
 import { Chess } from 'chess.js';
-import { generatePuzzles, getDailyPuzzles, cancelJob, checkPuzzle, revealPuzzle, requestMotifHint, ApiError } from '../api';
+import { generatePuzzles, getDailyPuzzles, cancelJob, checkPuzzle, confirmPuzzleDiagnosis, getPuzzleDiagnosis, revealPuzzle, requestMotifHint, type PuzzleDiagnosis, ApiError } from '../api';
 import { JobStatusCard } from '../components/JobStatusCard';
 import { SessionSummaryCard } from '../components/SessionSummaryCard';
 import { WarmupSummary } from '../components/WarmupSummary';
 import { AchievementsList } from '../components/AchievementsList';
 import { RecentSessionsCard } from '../components/RecentSessionsCard';
+import { MistakeDiagnosisCard } from '../components/MistakeDiagnosisCard';
 import { useJobPolling } from '../hooks/useJobPolling';
 import { useChessUsername } from '../context/ChessUsernameContext';
 import { usePuzzleMode } from '../context/PuzzleModeContext';
@@ -36,6 +37,24 @@ const MOTIF_RANK_STYLE = {
 
 const motifRankStyle = (rank: string) =>
     MOTIF_RANK_STYLE[rank as keyof typeof MOTIF_RANK_STYLE] ?? MOTIF_RANK_STYLE.needs_work;
+
+type PuzzleInstanceOwner = {
+    puzzleId: string;
+    puzzleEpoch: number;
+    epoch: number;
+    username: string;
+};
+
+type DiagnosisConfirmationOwner = PuzzleInstanceOwner & {
+    requestId: number;
+};
+
+type TerminalDiagnosisOwner = {
+    puzzleId: string;
+    puzzleEpoch: number;
+    diagnosisEpoch: number;
+    username: string;
+};
 
 export default function Puzzles() {
     const { username } = useChessUsername();
@@ -70,6 +89,13 @@ export default function Puzzles() {
     // reveal, record a review). Deliberately separate from the puzzle `status`:
     // a failed request is NOT a wrong answer and must never be scored as one.
     const [actionError, setActionError] = useState<string | null>(null);
+    const [diagnosisResult, setDiagnosisResult] = useState<{ owner: PuzzleInstanceOwner; diagnosis: PuzzleDiagnosis } | null>(null);
+    const [diagnosisLoadingOwner, setDiagnosisLoadingOwner] = useState<PuzzleInstanceOwner | null>(null);
+    const [diagnosisConfirmationOwner, setDiagnosisConfirmationOwner] = useState<DiagnosisConfirmationOwner | null>(null);
+    const [diagnosisConfirmationError, setDiagnosisConfirmationError] = useState<{
+        owner: PuzzleInstanceOwner;
+        message: string;
+    } | null>(null);
 
     // Get motif filter and warmup mode from URL query params
     const [searchParams] = useSearchParams();
@@ -133,7 +159,7 @@ export default function Puzzles() {
         }
     }
 
-    const recordPuzzleOutcomeRef = useRef<(result: 'pass' | 'fail', attemptedMove?: string) => Promise<boolean>>(async () => false);
+    const recordPuzzleOutcomeRef = useRef<(result: 'pass' | 'fail', attemptedMove?: string, requestDiagnosis?: boolean) => Promise<boolean>>(async () => false);
     const isAdvancingPuzzle = useRef(false);
 
     const timer = usePuzzleTimer({
@@ -141,7 +167,7 @@ export default function Puzzles() {
         activeSessionId,
         onPuzzleTimeout: () => {
             if (statusRef.current === 'solving') {
-                void recordPuzzleOutcomeRef.current('fail');
+                void recordPuzzleOutcomeRef.current('fail', undefined, true);
                 setStatus('incorrect');
             }
         },
@@ -186,8 +212,23 @@ export default function Puzzles() {
     // disable rendering alone cannot close that race before React re-renders.
     const checkingPuzzleRef = useRef<{ puzzleId: string; epoch: number } | null>(null);
     const currentPuzzleIdRef = useRef<string | null>(currentPuzzle?.id ?? null);
+    const currentUsernameRef = useRef(username);
+    currentUsernameRef.current = username;
     const puzzleInstanceRef = useRef<typeof currentPuzzle>(currentPuzzle);
     const puzzleEpochRef = useRef(0);
+    // Diagnosis ownership crosses identity boundaries independently from the
+    // durable terminal-outcome owner. A username round-trip on the same puzzle
+    // must never revive a previous user's result or let its finalizer clear a
+    // current request, but it must not reopen or duplicate the review write.
+    const diagnosisEpochRef = useRef(0);
+    const diagnosisUsernameRef = useRef(username);
+    const diagnosisRequestRef = useRef<PuzzleInstanceOwner | null>(null);
+    const diagnosisConfirmationRequestRef = useRef<DiagnosisConfirmationOwner | null>(null);
+    const diagnosisConfirmationSequenceRef = useRef(0);
+    const mountedRef = useRef(true);
+    useEffect(() => () => {
+        mountedRef.current = false;
+    }, []);
     // The terminal decision is durable for this puzzle instance, while its
     // persistence promise is retryable. A failed write must not reopen the
     // decision to a delayed solve-check response.
@@ -196,24 +237,187 @@ export default function Puzzles() {
         epoch: number;
         result: 'pass' | 'fail';
         attemptedMove?: string;
+        requestDiagnosis: boolean;
+        diagnosisOwner: TerminalDiagnosisOwner;
     } | null>(null);
     if (puzzleInstanceRef.current !== currentPuzzle) {
         puzzleInstanceRef.current = currentPuzzle;
         puzzleEpochRef.current += 1;
+        diagnosisEpochRef.current += 1;
         checkingPuzzleRef.current = null;
         outcomeDecisionRef.current = null;
         outcomeWriteRef.current = null;
+        setDiagnosisResult(null);
+        setDiagnosisLoadingOwner(null);
+        diagnosisConfirmationRequestRef.current = null;
+        setDiagnosisConfirmationOwner(null);
+        setDiagnosisConfirmationError(null);
+    }
+    if (diagnosisUsernameRef.current !== username) {
+        diagnosisUsernameRef.current = username;
+        diagnosisEpochRef.current += 1;
+        diagnosisRequestRef.current = null;
+        setDiagnosisResult(null);
+        setDiagnosisLoadingOwner(null);
+        diagnosisConfirmationRequestRef.current = null;
+        setDiagnosisConfirmationOwner(null);
+        setDiagnosisConfirmationError(null);
     }
     currentPuzzleIdRef.current = currentPuzzle?.id ?? null;
+    const diagnosisOwner = diagnosisResult?.owner;
+    const activeDiagnosis =
+        diagnosisOwner &&
+        diagnosisOwner.puzzleId === currentPuzzle?.id &&
+        diagnosisOwner.puzzleEpoch === puzzleEpochRef.current &&
+        diagnosisOwner.epoch === diagnosisEpochRef.current &&
+        diagnosisOwner.username === username
+            ? diagnosisResult?.diagnosis ?? null
+            : null;
+    const diagnosisLoading =
+        !!diagnosisLoadingOwner &&
+        diagnosisLoadingOwner.puzzleId === currentPuzzle?.id &&
+        diagnosisLoadingOwner.puzzleEpoch === puzzleEpochRef.current &&
+        diagnosisLoadingOwner.epoch === diagnosisEpochRef.current &&
+        diagnosisLoadingOwner.username === username;
+    const diagnosisConfirmationSaving =
+        !!diagnosisConfirmationOwner &&
+        diagnosisConfirmationOwner.puzzleId === currentPuzzle?.id &&
+        diagnosisConfirmationOwner.puzzleEpoch === puzzleEpochRef.current &&
+        diagnosisConfirmationOwner.epoch === diagnosisEpochRef.current &&
+        diagnosisConfirmationOwner.username === username;
+    const activeDiagnosisConfirmationError =
+        diagnosisConfirmationError &&
+        diagnosisConfirmationError.owner.puzzleId === currentPuzzle?.id &&
+        diagnosisConfirmationError.owner.puzzleEpoch === puzzleEpochRef.current &&
+        diagnosisConfirmationError.owner.epoch === diagnosisEpochRef.current &&
+        diagnosisConfirmationError.owner.username === username
+            ? diagnosisConfirmationError.message
+            : null;
 
-    const recordPuzzleOutcome = (result: 'pass' | 'fail', attemptedMove?: string): Promise<boolean> => {
+    const requestDiagnosisForResolvedOutcome = (owner: TerminalDiagnosisOwner) => {
+        if (
+            currentPuzzleIdRef.current !== owner.puzzleId ||
+            puzzleEpochRef.current !== owner.puzzleEpoch ||
+            diagnosisEpochRef.current !== owner.diagnosisEpoch ||
+            currentUsernameRef.current !== owner.username
+        ) return;
+        const diagnosisOwner: PuzzleInstanceOwner = {
+            puzzleId: owner.puzzleId,
+            puzzleEpoch: owner.puzzleEpoch,
+            epoch: owner.diagnosisEpoch,
+            username: owner.username,
+        };
+        const existingRequest = diagnosisRequestRef.current;
+        if (
+            existingRequest?.puzzleId === diagnosisOwner.puzzleId &&
+            existingRequest.epoch === diagnosisOwner.epoch &&
+            existingRequest.username === diagnosisOwner.username
+        ) return;
+
+        diagnosisRequestRef.current = diagnosisOwner;
+        setDiagnosisLoadingOwner(diagnosisOwner);
+        // Keep this supplementary request behind the successful review write.
+        // It is deliberately isolated from play/session control flow: an API
+        // failure leaves the completed puzzle usable and move-on untouched.
+        void Promise.resolve()
+            .then(() => getPuzzleDiagnosis(diagnosisOwner.puzzleId, diagnosisOwner.username, true))
+            .then((diagnosis) => {
+                if (
+                    currentPuzzleIdRef.current === diagnosisOwner.puzzleId &&
+                    diagnosisEpochRef.current === diagnosisOwner.epoch &&
+                    currentUsernameRef.current === diagnosisOwner.username
+                ) {
+                    setDiagnosisResult({ owner: diagnosisOwner, diagnosis });
+                }
+            })
+            .catch(() => undefined)
+            .finally(() => {
+                if (
+                    currentPuzzleIdRef.current === diagnosisOwner.puzzleId &&
+                    diagnosisEpochRef.current === diagnosisOwner.epoch &&
+                    currentUsernameRef.current === diagnosisOwner.username
+                ) {
+                    setDiagnosisLoadingOwner(null);
+                }
+            });
+    };
+
+    const confirmResolvedDiagnosis = (cause: string) => {
+        if (!activeDiagnosis || !diagnosisOwner || diagnosisConfirmationSaving) return;
+        const owner = diagnosisOwner;
+        const requestOwner: DiagnosisConfirmationOwner = {
+            ...owner,
+            requestId: diagnosisConfirmationSequenceRef.current + 1,
+        };
+        diagnosisConfirmationSequenceRef.current = requestOwner.requestId;
+        diagnosisConfirmationRequestRef.current = requestOwner;
+        setDiagnosisConfirmationOwner(requestOwner);
+        setDiagnosisConfirmationError(null);
+
+        void Promise.resolve()
+            .then(() => confirmPuzzleDiagnosis(owner.puzzleId, owner.username, cause))
+            .then((diagnosis) => {
+                if (
+                    mountedRef.current &&
+                    diagnosisConfirmationRequestRef.current?.requestId === requestOwner.requestId &&
+                    currentPuzzleIdRef.current === owner.puzzleId &&
+                    puzzleEpochRef.current === owner.puzzleEpoch &&
+                    diagnosisEpochRef.current === owner.epoch &&
+                    currentUsernameRef.current === owner.username
+                ) {
+                    setDiagnosisResult({ owner, diagnosis });
+                    setDiagnosisConfirmationError(null);
+                }
+            })
+            .catch(() => {
+                if (
+                    mountedRef.current &&
+                    diagnosisConfirmationRequestRef.current?.requestId === requestOwner.requestId &&
+                    currentPuzzleIdRef.current === owner.puzzleId &&
+                    puzzleEpochRef.current === owner.puzzleEpoch &&
+                    diagnosisEpochRef.current === owner.epoch &&
+                    currentUsernameRef.current === owner.username
+                ) {
+                    setDiagnosisConfirmationError({
+                        owner,
+                        message: 'Couldn’t save your label. Try again.',
+                    });
+                }
+            })
+            .finally(() => {
+                if (
+                    mountedRef.current &&
+                    diagnosisConfirmationRequestRef.current?.requestId === requestOwner.requestId &&
+                    currentPuzzleIdRef.current === owner.puzzleId &&
+                    puzzleEpochRef.current === owner.puzzleEpoch &&
+                    diagnosisEpochRef.current === owner.epoch &&
+                    currentUsernameRef.current === owner.username
+                ) {
+                    setDiagnosisConfirmationOwner(null);
+                }
+            });
+    };
+
+    const recordPuzzleOutcome = (result: 'pass' | 'fail', attemptedMove?: string, requestDiagnosis = false): Promise<boolean> => {
         if (!currentPuzzle) return Promise.resolve(false);
         const puzzleId = currentPuzzle.id;
         const epoch = puzzleEpochRef.current;
         const existingDecision = outcomeDecisionRef.current;
         const decision = existingDecision?.puzzleId === puzzleId && existingDecision.epoch === epoch
             ? existingDecision
-            : { puzzleId, epoch, result, attemptedMove };
+            : {
+                puzzleId,
+                epoch,
+                result,
+                attemptedMove,
+                requestDiagnosis,
+                diagnosisOwner: {
+                    puzzleId,
+                    puzzleEpoch: epoch,
+                    diagnosisEpoch: diagnosisEpochRef.current,
+                    username,
+                },
+            };
         if (decision !== existingDecision) outcomeDecisionRef.current = decision;
         if (outcomeWriteRef.current) return outcomeWriteRef.current;
 
@@ -226,6 +430,11 @@ export default function Puzzles() {
                 return false;
             });
         outcomeWriteRef.current = writePromise;
+        void writePromise.then((recorded) => {
+            if (recorded && decision.requestDiagnosis) {
+                requestDiagnosisForResolvedOutcome(decision.diagnosisOwner);
+            }
+        });
         return writePromise;
     };
     recordPuzzleOutcomeRef.current = recordPuzzleOutcome;
@@ -543,7 +752,7 @@ export default function Puzzles() {
                 // needs the review to have landed before it asks for a
                 // diagnosis the gate keys on attempts > 0.
                 const solvedLine = [...attemptedLine, normalized].join(' ');
-                void recordPuzzleOutcome('pass', solvedLine || undefined);
+                void recordPuzzleOutcome('pass', solvedLine || undefined, true);
             }
         } catch (err) {
             if (currentPuzzleIdRef.current !== puzzleId || puzzleEpochRef.current !== puzzleEpoch) return;
@@ -637,7 +846,7 @@ export default function Puzzles() {
         // the opposite bug: move-on skipped, and a later failure was never
         // retried. Awaiting the same promise has neither -- it yields the real
         // outcome exactly once, with no second post.
-        outcomeWriteRef.current = recordPuzzleOutcome('fail');
+        outcomeWriteRef.current = recordPuzzleOutcome('fail', undefined, true);
         await outcomeWriteRef.current;
     };
 
@@ -1573,6 +1782,19 @@ export default function Puzzles() {
                             )}
                         </div>
 
+                        {(activeDiagnosis || diagnosisLoading) && (
+                            <div data-testid="post-resolution-diagnosis" className="min-w-0">
+                                <MistakeDiagnosisCard
+                                    diagnosis={activeDiagnosis}
+                                    revealed
+                                    loading={diagnosisLoading}
+                                    savingConfirmation={diagnosisConfirmationSaving}
+                                    confirmationError={activeDiagnosisConfirmationError}
+                                    onConfirm={confirmResolvedDiagnosis}
+                                />
+                            </div>
+                        )}
+
                         {/* Connectivity/action failures. Sits outside the status
                             region (which is polite and describes the puzzle) and
                             is announced assertively — it means an action the user
@@ -1763,7 +1985,16 @@ export default function Puzzles() {
                                                     setActionError(null);
                                                     // Don't close the session on an unrecorded
                                                     // review — the summary would be missing it.
-                                                    if (!await handleReviewPuzzle('fail')) {
+                                                    let recorded = await recordPuzzleOutcome('fail', undefined, true);
+                                                    // The timeout write may already have settled false
+                                                    // before Finish Session is clicked. Retry through the
+                                                    // same terminal decision and diagnosis owner, rather
+                                                    // than bypassing it with a raw review call.
+                                                    if (!recorded) {
+                                                        outcomeWriteRef.current = null;
+                                                        recorded = await recordPuzzleOutcome('fail', undefined, true);
+                                                    }
+                                                    if (!recorded) {
                                                         setActionError("We couldn't save that result — the session is still open. Check your connection and try again.");
                                                         return;
                                                     }

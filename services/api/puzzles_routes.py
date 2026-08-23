@@ -24,7 +24,7 @@ from typing import Annotated, Literal
 
 import chess
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, model_serializer
 from sqlalchemy import and_, case, func, literal, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -1750,8 +1750,20 @@ class DiagnosisResponse(BaseModel):
     explanation: str | None = None
     training_recommendation: str | None = None
     user_confirmed_cause: str | None = None
+    # A safe, server-owned taxonomy for post-resolution feedback. It is set
+    # only on ready responses, so clients cannot infer anything from an
+    # unresolved/withheld response and never need to copy the taxonomy.
+    cause_options: list[CauseOption] | None = None
     source: str | None = None
     diagnosed_at: datetime | None = None
+
+    @model_serializer(mode="wrap")
+    def _omit_unavailable_cause_options(self, handler):
+        """Keep the options absent, not merely empty, until a ready diagnosis."""
+        data = handler(self)
+        if data["cause_options"] is None:
+            del data["cause_options"]
+        return data
 
 
 class DiagnosisConfirmRequest(BaseModel):
@@ -1797,8 +1809,9 @@ def _diagnosis_response(
     # /puzzles/{id}: withheld unless the caller reveals. The cause and its label
     # stay, because "loose piece awareness" is a coaching label, not the move.
     evidence = row.evidence_json or [] if reveal_solution else []
+    state: Literal["ready", "unclear"] = "unclear" if unclear else "ready"
     return DiagnosisResponse(
-        state="unclear" if unclear else "ready",
+        state=state,
         puzzle_id=puzzle_id,
         primary_motif=row.primary_motif,
         primary_cause=cause,
@@ -1811,6 +1824,14 @@ def _diagnosis_response(
         explanation=row.explanation,
         training_recommendation=row.training_recommendation,
         user_confirmed_cause=row.user_confirmed_cause,
+        cause_options=(
+            [
+                CauseOption(value=cause, label=label)
+                for cause, label in CAUSE_LABELS.items()
+            ]
+            if state == "ready"
+            else None
+        ),
         source=row.source,
         diagnosed_at=row.updated_at,
     )

@@ -489,6 +489,11 @@ export interface DiagnosisEvidenceItem {
     value: string;
 }
 
+export interface DiagnosisCauseOption {
+    value: string;
+    label: string;
+}
+
 export interface PuzzleDiagnosis {
     state: DiagnosisState;
     puzzle_id: string;
@@ -503,6 +508,8 @@ export interface PuzzleDiagnosis {
     explanation?: string | null;
     training_recommendation?: string | null;
     user_confirmed_cause?: string | null;
+    /** Server-supplied only after a resolved, ready diagnosis. */
+    cause_options?: DiagnosisCauseOption[];
     source?: string | null;
     diagnosed_at?: string | null;
 }
@@ -523,5 +530,26 @@ export async function getPuzzleDiagnosis(
     if (reveal) params.append('reveal', 'true');
     return await request<PuzzleDiagnosis>(
         `/puzzles/${encodeURIComponent(puzzleId)}/diagnosis?${params}`
+    );
+}
+
+/**
+ * Persist a confirmation or correction for an already-resolved diagnosis.
+ * The server remains the source of supported cause values and returns the
+ * diagnosis that should replace the card's current state.
+ */
+export async function confirmPuzzleDiagnosis(
+    puzzleId: string,
+    username: string,
+    cause: string
+): Promise<PuzzleDiagnosis> {
+    const params = new URLSearchParams({ username, reveal: 'true' });
+    return await request<PuzzleDiagnosis>(
+        `/puzzles/${encodeURIComponent(puzzleId)}/diagnosis/confirm?${params}`,
+        {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ cause }),
+        }
     );
 }

@@ -1,5 +1,6 @@
 import { render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import userEvent from '@testing-library/user-event';
+import { describe, expect, it, vi } from 'vitest';
 import { MistakeDiagnosisCard } from './MistakeDiagnosisCard';
 import type { PuzzleDiagnosis } from '../api/puzzles';
 
@@ -86,6 +87,131 @@ describe('MistakeDiagnosisCard', () => {
             );
             expect(container.textContent).not.toMatch(/\d+%/);
             expect(container.textContent).not.toMatch(/confiden/i);
+        });
+
+        it('confirms the displayed cause once without expanding the taxonomy', async () => {
+            const onConfirm = vi.fn();
+            const user = userEvent.setup();
+            render(
+                <MistakeDiagnosisCard
+                    diagnosis={diagnosis({
+                        cause_options: [
+                            { value: 'loose_piece_awareness', label: 'Loose piece awareness' },
+                            { value: 'king_safety_blindness', label: 'King safety blindness' },
+                        ],
+                    })}
+                    revealed
+                    onConfirm={onConfirm}
+                />
+            );
+
+            expect(screen.getByRole('button', { name: /this fits/i })).toBeInTheDocument();
+            expect(screen.getByRole('group')).not.toHaveAttribute('open');
+            await user.click(screen.getByRole('button', { name: /this fits/i }));
+            expect(onConfirm).toHaveBeenCalledTimes(1);
+            expect(onConfirm).toHaveBeenCalledWith('loose_piece_awareness');
+        });
+
+        it('suppresses duplicate writes while a confirmation is saving', async () => {
+            const onConfirm = vi.fn();
+            const user = userEvent.setup();
+            render(
+                <MistakeDiagnosisCard
+                    diagnosis={diagnosis({
+                        cause_options: [
+                            { value: 'loose_piece_awareness', label: 'Loose piece awareness' },
+                            { value: 'king_safety_blindness', label: 'King safety blindness' },
+                        ],
+                    })}
+                    revealed
+                    savingConfirmation
+                    onConfirm={onConfirm}
+                />
+            );
+
+            const fits = screen.getByRole('button', { name: /saving/i });
+            expect(fits).toBeDisabled();
+            await user.click(fits);
+            expect(onConfirm).not.toHaveBeenCalled();
+        });
+
+        it('submits the selected server-supplied alternative cause', async () => {
+            const onConfirm = vi.fn();
+            const user = userEvent.setup();
+            render(
+                <MistakeDiagnosisCard
+                    diagnosis={diagnosis({
+                        cause_options: [
+                            { value: 'loose_piece_awareness', label: 'Loose piece awareness' },
+                            { value: 'king_safety_blindness', label: 'King safety blindness' },
+                        ],
+                    })}
+                    revealed
+                    onConfirm={onConfirm}
+                />
+            );
+
+            await user.click(screen.getByText('Choose a different cause'));
+            await user.click(screen.getByRole('button', { name: 'King safety blindness' }));
+            expect(onConfirm).toHaveBeenCalledWith('king_safety_blindness');
+        });
+
+        it('keeps correction compact, keyboard-operable, and accessible at the mobile structure', async () => {
+            const onConfirm = vi.fn();
+            const user = userEvent.setup();
+            const { container } = render(
+                <div style={{ width: 390, minHeight: 844 }}>
+                    <MistakeDiagnosisCard
+                        revealed
+                        onConfirm={onConfirm}
+                        diagnosis={diagnosis({
+                            cause_options: [
+                                { value: 'loose_piece_awareness', label: 'Loose piece awareness' },
+                                { value: 'king_safety_blindness', label: 'King safety blindness' },
+                                { value: 'forcing_move_blindness', label: 'Forcing move blindness' },
+                            ],
+                        })}
+                    />
+                </div>
+            );
+            const fits = screen.getByRole('button', { name: 'This fits' });
+            const disclosure = screen.getByText('Choose a different cause');
+            const details = disclosure.closest('details');
+
+            expect(details).not.toBeNull();
+            expect(details).not.toHaveAttribute('open');
+            // Native disclosure keeps descendants in the DOM, but not in its
+            // visible disclosure state; `open` is the platform contract.
+            expect(fits.compareDocumentPosition(disclosure) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+            // `summary` is the native disclosure control: it receives focus
+            // directly, and browsers supply Enter/Space activation without a
+            // custom keyboard handler. JSDOM does not implement that default
+            // action, so exercise the focused native control with a click.
+            disclosure.focus();
+            expect(document.activeElement).toBe(disclosure);
+            await user.click(disclosure);
+            expect(details).toHaveAttribute('open');
+            const alternative = screen.getByRole('button', { name: 'King safety blindness' });
+            expect(alternative).toBeEnabled();
+            expect(alternative.compareDocumentPosition(fits) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy();
+            expect(container.querySelector('.flex.flex-wrap')).toBeInTheDocument();
+        });
+
+        it('shows confirmation failure without disabling the move-on action around it', () => {
+            render(
+                <MistakeDiagnosisCard
+                    diagnosis={diagnosis({
+                        cause_options: [{ value: 'loose_piece_awareness', label: 'Loose piece awareness' }],
+                    })}
+                    revealed
+                    confirmationError="Couldn’t save your label. Try again."
+                    onConfirm={vi.fn()}
+                />
+            );
+
+            expect(screen.getByRole('alert')).toHaveTextContent(/couldn’t save your label/i);
+            expect(screen.getByRole('button', { name: /this fits/i })).toBeEnabled();
         });
     });
 
