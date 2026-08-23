@@ -98,13 +98,22 @@ export default function Puzzles() {
     } = insights;
 
     const statusRef = useRef(status);
-    // The reveal's in-flight review write, or null. Move-on awaits THIS rather
+    // The in-flight review write for THIS puzzle's outcome, or null. Covers
+    // the reveal (a self-reported fail) and the solve (a pass); an incorrect
+    // attempt is recorded by the user's own "Mark as failed" button and is
+    // deliberately not automatic.
+    //
+    // Recording at outcome rather than at move-on is what makes the
+    // post-resolution panel possible: the diagnosis is gated on attempts > 0,
+    // so a panel shown before the review landed would be withheld.
+    //
+    // Move-on awaits THIS rather
     // than a boolean, because during the flight no boolean is correct: the
     // outcome is not known yet, and both orderings of a flag lose a result in
     // one direction or the other (advance on an unlanded write, or skip a
     // retry after a failed one). Cleared on failure so move-on retries with
     // the idempotency key the session hook kept.
-    const revealWriteRef = useRef<Promise<boolean> | null>(null);
+    const outcomeWriteRef = useRef<Promise<boolean> | null>(null);
     // Rung 0 of the hint ladder (§5.1): the motif, asked for explicitly.
     // Held here rather than in `useClue` because that hook is shared with
     // Engine analysis, which has no motif and no gate -- renumbering its rungs
@@ -124,7 +133,7 @@ export default function Puzzles() {
         }
     }
 
-    const handleReviewPuzzleRef = useRef<((result: 'pass' | 'fail', timeMs?: number) => Promise<boolean>)>(async () => false);
+    const recordPuzzleOutcomeRef = useRef<(result: 'pass' | 'fail', attemptedMove?: string) => Promise<boolean>>(async () => false);
     const isAdvancingPuzzle = useRef(false);
 
     const timer = usePuzzleTimer({
@@ -132,7 +141,7 @@ export default function Puzzles() {
         activeSessionId,
         onPuzzleTimeout: () => {
             if (statusRef.current === 'solving') {
-                handleReviewPuzzleRef.current('fail');
+                void recordPuzzleOutcomeRef.current('fail');
                 setStatus('incorrect');
             }
         },
@@ -172,6 +181,54 @@ export default function Puzzles() {
 
     const startPuzzleTimer = timer.startPuzzleTimer;
     const currentPuzzle = puzzles[currentIndex];
+    // A solve check owns one puzzle at a time. The same action is reachable
+    // through typed input, Enter, click-to-move, drag, and keyboard movement;
+    // disable rendering alone cannot close that race before React re-renders.
+    const checkingPuzzleRef = useRef<{ puzzleId: string; epoch: number } | null>(null);
+    const currentPuzzleIdRef = useRef<string | null>(currentPuzzle?.id ?? null);
+    const puzzleInstanceRef = useRef<typeof currentPuzzle>(currentPuzzle);
+    const puzzleEpochRef = useRef(0);
+    // The terminal decision is durable for this puzzle instance, while its
+    // persistence promise is retryable. A failed write must not reopen the
+    // decision to a delayed solve-check response.
+    const outcomeDecisionRef = useRef<{
+        puzzleId: string;
+        epoch: number;
+        result: 'pass' | 'fail';
+        attemptedMove?: string;
+    } | null>(null);
+    if (puzzleInstanceRef.current !== currentPuzzle) {
+        puzzleInstanceRef.current = currentPuzzle;
+        puzzleEpochRef.current += 1;
+        checkingPuzzleRef.current = null;
+        outcomeDecisionRef.current = null;
+        outcomeWriteRef.current = null;
+    }
+    currentPuzzleIdRef.current = currentPuzzle?.id ?? null;
+
+    const recordPuzzleOutcome = (result: 'pass' | 'fail', attemptedMove?: string): Promise<boolean> => {
+        if (!currentPuzzle) return Promise.resolve(false);
+        const puzzleId = currentPuzzle.id;
+        const epoch = puzzleEpochRef.current;
+        const existingDecision = outcomeDecisionRef.current;
+        const decision = existingDecision?.puzzleId === puzzleId && existingDecision.epoch === epoch
+            ? existingDecision
+            : { puzzleId, epoch, result, attemptedMove };
+        if (decision !== existingDecision) outcomeDecisionRef.current = decision;
+        if (outcomeWriteRef.current) return outcomeWriteRef.current;
+
+        const review = decision.attemptedMove === undefined
+            ? handleReviewPuzzle(decision.result)
+            : handleReviewPuzzle(decision.result, undefined, decision.attemptedMove);
+        const writePromise = Promise.resolve(review)
+            .catch((err) => {
+                console.error('Failed to record puzzle outcome:', err);
+                return false;
+            });
+        outcomeWriteRef.current = writePromise;
+        return writePromise;
+    };
+    recordPuzzleOutcomeRef.current = recordPuzzleOutcome;
     // The clue/board work off the on-demand-fetched solution, never a pre-sent
     // one — so the hint machinery only has the answer once the user asks for it.
     const clue = useClue(revealedMove ?? '', currentPuzzle?.fen ?? '', { maxStage: 3 });
@@ -200,7 +257,7 @@ export default function Puzzles() {
                 setPuzzles(res.puzzles);
                 setCurrentIndex(0);
                 setStatus('solving');
-                revealWriteRef.current = null;
+                outcomeWriteRef.current = null;
                 setMotifHint(null);
                 setMotifHintAsked(false);
             setMotifHint(null);
@@ -325,10 +382,6 @@ export default function Puzzles() {
         }
     };
 
-    // Keep ref in sync for timer timeout callback
-    useEffect(() => {
-        handleReviewPuzzleRef.current = handleReviewPuzzle;
-    }, [handleReviewPuzzle]);
 
     // Auto-start warmup session when in warmup mode
     useEffect(() => {
@@ -435,6 +488,12 @@ export default function Puzzles() {
     // end-to-end on review. `boardAfterMove` already has the user's move applied.
     const processUserMove = async (boardAfterMove: Chess, uciMove: string, fenBefore: string) => {
         if (!currentPuzzle) return;
+        const puzzleId = currentPuzzle.id;
+        const puzzleEpoch = puzzleEpochRef.current;
+        const checkOwner = { puzzleId, epoch: puzzleEpoch };
+        const activeCheckOwner = checkingPuzzleRef.current;
+        if (activeCheckOwner?.puzzleId === puzzleId && activeCheckOwner.epoch === puzzleEpoch) return;
+        checkingPuzzleRef.current = checkOwner;
         const normalized = uciMove.toLowerCase();
         // Reflect the user's move immediately.
         setGame(new Chess(boardAfterMove.fen()));
@@ -442,6 +501,14 @@ export default function Puzzles() {
         setActionError(null);
         try {
             const res = await checkPuzzle(currentPuzzle.id, username, normalized, linePlyIndex);
+            // A refresh or rotation may have replaced the puzzle while its
+            // request was in flight. Its result must not become the current
+            // puzzle's status or outcome write.
+            if (currentPuzzleIdRef.current !== puzzleId || puzzleEpochRef.current !== puzzleEpoch) return;
+            // Timeout/reveal already decided this puzzle's outcome. A delayed
+            // check cannot overwrite that decision with a pass, even when the
+            // terminal outcome's failed write is available for retry.
+            if (outcomeDecisionRef.current?.puzzleId === puzzleId && outcomeDecisionRef.current.epoch === puzzleEpoch) return;
             if (!res.correct) {
                 setStatus('incorrect');
                 return;
@@ -471,8 +538,15 @@ export default function Puzzles() {
                 // status stays 'solving' — prompt the next move.
             } else {
                 setStatus('correct');
+                // Record the solve NOW, not at move-on. Same reason as the
+                // reveal: the outcome is known, and the post-resolution panel
+                // needs the review to have landed before it asks for a
+                // diagnosis the gate keys on attempts > 0.
+                const solvedLine = [...attemptedLine, normalized].join(' ');
+                void recordPuzzleOutcome('pass', solvedLine || undefined);
             }
         } catch (err) {
+            if (currentPuzzleIdRef.current !== puzzleId || puzzleEpochRef.current !== puzzleEpoch) return;
             // A failed REQUEST is not a failed ATTEMPT. Marking it 'incorrect'
             // told the user they blundered when the network dropped, broke
             // their streak, and offered "Mark as Failed & Try Again" — which
@@ -482,6 +556,10 @@ export default function Puzzles() {
             setGame(new Chess(fenBefore));
             setUserMove('');
             setActionError("We couldn't check that move — your attempt wasn't recorded. Check your connection and try again.");
+        } finally {
+            if (checkingPuzzleRef.current === checkOwner) {
+                checkingPuzzleRef.current = null;
+            }
         }
     };
 
@@ -559,8 +637,8 @@ export default function Puzzles() {
         // the opposite bug: move-on skipped, and a later failure was never
         // retried. Awaiting the same promise has neither -- it yields the real
         // outcome exactly once, with no second post.
-        revealWriteRef.current = handleReviewPuzzle('fail');
-        await revealWriteRef.current;
+        outcomeWriteRef.current = recordPuzzleOutcome('fail');
+        await outcomeWriteRef.current;
     };
 
     // One graduated hint ladder, identical with or without an active session:
@@ -715,7 +793,8 @@ export default function Puzzles() {
         if (currentIndex < puzzles.length - 1) {
             setCurrentIndex(currentIndex + 1);
             setStatus('solving');
-            revealWriteRef.current = null;
+            outcomeDecisionRef.current = null;
+            outcomeWriteRef.current = null;
             setMotifHint(null);
             setMotifHintAsked(false);
             setUserMove('');
@@ -734,37 +813,31 @@ export default function Puzzles() {
         try {
             setActionError(null);
             let recorded = true;
-            if (status === 'correct') {
-                // Send the WHOLE solved line (space-separated UCI) so the SERVER
-                // re-verifies every ply — a puzzle counts as solved only when the
-                // full line was played correctly. Falls back to the single move
-                // for legacy single-move puzzles.
-                const solvedLine = attemptedLine.length > 0
-                    ? attemptedLine.join(' ')
-                    : (userMove.trim().toLowerCase() || undefined);
-                recorded = await handleReviewPuzzle('pass', undefined, solvedLine);
-            } else if (status === 'revealed') {
-                // Revealed solution: a self-reported fail, no move to verify.
-                // Already recorded by `handleRevealSolution` in the normal case
-                // — re-sending here would rotate to a fresh idempotency key and
-                // bank a SECOND fail, moving ease_factor twice for one attempt.
-                // Only retry when the reveal-time write did not reach the
-                // server; the key it kept makes that retry idempotent.
-                // Await the reveal's own write rather than guessing at it.
-                // If it is still in flight this blocks on the real outcome; if
-                // it already failed, this retries with the key the hook kept.
-                recorded = revealWriteRef.current
-                    ? await revealWriteRef.current
-                    : await handleReviewPuzzle('fail');
+            if (status === 'correct' || status === 'revealed') {
+                // Await the write this puzzle's outcome already started rather
+                // than firing a second one. If it is still in flight this
+                // blocks on the real outcome; if it failed, the ref was
+                // cleared and this retries with the key the hook kept.
+                //
+                // Both branches were separate before, and the 'correct' one
+                // sent its own review here -- which is why the solve was not
+                // recorded until the user moved on, and why a panel shown in
+                // between saw attempts = 0.
+                if (outcomeWriteRef.current) {
+                    recorded = await outcomeWriteRef.current;
+                } else {
+                    const solvedLine = attemptedLine.length > 0
+                        ? attemptedLine.join(' ')
+                        : (userMove.trim().toLowerCase() || undefined);
+                    recorded = await recordPuzzleOutcome(
+                        status === 'correct' ? 'pass' : 'fail',
+                        status === 'correct' ? solvedLine : undefined,
+                    );
+                }
                 if (!recorded) {
-                    revealWriteRef.current = null;
-                setMotifHint(null);
-                setMotifHintAsked(false);
-            setMotifHint(null);
-            setMotifHintAsked(false);
+                    outcomeWriteRef.current = null;
                 }
             }
-
             // A review that failed to reach the server must NOT advance the
             // session: doing so silently discarded the attempt (and, on the last
             // puzzle, baked the loss into the summary). Stay put and let the
@@ -1645,7 +1718,8 @@ export default function Puzzles() {
                                             type="button"
                                             onClick={async () => {
                                                 setActionError(null);
-                                                if (!await handleReviewPuzzle('fail')) {
+                                                if (!await recordPuzzleOutcome('fail')) {
+                                                    outcomeWriteRef.current = null;
                                                     setActionError("We couldn't save that result — nothing was recorded. Check your connection and try again.");
                                                     return;
                                                 }

@@ -13,7 +13,7 @@
  * end to end.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import Puzzles from './Puzzles';
 import { setupMockLocalStorage } from '../test/helpers';
@@ -21,6 +21,8 @@ import { checkPuzzle, revealPuzzle } from '../api';
 import type { UsePuzzleSessionReturn } from '../hooks/usePuzzleSession';
 
 let mockSearchParams = new URLSearchParams();
+let timedOut: (() => void) | null = null;
+let currentSessionReturn: UsePuzzleSessionReturn | null = null;
 
 vi.mock('react-router-dom', () => ({
     useNavigate: () => vi.fn(),
@@ -94,7 +96,10 @@ vi.mock('../hooks/usePuzzleTimer', () => {
         puzzleStartTime: null,
         timeRemaining: 0,
     };
-    return { usePuzzleTimer: () => stub };
+    return { usePuzzleTimer: (options: { onPuzzleTimeout?: () => void }) => {
+        timedOut = options.onPuzzleTimeout ?? null;
+        return stub;
+    } };
 });
 
 vi.mock('../components/JobStatusCard', () => ({ JobStatusCard: () => null }));
@@ -161,7 +166,7 @@ function makeSessionReturn(): UsePuzzleSessionReturn {
 }
 
 vi.mock('../hooks/usePuzzleSession', () => ({
-    usePuzzleSession: () => makeSessionReturn(),
+    usePuzzleSession: () => currentSessionReturn ?? makeSessionReturn(),
 }));
 
 const typeAndCheck = async (user: ReturnType<typeof userEvent.setup>, move: string) => {
@@ -170,10 +175,22 @@ const typeAndCheck = async (user: ReturnType<typeof userEvent.setup>, move: stri
     await user.click(screen.getByRole('button', { name: /check entered move/i }));
 };
 
+function deferred<T>() {
+    let resolve!: (value: T) => void;
+    let reject!: (reason?: unknown) => void;
+    const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+        resolve = resolvePromise;
+        reject = rejectPromise;
+    });
+    return { promise, resolve, reject };
+}
+
 describe('Puzzles — honest failure handling', () => {
     beforeEach(() => {
         setupMockLocalStorage();
         mockSearchParams = new URLSearchParams();
+        timedOut = null;
+        currentSessionReturn = null;
         mockHandleReviewPuzzle.mockReset().mockResolvedValue(true);
         mockHandleCompleteSession.mockClear();
         mockSetCurrentIndex.mockClear();
@@ -242,6 +259,243 @@ describe('Puzzles — honest failure handling', () => {
 
         await waitFor(() => expect(mockSetCurrentIndex).toHaveBeenCalledWith(1));
         expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
+
+    describe('a solve is recorded at the solve, not at move-on', () => {
+        // The prerequisite for the post-resolution panel. The diagnosis gate
+        // keys on attempts > 0, so a panel shown between the solve and the
+        // move-on -- which is exactly when it should be on screen -- would
+        // have asked for a diagnosis the server still considered withheld.
+
+        it('records the pass as soon as the puzzle is solved', async () => {
+            const user = userEvent.setup();
+            render(<Puzzles />);
+
+            await typeAndCheck(user, 'e2e4');
+
+            await waitFor(() =>
+                expect(mockHandleReviewPuzzle).toHaveBeenCalledWith(
+                    'pass', undefined, expect.any(String),
+                ),
+            );
+            expect(mockSetCurrentIndex).not.toHaveBeenCalled();
+        });
+
+        it('does not record a second pass when the user moves on', async () => {
+            // handleReviewPuzzle rotates its idempotency key on success, so a
+            // second call banks a SECOND pass and moves ease_factor twice.
+            const user = userEvent.setup();
+            render(<Puzzles />);
+
+            await typeAndCheck(user, 'e2e4');
+            await waitFor(() => expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(1));
+
+            await user.click(screen.getByRole('button', { name: /next puzzle/i }));
+
+            await waitFor(() => expect(mockSetCurrentIndex).toHaveBeenCalledWith(1));
+            expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(1);
+        });
+
+        it('stays put when the solve write did not land', async () => {
+            mockHandleReviewPuzzle.mockResolvedValue(false);
+            const user = userEvent.setup();
+            render(<Puzzles />);
+
+            await typeAndCheck(user, 'e2e4');
+            await waitFor(() => expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(1));
+
+            await user.click(screen.getByRole('button', { name: /next puzzle/i }));
+
+            await waitFor(() =>
+                expect(screen.getByRole('alert')).toHaveTextContent(/couldn't save that result/i),
+            );
+            expect(mockSetCurrentIndex).not.toHaveBeenCalled();
+        });
+
+        it('ignores a duplicate solving submission and waits for its owner write before advancing', async () => {
+            const pendingCheck = deferred<{ correct: boolean; result: string }>();
+            const pendingReview = deferred<boolean>();
+            vi.mocked(checkPuzzle).mockReturnValue(pendingCheck.promise as never);
+            mockHandleReviewPuzzle.mockReturnValue(pendingReview.promise);
+            const user = userEvent.setup();
+            render(<Puzzles />);
+            const checkCallsBeforeSubmit = vi.mocked(checkPuzzle).mock.calls.length;
+
+            await typeAndCheck(user, 'e2e4');
+            await user.click(screen.getByRole('button', { name: /check entered move/i }));
+
+            expect(checkPuzzle).toHaveBeenCalledTimes(checkCallsBeforeSubmit + 1);
+            pendingCheck.resolve({ correct: true, result: 'pass' });
+            await waitFor(() => expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(1));
+
+            await user.click(screen.getByRole('button', { name: /next puzzle/i }));
+            expect(mockSetCurrentIndex).not.toHaveBeenCalled();
+
+            pendingReview.resolve(true);
+            await waitFor(() => expect(mockSetCurrentIndex).toHaveBeenCalledWith(1));
+            expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(1);
+        });
+
+        it('stays on the puzzle when the owner write rejects, then retries safely', async () => {
+            const pendingReview = deferred<boolean>();
+            mockHandleReviewPuzzle
+                .mockReturnValueOnce(pendingReview.promise)
+                .mockResolvedValueOnce(true);
+            const user = userEvent.setup();
+            render(<Puzzles />);
+
+            await typeAndCheck(user, 'e2e4');
+            await waitFor(() => expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(1));
+
+            await user.click(screen.getByRole('button', { name: /next puzzle/i }));
+            pendingReview.reject(new Error('review unavailable'));
+
+            await waitFor(() =>
+                expect(screen.getByRole('alert')).toHaveTextContent(/couldn't save that result/i),
+            );
+            expect(mockSetCurrentIndex).not.toHaveBeenCalled();
+
+            await user.click(screen.getByRole('button', { name: /next puzzle/i }));
+            await waitFor(() => expect(mockSetCurrentIndex).toHaveBeenCalledWith(1));
+            expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(2);
+        });
+
+        it('keeps a failed timeout decision through a delayed correct check and retries fail', async () => {
+            const pendingCheck = deferred<{ correct: boolean; result: string }>();
+            const pendingTimeoutReview = deferred<boolean>();
+            vi.mocked(checkPuzzle).mockReturnValue(pendingCheck.promise as never);
+            mockHandleReviewPuzzle
+                .mockReturnValueOnce(pendingTimeoutReview.promise)
+                .mockResolvedValueOnce(true);
+            const user = userEvent.setup();
+            render(<Puzzles />);
+
+            await typeAndCheck(user, 'e2e4');
+            expect(timedOut).not.toBeNull();
+            act(() => timedOut?.());
+            expect(mockHandleReviewPuzzle).toHaveBeenCalledWith('fail');
+
+            // The timeout write fails before the delayed correct check returns.
+            // The terminal fail decision must survive that failed persistence,
+            // otherwise the check below turns this timed-out puzzle into a pass.
+            pendingTimeoutReview.resolve(false);
+            await waitFor(() => expect(screen.getByRole('button', { name: /mark as failed/i })).toBeInTheDocument());
+            pendingCheck.resolve({ correct: true, result: 'pass' });
+            await waitFor(() => expect(screen.queryByText('Correct! Excellent.')).not.toBeInTheDocument());
+            expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(1);
+            expect(mockHandleReviewPuzzle).not.toHaveBeenCalledWith('pass', expect.anything(), expect.anything());
+            expect(mockSetCurrentIndex).not.toHaveBeenCalled();
+
+            // Retry the terminal failure, rather than interpreting the delayed
+            // correct check as a pass. The session hook retains its idempotency
+            // key across the failed first attempt.
+            await user.click(screen.getByRole('button', { name: /mark as failed/i }));
+            await waitFor(() =>
+                expect(screen.getByRole('alert')).toHaveTextContent(/couldn't save that result/i),
+            );
+            expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(1);
+            await user.click(screen.getByRole('button', { name: /mark as failed/i }));
+            await waitFor(() => expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(2));
+            expect(mockHandleReviewPuzzle).toHaveBeenLastCalledWith('fail');
+            expect(mockSetCurrentIndex).not.toHaveBeenCalled();
+        });
+
+        it('keeps a failed reveal decision through a delayed correct check', async () => {
+            const pendingCheck = deferred<{ correct: boolean; result: string }>();
+            const pendingRevealReview = deferred<boolean>();
+            vi.mocked(checkPuzzle).mockReturnValue(pendingCheck.promise as never);
+            mockHandleReviewPuzzle
+                .mockReturnValueOnce(pendingRevealReview.promise)
+                .mockResolvedValueOnce(true);
+            const user = userEvent.setup();
+            render(<Puzzles />);
+
+            await typeAndCheck(user, 'e2e4');
+            await user.click(screen.getByRole('button', { name: /reveal best move solution/i }));
+            await waitFor(() => expect(mockHandleReviewPuzzle).toHaveBeenCalledWith('fail'));
+
+            pendingRevealReview.resolve(false);
+            await Promise.resolve();
+            pendingCheck.resolve({ correct: true, result: 'pass' });
+
+            await waitFor(() => expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(1));
+            expect(mockHandleReviewPuzzle).not.toHaveBeenCalledWith('pass', expect.anything(), expect.anything());
+            expect(screen.queryByText('Correct! Excellent.')).not.toBeInTheDocument();
+
+            await user.click(screen.getByRole('button', { name: /next puzzle/i }));
+            await waitFor(() =>
+                expect(screen.getByRole('alert')).toHaveTextContent(/couldn't save that result/i),
+            );
+            expect(mockSetCurrentIndex).not.toHaveBeenCalled();
+            await user.click(screen.getByRole('button', { name: /next puzzle/i }));
+            await waitFor(() => expect(mockSetCurrentIndex).toHaveBeenCalledWith(1));
+            expect(mockHandleReviewPuzzle).toHaveBeenLastCalledWith('fail');
+        });
+
+        it('ignores a delayed same-ID check response after the puzzle is rehydrated', async () => {
+            const pendingCheck = deferred<{ correct: boolean; result: string }>();
+            vi.mocked(checkPuzzle).mockReturnValue(pendingCheck.promise as never);
+            currentSessionReturn = makeSessionReturn();
+            const user = userEvent.setup();
+            const { rerender } = render(<Puzzles />);
+
+            await typeAndCheck(user, 'e2e4');
+            currentSessionReturn = {
+                ...currentSessionReturn,
+                puzzles: [{ ...puzzle }, { ...puzzle, id: 'p2' }],
+            };
+            rerender(<Puzzles />);
+            pendingCheck.resolve({ correct: true, result: 'pass' });
+
+            await waitFor(() => expect(mockHandleReviewPuzzle).not.toHaveBeenCalled());
+            expect(screen.queryByText('Correct! Excellent.')).not.toBeInTheDocument();
+            expect(mockSetCurrentIndex).not.toHaveBeenCalled();
+        });
+
+        it('keeps the rehydrated check owner when a stale same-ID check settles', async () => {
+            const checkA = deferred<{ correct: boolean; result: string }>();
+            const checkB = deferred<{ correct: boolean; result: string }>();
+            vi.mocked(checkPuzzle)
+                .mockReturnValueOnce(checkA.promise as never)
+                .mockReturnValueOnce(checkB.promise as never);
+            currentSessionReturn = makeSessionReturn();
+            const user = userEvent.setup();
+            const { rerender } = render(<Puzzles />);
+            const checkCallsBeforeSubmit = vi.mocked(checkPuzzle).mock.calls.length;
+
+            // Check A owns the original instance. Rehydration keeps the same
+            // puzzle ID but creates a distinct epoch, so Check B owns that new
+            // instance while A remains in flight.
+            await typeAndCheck(user, 'e2e4');
+            currentSessionReturn = {
+                ...currentSessionReturn,
+                puzzles: [{ ...puzzle }, { ...puzzle, id: 'p2' }],
+            };
+            rerender(<Puzzles />);
+            await user.click(screen.getByRole('button', { name: /check entered move/i }));
+            expect(checkPuzzle).toHaveBeenCalledTimes(checkCallsBeforeSubmit + 2);
+
+            // A's stale finalizer must not release B's ownership. A third
+            // submission while B is pending must therefore be ignored.
+            await act(async () => {
+                checkA.resolve({ correct: true, result: 'pass' });
+                await checkA.promise;
+                await Promise.resolve();
+                await Promise.resolve();
+            });
+            await new Promise((resolve) => setTimeout(resolve, 0));
+            const input = screen.getByPlaceholderText('e.g. e2e4');
+            await user.clear(input);
+            await user.type(input, 'e7e5');
+            await user.click(screen.getByRole('button', { name: /check entered move/i }));
+            expect(checkPuzzle).toHaveBeenCalledTimes(checkCallsBeforeSubmit + 2);
+
+            // B remains the active owner and can complete normally once its
+            // own response arrives.
+            checkB.resolve({ correct: true, result: 'pass' });
+            await waitFor(() => expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(1));
+            expect(screen.getByText('Correct! Excellent.')).toBeInTheDocument();
+        });
     });
 
     describe('a revealed solution is recorded at reveal, not at move-on', () => {
