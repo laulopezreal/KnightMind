@@ -360,11 +360,13 @@ describe('Puzzles — honest failure handling', () => {
             expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(2);
         });
 
-        it('lets timeout own a delayed solve and never advances on the synthetic pass', async () => {
+        it('keeps a failed timeout decision through a delayed correct check and retries fail', async () => {
             const pendingCheck = deferred<{ correct: boolean; result: string }>();
             const pendingTimeoutReview = deferred<boolean>();
             vi.mocked(checkPuzzle).mockReturnValue(pendingCheck.promise as never);
-            mockHandleReviewPuzzle.mockReturnValue(pendingTimeoutReview.promise);
+            mockHandleReviewPuzzle
+                .mockReturnValueOnce(pendingTimeoutReview.promise)
+                .mockResolvedValueOnce(true);
             const user = userEvent.setup();
             render(<Puzzles />);
 
@@ -373,16 +375,61 @@ describe('Puzzles — honest failure handling', () => {
             act(() => timedOut?.());
             expect(mockHandleReviewPuzzle).toHaveBeenCalledWith('fail');
 
+            // The timeout write fails before the delayed correct check returns.
+            // The terminal fail decision must survive that failed persistence,
+            // otherwise the check below turns this timed-out puzzle into a pass.
+            pendingTimeoutReview.resolve(false);
+            await waitFor(() => expect(screen.getByRole('button', { name: /mark as failed/i })).toBeInTheDocument());
             pendingCheck.resolve({ correct: true, result: 'pass' });
-            await Promise.resolve();
-            await Promise.resolve();
+            await waitFor(() => expect(screen.queryByText('Correct! Excellent.')).not.toBeInTheDocument());
             expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(1);
             expect(mockHandleReviewPuzzle).not.toHaveBeenCalledWith('pass', expect.anything(), expect.anything());
             expect(mockSetCurrentIndex).not.toHaveBeenCalled();
 
-            pendingTimeoutReview.resolve(false);
-            await Promise.resolve();
+            // Retry the terminal failure, rather than interpreting the delayed
+            // correct check as a pass. The session hook retains its idempotency
+            // key across the failed first attempt.
+            await user.click(screen.getByRole('button', { name: /mark as failed/i }));
+            await waitFor(() =>
+                expect(screen.getByRole('alert')).toHaveTextContent(/couldn't save that result/i),
+            );
+            expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(1);
+            await user.click(screen.getByRole('button', { name: /mark as failed/i }));
+            await waitFor(() => expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(2));
+            expect(mockHandleReviewPuzzle).toHaveBeenLastCalledWith('fail');
             expect(mockSetCurrentIndex).not.toHaveBeenCalled();
+        });
+
+        it('keeps a failed reveal decision through a delayed correct check', async () => {
+            const pendingCheck = deferred<{ correct: boolean; result: string }>();
+            const pendingRevealReview = deferred<boolean>();
+            vi.mocked(checkPuzzle).mockReturnValue(pendingCheck.promise as never);
+            mockHandleReviewPuzzle
+                .mockReturnValueOnce(pendingRevealReview.promise)
+                .mockResolvedValueOnce(true);
+            const user = userEvent.setup();
+            render(<Puzzles />);
+
+            await typeAndCheck(user, 'e2e4');
+            await user.click(screen.getByRole('button', { name: /reveal best move solution/i }));
+            await waitFor(() => expect(mockHandleReviewPuzzle).toHaveBeenCalledWith('fail'));
+
+            pendingRevealReview.resolve(false);
+            await Promise.resolve();
+            pendingCheck.resolve({ correct: true, result: 'pass' });
+
+            await waitFor(() => expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(1));
+            expect(mockHandleReviewPuzzle).not.toHaveBeenCalledWith('pass', expect.anything(), expect.anything());
+            expect(screen.queryByText('Correct! Excellent.')).not.toBeInTheDocument();
+
+            await user.click(screen.getByRole('button', { name: /next puzzle/i }));
+            await waitFor(() =>
+                expect(screen.getByRole('alert')).toHaveTextContent(/couldn't save that result/i),
+            );
+            expect(mockSetCurrentIndex).not.toHaveBeenCalled();
+            await user.click(screen.getByRole('button', { name: /next puzzle/i }));
+            await waitFor(() => expect(mockSetCurrentIndex).toHaveBeenCalledWith(1));
+            expect(mockHandleReviewPuzzle).toHaveBeenLastCalledWith('fail');
         });
 
         it('ignores a delayed same-ID check response after the puzzle is rehydrated', async () => {

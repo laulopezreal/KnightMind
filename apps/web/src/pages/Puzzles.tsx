@@ -188,12 +188,20 @@ export default function Puzzles() {
     const currentPuzzleIdRef = useRef<string | null>(currentPuzzle?.id ?? null);
     const puzzleInstanceRef = useRef<typeof currentPuzzle>(currentPuzzle);
     const puzzleEpochRef = useRef(0);
-    const outcomeOwnerRef = useRef<{ puzzleId: string; epoch: number; promise: Promise<boolean> } | null>(null);
+    // The terminal decision is durable for this puzzle instance, while its
+    // persistence promise is retryable. A failed write must not reopen the
+    // decision to a delayed solve-check response.
+    const outcomeDecisionRef = useRef<{
+        puzzleId: string;
+        epoch: number;
+        result: 'pass' | 'fail';
+        attemptedMove?: string;
+    } | null>(null);
     if (puzzleInstanceRef.current !== currentPuzzle) {
         puzzleInstanceRef.current = currentPuzzle;
         puzzleEpochRef.current += 1;
         checkingPuzzleRef.current = null;
-        outcomeOwnerRef.current = null;
+        outcomeDecisionRef.current = null;
         outcomeWriteRef.current = null;
     }
     currentPuzzleIdRef.current = currentPuzzle?.id ?? null;
@@ -202,28 +210,23 @@ export default function Puzzles() {
         if (!currentPuzzle) return Promise.resolve(false);
         const puzzleId = currentPuzzle.id;
         const epoch = puzzleEpochRef.current;
-        const existingOwner = outcomeOwnerRef.current;
-        if (existingOwner && existingOwner.puzzleId === puzzleId && existingOwner.epoch === epoch) {
-            return existingOwner.promise;
-        }
+        const existingDecision = outcomeDecisionRef.current;
+        const decision = existingDecision?.puzzleId === puzzleId && existingDecision.epoch === epoch
+            ? existingDecision
+            : { puzzleId, epoch, result, attemptedMove };
+        if (decision !== existingDecision) outcomeDecisionRef.current = decision;
+        if (outcomeWriteRef.current) return outcomeWriteRef.current;
 
-        const review = attemptedMove === undefined
-            ? handleReviewPuzzle(result)
-            : handleReviewPuzzle(result, undefined, attemptedMove);
-        const ownerPromise = Promise.resolve(review)
+        const review = decision.attemptedMove === undefined
+            ? handleReviewPuzzle(decision.result)
+            : handleReviewPuzzle(decision.result, undefined, decision.attemptedMove);
+        const writePromise = Promise.resolve(review)
             .catch((err) => {
                 console.error('Failed to record puzzle outcome:', err);
                 return false;
             });
-        outcomeOwnerRef.current = { puzzleId, epoch, promise: ownerPromise };
-        outcomeWriteRef.current = ownerPromise;
-        void ownerPromise.then((recorded) => {
-            const owner = outcomeOwnerRef.current;
-            if (!recorded && owner?.puzzleId === puzzleId && owner.epoch === epoch && owner.promise === ownerPromise) {
-                outcomeOwnerRef.current = null;
-            }
-        });
-        return ownerPromise;
+        outcomeWriteRef.current = writePromise;
+        return writePromise;
     };
     recordPuzzleOutcomeRef.current = recordPuzzleOutcome;
     // The clue/board work off the on-demand-fetched solution, never a pre-sent
@@ -500,10 +503,10 @@ export default function Puzzles() {
             // request was in flight. Its result must not become the current
             // puzzle's status or outcome write.
             if (currentPuzzleIdRef.current !== puzzleId || puzzleEpochRef.current !== puzzleEpoch) return;
-            // Timeout/reveal already owns this puzzle's outcome. A delayed
-            // check cannot overwrite that owner with a pass or detach advance
-            // from the real write.
-            if (outcomeOwnerRef.current?.puzzleId === puzzleId && outcomeOwnerRef.current.epoch === puzzleEpoch) return;
+            // Timeout/reveal already decided this puzzle's outcome. A delayed
+            // check cannot overwrite that decision with a pass, even when the
+            // terminal outcome's failed write is available for retry.
+            if (outcomeDecisionRef.current?.puzzleId === puzzleId && outcomeDecisionRef.current.epoch === puzzleEpoch) return;
             if (!res.correct) {
                 setStatus('incorrect');
                 return;
@@ -788,7 +791,7 @@ export default function Puzzles() {
         if (currentIndex < puzzles.length - 1) {
             setCurrentIndex(currentIndex + 1);
             setStatus('solving');
-            outcomeOwnerRef.current = null;
+            outcomeDecisionRef.current = null;
             outcomeWriteRef.current = null;
             setMotifHint(null);
             setMotifHintAsked(false);
@@ -1713,7 +1716,8 @@ export default function Puzzles() {
                                             type="button"
                                             onClick={async () => {
                                                 setActionError(null);
-                                                if (!await handleReviewPuzzle('fail')) {
+                                                if (!await recordPuzzleOutcome('fail')) {
+                                                    outcomeWriteRef.current = null;
                                                     setActionError("We couldn't save that result — nothing was recorded. Check your connection and try again.");
                                                     return;
                                                 }
