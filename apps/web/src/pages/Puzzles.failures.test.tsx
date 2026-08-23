@@ -451,6 +451,51 @@ describe('Puzzles — honest failure handling', () => {
             expect(screen.queryByText('Correct! Excellent.')).not.toBeInTheDocument();
             expect(mockSetCurrentIndex).not.toHaveBeenCalled();
         });
+
+        it('keeps the rehydrated check owner when a stale same-ID check settles', async () => {
+            const checkA = deferred<{ correct: boolean; result: string }>();
+            const checkB = deferred<{ correct: boolean; result: string }>();
+            vi.mocked(checkPuzzle)
+                .mockReturnValueOnce(checkA.promise as never)
+                .mockReturnValueOnce(checkB.promise as never);
+            currentSessionReturn = makeSessionReturn();
+            const user = userEvent.setup();
+            const { rerender } = render(<Puzzles />);
+            const checkCallsBeforeSubmit = vi.mocked(checkPuzzle).mock.calls.length;
+
+            // Check A owns the original instance. Rehydration keeps the same
+            // puzzle ID but creates a distinct epoch, so Check B owns that new
+            // instance while A remains in flight.
+            await typeAndCheck(user, 'e2e4');
+            currentSessionReturn = {
+                ...currentSessionReturn,
+                puzzles: [{ ...puzzle }, { ...puzzle, id: 'p2' }],
+            };
+            rerender(<Puzzles />);
+            await user.click(screen.getByRole('button', { name: /check entered move/i }));
+            expect(checkPuzzle).toHaveBeenCalledTimes(checkCallsBeforeSubmit + 2);
+
+            // A's stale finalizer must not release B's ownership. A third
+            // submission while B is pending must therefore be ignored.
+            await act(async () => {
+                checkA.resolve({ correct: true, result: 'pass' });
+                await checkA.promise;
+                await Promise.resolve();
+                await Promise.resolve();
+            });
+            await new Promise((resolve) => setTimeout(resolve, 0));
+            const input = screen.getByPlaceholderText('e.g. e2e4');
+            await user.clear(input);
+            await user.type(input, 'e7e5');
+            await user.click(screen.getByRole('button', { name: /check entered move/i }));
+            expect(checkPuzzle).toHaveBeenCalledTimes(checkCallsBeforeSubmit + 2);
+
+            // B remains the active owner and can complete normally once its
+            // own response arrives.
+            checkB.resolve({ correct: true, result: 'pass' });
+            await waitFor(() => expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(1));
+            expect(screen.getByText('Correct! Excellent.')).toBeInTheDocument();
+        });
     });
 
     describe('a revealed solution is recorded at reveal, not at move-on', () => {

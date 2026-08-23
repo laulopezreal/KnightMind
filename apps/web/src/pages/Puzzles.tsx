@@ -184,7 +184,7 @@ export default function Puzzles() {
     // A solve check owns one puzzle at a time. The same action is reachable
     // through typed input, Enter, click-to-move, drag, and keyboard movement;
     // disable rendering alone cannot close that race before React re-renders.
-    const checkingPuzzleRef = useRef<string | null>(null);
+    const checkingPuzzleRef = useRef<{ puzzleId: string; epoch: number } | null>(null);
     const currentPuzzleIdRef = useRef<string | null>(currentPuzzle?.id ?? null);
     const puzzleInstanceRef = useRef<typeof currentPuzzle>(currentPuzzle);
     const puzzleEpochRef = useRef(0);
@@ -490,8 +490,10 @@ export default function Puzzles() {
         if (!currentPuzzle) return;
         const puzzleId = currentPuzzle.id;
         const puzzleEpoch = puzzleEpochRef.current;
-        if (checkingPuzzleRef.current === puzzleId) return;
-        checkingPuzzleRef.current = puzzleId;
+        const checkOwner = { puzzleId, epoch: puzzleEpoch };
+        const activeCheckOwner = checkingPuzzleRef.current;
+        if (activeCheckOwner?.puzzleId === puzzleId && activeCheckOwner.epoch === puzzleEpoch) return;
+        checkingPuzzleRef.current = checkOwner;
         const normalized = uciMove.toLowerCase();
         // Reflect the user's move immediately.
         setGame(new Chess(boardAfterMove.fen()));
@@ -555,7 +557,7 @@ export default function Puzzles() {
             setUserMove('');
             setActionError("We couldn't check that move — your attempt wasn't recorded. Check your connection and try again.");
         } finally {
-            if (checkingPuzzleRef.current === puzzleId) {
+            if (checkingPuzzleRef.current === checkOwner) {
                 checkingPuzzleRef.current = null;
             }
         }
