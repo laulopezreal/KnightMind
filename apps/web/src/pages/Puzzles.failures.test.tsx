@@ -719,6 +719,80 @@ describe('Puzzles — honest failure handling', () => {
             expect(screen.getByRole('button', { name: /next puzzle/i })).toBeEnabled();
         });
 
+        it('suppresses duplicate confirmation clicks while the current request is pending', async () => {
+            const pendingConfirmation = deferred<unknown>();
+            vi.mocked(confirmPuzzleDiagnosis).mockReturnValue(pendingConfirmation.promise as never);
+            const user = userEvent.setup();
+            render(<Puzzles />);
+
+            await typeAndCheck(user, 'e2e4');
+            const fits = await screen.findByRole('button', { name: /this fits/i });
+            await user.click(fits);
+            await user.click(fits);
+
+            await waitFor(() => expect(confirmPuzzleDiagnosis).toHaveBeenCalledTimes(1));
+            expect(screen.getByRole('button', { name: /saving/i })).toBeDisabled();
+
+            pendingConfirmation.resolve({
+                state: 'ready', puzzle_id: 'p1', primary_cause: 'loose_piece_awareness',
+                primary_cause_label: 'Loose piece awareness', secondary_causes: [],
+                secondary_cause_labels: [], evidence: [], evidence_withheld: false, cause_options: [],
+            });
+            await act(async () => { await pendingConfirmation.promise; });
+            expect(confirmPuzzleDiagnosis).toHaveBeenCalledTimes(1);
+        });
+
+        it('does not let an old confirmation mutate an A-to-B-to-A identity boundary', async () => {
+            const pendingConfirmation = deferred<unknown>();
+            vi.mocked(confirmPuzzleDiagnosis).mockReturnValue(pendingConfirmation.promise as never);
+            const user = userEvent.setup();
+            const { rerender } = render(<Puzzles />);
+
+            await typeAndCheck(user, 'e2e4');
+            await user.click(await screen.findByRole('button', { name: /this fits/i }));
+            await waitFor(() => expect(confirmPuzzleDiagnosis).toHaveBeenCalledTimes(1));
+            expect(screen.getByRole('button', { name: /saving/i })).toBeDisabled();
+
+            mockUsername = 'otherplayer';
+            rerender(<Puzzles />);
+            mockUsername = 'testplayer';
+            rerender(<Puzzles />);
+
+            await act(async () => {
+                pendingConfirmation.reject(new Error('old A failed'));
+                try { await pendingConfirmation.promise; } catch { /* expected */ }
+            });
+
+            await waitFor(() => {
+                expect(screen.queryByRole('region', { name: /mistake diagnosis/i })).not.toBeInTheDocument();
+                expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+                expect(screen.queryByRole('button', { name: /saving/i })).not.toBeInTheDocument();
+            });
+            expect(confirmPuzzleDiagnosis).toHaveBeenCalledTimes(1);
+        });
+
+        it('drops confirmation completion after unmount without a follow-up side effect', async () => {
+            const pendingConfirmation = deferred<unknown>();
+            vi.mocked(confirmPuzzleDiagnosis).mockReturnValue(pendingConfirmation.promise as never);
+            const user = userEvent.setup();
+            const { unmount } = render(<Puzzles />);
+
+            await typeAndCheck(user, 'e2e4');
+            await user.click(await screen.findByRole('button', { name: /this fits/i }));
+            await waitFor(() => expect(confirmPuzzleDiagnosis).toHaveBeenCalledTimes(1));
+            unmount();
+
+            await act(async () => {
+                pendingConfirmation.resolve({
+                    state: 'ready', puzzle_id: 'p1', primary_cause_label: 'Stale after unmount',
+                    secondary_causes: [], secondary_cause_labels: [], evidence: [],
+                    evidence_withheld: false, cause_options: [],
+                });
+                await pendingConfirmation.promise;
+            });
+            expect(confirmPuzzleDiagnosis).toHaveBeenCalledTimes(1);
+        });
+
         it('ignores a stale confirmation response after same-ID rehydration', async () => {
             const pendingConfirmation = deferred<unknown>();
             vi.mocked(confirmPuzzleDiagnosis).mockReturnValue(pendingConfirmation.promise as never);

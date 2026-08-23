@@ -764,6 +764,36 @@ class TestConfirm:
         assert body["primary_cause"] == "loose_piece_awareness"
         assert body["user_confirmed_cause"] == "loose_piece_awareness"
 
+    def test_repeated_reordered_confirmations_are_last_write_wins_server_truth(
+        self, client, db_session, monkeypatch
+    ):
+        self._diagnose(db_session, monkeypatch)
+        # The synchronous TestClient fixture shares one SQLAlchemy Session, so
+        # it cannot safely hold two independent uncommitted requests open. This
+        # deterministic API-boundary sequence exercises the contract Postgres
+        # provides here: each completed write returns its own server row, and
+        # the last committed valid request wins without changing the computed
+        # cause. The endpoint intentionally has no version/precondition API.
+        requests = [
+            "loose_piece_awareness",
+            "king_safety_blindness",
+            "loose_piece_awareness",
+            "king_safety_blindness",
+        ]
+        for cause in requests:
+            response = client.post(
+                f"/puzzles/p1/diagnosis/confirm?username={USER}", json={"cause": cause}
+            )
+            assert response.status_code == 200
+            body = response.json()
+            assert body["user_confirmed_cause"] == cause
+            assert body["primary_cause"] == cause
+
+        stored = DiagnosisRepository(db_session).get(USER, "p1")
+        assert stored is not None
+        assert stored.user_confirmed_cause == requests[-1]
+        assert stored.primary_cause == "loose_piece_awareness"
+
     def test_withheld_confirm_response_omits_cause_options_and_solution_fields(
         self, client, db_session, monkeypatch
     ):
