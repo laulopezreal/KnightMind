@@ -186,3 +186,93 @@ def test_the_repaired_index_still_enforces_one_job_per_user_per_type(drifted_db)
     with pytest.raises(Exception):  # noqa: B017 - the driver's IntegrityError
         with engine.begin() as conn:
             conn.execute(insert, {"id": "c", "t": "diagnosis"})
+
+
+def test_focus_practice_review_policy_migration_upgrade_defaults_index_and_downgrade(
+    drifted_db,
+):
+    """Exercise the additive telemetry migration against a populated old schema."""
+    url, _apply_shape, alembic, engine = drifted_db
+    assert alembic("upgrade", "d1e2f3a4b5c6").returncode == 0
+
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO games (game_id, url, username, white_username, "
+                "black_username, white_result, black_result, time_control, "
+                "end_time, rated) VALUES "
+                "('focus-game', '', 'focus-user', 'focus-user', 'opponent', "
+                "'win', 'lose', '600', 0, true)"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO puzzles (id, username, source_game_id, ply, fen, "
+                "side_to_move, played_move_uci, best_move_uci, eval_before, "
+                "eval_after, swing) VALUES "
+                "('focus-puzzle', 'focus-user', 'focus-game', 1, "
+                "'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - - 0 1', "
+                "'white', 'e2e4', 'd2d4', 0.5, -1.5, 2.0)"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO puzzle_reviews (id, puzzle_id, username, reviewed_at, "
+                "result, verified) VALUES ('pre-focus-review', 'focus-puzzle', "
+                "'focus-user', now(), 'pass', false)"
+            )
+        )
+
+    upgrade = alembic("upgrade", "head")
+    assert upgrade.returncode == 0, upgrade.stderr
+    with engine.connect() as conn:
+        assert conn.execute(
+            text(
+                "SELECT review_context, affects_scheduling FROM puzzle_reviews "
+                "WHERE id = 'pre-focus-review'"
+            )
+        ).one() == ("standard", True)
+        assert (
+            conn.execute(
+                text(
+                    "SELECT pg_get_indexdef(indexrelid) FROM pg_index "
+                    "WHERE indexrelid = "
+                    "'ix_puzzle_reviews_username_context_reviewed_at'::regclass"
+                )
+            )
+            .scalar_one()
+            .endswith("(username, review_context, reviewed_at)")
+        )
+        defaults = dict(
+            conn.execute(
+                text(
+                    "SELECT column_name, column_default FROM information_schema.columns "
+                    "WHERE table_name = 'puzzle_reviews' AND column_name IN "
+                    "('review_context', 'affects_scheduling')"
+                )
+            ).all()
+        )
+        assert "standard" in defaults["review_context"]
+        assert defaults["affects_scheduling"] is not None
+
+    downgrade = alembic("downgrade", "d1e2f3a4b5c6")
+    assert downgrade.returncode == 0, downgrade.stderr
+    with engine.connect() as conn:
+        columns = {
+            row[0]
+            for row in conn.execute(
+                text(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_name = 'puzzle_reviews'"
+                )
+            )
+        }
+        assert {"review_context", "affects_scheduling"}.isdisjoint(columns)
+        assert (
+            conn.execute(
+                text(
+                    "SELECT to_regclass('ix_puzzle_reviews_username_context_reviewed_at')"
+                )
+            ).scalar_one()
+            is None
+        )

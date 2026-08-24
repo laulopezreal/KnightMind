@@ -229,15 +229,21 @@ def start_focus_practice(
         candidates.append((tier, sort_time, puzzle_id, policy, puzzle, stats))
     candidates.sort(key=lambda item: (item[0], item[1], item[2]))
     ids = [item[2] for item in candidates]
-    varied = _vary_session(
-        ids,
-        all_stats,
-        _source_games(db, request.username, ids),
-        request.n,
-        cap_motifs=False,
-    )[: request.n]
+    source_games = _source_games(db, request.username, ids)
+    varied = []
+    for tier in (0, 1, 2):
+        tier_ids = [item[2] for item in candidates if item[0] == tier]
+        varied.extend(
+            _vary_session(
+                tier_ids,
+                all_stats,
+                source_games,
+                request.n,
+                cap_motifs=False,
+            )
+        )
     candidate_by_id = {item[2]: item for item in candidates}
-    selected = [candidate_by_id[puzzle_id] for puzzle_id in varied]
+    selected = [candidate_by_id[puzzle_id] for puzzle_id in varied[: request.n]]
     if len(selected) < 2:
         raise HTTPException(
             status_code=409,
