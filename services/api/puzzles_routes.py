@@ -2226,7 +2226,13 @@ def _find_existing_review(db, puzzle_id, username, session_id, client_review_id)
 
 
 def _build_review_response(
-    stats, puzzle_stats, result, verified: bool = False, source: str | None = None
+    stats,
+    puzzle_stats,
+    result,
+    verified: bool = False,
+    source: str | None = None,
+    review_context: str = "standard",
+    affects_scheduling: bool = True,
 ) -> dict:
     """Build the review endpoint payload for a given (stats, result).
 
@@ -2240,7 +2246,9 @@ def _build_review_response(
     """
     result_val = result.value if isinstance(result, PuzzleResult) else result
     feedback_message = ""
-    if result_val == "pass":
+    if not affects_scheduling:
+        feedback_message = "Practice recorded. Your normal review date is unchanged."
+    elif result_val == "pass":
         if stats.attempts == 1:
             feedback_message = "Perfect! First try!"
         elif stats.attempts > 0 and stats.pass_count / stats.attempts > 0.8:
@@ -2263,6 +2271,8 @@ def _build_review_response(
         "result": result_val,
         "verified": verified,
         "source": source,
+        "review_context": review_context,
+        "affects_scheduling": affects_scheduling,
         "stats": {
             "attempts": stats.attempts,
             "pass_count": stats.pass_count,
@@ -2327,6 +2337,8 @@ def review_puzzle(
                 existing.result,
                 verified=existing.verified,
                 source=existing.source,
+                review_context=existing.review_context,
+                affects_scheduling=existing.affects_scheduling,
             )
 
     # Server-verified training integrity (audit gate 7): when the client sends
@@ -2352,6 +2364,8 @@ def review_puzzle(
         verified = False
         review_source = "client_reported"
 
+    review_context = "standard"
+    affects_scheduling = True
     # If session_id provided, validate session and update counters
     if session_id:
         from services.api.models import PuzzleResult as PR
@@ -2379,6 +2393,29 @@ def review_puzzle(
 
         if session.completed_at is not None:
             raise HTTPException(status_code=400, detail="Session already completed")
+
+        if session.session_type == "focus_practice":
+            selected = (session.session_data or {}).get("selected_items", [])
+            item = next(
+                (
+                    candidate
+                    for candidate in selected
+                    if candidate.get("puzzle_id") == puzzle_id
+                ),
+                None,
+            )
+            if item is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail={"code": "session_item_mismatch"},
+                )
+            policy = item.get("review_policy")
+            if policy not in {"normal_review", "practice_only"}:
+                raise HTTPException(
+                    status_code=409, detail={"code": "session_item_mismatch"}
+                )
+            review_context = "focus_practice"
+            affects_scheduling = policy == "normal_review"
 
         # Increment session counters (will be committed with review). Use the
         # SERVER-decided outcome so a spoofed "pass" with a wrong move can't
@@ -2414,10 +2451,21 @@ def review_puzzle(
             client_result=client_result,
             verified=verified,
             source=review_source,
+            review_context=review_context,
+            affects_scheduling=affects_scheduling,
         )
 
         # 2. Update aggregate stats (triggers scheduling logic)
-        stats = update_puzzle_stats(db, puzzle_id, request.username, effective_result)
+        if affects_scheduling:
+            stats = update_puzzle_stats(
+                db, puzzle_id, request.username, effective_result
+            )
+        else:
+            stats = get_puzzle_stats(db, puzzle_id, request.username)
+            if stats is None:
+                raise HTTPException(
+                    status_code=409, detail={"code": "session_item_mismatch"}
+                )
 
         # 3. Get puzzle details for feedback
         puzzle_stats = puzzle_repository.get_puzzle_stats(request.username, puzzle_id)
@@ -2452,6 +2500,8 @@ def review_puzzle(
                     existing.result,
                     verified=existing.verified,
                     source=existing.source,
+                    review_context=existing.review_context,
+                    affects_scheduling=existing.affects_scheduling,
                 )
         raise
 
@@ -2463,6 +2513,8 @@ def review_puzzle(
         effective_result,
         verified=verified,
         source=review_source,
+        review_context=review_context,
+        affects_scheduling=affects_scheduling,
     )
 
 

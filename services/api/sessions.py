@@ -6,17 +6,26 @@ Handles session lifecycle: start, complete, and recent sessions query.
 
 import logging
 import uuid
+from dataclasses import asdict
 from datetime import datetime, timezone
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
 from services.api.db import get_db
+from services.api.diagnosis.causes import CAUSE_LABELS
+from services.api.diagnosis.planner import plan_focus
 from services.api.identity import assert_owns_username, require_account
-from services.api.models import Account, TrainingSession
+from services.api.models import Account, PuzzleStats, TrainingSession
+from services.api.puzzles.provenance import resolve_display_name
+from services.api.puzzles.resolution import is_resolved
 from services.api.ratings_auto import auto_snapshot
+from services.api.storage import PuzzleRepository
+from services.api.storage.diagnosis_repository import DiagnosisRepository
+from services.api.storage.spaced_repetition import _source_games, _vary_session
 from services.api.usernames import Username
 
 logger = logging.getLogger(__name__)
@@ -28,7 +37,9 @@ router = APIRouter(prefix="/sessions", tags=["sessions"])
 class StartSessionRequest(BaseModel):
     username: Username
     n: int
-    session_type: str = "standard"  # "standard", "timed", "accuracy_goal"
+    # Focus practice has no generic start path: its membership and scheduling
+    # policy must come from a server-owned snapshot.
+    session_type: Literal["standard", "timed", "accuracy_goal"] = "standard"
     target_accuracy: float | None = None  # Target accuracy percentage (0.0-100.0)
     target_time_minutes: int | None = None  # Target session time in minutes
     session_data: dict | None = (
@@ -42,6 +53,21 @@ class StartSessionResponse(BaseModel):
     session_type: str | None = None
     target_accuracy: float | None = None
     target_time_minutes: int | None = None
+
+
+class FocusPracticeStartRequest(BaseModel):
+    username: Username
+    focus_cause: str
+    n: int = Field(default=5, ge=2, le=10)
+
+
+class FocusPracticeStartResponse(BaseModel):
+    session_id: str
+    session_type: Literal["focus_practice"] = "focus_practice"
+    focus: dict
+    requested_n: int
+    returned_count: int
+    puzzles: list[dict]
 
 
 class CompleteSessionRequest(BaseModel):
@@ -78,6 +104,130 @@ class SessionSummary(BaseModel):
 
 class UseHintRequest(BaseModel):
     username: Username
+
+
+@router.post("/focus-practice/start", response_model=FocusPracticeStartResponse)
+def start_focus_practice(
+    request: FocusPracticeStartRequest,
+    db: Session = Depends(get_db),
+    account: Account | None = Depends(require_account),
+):
+    """Create a focused session with immutable server-selected review policy."""
+    assert_owns_username(account, request.username, db)
+    if request.focus_cause not in CAUSE_LABELS:
+        raise HTTPException(status_code=422, detail="Unknown cause")
+    diagnosis_repo = DiagnosisRepository(db)
+    planned = plan_focus(diagnosis_repo.cause_breakdown(request.username))
+    if planned is None or planned.cause != request.focus_cause:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "focus_practice_unavailable", "reason": "focus_changed"},
+        )
+
+    puzzle_repo = PuzzleRepository(db)
+    all_stats = {
+        row.puzzle_id: row
+        for row in db.scalars(
+            select(PuzzleStats).where(PuzzleStats.username == request.username)
+        ).all()
+    }
+    captured_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    candidates = []
+    for puzzle_id in diagnosis_repo.puzzle_ids_for_cause(
+        request.username, request.focus_cause
+    ):
+        puzzle = puzzle_repo.get_puzzle(request.username, puzzle_id)
+        if puzzle is None:
+            continue
+        stats = all_stats.get(puzzle_id)
+        if stats is None or stats.next_due_at is None:
+            tier, policy, sort_time = 1, "normal_review", captured_at
+        elif stats.next_due_at <= captured_at:
+            tier, policy, sort_time = 0, "normal_review", stats.next_due_at
+        else:
+            tier, policy, sort_time = 2, "practice_only", stats.next_due_at
+        candidates.append((tier, sort_time, puzzle_id, policy, puzzle, stats))
+    candidates.sort(key=lambda item: (item[0], item[1], item[2]))
+    ids = [item[2] for item in candidates]
+    varied = _vary_session(
+        ids,
+        all_stats,
+        _source_games(db, request.username, ids),
+        request.n,
+        cap_motifs=False,
+    )[: request.n]
+    candidate_by_id = {item[2]: item for item in candidates}
+    selected = [candidate_by_id[puzzle_id] for puzzle_id in varied]
+    if len(selected) < 2:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "focus_practice_unavailable",
+                "reason": "insufficient_safe_candidates",
+            },
+        )
+
+    # Reuse the established pre-attempt serializer and solution stripping path.
+    from services.api.puzzles_routes import _end_times_by_puzzle, _strip_solution
+
+    end_times = _end_times_by_puzzle(
+        db, request.username, [item[4] for item in selected]
+    )
+    snapshot_items = []
+    payloads = []
+    for position, (_, _, puzzle_id, policy, puzzle, stats) in enumerate(selected):
+        snapshot_items.append(
+            {"puzzle_id": puzzle_id, "position": position, "review_policy": policy}
+        )
+        payload = asdict(puzzle)
+        payload.update(
+            {
+                "next_due_at": stats.next_due_at if stats else None,
+                "interval_days": stats.interval_days if stats else None,
+                "ease_factor": stats.ease_factor if stats else 2.0,
+                "display_name": resolve_display_name(
+                    title=stats.title if stats else None,
+                    end_time=end_times.get(puzzle_id),
+                    ply=getattr(puzzle, "ply", None),
+                    resolved=is_resolved(stats),
+                ),
+                "queue_reason": {
+                    "reason": "practice",
+                    "explanation": "Extra practice for your current focus.",
+                },
+                "review_policy": policy,
+            }
+        )
+        payloads.append(_strip_solution(payload))
+    session_id = str(uuid.uuid4())
+    db.add(
+        TrainingSession(
+            id=session_id,
+            username=request.username,
+            requested_n=request.n,
+            pass_count=0,
+            fail_count=0,
+            total_time_ms=0,
+            session_type="focus_practice",
+            current_streak=0,
+            best_streak=0,
+            hints_used=0,
+            session_data={
+                "schema_version": 1,
+                "focus_cause": request.focus_cause,
+                "focus_name": planned.name,
+                "selected_items": snapshot_items,
+            },
+        )
+    )
+    db.commit()
+    return FocusPracticeStartResponse(
+        session_id=session_id,
+        focus={"cause": request.focus_cause, "name": planned.name},
+        requested_n=request.n,
+        returned_count=len(payloads),
+        puzzles=payloads,
+    )
 
 
 @router.post("/start", response_model=StartSessionResponse)
