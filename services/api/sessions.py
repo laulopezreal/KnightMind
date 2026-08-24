@@ -94,6 +94,13 @@ class SessionSummary(BaseModel):
     # depend on how the user navigated back — see the resume path in
     # usePuzzleSession.
     focus_cause: str | None = None
+    focus_name: str | None = None
+    # Focus-practice is the one session type whose exact selected queue and
+    # scheduling policy are server-owned snapshot state. These fields are only
+    # populated for that type on GET /sessions/{id}; normal summaries retain
+    # their compact legacy contract.
+    selected_items: list[dict] | None = None
+    puzzles: list[dict] | None = None
     focus_opening: str | None = None
     focus_opening_scope: str | None = None
     # Same reasoning, and the stakes are higher: motif *filters* the queue
@@ -104,6 +111,79 @@ class SessionSummary(BaseModel):
 
 class UseHintRequest(BaseModel):
     username: Username
+
+
+def focus_practice_candidate_count(db: Session, username: str, cause: str) -> int:
+    """Count the safely servable candidates for Today's Focus availability."""
+    diagnosis_repo = DiagnosisRepository(db)
+    puzzle_repo = PuzzleRepository(db)
+    return sum(
+        puzzle_repo.get_puzzle(username, puzzle_id) is not None
+        for puzzle_id in diagnosis_repo.puzzle_ids_for_cause(username, cause)
+    )
+
+
+def _focus_practice_payloads(
+    db: Session, username: str, selected_items: list[dict]
+) -> list[dict]:
+    """Rehydrate an immutable Focus Practice snapshot as safe puzzle payloads.
+
+    The snapshot owns identity, order, and review policy. Current diagnosis and
+    schedule state are intentionally never consulted here, so resume cannot
+    quietly select a different queue or change a future item's policy.
+    """
+    from services.api.puzzles_routes import _end_times_by_puzzle, _strip_solution
+
+    puzzle_repo = PuzzleRepository(db)
+    puzzles = []
+    for item in selected_items:
+        puzzle_id = item.get("puzzle_id")
+        policy = item.get("review_policy")
+        if not isinstance(puzzle_id, str) or policy not in {
+            "normal_review",
+            "practice_only",
+        }:
+            raise HTTPException(
+                status_code=409, detail={"code": "session_item_mismatch"}
+            )
+        puzzle = puzzle_repo.get_puzzle(username, puzzle_id)
+        if puzzle is None:
+            raise HTTPException(
+                status_code=409, detail={"code": "session_item_mismatch"}
+            )
+        puzzles.append((puzzle_id, policy, puzzle))
+
+    all_stats = {
+        row.puzzle_id: row
+        for row in db.scalars(
+            select(PuzzleStats).where(PuzzleStats.username == username)
+        ).all()
+    }
+    end_times = _end_times_by_puzzle(db, username, [puzzle for _, _, puzzle in puzzles])
+    payloads = []
+    for puzzle_id, policy, puzzle in puzzles:
+        stats = all_stats.get(puzzle_id)
+        payload = asdict(puzzle)
+        payload.update(
+            {
+                "next_due_at": stats.next_due_at if stats else None,
+                "interval_days": stats.interval_days if stats else None,
+                "ease_factor": stats.ease_factor if stats else 2.0,
+                "display_name": resolve_display_name(
+                    title=stats.title if stats else None,
+                    end_time=end_times.get(puzzle_id),
+                    ply=getattr(puzzle, "ply", None),
+                    resolved=is_resolved(stats),
+                ),
+                "queue_reason": {
+                    "reason": "practice",
+                    "explanation": "Extra practice for your current focus.",
+                },
+                "review_policy": policy,
+            }
+        )
+        payloads.append(_strip_solution(payload))
+    return payloads
 
 
 @router.post("/focus-practice/start", response_model=FocusPracticeStartResponse)
@@ -167,38 +247,12 @@ def start_focus_practice(
             },
         )
 
-    # Reuse the established pre-attempt serializer and solution stripping path.
-    from services.api.puzzles_routes import _end_times_by_puzzle, _strip_solution
-
-    end_times = _end_times_by_puzzle(
-        db, request.username, [item[4] for item in selected]
-    )
     snapshot_items = []
-    payloads = []
-    for position, (_, _, puzzle_id, policy, puzzle, stats) in enumerate(selected):
+    for position, (_, _, puzzle_id, policy, _, _) in enumerate(selected):
         snapshot_items.append(
             {"puzzle_id": puzzle_id, "position": position, "review_policy": policy}
         )
-        payload = asdict(puzzle)
-        payload.update(
-            {
-                "next_due_at": stats.next_due_at if stats else None,
-                "interval_days": stats.interval_days if stats else None,
-                "ease_factor": stats.ease_factor if stats else 2.0,
-                "display_name": resolve_display_name(
-                    title=stats.title if stats else None,
-                    end_time=end_times.get(puzzle_id),
-                    ply=getattr(puzzle, "ply", None),
-                    resolved=is_resolved(stats),
-                ),
-                "queue_reason": {
-                    "reason": "practice",
-                    "explanation": "Extra practice for your current focus.",
-                },
-                "review_policy": policy,
-            }
-        )
-        payloads.append(_strip_solution(payload))
+    payloads = _focus_practice_payloads(db, request.username, snapshot_items)
     session_id = str(uuid.uuid4())
     db.add(
         TrainingSession(
@@ -338,6 +392,18 @@ def get_session(
     # Object-level ownership: 404 (not 403) so foreign session ids aren't confirmed.
     assert_owns_username(account, session.username, db, status_code=404)
 
+    session_data = session.session_data or {}
+    selected_items = None
+    puzzles = None
+    if session.session_type == "focus_practice":
+        snapshot_items = session_data.get("selected_items")
+        if not isinstance(snapshot_items, list):
+            raise HTTPException(
+                status_code=409, detail={"code": "session_item_mismatch"}
+            )
+        selected_items = snapshot_items
+        puzzles = _focus_practice_payloads(db, session.username, selected_items)
+
     return SessionSummary(
         session_id=session.id,
         requested_n=session.requested_n,
@@ -352,10 +418,13 @@ def get_session(
         current_streak=session.current_streak,
         best_streak=session.best_streak,
         hints_used=session.hints_used,
-        focus_cause=(session.session_data or {}).get("focus_cause"),
-        focus_opening=(session.session_data or {}).get("focus_opening"),
-        focus_opening_scope=(session.session_data or {}).get("focus_opening_scope"),
-        motif=(session.session_data or {}).get("motif"),
+        focus_cause=session_data.get("focus_cause"),
+        focus_name=session_data.get("focus_name"),
+        selected_items=selected_items,
+        puzzles=puzzles,
+        focus_opening=session_data.get("focus_opening"),
+        focus_opening_scope=session_data.get("focus_opening_scope"),
+        motif=session_data.get("motif"),
     )
 
 

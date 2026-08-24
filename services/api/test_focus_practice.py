@@ -170,3 +170,42 @@ def test_generic_session_start_rejects_forged_focus_practice_type(client):
         json={"username": USER, "n": 5, "session_type": "focus_practice"},
     )
     assert response.status_code == 422
+
+
+def test_focus_practice_resume_uses_the_saved_order_and_policy(client, db_session):
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    _seed_focus_candidate(db_session, "due", "game-due", due_at=now - timedelta(days=1))
+    _seed_focus_candidate(
+        db_session, "future", "game-future", due_at=now + timedelta(days=7)
+    )
+    _seed_focus_candidate(db_session, "new", "game-new")
+    _seed_focus_candidate(db_session, "extra", "game-extra")
+    db_session.commit()
+
+    started = client.post(
+        "/sessions/focus-practice/start",
+        json={"username": USER, "focus_cause": CAUSE, "n": 4},
+    ).json()
+
+    # The live diagnosis can change after the session starts. Resume must use
+    # the persisted snapshot, not re-select against current focus state.
+    db_session.get(PuzzleDiagnosis, ("due", USER)).user_confirmed_cause = (
+        "king_safety_blindness"
+    )
+    db_session.commit()
+
+    resumed = client.get(f"/sessions/{started['session_id']}")
+
+    assert resumed.status_code == 200
+    body = resumed.json()
+    assert body["focus_cause"] == CAUSE
+    assert body["focus_name"] == started["focus"]["name"]
+    started_items = [
+        (puzzle["id"], puzzle["review_policy"]) for puzzle in started["puzzles"]
+    ]
+    assert [
+        (item["puzzle_id"], item["review_policy"]) for item in body["selected_items"]
+    ] == started_items
+    assert [
+        (puzzle["id"], puzzle["review_policy"]) for puzzle in body["puzzles"]
+    ] == started_items
