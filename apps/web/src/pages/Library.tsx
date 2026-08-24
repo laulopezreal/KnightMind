@@ -110,7 +110,7 @@ function PuzzleRow({ puzzle }: { puzzle: LibraryPuzzle }) {
                             that limit; they are position- and model-derived now,
                             so they can. */}
                         <span className="font-serif text-primary truncate min-w-0">
-                            {puzzle.title || puzzle.id.slice(0, 8)}
+                            {puzzle.display_name}
                         </span>
                         <StatusBadge status={puzzle.status} />
                         <DifficultyBadge difficulty={puzzle.difficulty} />
@@ -316,8 +316,8 @@ export default function Library() {
                 {/* Search */}
                 <input
                     type="text"
-                    placeholder="Search by title or ID..."
-                    aria-label="Search puzzles by title or ID"
+                    placeholder="Search by name, opening, or ID..."
+                    aria-label="Search puzzles by name, opening, or ID"
                     value={search}
                     onChange={(e) => setSearch(e.target.value)}
                     className="w-full bg-transparent border-b border-primary/20 py-2 text-primary font-sans placeholder:text-primary/70 focus:outline-none focus:border-primary/60 transition-colors"

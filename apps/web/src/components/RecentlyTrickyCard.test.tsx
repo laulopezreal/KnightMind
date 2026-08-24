@@ -13,8 +13,8 @@ vi.mock('../utils/time', () => ({
 }));
 
 const mockPuzzles = [
-  { puzzle_id: 'p1', title: 'Fork Attack', fail_count: 3, last_attempted_at: '2025-01-15T10:00:00Z' },
-  { puzzle_id: 'p2', title: 'Pin Defense', fail_count: 2, last_attempted_at: '2025-01-15T09:00:00Z' },
+  { puzzle_id: 'p1', title: 'Fork Attack', display_name: 'Fork Attack', fail_count: 3, last_attempted_at: '2025-01-15T10:00:00Z' },
+  { puzzle_id: 'p2', title: 'Pin Defense', display_name: 'Pin Defense', fail_count: 2, last_attempted_at: '2025-01-15T09:00:00Z' },
 ];
 
 describe('RecentlyTrickyCard', () => {
@@ -65,5 +65,34 @@ describe('RecentlyTrickyCard', () => {
     // by a motif that doesn't exist and produced an empty, mislabeled session.
     expect(links[0]).toHaveAttribute('href', '/library/p1');
     expect(links[1]).toHaveAttribute('href', '/library/p2');
+  });
+});
+
+describe('RecentlyTrickyCard — display_name (design §8, rollout step 2)', () => {
+  it('renders provenance when the puzzle has no nickname yet', () => {
+    // The bug this card had: it filters fail_count >= 2 and the nickname is
+    // written asynchronously, so `title` is null for every gap in that race --
+    // and a rejected naming call leaves it null permanently. The card showed a
+    // column of "Untitled Puzzle" on the surface dedicated to naming puzzles.
+    const unnamed = [
+      {
+        puzzle_id: 'p3',
+        title: null as unknown as string,
+        display_name: '12 Mar · Sicilian · move 18',
+        fail_count: 4,
+        last_attempted_at: '2025-01-15T10:00:00Z',
+      },
+    ];
+
+    render(<RecentlyTrickyCard puzzles={unnamed} totalCount={1} />);
+
+    expect(screen.getByText('12 Mar · Sicilian · move 18')).toBeInTheDocument();
+    expect(screen.queryByText('Untitled Puzzle')).not.toBeInTheDocument();
+  });
+
+  it('still prefers the nickname when there is one', () => {
+    render(<RecentlyTrickyCard puzzles={mockPuzzles} totalCount={2} />);
+
+    expect(screen.getByText('Fork Attack')).toBeInTheDocument();
   });
 });

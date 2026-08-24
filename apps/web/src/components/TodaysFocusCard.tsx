@@ -21,10 +21,10 @@ interface TodaysFocusCardProps {
  *   other is "import some games".
  * - **Nothing.** The card renders nothing rather than an empty shell.
  *
- * The call to action opens a *biased* session rather than a filtered one: it
- * puts the focus puzzles first among what is already due. Training on a
- * not-yet-due puzzle would corrupt its interval, so a focus can reorder the
- * queue but never extend it.
+ * The ordinary call to action opens a *biased* due session rather than a
+ * filtered one. When nothing is due, only the server may offer a separate
+ * focus-practice session, whose snapshot keeps future-position practice from
+ * changing ordinary scheduling.
  */
 export function TodaysFocusCard({ data }: TodaysFocusCardProps) {
     const { focus, below_threshold, pending } = data;
@@ -69,10 +69,17 @@ export function TodaysFocusCard({ data }: TodaysFocusCardProps) {
                 >
                     Train this pattern · {focus.trainable_now} ready
                 </Link>
+            ) : focus.practice_available && (focus.practice_candidate_count ?? 0) >= 2 ? (
+                <Link
+                    to={`/puzzles?mode=focus_practice&focus_cause=${encodeURIComponent(focus.cause)}`}
+                    className="km-interactive km-focus-visible inline-block mt-4 min-h-11 border border-primary/40 rounded-sm px-4 py-2 font-sans text-sm text-primary hover:bg-primary/10 transition-colors"
+                >
+                    Practice this focus · {focus.practice_candidate_count} positions
+                </Link>
             ) : (
                 // Nothing of this pattern is due, and training early would
-                // re-anchor intervals. Naming the pattern is still useful; a
-                // button that served an unrelated queue would not be.
+                // re-anchor intervals. A focus practice button is truthful only
+                // when the server has confirmed a safe bounded set.
                 <p className="font-sans text-xs text-primary/70 mt-4">
                     Nothing from this pattern is due right now — it will come
                     back around.

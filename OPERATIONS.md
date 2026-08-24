@@ -337,6 +337,27 @@ zcat BACKUP.sql.gz | docker exec -i knightmind-db-1 psql -U knightmind -d knight
 docker exec -i knightmind-db-1 pg_restore -U knightmind -d knightmind --clean --if-exists < BACKUP.dump
 ```
 
+**The target cluster must already have a `knightmind` role.** The dump carries
+`OWNER TO knightmind` on every object, so a restore into a cluster without it
+stops at the first one:
+
+```
+ERROR:  role "knightmind" does not exist
+```
+
+Restoring back into `knightmind-db-1` never hits this, and neither does the
+throwaway recipe below — but only because it passes `POSTGRES_USER=knightmind`,
+which creates the role as the cluster superuser. That argument is load-bearing,
+not cosmetic. Change it, or restore into a managed instance whose superuser you
+do not get to name, and the restore fails on the first table. Either create the
+role first (`CREATE ROLE knightmind LOGIN SUPERUSER;`) or strip ownership with
+`pg_restore --no-owner` / `psql` after `sed`-ing the `OWNER TO` lines out.
+
+Measured 2026-08-15, verifying the pre-release backup into a container that used
+`POSTGRES_USER=test`: one `CREATE TABLE` ran, the `ALTER TABLE ... OWNER TO`
+after it failed, and `ON_ERROR_STOP=1` ended the restore there. Of fifteen
+tables, one existed and none held a row.
+
 ### A dump is not verified until it has been restored
 
 `sha256sum -c` proves the file did not rot. It does not prove the dump is loadable or complete. Before relying on a backup for a risky change, restore it into a throwaway container and compare row counts to live:

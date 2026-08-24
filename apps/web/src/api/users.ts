@@ -133,7 +133,10 @@ export interface TrendsResponse {
 
 export interface TrickyPuzzle {
     puzzle_id: string;
+    /** @deprecated Render `display_name`. Kept until the API drops it. */
     title: string;
+    /** Nickname when the puzzle has one, provenance otherwise. Never empty. */
+    display_name: string;
     fail_count: number;
     last_attempted_at: string;
 }
@@ -227,6 +230,10 @@ export interface TodaysFocus {
     runner_up?: string | null;
     /** Puzzles of this cause trainable right now — not the corpus total. */
     trainable_now?: number;
+    /** Safe server-owned focus-practice candidates, including future reviews. */
+    practice_candidate_count?: number;
+    /** True only when the server can create a bounded focus-practice session. */
+    practice_available?: boolean;
 }
 
 export interface TodaysFocusResponse {

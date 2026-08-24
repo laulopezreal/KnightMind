@@ -24,10 +24,11 @@ from typing import Annotated, Literal
 
 import chess
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, model_serializer
 from sqlalchemy import and_, case, func, literal, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from sqlalchemy.sql.elements import ColumnElement
 
 from services.api.db import get_db
 from services.api.diagnosis.causes import CAUSE_LABELS
@@ -44,9 +45,17 @@ from services.api.models import (
     PuzzleResult,
     PuzzleReview,
     PuzzleStats,
+    TrainingSession,
 )
 from services.api.models import Game as GameModel
 from services.api.models import Puzzle as PuzzleModel
+from services.api.puzzles.provenance import resolve_display_name
+from services.api.puzzles.resolution import (
+    focus_is_visible,
+    is_resolved,
+    motif_is_visible,
+    resolution_gate_enabled,
+)
 from services.api.ratelimit import rate_limit
 from services.api.storage import PuzzleRepository, normalized_position
 from services.api.storage.diagnosis_repository import DiagnosisRepository
@@ -136,6 +145,12 @@ class PuzzleDiagnosisSummary(BaseModel):
 class PuzzleListItem(BaseModel):
     id: str
     title: str | None
+    # What the client should render. Equal to `title` wherever one exists,
+    # which is everywhere today; it diverges once titles become NULL by
+    # default (design §7). Optional for now so the list route -- which does not
+    # yet join a game -- can omit it until step 1 finishes; the detail route
+    # below always sets it.
+    display_name: str | None = None
     primary_motif: str | None
     difficulty: str  # "easy" | "medium" | "hard"
     swing: float
@@ -625,16 +640,24 @@ def create_daily_puzzle_session(
     all_stats = get_all_puzzle_stats(db, username)
 
     # Convert to dict format for response and merge with stats
+    end_times = _end_times_by_puzzle(db, username, updated_puzzles)
     puzzles_dict = []
     for p in updated_puzzles:
         p_dict = asdict(p)
         stats = all_stats.get(p.id)
-        if stats:
+        resolved = is_resolved(stats)
+        if stats and resolved:
             p_dict["primary_motif"] = stats.primary_motif
             p_dict["title"] = stats.title
         else:
             p_dict["primary_motif"] = None
             p_dict["title"] = None
+        p_dict["display_name"] = resolve_display_name(
+            title=stats.title if stats else None,
+            end_time=end_times.get(p.id),
+            ply=getattr(p, "ply", None),
+            resolved=resolved,
+        )
         # SCORED training path (post-generation warm-up): strip the solution so
         # it can't be pre-read before an attempt (audit gate 13).
         puzzles_dict.append(_strip_solution(p_dict))
@@ -642,7 +665,44 @@ def create_daily_puzzle_session(
     return DailyPuzzlesResponse(puzzles=puzzles_dict, count=len(puzzles_dict))
 
 
-def _queue_reason(stats, in_focus: bool, focus_name: str | None, now: datetime) -> dict:
+def _end_times_by_puzzle(db: Session, username: str, puzzles) -> dict[str, int]:
+    """``{puzzle_id: game end_time}`` for a batch, in one query.
+
+    The two dict-shaped payloads (`/puzzles/due` and the daily session) build
+    their rows by iterating puzzles and looking stats up in a preloaded map,
+    so provenance needs the same treatment: one query for the whole batch
+    rather than a game fetch per puzzle. `/puzzles/due` is the scored training
+    request, and an N+1 there is paid on every session start.
+
+    Puzzles whose game is missing are simply absent from the map, and
+    ``compose_provenance`` drops the date component for them.
+    """
+    game_ids = {p.source_game_id for p in puzzles if getattr(p, "source_game_id", None)}
+    if not game_ids:
+        return {}
+    end_times: dict[str, int] = {
+        game_id: end_time
+        for game_id, end_time in db.execute(
+            select(GameModel.game_id, GameModel.end_time).where(
+                GameModel.username == username,
+                GameModel.game_id.in_(game_ids),
+            )
+        ).all()
+    }
+    return {
+        p.id: end_times[p.source_game_id]
+        for p in puzzles
+        if getattr(p, "source_game_id", None) in end_times
+    }
+
+
+def _queue_reason(
+    stats,
+    in_focus: bool,
+    focus_name: str | None,
+    now: datetime,
+    resolved: bool = True,
+) -> dict:
     """Why this puzzle is in today's queue.
 
     Reported per puzzle so the queue is inspectable rather than a black box:
@@ -672,13 +732,19 @@ def _queue_reason(stats, in_focus: bool, focus_name: str | None, now: datetime) 
     # A focus never replaces the scheduling reason — it explains the *order*,
     # not the presence. Saying "matches your focus" about a puzzle that is here
     # because it came due would misrepresent why it was served.
-    if in_focus and focus_name:
+    #
+    # Both the sentence and the `pattern` field name the DIAGNOSED CAUSE, so
+    # they are revealing fields inside a scored pre-attempt payload (§4) --
+    # which is exactly why a strip list naming only "motif and nickname" would
+    # have missed them. Withheld for an unresolved puzzle; the scheduling half
+    # of the explanation, which says only when it came due, always stays.
+    if in_focus and focus_name and resolved:
         explanation = (
             f"{explanation} Matches the pattern you are training: {focus_name}."
         )
 
     payload = {"reason": reason, "explanation": explanation}
-    if in_focus and focus_name:
+    if in_focus and focus_name and resolved:
         payload["pattern"] = focus_name
     if stats is not None and stats.fail_count:
         # Surfaced because a repeat failure is the strongest signal in the
@@ -813,14 +879,28 @@ def get_due_puzzles_endpoint(
     )
 
     # 3. Load content and merge with stats
-    result_puzzles = []
-    for pid in due_ids:
-        puzzle = puzzle_repository.get_puzzle(username, pid)
-        if not puzzle:
-            continue
+    #
+    # Loaded up front rather than inside the loop so provenance can resolve
+    # every game in one query. The per-id fetches below were already happening;
+    # this only reorders them so the batch is knowable before the payload is
+    # built. Missing puzzles are dropped here exactly as they were before.
+    loaded = [
+        (pid, puzzle)
+        for pid, puzzle in (
+            (pid, puzzle_repository.get_puzzle(username, pid)) for pid in due_ids
+        )
+        if puzzle is not None
+    ]
+    end_times = _end_times_by_puzzle(db, username, [p for _, p in loaded])
 
+    result_puzzles = []
+    for pid, puzzle in loaded:
         p_dict = asdict(puzzle)
         stats = all_stats.get(pid)
+        # /puzzles/due is the scored pre-attempt payload -- §4 calls it the
+        # request that matters most, because it is the one the trainer reads
+        # immediately before the user plays.
+        due_resolved = is_resolved(stats)
         if stats:
             p_dict.update(
                 {
@@ -832,8 +912,26 @@ def get_due_puzzles_endpoint(
                     "fail_count": stats.fail_count,
                     "last_reviewed_at": stats.last_reviewed_at,
                     "last_result": stats.last_result,
-                    "title": stats.title,
-                    "primary_motif": stats.primary_motif,
+                    "title": stats.title if due_resolved else None,
+                    # §5: naming a motif reveals THAT motif, on the puzzles
+                    # that have it. The nickname stays gated -- no intent in §5
+                    # unlocks it, because a theme categorises the tactic while
+                    # the nickname describes it.
+                    "primary_motif": (
+                        stats.primary_motif
+                        if motif_is_visible(
+                            resolved=due_resolved,
+                            puzzle_motif=stats.primary_motif,
+                            requested_motif=motif,
+                        )
+                        else None
+                    ),
+                    "display_name": resolve_display_name(
+                        title=stats.title,
+                        end_time=end_times.get(pid),
+                        ply=getattr(puzzle, "ply", None),
+                        resolved=due_resolved,
+                    ),
                 }
             )
         else:
@@ -850,10 +948,28 @@ def get_due_puzzles_endpoint(
                     "last_result": None,
                     "title": None,
                     "primary_motif": None,
+                    "display_name": resolve_display_name(
+                        title=None,
+                        end_time=end_times.get(pid),
+                        ply=getattr(puzzle, "ply", None),
+                        # No stats row at all, so nothing has been attempted.
+                        resolved=False,
+                    ),
                 }
             )
         p_dict["queue_reason"] = _queue_reason(
-            stats, pid in focus_ids, focus_name, datetime.now(timezone.utc)
+            stats,
+            pid in focus_ids,
+            focus_name,
+            datetime.now(timezone.utc),
+            # The focus arrived in the request, so echoing it back reveals
+            # nothing the caller did not supply -- and it unlocks exactly the
+            # one cause or opening it names.
+            resolved=focus_is_visible(
+                resolved=due_resolved,
+                focus_requested=bool(focus_cause or focus_opening),
+                in_focus=pid in focus_ids,
+            ),
         )
         # SCORED training path: never ship the solution up front.
         result_puzzles.append(_strip_solution(p_dict))
@@ -1235,18 +1351,69 @@ def list_puzzles(
     computed_status = status_case.label("computed_status")
 
     base_stmt = (
-        select(PuzzleModel, PuzzleStats, PuzzleDiagnosis, computed_status)
+        select(PuzzleModel, PuzzleStats, PuzzleDiagnosis, GameModel, computed_status)
         .outerjoin(PuzzleStats, join_cond)
         .outerjoin(PuzzleDiagnosis, diagnosis_join_cond)
+        # Provenance needs the game's end_time. On the join rather than a
+        # lookup per row: this route is paginated but still returns N rows, and
+        # a per-row `db.get` would be an N+1 on the Library's main list.
+        # OUTER, so a puzzle whose game is missing keeps its place in a page
+        # whose total was counted separately -- it just loses the date.
+        .outerjoin(
+            GameModel,
+            (GameModel.game_id == PuzzleModel.source_game_id)
+            & (GameModel.username == PuzzleModel.username),
+        )
         .where(PuzzleModel.username == username_lower)
     )
 
-    # Search filter
+    # Search filter.
+    #
+    # Title, opening and id -- NOT the composed provenance string. Provenance
+    # is derived, never stored (design §3), so matching "12 Mar · Sicilian ·
+    # move 18" as text would mean composing it in SQL. The opening is the one
+    # provenance component that IS stored, and it is the one worth searching:
+    # "sicilian" is a thing a user types, "move 18" is not.
+    #
+    # This matters more after rollout step 6 than it does today. With titles
+    # NULL by default, a title-only predicate silently degrades to hex-id
+    # search while the box still invites a name -- so the opening term is what
+    # keeps the feature meaningful, and the placeholder says what is covered
+    # rather than implying more.
+    #
+    # The gate reaches this predicate, not just the payload. A withheld
+    # nickname that is still matchable lets a user confirm what a puzzle is
+    # called without being shown it -- a slower version of showing it. So the
+    # title term applies only to resolved rows.
+    #
+    # Expressed in SQL rather than by filtering afterwards, because this runs
+    # before LIMIT: post-filtering would return short pages and a wrong total.
+    # The opening and id terms stay ungated on purpose -- the opening IS
+    # provenance, which is never withheld, and an id reveals nothing.
     if q:
         q_pattern = f"%{q.lower()}%"
+        title_match: ColumnElement[bool] = func.lower(PuzzleStats.title).like(q_pattern)
+        if resolution_gate_enabled():
+            title_match = and_(
+                title_match,
+                PuzzleStats.attempts > 0,
+                or_(
+                    PuzzleStats.next_due_at.is_(None),
+                    # NAIVE, matching the column. An aware bound makes Postgres
+                    # reinterpret the naive column through the session
+                    # TimeZone, shifting the boundary by the offset -- the rule
+                    # spaced_repetition documents and the bug the worker
+                    # heartbeat already paid for once. This function computed
+                    # `now = _utcnow_naive()` 150 lines up for exactly this and
+                    # the first version of this predicate ignored it, so the
+                    # SQL and Python halves of one gate could disagree.
+                    PuzzleStats.next_due_at > now,
+                ),
+            )
         base_stmt = base_stmt.where(
             or_(
-                func.lower(PuzzleStats.title).like(q_pattern),
+                title_match,
+                func.lower(PuzzleDiagnosis.opening_name).like(q_pattern),
                 func.lower(PuzzleModel.id).like(q_pattern),
             )
         )
@@ -1359,12 +1526,38 @@ def list_puzzles(
     # --- 7. Build response ---
     rows = db.execute(base_stmt).all()
     result_puzzles = []
-    for puzzle, stats, diagnosis, row_status in rows:
+    for puzzle, stats, diagnosis, game, row_status in rows:
+        row_resolved = is_resolved(stats)
         result_puzzles.append(
             PuzzleListItem(
                 id=puzzle.id,
-                title=stats.title if stats else None,
-                primary_motif=stats.primary_motif if stats else None,
+                # `title` is gated identically to display_name. Gating only
+                # display_name would withhold the nickname from the field the
+                # client renders while still shipping it in the field beside
+                # it -- the gate would be decorative.
+                title=(stats.title if (stats and row_resolved) else None),
+                display_name=resolve_display_name(
+                    title=stats.title if stats else None,
+                    end_time=game.end_time if game else None,
+                    ply=puzzle.ply,
+                    opening_name=diagnosis.opening_name if diagnosis else None,
+                    resolved=row_resolved,
+                ),
+                # §5: the Library's motif filter is themed intent, so a
+                # filtered browse shows the motif it was filtered by, and
+                # nothing else.
+                primary_motif=(
+                    stats.primary_motif
+                    if (
+                        stats
+                        and motif_is_visible(
+                            resolved=row_resolved,
+                            puzzle_motif=stats.primary_motif,
+                            requested_motif=motif,
+                        )
+                    )
+                    else None
+                ),
                 difficulty=_swing_to_difficulty(puzzle.swing),
                 swing=puzzle.swing,
                 fen=puzzle.fen,
@@ -1382,7 +1575,15 @@ def list_puzzles(
                 last_result=stats.last_result if stats else None,
                 next_due_at=stats.next_due_at if stats else None,
                 created_at=puzzle.created_at,
-                diagnosis_summary=_puzzle_diagnosis_summary(diagnosis),
+                # The summary carries `primary_cause` and its label -- the
+                # diagnosed cause, in the browse payload. §4 lists diagnosis
+                # prose as a revealing field and this is the short form of it,
+                # so it follows the same gate. Missed on the first pass through
+                # step 3: the leak was found by printing an actual response
+                # rather than by reading the list of fields.
+                diagnosis_summary=(
+                    _puzzle_diagnosis_summary(diagnosis) if row_resolved else None
+                ),
             )
         )
 
@@ -1464,10 +1665,25 @@ def get_puzzle_detail(
         raise HTTPException(status_code=404, detail="Puzzle not found")
 
     puzzle, stats, computed_status = row
+    # One row, so the game is a primary-key lookup rather than a join rewrite.
+    # Provenance needs its end_time; a missing game degrades the label to the
+    # move number instead of failing the request.
+    game = (
+        db.get(GameModel, (puzzle.source_game_id, puzzle.username))
+        if puzzle.source_game_id
+        else None
+    )
+    resolved = is_resolved(stats)
     return PuzzleListItem(
         id=puzzle.id,
-        title=stats.title if stats else None,
-        primary_motif=stats.primary_motif if stats else None,
+        title=(stats.title if (stats and resolved) else None),
+        display_name=resolve_display_name(
+            title=stats.title if stats else None,
+            end_time=game.end_time if game else None,
+            ply=puzzle.ply,
+            resolved=resolved,
+        ),
+        primary_motif=(stats.primary_motif if (stats and resolved) else None),
         difficulty=_swing_to_difficulty(puzzle.swing),
         swing=puzzle.swing,
         fen=puzzle.fen,
@@ -1506,6 +1722,11 @@ class DiagnosisResponse(BaseModel):
     * ``unclear``     — analysed, but no rule found a supported cause
     * ``pending``     — not analysed yet; a job will get to it
     * ``unavailable`` — this puzzle cannot be analysed at all
+    * ``withheld``    — there may well be one, but this puzzle has not been
+      attempted in its current exposure, and the prose names the cause and the
+      solution (§4). A distinct state rather than reusing ``pending``, which
+      would claim the analysis has not happened; the honest statement is that
+      it is not being shown yet.
 
     No cause is ever invented to avoid ``unclear``. There is deliberately no
     numeric confidence: the rule strength is an ordering prior, not a
@@ -1513,7 +1734,7 @@ class DiagnosisResponse(BaseModel):
     what the rules know.
     """
 
-    state: Literal["ready", "unclear", "pending", "unavailable"]
+    state: Literal["ready", "unclear", "pending", "unavailable", "withheld"]
     puzzle_id: str
     primary_motif: str | None = None
     primary_cause: str | None = None
@@ -1529,12 +1750,34 @@ class DiagnosisResponse(BaseModel):
     explanation: str | None = None
     training_recommendation: str | None = None
     user_confirmed_cause: str | None = None
+    # A safe, server-owned taxonomy for post-resolution feedback. It is set
+    # only on ready responses, so clients cannot infer anything from an
+    # unresolved/withheld response and never need to copy the taxonomy.
+    cause_options: list[CauseOption] | None = None
     source: str | None = None
     diagnosed_at: datetime | None = None
+
+    @model_serializer(mode="wrap")
+    def _omit_unavailable_cause_options(self, handler):
+        """Keep the options absent, not merely empty, until a ready diagnosis."""
+        data = handler(self)
+        if data["cause_options"] is None:
+            del data["cause_options"]
+        return data
 
 
 class DiagnosisConfirmRequest(BaseModel):
     cause: str
+
+
+def _unresolved_diagnosis(puzzle_id: str) -> DiagnosisResponse:
+    """The gate's answer for a puzzle the user has not attempted yet.
+
+    Every revealing field is simply absent rather than emptied-but-present, so
+    there is nothing to infer from the shape of the response: an unresolved
+    puzzle with a diagnosis and one without are byte-identical here.
+    """
+    return DiagnosisResponse(state="withheld", puzzle_id=puzzle_id)
 
 
 def _diagnosis_response(
@@ -1566,8 +1809,9 @@ def _diagnosis_response(
     # /puzzles/{id}: withheld unless the caller reveals. The cause and its label
     # stay, because "loose piece awareness" is a coaching label, not the move.
     evidence = row.evidence_json or [] if reveal_solution else []
+    state: Literal["ready", "unclear"] = "unclear" if unclear else "ready"
     return DiagnosisResponse(
-        state="unclear" if unclear else "ready",
+        state=state,
         puzzle_id=puzzle_id,
         primary_motif=row.primary_motif,
         primary_cause=cause,
@@ -1580,6 +1824,14 @@ def _diagnosis_response(
         explanation=row.explanation,
         training_recommendation=row.training_recommendation,
         user_confirmed_cause=row.user_confirmed_cause,
+        cause_options=(
+            [
+                CauseOption(value=cause, label=label)
+                for cause, label in CAUSE_LABELS.items()
+            ]
+            if state == "ready"
+            else None
+        ),
         source=row.source,
         diagnosed_at=row.updated_at,
     )
@@ -1619,8 +1871,112 @@ def get_puzzle_diagnosis(
     # evidence is always included, so this deploys without breaking anything;
     # when it is ON, ?reveal=true is required.
     reveal_solution = reveal or not _strip_puzzle_solutions_enabled()
+
+    # The resolution gate is a SECOND, independent question, and this endpoint
+    # is the only one that has to load stats to answer it -- the existence
+    # check above reads Puzzle, not PuzzleStats. One extra indexed read on a
+    # single-row endpoint. Diagnosis prose names the cause and the solution in
+    # sentences, so it is the most revealing payload in the app.
+    # NOT db.get: PuzzleStats is keyed on puzzle_id ALONE, so a get() by id
+    # would happily return another user's row. Both halves of the ownership
+    # key go in the predicate -- the same rule the joins elsewhere follow
+    # (#360).
+    stats = db.scalars(
+        select(PuzzleStats).where(
+            PuzzleStats.puzzle_id == puzzle_id,
+            PuzzleStats.username == username,
+        )
+    ).first()
+    if not is_resolved(stats):
+        return _unresolved_diagnosis(puzzle_id)
+
     return _diagnosis_response(
         puzzle_id, DiagnosisRepository(db).get(username, puzzle_id), reveal_solution
+    )
+
+
+class MotifHintRequest(BaseModel):
+    username: Username
+    # Optional: a hint asked outside a session still returns the motif, it just
+    # has no counter to record against. The Library's own board is exactly that
+    # case, and refusing there would make the gate inescapable on that surface.
+    session_id: str | None = None
+
+
+class MotifHintResponse(BaseModel):
+    """Rung 0 of the hint ladder."""
+
+    puzzle_id: str
+    # None when the puzzle genuinely has no usable motif -- `blunder` means "no
+    # motif was identified", so returning it would spend a hint on nothing.
+    primary_motif: str | None
+    hints_used: int | None = None
+
+
+@router.post("/puzzles/{puzzle_id}/hint/motif", response_model=MotifHintResponse)
+def use_motif_hint(
+    puzzle_id: str,
+    request: MotifHintRequest,
+    db: Session = Depends(get_db),
+    account: Account | None = Depends(require_account),
+):
+    """Ask for the motif. This is the gate's exit, and it is meant to be.
+
+    §4 withholds the motif before an attempt, which without an exit turns a
+    hint ladder into a wall: the existing rungs are "name the piece to move",
+    "highlight the destination", "reveal the solution", and the motif reveals
+    strictly less than the first of those. So it sorts *before* them as a new
+    rung 0.
+
+    Deliberately a POST on a puzzle-scoped path rather than a widening of
+    ``POST /sessions/{id}/hint``, which takes a session and a username and has
+    no ``puzzle_id`` at all -- it cannot say which puzzle was hinted, and once
+    §4 strips the motif from the payload the client has nowhere else to get it.
+
+    The ask is recorded, which is the point of routing it through an endpoint
+    instead of relaxing the serializer: a motif that arrives this way is a hint
+    the user spent, and §9 keeps the distinction so the scheduler can use it
+    later. Reuses the existing counter rather than adding a second one.
+    """
+    puzzle = db.scalars(
+        select(PuzzleModel).where(
+            PuzzleModel.id == puzzle_id,
+            PuzzleModel.username == request.username,
+        )
+    ).first()
+    if not puzzle:
+        raise HTTPException(status_code=404, detail="Puzzle not found")
+    assert_owns_username(account, request.username, db)
+
+    stats = db.scalars(
+        select(PuzzleStats).where(
+            PuzzleStats.puzzle_id == puzzle_id,
+            PuzzleStats.username == request.username,
+        )
+    ).first()
+    # `usable_motif` drops "blunder", which means no motif was identified.
+    # Spending a hint to be told nothing was identified is worse than being
+    # told there is nothing to tell.
+    motif = usable_motif(stats.primary_motif) if stats else None
+
+    hints_used = None
+    if request.session_id:
+        session = db.scalars(
+            select(TrainingSession).where(TrainingSession.id == request.session_id)
+        ).first()
+        # A bad or foreign session id must not cost the user their hint: the
+        # motif is returned either way, and only the recording is skipped.
+        if (
+            session
+            and session.username == request.username
+            and session.completed_at is None
+        ):
+            session.hints_used += 1
+            db.commit()
+            hints_used = session.hints_used
+
+    return MotifHintResponse(
+        puzzle_id=puzzle_id, primary_motif=motif, hints_used=hints_used
     )
 
 
@@ -1636,6 +1992,9 @@ class SimilarPuzzleItem(BaseModel):
 
     id: str
     title: str | None = None
+    # See PuzzleListItem.display_name: equal to `title` today, and the single
+    # field a client should render once titles become NULL by default.
+    display_name: str | None = None
     primary_motif: str | None = None
     difficulty: str
     swing: float
@@ -1689,26 +2048,54 @@ def get_similar_puzzles(
     if owns is None:
         raise HTTPException(status_code=404, detail="Puzzle not found")
 
+    # The ANCHOR's own resolution decides whether this response may name its
+    # diagnosed cause. Without this the route is a one-hop bypass of the
+    # diagnosis gate: GET /puzzles/{id}/diagnosis answers "withheld" while
+    # GET /puzzles/{id}/similar hands over the same cause for the same puzzle.
+    anchor_stats = db.scalars(
+        select(PuzzleStats).where(
+            PuzzleStats.puzzle_id == puzzle_id,
+            PuzzleStats.username == username_lower,
+        )
+    ).first()
+    anchor_resolved = is_resolved(anchor_stats)
+
     repo = DiagnosisRepository(db)
     key = repo.cluster_key_for(username_lower, puzzle_id)
     if key is None:
         return SimilarPuzzlesResponse()
 
+    cluster = key  # narrowed for the closure below
+
+    def _cause_fields() -> dict:
+        if not anchor_resolved:
+            return {}
+        return {
+            "cause": cluster.cause,
+            "cause_label": humanise_cause(cluster.cause),
+        }
+
     sibling_ids, tier = repo.similar_puzzle_ids(username_lower, puzzle_id, key, n)
     if not sibling_ids or tier is None:
-        return SimilarPuzzlesResponse(
-            cause=key.cause, cause_label=humanise_cause(key.cause)
-        )
+        return SimilarPuzzlesResponse(**_cause_fields())
 
     # Stats ride in on the join rather than a second round trip. PuzzleStats is
     # keyed on puzzle_id alone, so the username predicate belongs in the ON
     # clause — the same shape GET /puzzles/{id} uses.
     rows = db.execute(
-        select(PuzzleModel, PuzzleStats)
+        select(PuzzleModel, PuzzleStats, GameModel)
         .outerjoin(
             PuzzleStats,
             (PuzzleModel.id == PuzzleStats.puzzle_id)
             & (PuzzleStats.username == username_lower),
+        )
+        # Same reason as the list route: provenance needs end_time, and the
+        # sibling set is N rows, so this must be a join rather than a lookup
+        # per row.
+        .outerjoin(
+            GameModel,
+            (GameModel.game_id == PuzzleModel.source_game_id)
+            & (GameModel.username == PuzzleModel.username),
         )
         .where(
             PuzzleModel.username == username_lower,
@@ -1720,20 +2107,36 @@ def get_similar_puzzles(
     # promise one, and re-sorting here would quietly discard the ranking. A
     # diagnosis whose puzzle row is missing is skipped, so the list can be
     # shorter than n.
-    by_id = {puzzle.id: (puzzle, stats) for puzzle, stats in rows}
+    by_id = {puzzle.id: (puzzle, stats, game) for puzzle, stats, game in rows}
     items = []
     for pid in sibling_ids:
         found = by_id.get(pid)
         if found is None:
             continue
-        row, stats = found
+        row, stats, game = found
+        # Siblings are selected by shared diagnosis, NOT by attempt state, so
+        # this set is mostly puzzles the user has never touched -- and it is
+        # reached from a puzzle they just solved, with links straight into
+        # each one. §4 names this route as a leak site and the first pass
+        # closed the other four and missed it.
+        sibling_resolved = is_resolved(stats)
         items.append(
             SimilarPuzzleItem(
                 id=row.id,
-                title=stats.title if stats else None,
+                title=stats.title if (stats and sibling_resolved) else None,
+                display_name=resolve_display_name(
+                    title=stats.title if stats else None,
+                    end_time=game.end_time if game else None,
+                    ply=row.ply,
+                    resolved=sibling_resolved,
+                ),
                 # "blunder" means no motif was identified; tagging a row with it
                 # says nothing and contradicts the reason line, which omits it.
-                primary_motif=usable_motif(stats.primary_motif) if stats else None,
+                primary_motif=(
+                    usable_motif(stats.primary_motif)
+                    if (stats and sibling_resolved)
+                    else None
+                ),
                 difficulty=_swing_to_difficulty(row.swing),
                 swing=row.swing,
                 fen=row.fen,
@@ -1745,10 +2148,10 @@ def get_similar_puzzles(
         )
 
     return SimilarPuzzlesResponse(
-        cause=key.cause,
-        cause_label=humanise_cause(key.cause),
+        **_cause_fields(),
         match=tier.value,
-        reason=describe(key, tier),
+        # `describe` names the cause in prose, so it follows the cause.
+        reason=describe(key, tier) if anchor_resolved else None,
         puzzles=items,
     )
 
@@ -1782,7 +2185,24 @@ def confirm_puzzle_diagnosis(
     if row is None:
         raise HTTPException(status_code=404, detail="No diagnosis for this puzzle")
     db.commit()
-    # Same gate as the read: this returns the identical body, evidence and all.
+
+    # BOTH gates as the read, not just the reveal one. This returns the
+    # identical body, so the resolution gate has to be mirrored here or the
+    # endpoint is a one-POST bypass: the GET answers "withheld" while this
+    # hands over the prose and the evidence naming the solution move.
+    #
+    # _diagnosis_response's docstring already records this endpoint bypassing
+    # the GET's reveal gate once before. The confirmation itself is still
+    # recorded above -- only the body is withheld.
+    stats = db.scalars(
+        select(PuzzleStats).where(
+            PuzzleStats.puzzle_id == puzzle_id,
+            PuzzleStats.username == username,
+        )
+    ).first()
+    if not is_resolved(stats):
+        return _unresolved_diagnosis(puzzle_id)
+
     return _diagnosis_response(
         puzzle_id, row, reveal or not _strip_puzzle_solutions_enabled()
     )
@@ -1806,7 +2226,13 @@ def _find_existing_review(db, puzzle_id, username, session_id, client_review_id)
 
 
 def _build_review_response(
-    stats, puzzle_stats, result, verified: bool = False, source: str | None = None
+    stats,
+    puzzle_stats,
+    result,
+    verified: bool = False,
+    source: str | None = None,
+    review_context: str = "standard",
+    affects_scheduling: bool = True,
 ) -> dict:
     """Build the review endpoint payload for a given (stats, result).
 
@@ -1820,7 +2246,9 @@ def _build_review_response(
     """
     result_val = result.value if isinstance(result, PuzzleResult) else result
     feedback_message = ""
-    if result_val == "pass":
+    if not affects_scheduling:
+        feedback_message = "Practice recorded. Your normal review date is unchanged."
+    elif result_val == "pass":
         if stats.attempts == 1:
             feedback_message = "Perfect! First try!"
         elif stats.attempts > 0 and stats.pass_count / stats.attempts > 0.8:
@@ -1843,6 +2271,8 @@ def _build_review_response(
         "result": result_val,
         "verified": verified,
         "source": source,
+        "review_context": review_context,
+        "affects_scheduling": affects_scheduling,
         "stats": {
             "attempts": stats.attempts,
             "pass_count": stats.pass_count,
@@ -1907,6 +2337,8 @@ def review_puzzle(
                 existing.result,
                 verified=existing.verified,
                 source=existing.source,
+                review_context=existing.review_context,
+                affects_scheduling=existing.affects_scheduling,
             )
 
     # Server-verified training integrity (audit gate 7): when the client sends
@@ -1932,6 +2364,8 @@ def review_puzzle(
         verified = False
         review_source = "client_reported"
 
+    review_context = "standard"
+    affects_scheduling = True
     # If session_id provided, validate session and update counters
     if session_id:
         from services.api.models import PuzzleResult as PR
@@ -1959,6 +2393,29 @@ def review_puzzle(
 
         if session.completed_at is not None:
             raise HTTPException(status_code=400, detail="Session already completed")
+
+        if session.session_type == "focus_practice":
+            selected = (session.session_data or {}).get("selected_items", [])
+            item = next(
+                (
+                    candidate
+                    for candidate in selected
+                    if candidate.get("puzzle_id") == puzzle_id
+                ),
+                None,
+            )
+            if item is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail={"code": "session_item_mismatch"},
+                )
+            policy = item.get("review_policy")
+            if policy not in {"normal_review", "practice_only"}:
+                raise HTTPException(
+                    status_code=409, detail={"code": "session_item_mismatch"}
+                )
+            review_context = "focus_practice"
+            affects_scheduling = policy == "normal_review"
 
         # Increment session counters (will be committed with review). Use the
         # SERVER-decided outcome so a spoofed "pass" with a wrong move can't
@@ -1994,10 +2451,21 @@ def review_puzzle(
             client_result=client_result,
             verified=verified,
             source=review_source,
+            review_context=review_context,
+            affects_scheduling=affects_scheduling,
         )
 
         # 2. Update aggregate stats (triggers scheduling logic)
-        stats = update_puzzle_stats(db, puzzle_id, request.username, effective_result)
+        if affects_scheduling:
+            stats = update_puzzle_stats(
+                db, puzzle_id, request.username, effective_result
+            )
+        else:
+            stats = get_puzzle_stats(db, puzzle_id, request.username)
+            if stats is None:
+                raise HTTPException(
+                    status_code=409, detail={"code": "session_item_mismatch"}
+                )
 
         # 3. Get puzzle details for feedback
         puzzle_stats = puzzle_repository.get_puzzle_stats(request.username, puzzle_id)
@@ -2032,6 +2500,8 @@ def review_puzzle(
                     existing.result,
                     verified=existing.verified,
                     source=existing.source,
+                    review_context=existing.review_context,
+                    affects_scheduling=existing.affects_scheduling,
                 )
         raise
 
@@ -2043,6 +2513,8 @@ def review_puzzle(
         effective_result,
         verified=verified,
         source=review_source,
+        review_context=review_context,
+        affects_scheduling=affects_scheduling,
     )
 
 

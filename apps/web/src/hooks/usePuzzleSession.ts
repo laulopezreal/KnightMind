@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import {
     getDuePuzzles,
+    startFocusPractice,
     startSession,
     completeSession,
     reviewPuzzle,
@@ -55,6 +56,7 @@ export interface UsePuzzleSessionOptions {
     motifFilter: string | null;
     /** Mistake cause to bias the queue toward. Never narrows it. */
     focusCause: string | null;
+    focusPracticeMode: boolean;
     /** Opening to bias the queue toward, with its scope. Never narrows it. */
     focusOpening: string | null;
     focusOpeningScope: string | null;
@@ -157,6 +159,7 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
         warmupMode,
         motifFilter,
         focusCause,
+        focusPracticeMode,
         focusOpening,
         focusOpeningScope,
         userStatus,
@@ -181,6 +184,46 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [lastFeedback, setLastFeedback] = useState('');
+
+    // A focus-practice start is owned by the exact rendered account/context that
+    // created it. Refs are kept current during render so a response that lands
+    // between render and effects cannot borrow a later A -> B -> A identity.
+    const focusStartEpochRef = useRef(0);
+    const focusStartPromiseRef = useRef<Promise<void> | null>(null);
+    const focusStartOwnerRef = useRef<{ username: string; focusCause: string | null; focusPracticeMode: boolean; activeSessionId: string | null; committedSessionId: string | null; epoch: number } | null>(null);
+    const focusStartContextRef = useRef({ username, focusCause, focusPracticeMode, activeSessionId });
+    const mountedRef = useRef(true);
+    const focusStartContext = { username, focusCause, focusPracticeMode, activeSessionId };
+    const previousFocusStartContext = focusStartContextRef.current;
+    const focusStartOwner = focusStartOwnerRef.current;
+    const isOwnCommittedSessionTransition =
+        !!focusStartOwner
+        && previousFocusStartContext.username === focusStartContext.username
+        && previousFocusStartContext.focusCause === focusStartContext.focusCause
+        && previousFocusStartContext.focusPracticeMode === focusStartContext.focusPracticeMode
+        && previousFocusStartContext.activeSessionId === focusStartOwner.activeSessionId
+        && focusStartContext.activeSessionId === focusStartOwner.committedSessionId;
+    if (
+        previousFocusStartContext.username !== focusStartContext.username
+        || previousFocusStartContext.focusCause !== focusStartContext.focusCause
+        || previousFocusStartContext.focusPracticeMode !== focusStartContext.focusPracticeMode
+        || (previousFocusStartContext.activeSessionId !== focusStartContext.activeSessionId && !isOwnCommittedSessionTransition)
+    ) {
+        focusStartEpochRef.current += 1;
+        focusStartPromiseRef.current = null;
+        focusStartOwnerRef.current = null;
+    }
+    focusStartContextRef.current = focusStartContext;
+
+    useEffect(() => {
+        mountedRef.current = true;
+        return () => {
+            mountedRef.current = false;
+            focusStartEpochRef.current += 1;
+            focusStartPromiseRef.current = null;
+            focusStartOwnerRef.current = null;
+        };
+    }, []);
 
     // ── localStorage: best streak ──
     useEffect(() => {
@@ -271,21 +314,23 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
                 setError(null);
                 setIsLoading(true);
                 try {
-                    const response = await getDuePuzzles(
-                        username,
-                        session.requested_n,
-                        session.session_type || 'standard',
-                        session.target_accuracy,
-                        // The session's own motif and focus, not the URL's. A
-                        // resumed session must be served the way it was
-                        // originally, or the restored index points at a
-                        // different puzzle and the user re-solves one —
-                        // advancing its interval twice.
-                        session.motif || undefined,
-                        session.focus_cause || undefined,
-                        session.focus_opening || undefined,
-                        session.focus_opening_scope || undefined,
-                    );
+                    const response = session.session_type === 'focus_practice'
+                        ? { puzzles: session.puzzles ?? [] }
+                        : await getDuePuzzles(
+                            username,
+                            session.requested_n,
+                            session.session_type || 'standard',
+                            session.target_accuracy,
+                            // The session's own motif and focus, not the URL's. A
+                            // resumed session must be served the way it was
+                            // originally, or the restored index points at a
+                            // different puzzle and the user re-solves one —
+                            // advancing its interval twice.
+                            session.motif || undefined,
+                            session.focus_cause || undefined,
+                            session.focus_opening || undefined,
+                            session.focus_opening_scope || undefined,
+                        );
                     setPuzzles(response.puzzles);
 
                     // Restore current index with bounds checking
@@ -363,20 +408,17 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
     }, [activeSessionId, checkSessionAchievements, refreshMotifPerformance, refreshRecentSessions, setActiveSessionId, timer.cleanup, username]);
 
     // ── handleReviewPuzzle ──
-    // In-flight guard: a fast double-click must not fire two concurrent POSTs.
-    const isReviewingRef = useRef(false);
+    // Concurrent callers must await the owner's real write, not a synthetic
+    // success. Timer, reveal, and solve paths can overlap before React renders.
+    const reviewOwnerPromiseRef = useRef<Promise<boolean> | null>(null);
     // Idempotency key for the current submission. Held across an error so a
     // manual retry of the *same* submission replays idempotently on the server;
     // cleared after success so the next distinct submission gets a fresh key.
     const reviewKeyRef = useRef<string | null>(null);
     const currentPuzzle = puzzles[currentIndex];
-    const handleReviewPuzzle = useCallback(async (result: 'pass' | 'fail', timeMs?: number, attemptedMove?: string): Promise<boolean> => {
-        if (!currentPuzzle || !username.trim()) return false;
-        // A concurrent submission already owns this review (e.g. the timer fired
-        // as the user clicked). Report success so the caller still advances —
-        // the review IS being recorded, just not by this call.
-        if (isReviewingRef.current) return true;
-        isReviewingRef.current = true;
+    const handleReviewPuzzle = useCallback((result: 'pass' | 'fail', timeMs?: number, attemptedMove?: string): Promise<boolean> => {
+        if (!currentPuzzle || !username.trim()) return Promise.resolve(false);
+        if (reviewOwnerPromiseRef.current) return reviewOwnerPromiseRef.current;
 
         if (!reviewKeyRef.current) {
             reviewKeyRef.current = generateReviewKey();
@@ -388,8 +430,7 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
             timeSpent = Date.now() - timer.puzzleStartTime;
         }
 
-        try {
-            const response = await reviewPuzzle(
+        const ownerPromise = reviewPuzzle(
                 currentPuzzle.id,
                 username.trim(),
                 result,
@@ -397,7 +438,7 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
                 activeSessionId || undefined,
                 clientReviewId,
                 attemptedMove,
-            );
+            ).then((response) => {
 
             // Success: rotate the key so the next distinct review gets a new one.
             reviewKeyRef.current = null;
@@ -407,7 +448,10 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
             // for legacy/no-move flows where the server echoes the client claim.
             const effectiveResult = response.result ?? result;
 
-            if (response.feedback) {
+            if (response.review_context === 'focus_practice' && response.affects_scheduling === false) {
+                setLastFeedback('Practice recorded. Your normal review date is unchanged.');
+                setTimeout(() => setLastFeedback(''), 5000);
+            } else if (response.feedback) {
                 setLastFeedback(response.feedback);
                 setTimeout(() => setLastFeedback(''), 5000);
             }
@@ -434,14 +478,16 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
             // puzzle) inflate the count and end the session before the last
             // puzzle, stranding a dead "Next Puzzle" button.
             return true;
-        } catch (err) {
+        }).catch((err) => {
             console.error('Failed to review puzzle:', err);
             setError(err instanceof Error ? err.message : 'Failed to review puzzle');
             // Keep reviewKeyRef so a manual retry replays idempotently server-side.
             return false;
-        } finally {
-            isReviewingRef.current = false;
-        }
+        }).finally(() => {
+            reviewOwnerPromiseRef.current = null;
+        });
+        reviewOwnerPromiseRef.current = ownerPromise;
+        return ownerPromise;
     }, [
         activeSessionId,
         bestStreak,
@@ -473,13 +519,98 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
         if (!username.trim()) return fail('Please enter a username');
         if (!userStatus) return fail('Still loading your training data — try again in a moment.');
         if (userStatus.puzzles_count === 0) return fail('No puzzles available. Generate puzzles first.');
-        if (userStatus.due_count === 0) {
+        if (!focusPracticeMode && userStatus.due_count === 0) {
             return fail('No puzzles are due for review right now. Check back later or generate more puzzles.');
         }
 
         setSessionState('loading');
         setError(null);
         setLastFeedback('');
+
+        if (focusPracticeMode) {
+            if (!focusCause) return fail('This focus is no longer available. Return to Today’s Focus and choose a current practice session.');
+            const owner: NonNullable<typeof focusStartOwnerRef.current> = {
+                username: username.trim(),
+                focusCause,
+                focusPracticeMode,
+                activeSessionId,
+                committedSessionId: null,
+                epoch: focusStartEpochRef.current + 1,
+            };
+            const pendingOwner = focusStartOwnerRef.current;
+            if (
+                focusStartPromiseRef.current
+                && pendingOwner
+                && pendingOwner.username === owner.username
+                && pendingOwner.focusCause === owner.focusCause
+                && pendingOwner.focusPracticeMode === owner.focusPracticeMode
+                && pendingOwner.activeSessionId === owner.activeSessionId
+                && pendingOwner.epoch === focusStartEpochRef.current
+            ) {
+                return focusStartPromiseRef.current;
+            }
+
+            focusStartEpochRef.current = owner.epoch;
+            focusStartOwnerRef.current = owner;
+            const ownsFocusStart = () => {
+                const current = focusStartContextRef.current;
+                return mountedRef.current
+                    && focusStartEpochRef.current === owner.epoch
+                    && current.username === owner.username
+                    && current.focusCause === owner.focusCause
+                    && current.focusPracticeMode === owner.focusPracticeMode
+                    && (current.activeSessionId === owner.activeSessionId || current.activeSessionId === owner.committedSessionId);
+            };
+            const failIfCurrent = (message: string) => {
+                if (!ownsFocusStart()) return;
+                setError(message);
+                setSessionState('error');
+            };
+
+            setIsLoading(true);
+            const operation = (async () => {
+                try {
+                    const response = await startFocusPractice(owner.username, owner.focusCause!, 5);
+                    if (!ownsFocusStart()) return;
+                    if (response.puzzles.length < 2) return failIfCurrent('There are not enough safe positions for extra practice yet.');
+                    if (!ownsFocusStart()) return;
+                    owner.committedSessionId = response.session_id;
+                    setActiveSessionId(response.session_id);
+                    if (!ownsFocusStart()) return;
+                    localStorage.setItem(`knightmind:session:${owner.username}`, response.session_id);
+                    if (!ownsFocusStart()) return;
+                    localStorage.removeItem(`knightmind:sessionState:${owner.username}`);
+                    if (!ownsFocusStart()) return;
+                    setSessionSummary({ session_id: response.session_id, session_type: response.session_type, requested_n: response.returned_count, pass_count: 0, fail_count: 0, total_time_ms: 0, created_at: new Date().toISOString(), completed_at: null, current_streak: 0, best_streak: 0, hints_used: 0, focus_cause: response.focus.cause, focus_name: response.focus.name, puzzles: response.puzzles });
+                    if (!ownsFocusStart()) return;
+                    setPuzzles(response.puzzles);
+                    if (!ownsFocusStart()) return;
+                    setCurrentIndex(0);
+                    if (!ownsFocusStart()) return;
+                    setReviewedCount(0);
+                    if (!ownsFocusStart()) return;
+                    setStreak(0);
+                    if (!ownsFocusStart()) return;
+                    setHintsUsed(0);
+                    if (!ownsFocusStart()) return;
+                    setPerformanceHistory([]);
+                    if (!ownsFocusStart()) return;
+                    setStatus('solving');
+                    if (!ownsFocusStart()) return;
+                    setSessionState('active');
+                } catch (err) {
+                    failIfCurrent(err instanceof Error ? err.message : 'Couldn’t start focus practice. Try again.');
+                } finally {
+                    if (ownsFocusStart()) {
+                        focusStartPromiseRef.current = null;
+                        focusStartOwnerRef.current = null;
+                        setIsLoading(false);
+                    }
+                }
+            })();
+            focusStartPromiseRef.current = operation;
+            return operation;
+        }
 
         let targetAccuracyParam: number | undefined = undefined;
         let targetTimeMinutesParam: number | undefined = undefined;
@@ -574,6 +705,7 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
         warmupMode,
         motifFilter,
         focusCause,
+        focusPracticeMode,
         focusOpening,
         focusOpeningScope,
         setActiveSessionId,

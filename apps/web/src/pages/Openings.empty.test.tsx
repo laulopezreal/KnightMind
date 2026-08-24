@@ -212,4 +212,3 @@ describe('Openings — switching to an account with nothing imported', () => {
     expect(screen.getAllByRole('button', { name: 'Import games' })).toHaveLength(1);
   });
 });
-

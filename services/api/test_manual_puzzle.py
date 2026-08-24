@@ -188,8 +188,13 @@ def test_create_manual_puzzle_appears_in_library_motif_filter(client):
     assert data["total"] == 1
     assert data["available_motifs"] == ["fork"]
     assert data["puzzles"][0]["id"] == puzzle_id
-    assert data["puzzles"][0]["title"] == "Sicilian Fork"
+    # The motif IS asserted: ?motif=fork is themed intent, and §5's override
+    # reveals the motif the caller named even on an unattempted puzzle.
     assert data["puzzles"][0]["primary_motif"] == "fork"
+    # The nickname is not, and must not be: no §5 intent reveals it, and a
+    # freshly created manual puzzle has never been attempted. display_name
+    # carries provenance instead, which is what the client renders.
+    assert data["puzzles"][0]["display_name"]
 
 
 def test_create_manual_puzzle_does_not_count_as_imported_game(client):

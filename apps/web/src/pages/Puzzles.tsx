@@ -5,12 +5,13 @@ import { AccessibleChessboard } from '../components/AccessibleChessboard';
 import { PageHeader } from '../components/PageHeader';
 import { ConnectAccountEmpty } from '../components/ConnectAccountEmpty';
 import { Chess } from 'chess.js';
-import { generatePuzzles, getDailyPuzzles, cancelJob, checkPuzzle, revealPuzzle, ApiError } from '../api';
+import { generatePuzzles, getDailyPuzzles, cancelJob, checkPuzzle, confirmPuzzleDiagnosis, getPuzzleDiagnosis, revealPuzzle, requestMotifHint, type PuzzleDiagnosis, ApiError } from '../api';
 import { JobStatusCard } from '../components/JobStatusCard';
 import { SessionSummaryCard } from '../components/SessionSummaryCard';
 import { WarmupSummary } from '../components/WarmupSummary';
 import { AchievementsList } from '../components/AchievementsList';
 import { RecentSessionsCard } from '../components/RecentSessionsCard';
+import { MistakeDiagnosisCard } from '../components/MistakeDiagnosisCard';
 import { useJobPolling } from '../hooks/useJobPolling';
 import { useChessUsername } from '../context/ChessUsernameContext';
 import { usePuzzleMode } from '../context/PuzzleModeContext';
@@ -36,6 +37,24 @@ const MOTIF_RANK_STYLE = {
 
 const motifRankStyle = (rank: string) =>
     MOTIF_RANK_STYLE[rank as keyof typeof MOTIF_RANK_STYLE] ?? MOTIF_RANK_STYLE.needs_work;
+
+type PuzzleInstanceOwner = {
+    puzzleId: string;
+    puzzleEpoch: number;
+    epoch: number;
+    username: string;
+};
+
+type DiagnosisConfirmationOwner = PuzzleInstanceOwner & {
+    requestId: number;
+};
+
+type TerminalDiagnosisOwner = {
+    puzzleId: string;
+    puzzleEpoch: number;
+    diagnosisEpoch: number;
+    username: string;
+};
 
 export default function Puzzles() {
     const { username } = useChessUsername();
@@ -70,6 +89,13 @@ export default function Puzzles() {
     // reveal, record a review). Deliberately separate from the puzzle `status`:
     // a failed request is NOT a wrong answer and must never be scored as one.
     const [actionError, setActionError] = useState<string | null>(null);
+    const [diagnosisResult, setDiagnosisResult] = useState<{ owner: PuzzleInstanceOwner; diagnosis: PuzzleDiagnosis } | null>(null);
+    const [diagnosisLoadingOwner, setDiagnosisLoadingOwner] = useState<PuzzleInstanceOwner | null>(null);
+    const [diagnosisConfirmationOwner, setDiagnosisConfirmationOwner] = useState<DiagnosisConfirmationOwner | null>(null);
+    const [diagnosisConfirmationError, setDiagnosisConfirmationError] = useState<{
+        owner: PuzzleInstanceOwner;
+        message: string;
+    } | null>(null);
 
     // Get motif filter and warmup mode from URL query params
     const [searchParams] = useSearchParams();
@@ -77,6 +103,7 @@ export default function Puzzles() {
     // A bias rather than a filter, so — unlike motif — it never leaves the user
     // in a dead-end empty session and needs no escape hatch.
     const focusCause = searchParams.get('focus_cause');
+    const focusPracticeMode = searchParams.get('mode') === 'focus_practice';
     const focusOpening = searchParams.get('focus_opening');
     const focusOpeningScope = searchParams.get('focus_opening_scope');
     const isWarmupMode = searchParams.get('warmup') === 'true';
@@ -98,6 +125,28 @@ export default function Puzzles() {
     } = insights;
 
     const statusRef = useRef(status);
+    // The in-flight review write for THIS puzzle's outcome, or null. Covers
+    // the reveal (a self-reported fail) and the solve (a pass); an incorrect
+    // attempt is recorded by the user's own "Mark as failed" button and is
+    // deliberately not automatic.
+    //
+    // Recording at outcome rather than at move-on is what makes the
+    // post-resolution panel possible: the diagnosis is gated on attempts > 0,
+    // so a panel shown before the review landed would be withheld.
+    //
+    // Move-on awaits THIS rather
+    // than a boolean, because during the flight no boolean is correct: the
+    // outcome is not known yet, and both orderings of a flag lose a result in
+    // one direction or the other (advance on an unlanded write, or skip a
+    // retry after a failed one). Cleared on failure so move-on retries with
+    // the idempotency key the session hook kept.
+    const outcomeWriteRef = useRef<Promise<boolean> | null>(null);
+    // Rung 0 of the hint ladder (§5.1): the motif, asked for explicitly.
+    // Held here rather than in `useClue` because that hook is shared with
+    // Engine analysis, which has no motif and no gate -- renumbering its rungs
+    // would change a surface this feature has nothing to do with.
+    const [motifHint, setMotifHint] = useState<string | null>(null);
+    const [motifHintAsked, setMotifHintAsked] = useState(false);
     const [previousSessionId, setPreviousSessionId] = useState<string | null>(null);
     useEffect(() => {
         statusRef.current = status;
@@ -111,7 +160,7 @@ export default function Puzzles() {
         }
     }
 
-    const handleReviewPuzzleRef = useRef<((result: 'pass' | 'fail', timeMs?: number) => Promise<boolean>)>(async () => false);
+    const recordPuzzleOutcomeRef = useRef<(result: 'pass' | 'fail', attemptedMove?: string, requestDiagnosis?: boolean) => Promise<boolean>>(async () => false);
     const isAdvancingPuzzle = useRef(false);
 
     const timer = usePuzzleTimer({
@@ -119,7 +168,7 @@ export default function Puzzles() {
         activeSessionId,
         onPuzzleTimeout: () => {
             if (statusRef.current === 'solving') {
-                handleReviewPuzzleRef.current('fail');
+                void recordPuzzleOutcomeRef.current('fail', undefined, true);
                 setStatus('incorrect');
             }
         },
@@ -136,6 +185,7 @@ export default function Puzzles() {
         warmupMode,
         motifFilter,
         focusCause,
+        focusPracticeMode,
         focusOpening,
         focusOpeningScope,
         userStatus,
@@ -159,10 +209,282 @@ export default function Puzzles() {
 
     const startPuzzleTimer = timer.startPuzzleTimer;
     const currentPuzzle = puzzles[currentIndex];
+    // A solve check owns one puzzle at a time. The same action is reachable
+    // through typed input, Enter, click-to-move, drag, and keyboard movement;
+    // disable rendering alone cannot close that race before React re-renders.
+    const checkingPuzzleRef = useRef<{ puzzleId: string; epoch: number } | null>(null);
+    const currentPuzzleIdRef = useRef<string | null>(currentPuzzle?.id ?? null);
+    const currentUsernameRef = useRef(username);
+    currentUsernameRef.current = username;
+    const puzzleInstanceRef = useRef<typeof currentPuzzle>(currentPuzzle);
+    const puzzleEpochRef = useRef(0);
+    // Diagnosis ownership crosses identity boundaries independently from the
+    // durable terminal-outcome owner. A username round-trip on the same puzzle
+    // must never revive a previous user's result or let its finalizer clear a
+    // current request, but it must not reopen or duplicate the review write.
+    const diagnosisEpochRef = useRef(0);
+    const diagnosisUsernameRef = useRef(username);
+    const diagnosisRequestRef = useRef<PuzzleInstanceOwner | null>(null);
+    const diagnosisConfirmationRequestRef = useRef<DiagnosisConfirmationOwner | null>(null);
+    const diagnosisConfirmationSequenceRef = useRef(0);
+    const mountedRef = useRef(true);
+    useEffect(() => () => {
+        mountedRef.current = false;
+    }, []);
+    // The terminal decision is durable for this puzzle instance, while its
+    // persistence promise is retryable. A failed write must not reopen the
+    // decision to a delayed solve-check response.
+    const outcomeDecisionRef = useRef<{
+        puzzleId: string;
+        epoch: number;
+        result: 'pass' | 'fail';
+        attemptedMove?: string;
+        requestDiagnosis: boolean;
+        diagnosisOwner: TerminalDiagnosisOwner;
+    } | null>(null);
+    if (puzzleInstanceRef.current !== currentPuzzle) {
+        puzzleInstanceRef.current = currentPuzzle;
+        puzzleEpochRef.current += 1;
+        diagnosisEpochRef.current += 1;
+        checkingPuzzleRef.current = null;
+        outcomeDecisionRef.current = null;
+        outcomeWriteRef.current = null;
+        setDiagnosisResult(null);
+        setDiagnosisLoadingOwner(null);
+        diagnosisConfirmationRequestRef.current = null;
+        setDiagnosisConfirmationOwner(null);
+        setDiagnosisConfirmationError(null);
+    }
+    if (diagnosisUsernameRef.current !== username) {
+        diagnosisUsernameRef.current = username;
+        diagnosisEpochRef.current += 1;
+        diagnosisRequestRef.current = null;
+        setDiagnosisResult(null);
+        setDiagnosisLoadingOwner(null);
+        diagnosisConfirmationRequestRef.current = null;
+        setDiagnosisConfirmationOwner(null);
+        setDiagnosisConfirmationError(null);
+    }
+    currentPuzzleIdRef.current = currentPuzzle?.id ?? null;
+    const diagnosisOwner = diagnosisResult?.owner;
+    const activeDiagnosis =
+        diagnosisOwner &&
+        diagnosisOwner.puzzleId === currentPuzzle?.id &&
+        diagnosisOwner.puzzleEpoch === puzzleEpochRef.current &&
+        diagnosisOwner.epoch === diagnosisEpochRef.current &&
+        diagnosisOwner.username === username
+            ? diagnosisResult?.diagnosis ?? null
+            : null;
+    const diagnosisLoading =
+        !!diagnosisLoadingOwner &&
+        diagnosisLoadingOwner.puzzleId === currentPuzzle?.id &&
+        diagnosisLoadingOwner.puzzleEpoch === puzzleEpochRef.current &&
+        diagnosisLoadingOwner.epoch === diagnosisEpochRef.current &&
+        diagnosisLoadingOwner.username === username;
+    const diagnosisConfirmationSaving =
+        !!diagnosisConfirmationOwner &&
+        diagnosisConfirmationOwner.puzzleId === currentPuzzle?.id &&
+        diagnosisConfirmationOwner.puzzleEpoch === puzzleEpochRef.current &&
+        diagnosisConfirmationOwner.epoch === diagnosisEpochRef.current &&
+        diagnosisConfirmationOwner.username === username;
+    const activeDiagnosisConfirmationError =
+        diagnosisConfirmationError &&
+        diagnosisConfirmationError.owner.puzzleId === currentPuzzle?.id &&
+        diagnosisConfirmationError.owner.puzzleEpoch === puzzleEpochRef.current &&
+        diagnosisConfirmationError.owner.epoch === diagnosisEpochRef.current &&
+        diagnosisConfirmationError.owner.username === username
+            ? diagnosisConfirmationError.message
+            : null;
+
+    const requestDiagnosisForResolvedOutcome = (owner: TerminalDiagnosisOwner) => {
+        if (
+            currentPuzzleIdRef.current !== owner.puzzleId ||
+            puzzleEpochRef.current !== owner.puzzleEpoch ||
+            diagnosisEpochRef.current !== owner.diagnosisEpoch ||
+            currentUsernameRef.current !== owner.username
+        ) return;
+        const diagnosisOwner: PuzzleInstanceOwner = {
+            puzzleId: owner.puzzleId,
+            puzzleEpoch: owner.puzzleEpoch,
+            epoch: owner.diagnosisEpoch,
+            username: owner.username,
+        };
+        const existingRequest = diagnosisRequestRef.current;
+        if (
+            existingRequest?.puzzleId === diagnosisOwner.puzzleId &&
+            existingRequest.epoch === diagnosisOwner.epoch &&
+            existingRequest.username === diagnosisOwner.username
+        ) return;
+
+        diagnosisRequestRef.current = diagnosisOwner;
+        setDiagnosisLoadingOwner(diagnosisOwner);
+        // Keep this supplementary request behind the successful review write.
+        // It is deliberately isolated from play/session control flow: an API
+        // failure leaves the completed puzzle usable and move-on untouched.
+        void Promise.resolve()
+            .then(() => getPuzzleDiagnosis(diagnosisOwner.puzzleId, diagnosisOwner.username, true))
+            .then((diagnosis) => {
+                if (
+                    currentPuzzleIdRef.current === diagnosisOwner.puzzleId &&
+                    diagnosisEpochRef.current === diagnosisOwner.epoch &&
+                    currentUsernameRef.current === diagnosisOwner.username
+                ) {
+                    setDiagnosisResult({ owner: diagnosisOwner, diagnosis });
+                }
+            })
+            .catch(() => undefined)
+            .finally(() => {
+                if (
+                    currentPuzzleIdRef.current === diagnosisOwner.puzzleId &&
+                    diagnosisEpochRef.current === diagnosisOwner.epoch &&
+                    currentUsernameRef.current === diagnosisOwner.username
+                ) {
+                    setDiagnosisLoadingOwner(null);
+                }
+            });
+    };
+
+    const confirmResolvedDiagnosis = (cause: string) => {
+        if (!activeDiagnosis || !diagnosisOwner || diagnosisConfirmationSaving) return;
+        const owner = diagnosisOwner;
+        const requestOwner: DiagnosisConfirmationOwner = {
+            ...owner,
+            requestId: diagnosisConfirmationSequenceRef.current + 1,
+        };
+        diagnosisConfirmationSequenceRef.current = requestOwner.requestId;
+        diagnosisConfirmationRequestRef.current = requestOwner;
+        setDiagnosisConfirmationOwner(requestOwner);
+        setDiagnosisConfirmationError(null);
+
+        void Promise.resolve()
+            .then(() => confirmPuzzleDiagnosis(owner.puzzleId, owner.username, cause))
+            .then((diagnosis) => {
+                if (
+                    mountedRef.current &&
+                    diagnosisConfirmationRequestRef.current?.requestId === requestOwner.requestId &&
+                    currentPuzzleIdRef.current === owner.puzzleId &&
+                    puzzleEpochRef.current === owner.puzzleEpoch &&
+                    diagnosisEpochRef.current === owner.epoch &&
+                    currentUsernameRef.current === owner.username
+                ) {
+                    setDiagnosisResult({ owner, diagnosis });
+                    setDiagnosisConfirmationError(null);
+                }
+            })
+            .catch(() => {
+                if (
+                    mountedRef.current &&
+                    diagnosisConfirmationRequestRef.current?.requestId === requestOwner.requestId &&
+                    currentPuzzleIdRef.current === owner.puzzleId &&
+                    puzzleEpochRef.current === owner.puzzleEpoch &&
+                    diagnosisEpochRef.current === owner.epoch &&
+                    currentUsernameRef.current === owner.username
+                ) {
+                    setDiagnosisConfirmationError({
+                        owner,
+                        message: 'Couldn’t save your label. Try again.',
+                    });
+                }
+            })
+            .finally(() => {
+                if (
+                    mountedRef.current &&
+                    diagnosisConfirmationRequestRef.current?.requestId === requestOwner.requestId &&
+                    currentPuzzleIdRef.current === owner.puzzleId &&
+                    puzzleEpochRef.current === owner.puzzleEpoch &&
+                    diagnosisEpochRef.current === owner.epoch &&
+                    currentUsernameRef.current === owner.username
+                ) {
+                    setDiagnosisConfirmationOwner(null);
+                }
+            });
+    };
+
+    const recordPuzzleOutcome = (result: 'pass' | 'fail', attemptedMove?: string, requestDiagnosis = false): Promise<boolean> => {
+        if (!currentPuzzle) return Promise.resolve(false);
+        const puzzleId = currentPuzzle.id;
+        const epoch = puzzleEpochRef.current;
+        const existingDecision = outcomeDecisionRef.current;
+        const decision = existingDecision?.puzzleId === puzzleId && existingDecision.epoch === epoch
+            ? existingDecision
+            : {
+                puzzleId,
+                epoch,
+                result,
+                attemptedMove,
+                requestDiagnosis,
+                diagnosisOwner: {
+                    puzzleId,
+                    puzzleEpoch: epoch,
+                    diagnosisEpoch: diagnosisEpochRef.current,
+                    username,
+                },
+            };
+        if (decision !== existingDecision) outcomeDecisionRef.current = decision;
+        if (outcomeWriteRef.current) return outcomeWriteRef.current;
+
+        const review = decision.attemptedMove === undefined
+            ? handleReviewPuzzle(decision.result)
+            : handleReviewPuzzle(decision.result, undefined, decision.attemptedMove);
+        const writePromise = Promise.resolve(review)
+            .catch((err) => {
+                console.error('Failed to record puzzle outcome:', err);
+                return false;
+            });
+        outcomeWriteRef.current = writePromise;
+        void writePromise.then((recorded) => {
+            if (recorded && decision.requestDiagnosis) {
+                requestDiagnosisForResolvedOutcome(decision.diagnosisOwner);
+            }
+        });
+        return writePromise;
+    };
+    recordPuzzleOutcomeRef.current = recordPuzzleOutcome;
     // The clue/board work off the on-demand-fetched solution, never a pre-sent
     // one — so the hint machinery only has the answer once the user asks for it.
     const clue = useClue(revealedMove ?? '', currentPuzzle?.fen ?? '', { maxStage: 3 });
     const clueReset = clue.reset;
+
+    // A persisted failed review ends one exposure of this puzzle, but "Try
+    // Again" deliberately keeps the same puzzle object in place. Advance the
+    // ownership epochs here rather than merely clearing the terminal decision:
+    // late checks and diagnosis finalizers from the failed exposure must stay
+    // stale, while the fresh exposure may accept exactly one new solve check.
+    // This is called only after the failed review has landed.
+    const beginFreshExposureAfterPersistedFail = () => {
+        const terminalDecision = outcomeDecisionRef.current;
+        if (
+            !currentPuzzle ||
+            terminalDecision?.puzzleId !== currentPuzzle.id ||
+            terminalDecision.epoch !== puzzleEpochRef.current ||
+            terminalDecision.result !== 'fail'
+        ) return false;
+
+        puzzleEpochRef.current += 1;
+        diagnosisEpochRef.current += 1;
+        checkingPuzzleRef.current = null;
+        outcomeDecisionRef.current = null;
+        outcomeWriteRef.current = null;
+        diagnosisRequestRef.current = null;
+        diagnosisConfirmationRequestRef.current = null;
+        setDiagnosisResult(null);
+        setDiagnosisLoadingOwner(null);
+        setDiagnosisConfirmationOwner(null);
+        setDiagnosisConfirmationError(null);
+        setStatus('solving');
+        setUserMove('');
+        setGame(new Chess(currentPuzzle.fen));
+        setLinePlyIndex(0);
+        setAttemptedLine([]);
+        setClickFrom(null);
+        clue.reset();
+        // The retry remains the same puzzle object, so the current-puzzle
+        // effect does not run. Restart here only after the failed review has
+        // persisted, which gives this fresh exposure a new elapsed origin and
+        // a full timed-session timeout window.
+        startPuzzleTimer();
+        return true;
+    };
     const puzzlesAvailable = puzzles.length > 0;
     const isFinalPuzzle = puzzlesAvailable && currentIndex >= puzzles.length - 1;
     // Disable only while the completion API call is in-flight. Once completed,
@@ -187,6 +509,11 @@ export default function Puzzles() {
                 setPuzzles(res.puzzles);
                 setCurrentIndex(0);
                 setStatus('solving');
+                outcomeWriteRef.current = null;
+                setMotifHint(null);
+                setMotifHintAsked(false);
+            setMotifHint(null);
+            setMotifHintAsked(false);
                 setUserMove('');
                 if (res.puzzles.length > 0) {
                     setSessionState('active');
@@ -217,8 +544,11 @@ export default function Puzzles() {
     const isGenerating = isJobPolling || (job?.status === 'queued' || job?.status === 'running');
     const controlsDisabled = !controlsEnabled || isLoading || isGenerating;
     const generateNewDisabled = !controlsEnabled || isLoading || isGenerating || !userStatus?.has_new_games;
+    const hasValidFocusPracticeIntent = focusPracticeMode && Boolean(focusCause);
     const { selectedModeLabel, screenReaderModeLabel } = getModeLabels(sessionType);
     const modeAvailabilityLabel = sessionType === 'standard' ? 'Active' : 'Beta';
+    const presentationModeLabel = hasValidFocusPracticeIntent ? 'Focus practice' : selectedModeLabel;
+    const presentationModeAvailabilityLabel = hasValidFocusPracticeIntent ? 'Active' : modeAvailabilityLabel;
     // No `!username` arm: the page returns ConnectAccountEmpty above, so these
     // reasons are only ever read by a signed-in user.
     const startSessionDisabledReason =
@@ -232,7 +562,11 @@ export default function Puzzles() {
                 ? ((insightsError && !isLoadingStatus && !isRefreshingInsights) ? "Couldn't load your training data." : 'Loading your training data...')
                 : userStatus.puzzles_count === 0
                     ? 'Generate puzzles first to unlock sessions.'
-                    : userStatus.due_count === 0
+                    : focusPracticeMode && !focusCause
+                        ? 'This focus is no longer available. Return to Today’s Focus and choose a current practice session.'
+                    : userStatus.due_count === 0 && hasValidFocusPracticeIntent
+                        ? 'Extra practice is available for this focus. The server decides which positions are safe and available.'
+                    : userStatus.due_count === 0 && !hasValidFocusPracticeIntent
                         ? 'No puzzles are due right now. Generate new puzzles to keep training.'
                         : sessionType !== 'standard'
                             ? 'Only Standard mode can start sessions for now. Switch mode in the sidebar.'
@@ -307,10 +641,6 @@ export default function Puzzles() {
         }
     };
 
-    // Keep ref in sync for timer timeout callback
-    useEffect(() => {
-        handleReviewPuzzleRef.current = handleReviewPuzzle;
-    }, [handleReviewPuzzle]);
 
     // Auto-start warmup session when in warmup mode
     useEffect(() => {
@@ -417,6 +747,12 @@ export default function Puzzles() {
     // end-to-end on review. `boardAfterMove` already has the user's move applied.
     const processUserMove = async (boardAfterMove: Chess, uciMove: string, fenBefore: string) => {
         if (!currentPuzzle) return;
+        const puzzleId = currentPuzzle.id;
+        const puzzleEpoch = puzzleEpochRef.current;
+        const checkOwner = { puzzleId, epoch: puzzleEpoch };
+        const activeCheckOwner = checkingPuzzleRef.current;
+        if (activeCheckOwner?.puzzleId === puzzleId && activeCheckOwner.epoch === puzzleEpoch) return;
+        checkingPuzzleRef.current = checkOwner;
         const normalized = uciMove.toLowerCase();
         // Reflect the user's move immediately.
         setGame(new Chess(boardAfterMove.fen()));
@@ -424,6 +760,14 @@ export default function Puzzles() {
         setActionError(null);
         try {
             const res = await checkPuzzle(currentPuzzle.id, username, normalized, linePlyIndex);
+            // A refresh or rotation may have replaced the puzzle while its
+            // request was in flight. Its result must not become the current
+            // puzzle's status or outcome write.
+            if (currentPuzzleIdRef.current !== puzzleId || puzzleEpochRef.current !== puzzleEpoch) return;
+            // Timeout/reveal already decided this puzzle's outcome. A delayed
+            // check cannot overwrite that decision with a pass, even when the
+            // terminal outcome's failed write is available for retry.
+            if (outcomeDecisionRef.current?.puzzleId === puzzleId && outcomeDecisionRef.current.epoch === puzzleEpoch) return;
             if (!res.correct) {
                 setStatus('incorrect');
                 return;
@@ -453,8 +797,15 @@ export default function Puzzles() {
                 // status stays 'solving' — prompt the next move.
             } else {
                 setStatus('correct');
+                // Record the solve NOW, not at move-on. Same reason as the
+                // reveal: the outcome is known, and the post-resolution panel
+                // needs the review to have landed before it asks for a
+                // diagnosis the gate keys on attempts > 0.
+                const solvedLine = [...attemptedLine, normalized].join(' ');
+                void recordPuzzleOutcome('pass', solvedLine || undefined, true);
             }
         } catch (err) {
+            if (currentPuzzleIdRef.current !== puzzleId || puzzleEpochRef.current !== puzzleEpoch) return;
             // A failed REQUEST is not a failed ATTEMPT. Marking it 'incorrect'
             // told the user they blundered when the network dropped, broke
             // their streak, and offered "Mark as Failed & Try Again" — which
@@ -464,6 +815,10 @@ export default function Puzzles() {
             setGame(new Chess(fenBefore));
             setUserMove('');
             setActionError("We couldn't check that move — your attempt wasn't recorded. Check your connection and try again.");
+        } finally {
+            if (checkingPuzzleRef.current === checkOwner) {
+                checkingPuzzleRef.current = null;
+            }
         }
     };
 
@@ -515,6 +870,34 @@ export default function Puzzles() {
             // puzzles) rather than teleporting one move and printing the rest.
             playSolutionLine(currentPuzzle.fen, pv.length ? pv : [bestMove]);
         }
+        // Record the fail NOW rather than when the user moves on. LibraryPuzzle
+        // has always done this — `handleRecordResult('fail')` sits in its own
+        // reveal handler — and the trainer deferring it cost two things.
+        //
+        // A user who revealed and then closed the tab had the attempt recorded
+        // NOWHERE: they saw the answer and the scheduler never learned the
+        // puzzle was failed, so it kept its old interval. And `attempts` stayed
+        // 0 for the entire window in which the solution is on screen, which is
+        // exactly the window the post-resolution panel exists to fill.
+        //
+        // The visual reveal above does not wait on this, matching the rule the
+        // hint ladder already follows: the reveal never depends on a write
+        // succeeding. If it does not land, `handleNextPuzzle` retries with the
+        // same idempotency key.
+        // Keep the PROMISE, not a boolean. `setStatus('revealed')` above has
+        // already made the advance control clickable, so there is a window in
+        // which move-on runs while this write is still in flight -- and no
+        // flag can be correct during it, because the outcome is not known yet.
+        //
+        // A boolean written after the await read false in that window and
+        // triggered a second call, which hit the session hook's in-flight
+        // guard (`return true` WITHOUT posting), so the session advanced on a
+        // write that had not landed. A boolean written before the await had
+        // the opposite bug: move-on skipped, and a later failure was never
+        // retried. Awaiting the same promise has neither -- it yields the real
+        // outcome exactly once, with no second post.
+        outcomeWriteRef.current = recordPuzzleOutcome('fail', undefined, true);
+        await outcomeWriteRef.current;
     };
 
     // One graduated hint ladder, identical with or without an active session:
@@ -523,7 +906,36 @@ export default function Puzzles() {
     // In a session we also record each rung server-side (an honest hint tally),
     // but the visual reveal never depends on that write succeeding.
     const handleHint = async () => {
-        if (!currentPuzzle || clue.isExhausted) return;
+        if (!currentPuzzle) return;
+
+        // Rung 0: the motif, before the ladder starts. Only offered while the
+        // payload does not already carry it -- with the gate off the chip is
+        // on screen and spending a hint to be told what is visible would be
+        // absurd.
+        if (!motifHintAsked && !currentPuzzle.primary_motif) {
+            setMotifHintAsked(true);
+            try {
+                const { primary_motif } = await requestMotifHint(
+                    currentPuzzle.id,
+                    username.trim(),
+                    activeSessionId || undefined,
+                );
+                // null means no motif was identified. The rung is still spent
+                // -- the user asked -- but there is nothing to show, so fall
+                // through to rung 1 rather than leaving them with nothing.
+                if (primary_motif) {
+                    setMotifHint(primary_motif);
+                    return;
+                }
+            } catch {
+                // A failed request must not cost the rung: let the next press
+                // try the ladder rather than stranding the user.
+                setMotifHintAsked(false);
+                return;
+            }
+        }
+
+        if (clue.isExhausted) return;
         const stage = clue.clueStage;
         // Rung 1 needs the solution in hand so the piece name / squares resolve.
         // Bail if the fetch fails — advancing with nothing to show would be a lie.
@@ -640,6 +1052,10 @@ export default function Puzzles() {
         if (currentIndex < puzzles.length - 1) {
             setCurrentIndex(currentIndex + 1);
             setStatus('solving');
+            outcomeDecisionRef.current = null;
+            outcomeWriteRef.current = null;
+            setMotifHint(null);
+            setMotifHintAsked(false);
             setUserMove('');
             setLastFeedback('');
             setLinePlyIndex(0);
@@ -656,20 +1072,31 @@ export default function Puzzles() {
         try {
             setActionError(null);
             let recorded = true;
-            if (status === 'correct') {
-                // Send the WHOLE solved line (space-separated UCI) so the SERVER
-                // re-verifies every ply — a puzzle counts as solved only when the
-                // full line was played correctly. Falls back to the single move
-                // for legacy single-move puzzles.
-                const solvedLine = attemptedLine.length > 0
-                    ? attemptedLine.join(' ')
-                    : (userMove.trim().toLowerCase() || undefined);
-                recorded = await handleReviewPuzzle('pass', undefined, solvedLine);
-            } else if (status === 'revealed') {
-                // Revealed solution: a self-reported fail, no move to verify.
-                recorded = await handleReviewPuzzle('fail');
+            if (status === 'correct' || status === 'revealed') {
+                // Await the write this puzzle's outcome already started rather
+                // than firing a second one. If it is still in flight this
+                // blocks on the real outcome; if it failed, the ref was
+                // cleared and this retries with the key the hook kept.
+                //
+                // Both branches were separate before, and the 'correct' one
+                // sent its own review here -- which is why the solve was not
+                // recorded until the user moved on, and why a panel shown in
+                // between saw attempts = 0.
+                if (outcomeWriteRef.current) {
+                    recorded = await outcomeWriteRef.current;
+                } else {
+                    const solvedLine = attemptedLine.length > 0
+                        ? attemptedLine.join(' ')
+                        : (userMove.trim().toLowerCase() || undefined);
+                    recorded = await recordPuzzleOutcome(
+                        status === 'correct' ? 'pass' : 'fail',
+                        status === 'correct' ? solvedLine : undefined,
+                    );
+                }
+                if (!recorded) {
+                    outcomeWriteRef.current = null;
+                }
             }
-
             // A review that failed to reach the server must NOT advance the
             // session: doing so silently discarded the attempt (and, on the last
             // puzzle, baked the loss into the summary). Stay put and let the
@@ -697,7 +1124,11 @@ export default function Puzzles() {
     // users here already says "Back rank mate", so printing "back_rank_mate"
     // made the two screens disagree mid-flow. Hoisted to a const so the visible
     // heading and its sr-only counterpart below can never drift apart.
-    const pageTitle = motifFilter ? `${formatMotifName(motifFilter)} Puzzles` : 'Daily Puzzles';
+    const pageTitle = hasValidFocusPracticeIntent
+        ? 'Focus practice'
+        : motifFilter
+            ? `${formatMotifName(motifFilter)} Puzzles`
+            : 'Daily Puzzles';
 
     // Every other account-dependent page (Dashboard, Library, Insights, Rating
     // Insights, Openings) swaps to this in place rather than rendering its
@@ -743,14 +1174,16 @@ export default function Puzzles() {
                         </h1>
                         <div className={`${activeSessionId && currentPuzzle ? 'hidden lg:flex' : 'flex'} items-center gap-2 mb-3`}>
                             <span className="text-xs font-sans uppercase tracking-wider px-2 py-1 rounded-sm border border-primary/20 bg-primary/5 text-primary/80">
-                                {selectedModeLabel} {modeAvailabilityLabel}
+                                {presentationModeLabel} {presentationModeAvailabilityLabel}
                             </span>
                             {sessionType !== 'standard' && (
                                 <span className="text-xs font-sans text-primary/70">Switch to Standard to start sessions.</span>
                             )}
                         </div>
                         <p className={`${activeSessionId && currentPuzzle ? 'hidden lg:block' : ''} text-lg text-primary/70 font-sans`}>
-                            {motifFilter
+                            {hasValidFocusPracticeIntent
+                                ? 'Extra practice for the selected focus. The server decides whether positions are safe and available.'
+                                : motifFilter
                                 ? `Practice ${formatMotifName(motifFilter)} tactical patterns`
                                 : 'Tactical patterns from your own games.'}
                         </p>
@@ -790,9 +1223,9 @@ export default function Puzzles() {
                             <button
                                 type="button"
                                 onClick={handleStartSession}
-                                disabled={controlsDisabled || !userStatus || userStatus.puzzles_count === 0 || userStatus.due_count === 0 || sessionType !== 'standard'}
+                                disabled={controlsDisabled || !userStatus || userStatus.puzzles_count === 0 || (userStatus.due_count === 0 && !hasValidFocusPracticeIntent) || sessionType !== 'standard'}
                                 title={startSessionDisabledReason ?? 'Start a new training session'}
-                                className={`px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-opacity km-focus-visible ${(controlsDisabled || !userStatus || userStatus.puzzles_count === 0 || userStatus.due_count === 0 || sessionType !== 'standard') ? 'km-interactive-disabled' : 'hover:opacity-90 cursor-pointer'}`}>
+                                className={`min-h-11 px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-opacity km-focus-visible ${(controlsDisabled || !userStatus || userStatus.puzzles_count === 0 || (userStatus.due_count === 0 && !hasValidFocusPracticeIntent) || sessionType !== 'standard') ? 'km-interactive-disabled' : 'hover:opacity-90 cursor-pointer'}`}>
                                 Start Session
                             </button>
                         )}
@@ -838,7 +1271,13 @@ export default function Puzzles() {
                 {/* Mode Information Cards - full width below user status */}
                 {!activeSessionId && (
                     <>
-                        {sessionType === 'standard' ? (
+                        {hasValidFocusPracticeIntent ? (
+                            <div className="p-4 bg-primary/5 border border-primary/20 rounded-sm">
+                                <p className="text-sm text-primary/70 font-sans">
+                                    <strong className="font-medium">Focus practice</strong> gives you extra practice for the selected focus. The server decides whether positions are safe and available.
+                                </p>
+                            </div>
+                        ) : sessionType === 'standard' ? (
                             <div className="p-4 bg-primary/5 border border-primary/20 rounded-sm">
                                 <p className="text-sm text-primary/70 font-sans">
                                     <strong className="font-medium">Standard mode</strong> uses spaced repetition to help you master tactical patterns from your own games.
@@ -917,6 +1356,13 @@ export default function Puzzles() {
                                     >
                                         Generate Puzzles
                                     </button>
+                                </>
+                            ) : userStatus.due_count === 0 && hasValidFocusPracticeIntent ? (
+                                <>
+                                    <h3 className="font-serif text-xl text-primary">Focus practice is ready</h3>
+                                    <p className="text-primary/70 font-sans">
+                                        Extra practice is available for the selected focus. The server decides which positions are safe and available.
+                                    </p>
                                 </>
                             ) : userStatus.due_count === 0 ? (
                                 <>
@@ -1193,10 +1639,11 @@ export default function Puzzles() {
                                         <div className="bg-primary/5 border border-primary/10 rounded-sm p-4 mb-4 w-full">
                                             <div className="flex justify-between items-center mb-2">
                                                 <span className="font-serif text-primary font-medium">
-                                                    Session in Progress
-                                                    {sessionSummary.session_type && sessionSummary.session_type !== 'standard'
-                                                        ? ` (${sessionSummary.session_type.replace('_', ' ')})`
-                                                        : ''}
+                                                    {sessionSummary.session_type === 'focus_practice'
+                                                        ? 'Focus practice'
+                                                        : sessionSummary.session_type && sessionSummary.session_type !== 'standard'
+                                                            ? `Session in Progress (${sessionSummary.session_type.replace('_', ' ')})`
+                                                            : 'Session in Progress'}
                                                 </span>
                                                 <span className="text-sm font-mono text-primary/70">
                                                     {reviewedCount} / {sessionSummary.requested_n}
@@ -1324,7 +1771,7 @@ export default function Puzzles() {
                                     <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
                                         <div className="flex items-center gap-2 min-w-0">
                                             <span className="font-serif text-xl text-primary">
-                                                {currentPuzzle.title || "Puzzle"}
+                                                {currentPuzzle.display_name}
                                                 {/* text-primary/70, not opacity-50: axe measured the
                                                     latter at 3.56:1 on the card tint (needs 4.5).
                                                     Same fix the sidebar nav already made — an alpha
@@ -1351,9 +1798,13 @@ export default function Puzzles() {
                         {/* Status Area */}
                         <div className="min-h-[60px] md:min-h-[100px] flex items-center justify-center text-center p-4 md:p-6 border border-primary/10 rounded-sm relative overflow-hidden" role="status" aria-live="polite">
                             {status === 'solving' && clue.clueStage === 0 && (
-                                linePlyIndex > 0
-                                    ? <p className="text-positive font-serif text-lg italic">Good move — now find the next move in the line.</p>
-                                    : <p className="text-primary/70 font-serif text-lg italic">Find the best move...</p>
+                                motifHint
+                                    ? <p className="text-primary/80 font-sans text-sm">
+                                        Look for a {formatMotifName(motifHint).toLowerCase()}.
+                                    </p>
+                                    : linePlyIndex > 0
+                                        ? <p className="text-positive font-serif text-lg italic">Good move — now find the next move in the line.</p>
+                                        : <p className="text-primary/70 font-serif text-lg italic">Find the best move...</p>
                             )}
                             {status === 'solving' && clue.clueStage === 1 && (
                                 <p className="text-primary/80 font-sans text-sm">
@@ -1397,9 +1848,25 @@ export default function Puzzles() {
                                             ).join('  ') || '…'
                                             : '…'}
                                     </p>
+                                    {lastFeedback && (
+                                        <p className="text-primary/80 font-sans text-sm mt-2 animate-teedin">{lastFeedback}</p>
+                                    )}
                                 </div>
                             )}
                         </div>
+
+                        {(activeDiagnosis || diagnosisLoading) && (
+                            <div data-testid="post-resolution-diagnosis" className="min-w-0">
+                                <MistakeDiagnosisCard
+                                    diagnosis={activeDiagnosis}
+                                    revealed
+                                    loading={diagnosisLoading}
+                                    savingConfirmation={diagnosisConfirmationSaving}
+                                    confirmationError={activeDiagnosisConfirmationError}
+                                    onConfirm={confirmResolvedDiagnosis}
+                                />
+                            </div>
+                        )}
 
                         {/* Connectivity/action failures. Sits outside the status
                             region (which is polite and describes the puzzle) and
@@ -1464,7 +1931,9 @@ export default function Puzzles() {
                                         {/* Short enough to stay on one line in the
                                             three-up action grid; the full "Hint 1 of 3:
                                             …" phrasing lives in the aria-label. */}
-                                        {clue.isExhausted ? 'Hints used' : `Hint ${clue.clueStage}/3`}
+                                        {clue.isExhausted && motifHintAsked
+                                            ? 'Hints used'
+                                            : `Hint ${clue.clueStage + (motifHintAsked ? 1 : 0)}/4`}
                                     </button>
                                     <button
                                         type="button"
@@ -1544,17 +2013,12 @@ export default function Puzzles() {
                                             type="button"
                                             onClick={async () => {
                                                 setActionError(null);
-                                                if (!await handleReviewPuzzle('fail')) {
+                                                if (!await recordPuzzleOutcome('fail')) {
+                                                    outcomeWriteRef.current = null;
                                                     setActionError("We couldn't save that result — nothing was recorded. Check your connection and try again.");
                                                     return;
                                                 }
-                                                setStatus('solving');
-                                                setUserMove('');
-                                                setGame(new Chess(currentPuzzle.fen));
-                                                // Restart the line from the top for the retry.
-                                                setLinePlyIndex(0);
-                                                setAttemptedLine([]);
-                                                clue.reset();
+                                                beginFreshExposureAfterPersistedFail();
                                             }}
                                             className="px-2 py-3 md:px-6 md:py-4 border border-primary/20 text-primary rounded-sm font-serif text-sm md:text-lg transition-all km-interactive km-focus-visible">
                                             <span className="md:hidden">Try Again</span>
@@ -1588,7 +2052,16 @@ export default function Puzzles() {
                                                     setActionError(null);
                                                     // Don't close the session on an unrecorded
                                                     // review — the summary would be missing it.
-                                                    if (!await handleReviewPuzzle('fail')) {
+                                                    let recorded = await recordPuzzleOutcome('fail', undefined, true);
+                                                    // The timeout write may already have settled false
+                                                    // before Finish Session is clicked. Retry through the
+                                                    // same terminal decision and diagnosis owner, rather
+                                                    // than bypassing it with a raw review call.
+                                                    if (!recorded) {
+                                                        outcomeWriteRef.current = null;
+                                                        recorded = await recordPuzzleOutcome('fail', undefined, true);
+                                                    }
+                                                    if (!recorded) {
                                                         setActionError("We couldn't save that result — the session is still open. Check your connection and try again.");
                                                         return;
                                                     }

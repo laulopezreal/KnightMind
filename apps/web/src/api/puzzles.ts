@@ -15,6 +15,13 @@ export interface ManualPuzzleResult {
 }
 
 export interface Puzzle {
+    /**
+     * What to render as this puzzle's name. Nickname when the gate permits and
+     * one exists, provenance ("12 Mar · Sicilian · move 18") otherwise. Never
+     * empty, so render it directly -- do NOT fall back to `title`, which the
+     * resolution gate nulls for unattempted puzzles.
+     */
+    display_name: string;
     id: string;
     username: string;
     source_game_id: string;
@@ -69,6 +76,8 @@ export interface ReviewPuzzleResponse {
     result?: 'pass' | 'fail';
     verified?: boolean;
     source?: 'server_verified' | 'client_reported' | null;
+    review_context?: 'standard' | 'focus_practice';
+    affects_scheduling?: boolean;
     puzzle_info: {
         fen: string;
         best_move: string;
@@ -189,6 +198,13 @@ export interface PuzzleDiagnosisSummary {
 }
 
 export interface LibraryPuzzle {
+    /**
+     * What to render as this puzzle's name. Nickname when the gate permits and
+     * one exists, provenance ("12 Mar · Sicilian · move 18") otherwise. Never
+     * empty, so render it directly -- do NOT fall back to `title`, which the
+     * resolution gate nulls for unattempted puzzles.
+     */
+    display_name: string;
     id: string;
     title: string | null;
     primary_motif: string | null;
@@ -261,6 +277,13 @@ export async function getLibraryPuzzle(
 export type SimilarMatch = 'exact' | 'cause_and_motif' | 'cause_and_phase' | 'cause_only';
 
 export interface SimilarPuzzle {
+    /**
+     * What to render as this puzzle's name. Nickname when the gate permits and
+     * one exists, provenance ("12 Mar · Sicilian · move 18") otherwise. Never
+     * empty, so render it directly -- do NOT fall back to `title`, which the
+     * resolution gate nulls for unattempted puzzles.
+     */
+    display_name: string;
     id: string;
     title?: string | null;
     primary_motif?: string | null;
@@ -382,6 +405,38 @@ export async function revealPuzzle(
     );
 }
 
+export interface MotifHintResponse {
+    puzzle_id: string;
+    /** null when no motif was identified -- see the endpoint's docstring. */
+    primary_motif: string | null;
+    hints_used: number | null;
+}
+
+/**
+ * Rung 0 of the hint ladder: ask what kind of tactic this is.
+ *
+ * The resolution gate withholds the motif from every pre-attempt payload, and
+ * the rest of the ladder starts at "name the piece to move" -- which reveals
+ * strictly more. Without this the cheapest nudge is unreachable and the gate
+ * is a wall.
+ */
+// NOT `useMotifHint`: eslint's rules-of-hooks treats any `use*` identifier as
+// a React hook and rejects calling it from an event handler.
+export async function requestMotifHint(
+    puzzleId: string,
+    username: string,
+    sessionId?: string
+): Promise<MotifHintResponse> {
+    return await request<MotifHintResponse>(
+        `/puzzles/${encodeURIComponent(puzzleId)}/hint/motif`,
+        {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, session_id: sessionId }),
+        }
+    );
+}
+
 export async function reviewPuzzle(
     puzzleId: string,
     username: string,
@@ -422,12 +477,23 @@ export async function createManualPuzzle(
 
 // --- Mistake diagnosis ---
 
-export type DiagnosisState = 'ready' | 'unclear' | 'pending' | 'unavailable';
+export type DiagnosisState =
+    | 'ready'
+    | 'unclear'
+    | 'pending'
+    | 'unavailable'
+    /** Gated: the puzzle has not been attempted in its current exposure. */
+    | 'withheld';
 
 export interface DiagnosisEvidenceItem {
     id: string;
     label: string;
     value: string;
+}
+
+export interface DiagnosisCauseOption {
+    value: string;
+    label: string;
 }
 
 export interface PuzzleDiagnosis {
@@ -444,6 +510,8 @@ export interface PuzzleDiagnosis {
     explanation?: string | null;
     training_recommendation?: string | null;
     user_confirmed_cause?: string | null;
+    /** Server-supplied only after a resolved, ready diagnosis. */
+    cause_options?: DiagnosisCauseOption[];
     source?: string | null;
     diagnosed_at?: string | null;
 }
@@ -464,5 +532,26 @@ export async function getPuzzleDiagnosis(
     if (reveal) params.append('reveal', 'true');
     return await request<PuzzleDiagnosis>(
         `/puzzles/${encodeURIComponent(puzzleId)}/diagnosis?${params}`
+    );
+}
+
+/**
+ * Persist a confirmation or correction for an already-resolved diagnosis.
+ * The server remains the source of supported cause values and returns the
+ * diagnosis that should replace the card's current state.
+ */
+export async function confirmPuzzleDiagnosis(
+    puzzleId: string,
+    username: string,
+    cause: string
+): Promise<PuzzleDiagnosis> {
+    const params = new URLSearchParams({ username, reveal: 'true' });
+    return await request<PuzzleDiagnosis>(
+        `/puzzles/${encodeURIComponent(puzzleId)}/diagnosis/confirm?${params}`,
+        {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ cause }),
+        }
     );
 }

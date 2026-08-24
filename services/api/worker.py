@@ -24,6 +24,24 @@ from services.api.usernames import canonical_username
 # event loop does not read as death.
 BEAT_INTERVAL_SECONDS = 5
 
+# How often to look for users with pending diagnosis and nothing running.
+#
+# A constant rather than an env flag on purpose: #371 documented the seven
+# existing flags and added a drift guard, so a new one carries a documentation
+# obligation, and nobody needs to tune a maintenance cadence per deployment.
+# Hourly is chosen against what the sweep costs and what it is racing: one
+# grouped query per tick, and a gap that today can last indefinitely. Shortening
+# it would not make the work finish sooner — the chain already re-queues itself
+# while there is work to do — it would only find *new* pending work sooner.
+DIAGNOSIS_SWEEP_INTERVAL_SECONDS = 3600
+
+# How long the sweep leaves a user alone after their last diagnosis job ended
+# FAILED or CANCELED. See `_diagnosis_backoff_users`: pending work does not
+# shrink when a job fails or is canceled, so without a backoff the sweep
+# re-queues a deterministic failure every hour and spends model budget it
+# cannot even count. A day still heals a transient outage.
+DIAGNOSIS_FAILURE_BACKOFF_SECONDS = 24 * 3600
+
 logger = logging.getLogger(__name__)
 
 
@@ -124,6 +142,7 @@ class JobWorker:
         # status == RUNNING. Reclaiming mid-flight discards the result silently.
         self._current_job_id: str | None = None
         self._beat_task: asyncio.Task | None = None
+        self._sweep_task: asyncio.Task | None = None
         # Notified when the job loop ends for any reason; worker_main uses this
         # to leave its shutdown wait so the process can exit and be restarted.
         self._on_exit: list[Callable[[], None]] = []
@@ -150,6 +169,7 @@ class JobWorker:
         # mark the API unhealthy after ~90s, and the deploy gate would fail:
         # busy is not dead, and the naive version could not tell them apart.
         self._beat_task = asyncio.create_task(self._beat_loop())
+        self._sweep_task = asyncio.create_task(self._sweep_loop())
         # The beat must not outlive the thing it attests to. Nothing linked them
         # before, so a job loop that died on SystemExit or MemoryError left the
         # beat task happily writing rows -- a dead worker reporting `ok`, which
@@ -175,6 +195,8 @@ class JobWorker:
             self.is_running = False
         if self._beat_task:
             self._beat_task.cancel()
+        if self._sweep_task:
+            self._sweep_task.cancel()
         # Tell the process. Without this the container is a zombie: the beat
         # stops and health goes stale, but `worker_main` sits on its shutdown
         # event forever, so the container stays Up, `restart: unless-stopped`
@@ -182,6 +204,142 @@ class JobWorker:
         # reads `is_running`.
         for callback in self._on_exit:
             callback()
+
+    async def _sweep_loop(self) -> None:
+        """Periodically start the diagnosis chain for users nobody is starting it for.
+
+        Diagnosis auto-chains from puzzle generation and from its own
+        completion, and is otherwise reachable only by an operator calling
+        ``POST /users/{u}/diagnose``. Both entry points need someone to still be
+        importing games. A user who stops — the common end state, not an edge
+        case — keeps whatever coverage they had at the time, forever, and a
+        rule-version bump silently never reaches them.
+
+        So this asks the one question no other caller asks: is there anyone with
+        pending work and nothing running? It does not *do* the work; it starts
+        the existing chain, which already handles batching, resumption and its
+        own follow-up.
+
+        Cancelled with the beat when the job loop ends, for the same reason: a
+        sweep that outlived the worker would queue jobs nothing is left to claim.
+        """
+        while True:
+            await asyncio.sleep(DIAGNOSIS_SWEEP_INTERVAL_SECONDS)
+            try:
+                await asyncio.to_thread(self._sweep_once)
+            except Exception as exc:  # noqa: BLE001
+                # Deliberately swallowed: maintenance must not kill the worker.
+                # This is a background nicety, and a database blip here must not
+                # take down a process that can still run the jobs it already
+                # has. The next tick retries.
+                logger.warning("Diagnosis sweep failed: %s", exc)
+
+    @staticmethod
+    def _diagnosis_backoff_users(db: Session) -> set[str]:
+        """Users whose most recent diagnosis job ended FAILED or CANCELED recently.
+
+        Without this the sweep is a spend loop, because it re-enqueues on the
+        pending predicate alone and ``pending_count`` only falls when a job
+        *succeeds*.
+
+        A failed job today is self-containing: ``execute_job`` calls
+        ``_enqueue_followup`` and ``_enqueue_remaining_diagnosis_if_pending``
+        only on the SUCCEEDED branch, so a job that dies stops the chain and
+        waits for a human. The sweep removes that containment. The per-puzzle
+        loop in ``run_diagnosis`` guards only ``EvidenceUnavailable``, and
+        ``_diagnostic_order`` is deterministic, so anything else re-runs into
+        the same puzzle on every pass. With ``COMMIT_INTERVAL = 50`` a failure
+        before the first commit also rolls back the ``audit.record`` rows for
+        model calls already made — so the retries would spend against the
+        provider without ever counting against ``budget_last_24h``, the only
+        cap there is.
+
+        CANCELED is here for a different reason and matters just as much. A
+        cancel does not change what is pending, so an uncontained sweep would
+        restart within the hour the backfill a user explicitly stopped to keep
+        it off their AI budget, with nothing in the UI explaining why.
+
+        The window is a day rather than the sweep interval: one retry per day
+        still heals a transient outage, while an hourly retry of a
+        deterministic failure is the loop this guards. Same reasoning as
+        ``naming_pass.retry_is_backed_off``, which exists because taking a
+        pending count at face value "would re-queue a job that fails
+        identically two seconds later".
+        """
+        cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
+            seconds=DIAGNOSIS_FAILURE_BACKOFF_SECONDS
+        )
+        latest = (
+            select(
+                Job.username,
+                func.max(Job.updated_at).label("latest"),
+            )
+            .where(Job.type == JobType.DIAGNOSIS.value)
+            .group_by(Job.username)
+            .subquery()
+        )
+        stmt = (
+            select(Job.username)
+            .join(
+                latest,
+                (Job.username == latest.c.username)
+                & (Job.updated_at == latest.c.latest),
+            )
+            .where(
+                Job.type == JobType.DIAGNOSIS.value,
+                Job.status.in_((JobStatus.FAILED.value, JobStatus.CANCELED.value)),
+                Job.updated_at >= cutoff,
+            )
+        )
+        return {canonical_username(u) for u in db.scalars(stmt)}
+
+    def _sweep_once(self) -> int:
+        """One pass. Returns how many users were actually enqueued.
+
+        Sleeps *before* the first pass rather than after, so a restart loop
+        cannot turn this into a burst: the worker already runs
+        ``cleanup_stuck_jobs`` at startup, and a crash-looping container that
+        also swept on boot would enqueue on every restart.
+        """
+        with SessionLocal() as db:
+            repo = DiagnosisRepository(db)
+            # Fold here rather than trusting the stored casing. Every other
+            # predicate in the repository folds, `execute_job` folds the job's
+            # username again, and worker.py's own crash-recovery comment notes
+            # that "the row was written by a canonical caller" is an invariant
+            # nothing enforces. An unfolded name would enqueue under one
+            # spelling and run under another, so the work would never be done
+            # and the user would be re-emitted on every pass.
+            usernames = {canonical_username(u) for u in repo.usernames_with_pending()}
+            backing_off = JobWorker._diagnosis_backoff_users(db)
+
+        eligible = sorted(usernames - backing_off)
+        queued = 0
+        for username in eligible:
+            # The active-job unique index is the deduplication, and
+            # `_enqueue_diagnosis` already treats the collision as a safe
+            # no-op. That is what keeps this idempotent: a sweep landing while
+            # the previous chain is still working adds nothing rather than
+            # queueing a second job or raising.
+            if JobWorker._enqueue_diagnosis(
+                username,
+                "Queued by periodic diagnosis sweep",
+                {"limit": DIAGNOSIS_BATCH_MAX, "auto_chain": True},
+            ):
+                queued += 1
+
+        # Count inserts, not candidates. Reporting users *considered* would
+        # print the same line every hour while a collision or a backoff meant
+        # nothing moved — which is precisely the signal an operator would grep
+        # for to notice a stuck sweep.
+        if queued or backing_off:
+            logger.info(
+                "Diagnosis sweep queued %d user(s); %d backing off after a "
+                "failed or canceled run",
+                queued,
+                len(backing_off & usernames),
+            )
+        return queued
 
     async def _beat_loop(self) -> None:
         # Runs until CANCELLED, not until `is_running` clears. stop() clears
@@ -230,6 +388,13 @@ class JobWorker:
             except asyncio.CancelledError:
                 pass
             self._beat_task = None
+        if self._sweep_task:
+            self._sweep_task.cancel()
+            try:
+                await self._sweep_task
+            except asyncio.CancelledError:
+                pass
+            self._sweep_task = None
         # Withdraw this worker's liveness on the way out. Health reads the
         # freshest beat across all rows, and a departing worker's last beat is
         # only seconds old -- so during a deploy, `compose up -d` stops the old
@@ -479,13 +644,18 @@ class JobWorker:
     @staticmethod
     def _enqueue_diagnosis(
         username: str, message: str, params: dict | None = None
-    ) -> None:
+    ) -> bool:
         """Queue one diagnosis job for a user, best-effort.
 
         Deliberately wrapped so a follow-up failure cannot turn already
         persisted work into a failed job. The active-job unique index still
         enforces at most one queued/running diagnosis per user; collisions are
         expected under races and are safe no-ops.
+
+        Returns True only when a row was actually inserted. The existing
+        chain callers ignore it; the periodic sweep counts it, because
+        "considered" and "queued" diverge exactly when something is wrong and
+        an operator is reading the log to find out what.
         """
         try:
             with SessionLocal() as db:
@@ -514,10 +684,12 @@ class JobWorker:
                     logger.info(
                         "Diagnosis already active for %s; not re-queuing", username
                     )
-                    return
+                    return False
             logger.info("Queued follow-up diagnosis for %s", username)
+            return True
         except Exception as exc:  # noqa: BLE001 - must never fail the generation
             logger.warning("Could not queue follow-up diagnosis: %s", exc)
+            return False
 
     @staticmethod
     def _enqueue_followup(job_type: str, username: str) -> None:

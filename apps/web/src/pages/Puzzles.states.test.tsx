@@ -111,7 +111,7 @@ vi.mock('../hooks/usePuzzleSession', async () => {
         difficulty: 'medium',
         swing: 1.0,
         created_at: '2025-01-01T00:00:00Z',
-        used_on: null,
+        display_name: 'Test Puzzle', used_on: null,
         attempts: 0,
         pass_count: 0,
     };

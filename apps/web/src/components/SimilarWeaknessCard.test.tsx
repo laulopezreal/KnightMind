@@ -14,7 +14,7 @@ function renderCard(data: SimilarPuzzlesResponse | null, currentPuzzleId = 'p1')
 
 const sibling = {
     id: 'p2',
-    title: 'Missed the fork',
+    title: 'Missed the fork', display_name: 'Missed the fork',
     primary_motif: 'hanging_piece',
     difficulty: 'medium' as const,
     swing: 3.2,
@@ -74,11 +74,22 @@ describe('SimilarWeaknessCard', () => {
         expect(screen.queryByText(/hanging_piece/)).not.toBeInTheDocument();
     });
 
-    it('survives a sibling with no title or motif', () => {
+    it('renders provenance for a sibling with no nickname or motif', () => {
+        // The card no longer carries its own 'Untitled position' fallback: the
+        // server always sends a non-empty display_name, so a sibling with no
+        // nickname shows where it came from instead of a placeholder. That is
+        // also what the resolution gate relies on -- a withheld nickname must
+        // degrade to provenance, not to filler.
         renderCard({
-            puzzles: [{ ...sibling, title: null, primary_motif: null, fail_count: 0 }],
+            puzzles: [{
+                ...sibling,
+                title: null,
+                display_name: '12 Mar · move 18',
+                primary_motif: null,
+                fail_count: 0,
+            }],
         });
-        expect(screen.getByText('Untitled position')).toBeInTheDocument();
+        expect(screen.getByText('12 Mar · move 18')).toBeInTheDocument();
     });
 
     it('does not render a reason line when the server sent none', () => {

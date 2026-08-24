@@ -161,6 +161,7 @@ from services.api.ops import router as ops_router
 
 app.include_router(ops_router)
 
+from services.api.sessions import focus_practice_candidate_count
 from services.api.sessions import router as sessions_router
 
 app.include_router(sessions_router)
@@ -637,6 +638,11 @@ class TodaysFocus(BaseModel):
     # them are scheduled for next week would be a promise the session cannot
     # keep, and training them early would corrupt their intervals anyway.
     trainable_now: int = 0
+    # Unlike trainable_now, this includes future-scheduled positions that the
+    # dedicated Focus Practice endpoint can safely record without changing
+    # their spaced-repetition schedule.
+    practice_candidate_count: int = 0
+    practice_available: bool = False
 
 
 class TodaysFocusResponse(BaseModel):
@@ -675,11 +681,15 @@ def get_todays_focus(
     chosen = plan_focus(stats)
 
     trainable_now = 0
+    practice_candidate_count = 0
     if chosen is not None:
         cause_ids = repo.puzzle_ids_for_cause(username, chosen.cause)
         if cause_ids:
             trainable_now = len(
                 get_trainable_puzzle_ids(db, username, sorted(cause_ids))
+            )
+            practice_candidate_count = focus_practice_candidate_count(
+                db, username, chosen.cause
             )
 
     # Counted exactly as the patterns endpoint counts it: a cause with no
@@ -695,7 +705,12 @@ def get_todays_focus(
     return TodaysFocusResponse(
         username=username,
         focus=(
-            TodaysFocus(**asdict(chosen), trainable_now=trainable_now)
+            TodaysFocus(
+                **asdict(chosen),
+                trainable_now=trainable_now,
+                practice_candidate_count=practice_candidate_count,
+                practice_available=practice_candidate_count >= 2,
+            )
             if chosen
             else None
         ),

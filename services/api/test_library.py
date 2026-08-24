@@ -104,8 +104,27 @@ def _create_stats(
     last_reviewed_at: datetime | None = None,
     last_result: str | None = None,
     next_due_at: datetime | None = None,
+    resolved: bool = True,
 ):
-    """Helper: create a PuzzleStats row."""
+    """Helper: create a PuzzleStats row.
+
+    Defaults to a RESOLVED row -- attempted, not yet due again -- so a test
+    asserting a revealing field passes with the resolution gate both on and
+    off. Pass ``resolved=False`` (or set attempts/next_due_at directly) for a
+    test whose subject IS the gate.
+
+    Without this the suite could only ever be run with the gate off, which is
+    exactly how three ungated routes and two dead overrides shipped green.
+    Callers that set `attempts` or `next_due_at` explicitly keep their values.
+    """
+    if resolved and attempts == 0 and next_due_at is None:
+        attempts = 1
+        next_due_at = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(
+            days=3
+        )
+        last_reviewed_at = last_reviewed_at or datetime.now(timezone.utc).replace(
+            tzinfo=None
+        )
     if title is _FROM_PUZZLE_ID:
         title = f"Test Puzzle {puzzle_id}"
     db.add(
@@ -136,6 +155,7 @@ def _create_diagnosis(
     insufficient_evidence: bool = False,
     status: str = DiagnosisStatus.OK,
     error: str | None = None,
+    opening_name: str | None = None,
 ):
     db.add(
         PuzzleDiagnosis(
@@ -155,6 +175,7 @@ def _create_diagnosis(
                     "value": "Best move Qxd5 from d1 to d5, PV d1d5",
                 }
             ],
+            opening_name=opening_name,
             explanation="The solution is Qxd5.",
             training_recommendation="Look for the queen move Qxd5.",
             updated_at=datetime(2026, 1, 2, 12, 0),
@@ -314,6 +335,10 @@ class TestListPuzzlesBasic:
 
     def test_user_confirmed_cause_wins_in_list_summary(self, client, db_session):
         _create_puzzle(db_session, "p-confirmed")
+        # Resolved: this test is about the summary's CONTENT, not the
+        # gate, and a puzzle with no stats row is unresolved by
+        # definition -- so the summary would be withheld.
+        _create_stats(db_session, "p-confirmed")
         _create_diagnosis(
             db_session,
             "p-confirmed",
@@ -332,6 +357,10 @@ class TestListPuzzlesBasic:
     def test_unclear_state_with_cause_reports_unclear(self, client, db_session):
         """insufficient_evidence=True forces state='unclear' even when primary_cause is set."""
         _create_puzzle(db_session, "p-unclear")
+        # Resolved: this test is about the summary's CONTENT, not the
+        # gate, and a puzzle with no stats row is unresolved by
+        # definition -- so the summary would be withheld.
+        _create_stats(db_session, "p-unclear")
         _create_diagnosis(
             db_session,
             "p-unclear",
@@ -351,6 +380,10 @@ class TestListPuzzlesBasic:
     def test_unavailable_diagnosis_omits_error_field(self, client, db_session):
         """UNAVAILABLE rows carry an error reason that must never reach the client."""
         _create_puzzle(db_session, "p-unavail")
+        # Resolved: this test is about the summary's CONTENT, not the
+        # gate, and a puzzle with no stats row is unresolved by
+        # definition -- so the summary would be withheld.
+        _create_stats(db_session, "p-unavail")
         _create_diagnosis(
             db_session,
             "p-unavail",
@@ -820,6 +853,140 @@ class TestAvailableMotifs:
         assert response.json()["available_motifs"] == ["Fork", "Pin"]
 
 
+class TestDisplayNameOnListRoutes:
+    """Step 1's list half: every puzzle-returning route resolves one name.
+
+    The property that matters here is not the string -- `test_provenance.py`
+    covers composition -- it is that resolving it for N puzzles costs a join
+    rather than a query per row.
+    """
+
+    def test_the_list_route_serves_display_name(self, client, db_session):
+        _create_puzzle(db_session, "p-list")
+        _create_stats(db_session, "p-list", title="Named", primary_motif="Pin")
+
+        body = client.get("/puzzles/list?username=testuser").json()
+        item = next(p for p in body["puzzles"] if p["id"] == "p-list")
+
+        # Invisible by design while every row still has a title.
+        assert item["display_name"] == item["title"] == "Named"
+
+    def test_a_puzzle_with_no_title_falls_back_to_provenance(self, client, db_session):
+        """The state the corpus reaches after rollout step 6. Without a
+        fallback the Library would render a column of blanks."""
+        _create_puzzle(db_session, "p-bare")
+        _create_stats(db_session, "p-bare", title=None, primary_motif="Pin")
+
+        body = client.get("/puzzles/list?username=testuser").json()
+        item = next(p for p in body["puzzles"] if p["id"] == "p-bare")
+
+        assert item["title"] is None
+        assert item["display_name"]
+        assert "move " in item["display_name"]
+
+    def test_resolving_n_names_does_not_cost_n_queries(self, client, db_session):
+        """The regression this PR exists to avoid.
+
+        A `db.get` per row for the game would satisfy every other assertion
+        here and quietly scale with the page. Asserting *invariance* rather
+        than a magic budget: the same request over 3 puzzles and over 12 must
+        issue the same number of statements. A budget would have to be
+        re-tuned whenever an unrelated query is added; this would not.
+        """
+        from sqlalchemy import event
+
+        statements: list[str] = []
+        engine = db_session.get_bind()
+
+        def record(conn, cursor, statement, *args):
+            statements.append(statement.strip().split()[0].upper())
+
+        def count_for(n: int) -> int:
+            statements.clear()
+            # Cold identity map, or this test cannot fail. `db.get` answers
+            # from the session's identity map without emitting SQL, and the
+            # fixture created these rows in the very session the route reuses
+            # -- so a per-row `db.get` would issue zero extra statements here
+            # while being a true N+1 in production, where every request gets a
+            # fresh session. Verified: without this line the N+1 mutant passes.
+            db_session.expire_all()
+            event.listen(engine, "before_cursor_execute", record)
+            try:
+                body = client.get(f"/puzzles/list?username=testuser&limit={n}").json()
+            finally:
+                event.remove(engine, "before_cursor_execute", record)
+            assert len(body["puzzles"]) == n
+            assert all(p["display_name"] for p in body["puzzles"])
+            return len(statements)
+
+        for i in range(12):
+            pid = f"p-many-{i:02d}"
+            _create_puzzle(db_session, pid)
+            _create_stats(db_session, pid, title=None, primary_motif="Pin")
+
+        assert count_for(12) == count_for(3)
+
+
+class TestLibrarySearchCoversProvenance:
+    """Rollout step 2, §8: search must cover provenance, or say what it covers.
+
+    Puzzle ids here are deliberately opaque (`pzl-a1`, not `p-sicilian`): the
+    predicate also matches on id, so an id containing the search term makes
+    these tests pass whether or not the opening term exists. Verified -- with
+    descriptive ids, removing the opening term left all four green.
+
+    It does both, partially by necessity. Provenance is derived and never
+    stored, so the composed string is not matchable in SQL; the opening is the
+    one component that IS stored, and the one a user would type. The
+    placeholder was changed to name what is actually searched rather than
+    promising more.
+    """
+
+    def test_search_matches_the_opening(self, client, db_session):
+        _create_puzzle(db_session, "pzl-a1")
+        _create_stats(db_session, "pzl-a1", title=None, primary_motif="Pin")
+        _create_diagnosis(db_session, "pzl-a1", opening_name="Sicilian Defense B27")
+        _create_puzzle(db_session, "pzl-a2")
+        _create_stats(db_session, "pzl-a2", title=None, primary_motif="Pin")
+
+        body = client.get("/puzzles/list?username=testuser&q=sicilian").json()
+
+        assert [p["id"] for p in body["puzzles"]] == ["pzl-a1"]
+
+    def test_search_still_matches_a_nickname(self, client, db_session):
+        _create_puzzle(db_session, "pzl-b1")
+        _create_stats(db_session, "pzl-b1", title="Bishop Had Bigger Plans")
+
+        body = client.get("/puzzles/list?username=testuser&q=bishop").json()
+
+        assert [p["id"] for p in body["puzzles"]] == ["pzl-b1"]
+
+    def test_a_null_title_no_longer_makes_search_id_only(self, client, db_session):
+        """The degradation §8 names. Before the opening term, a corpus with
+        NULL titles could only be searched by hex id, while the box invited a
+        name."""
+        _create_puzzle(db_session, "pzl-c1")
+        _create_stats(db_session, "pzl-c1", title=None, primary_motif="Pin")
+        _create_diagnosis(db_session, "pzl-c1", opening_name="Najdorf Variation")
+
+        body = client.get("/puzzles/list?username=testuser&q=najdorf").json()
+
+        assert [p["id"] for p in body["puzzles"]] == ["pzl-c1"]
+
+    def test_a_puzzle_with_no_diagnosis_is_simply_not_matched(self, client, db_session):
+        """The diagnosis join is OUTER, so a missing row must not drop the
+        puzzle from unfiltered listings -- only from opening searches."""
+        _create_puzzle(db_session, "pzl-d1")
+        _create_stats(db_session, "pzl-d1", title=None, primary_motif="Pin")
+
+        assert (
+            client.get("/puzzles/list?username=testuser&q=sicilian").json()["puzzles"]
+            == []
+        )
+        listed = client.get("/puzzles/list?username=testuser").json()["puzzles"]
+        assert "pzl-d1" in [p["id"] for p in listed]
+
+
 class TestGetPuzzleDetail:
     """Tests for GET /puzzles/{puzzle_id}."""
 
@@ -883,6 +1050,9 @@ class TestGetPuzzleDetail:
         expected_keys = {
             "id",
             "title",
+            # What the client renders. Equal to `title` while every row has
+            # one; diverges when titles become NULL by default (design §7).
+            "display_name",
             "primary_motif",
             "difficulty",
             "swing",
@@ -901,6 +1071,9 @@ class TestGetPuzzleDetail:
             "diagnosis_summary",
         }
         assert set(data.keys()) == expected_keys
+        # Step 1 is explicitly a no-op for what the user sees: a nickname wins
+        # wherever one exists, and today one always does.
+        assert data["display_name"] == data["title"] == "Shape Test"
 
     def test_detail_diagnosis_summary_is_null(self, client, db_session):
         """Detail endpoint always returns null for diagnosis_summary.

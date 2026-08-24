@@ -66,7 +66,7 @@ vi.mock('chess.js', () => {
 
 const MOCK_PUZZLE = {
     id: 'puzzle-abc',
-    title: 'Deadly Fork',
+    title: 'Deadly Fork', display_name: 'Deadly Fork',
     primary_motif: 'Fork',
     difficulty: 'medium' as const,
     swing: 3.0,
@@ -264,12 +264,18 @@ describe('LibraryPuzzle', () => {
             expect(screen.getByText('e2e4')).toBeInTheDocument();
         });
 
-        // Should record as fail (4th arg is time_spent_ms)
+        // The first available Reveal must record one numeric, nonnegative
+        // time_spent_ms value, rather than losing the timer to effect ordering.
         await waitFor(() => {
-            expect(mockReviewPuzzle).toHaveBeenCalledWith(
-                'puzzle-abc', 'testplayer', 'fail', expect.any(Number)
-            );
+            expect(mockReviewPuzzle).toHaveBeenCalledTimes(1);
         });
+        const [puzzleId, username, result, timeSpentMs] = mockReviewPuzzle.mock.calls[0];
+        expect(puzzleId).toBe('puzzle-abc');
+        expect(username).toBe('testplayer');
+        expect(result).toBe('fail');
+        expect(typeof timeSpentMs).toBe('number');
+        expect(Number.isFinite(timeSpentMs)).toBe(true);
+        expect(timeSpentMs).toBeGreaterThanOrEqual(0);
     });
 
     // --- Recorded confirmation ---
@@ -470,7 +476,7 @@ describe('LibraryPuzzle', () => {
                 puzzles: [
                     {
                         id: 'from-puzzle-a',
-                        title: 'Belongs to puzzle A',
+                        title: 'Belongs to puzzle A', display_name: 'Belongs to puzzle A',
                         primary_motif: 'hanging_piece',
                         difficulty: 'medium',
                         swing: 3.1,
@@ -540,7 +546,7 @@ describe('LibraryPuzzle', () => {
                 puzzles: [
                     {
                         id: 'sibling-1',
-                        title: 'Another fork missed',
+                        title: 'Another fork missed', display_name: 'Another fork missed',
                         primary_motif: 'Fork',
                         difficulty: 'medium',
                         swing: 3.1,
@@ -598,7 +604,12 @@ describe('LibraryPuzzle', () => {
             expect(screen.queryByText('Deadly Fork')).not.toBeInTheDocument();
             expect(screen.getByText(/loading puzzle/i)).toBeInTheDocument();
 
-            release({ ...MOCK_PUZZLE, id: 'sibling-1', title: 'Sibling' });
+            release({
+                ...MOCK_PUZZLE,
+                id: 'sibling-1',
+                title: 'Sibling',
+                display_name: 'Sibling',
+            });
             await waitFor(() => expect(screen.getByText('Sibling')).toBeInTheDocument());
         });
 

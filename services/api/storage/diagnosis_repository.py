@@ -140,6 +140,41 @@ class DiagnosisRepository:
             PuzzleDiagnosis.rule_version != RULE_VERSION,
         )
 
+    def usernames_with_pending(self) -> list[str]:
+        """Every user holding at least one puzzle that still needs diagnosing.
+
+        The per-user :meth:`pending_count` answers "how much is left for this
+        person", which presumes you already know who to ask about. The periodic
+        sweep does not: its whole job is finding the users nobody is asking
+        about, because diagnosis auto-chains only from puzzle generation, so a
+        user who stops importing games is otherwise never revisited.
+
+        One query rather than a fold over every known username. The tenant set
+        is small today, but the per-user loop costs a query each *forever*,
+        including for the majority with nothing pending — the shape that makes
+        a maintenance task quietly expensive as the corpus grows.
+
+        Usernames come back **as stored**, which is not the same as canonical.
+        Every other predicate here folds an incoming username, but this one has
+        none to fold — it reads them out — and "the row was written by a
+        canonical caller" is an invariant nothing enforces (the same point
+        ``worker.py`` makes about crash recovery). The write path folds today,
+        so no unfolded row exists; callers should still fold what they get,
+        because an unfolded name would enqueue work under one spelling and run
+        it under another, leaving the work undone and the user re-emitted on
+        every pass.
+        """
+        join = (PuzzleDiagnosis.puzzle_id == Puzzle.id) & (
+            PuzzleDiagnosis.username == Puzzle.username
+        )
+        stmt = (
+            select(Puzzle.username)
+            .outerjoin(PuzzleDiagnosis, join)
+            .where(or_(PuzzleDiagnosis.puzzle_id.is_(None), self._stale_clause()))
+            .group_by(Puzzle.username)
+        )
+        return list(self.db.scalars(stmt).all())
+
     def _pending_query(self, username: str) -> Select:
         # Private: callers below have already folded.
         join = (PuzzleDiagnosis.puzzle_id == Puzzle.id) & (

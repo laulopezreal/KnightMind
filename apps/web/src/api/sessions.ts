@@ -1,4 +1,21 @@
 import { request } from './core';
+import type { Puzzle } from './puzzles';
+
+export type FocusPracticeReviewPolicy = 'normal_review' | 'practice_only';
+
+export interface FocusPracticePuzzle extends Puzzle {
+    review_policy: FocusPracticeReviewPolicy;
+    queue_reason: { reason: 'practice'; explanation: string };
+}
+
+export interface FocusPracticeStartResponse {
+    session_id: string;
+    session_type: 'focus_practice';
+    focus: { cause: string; name: string };
+    requested_n: number;
+    returned_count: number;
+    puzzles: FocusPracticePuzzle[];
+}
 
 export interface SessionSummary {
     session_id: string;
@@ -25,6 +42,9 @@ export interface SessionSummary {
      *  this rather than the URL's, so returning via the nav bar cannot widen
      *  the queue and shift which puzzle index N is. */
     motif?: string | null;
+    selected_items?: Array<{ puzzle_id: string; position: number; review_policy: FocusPracticeReviewPolicy }> | null;
+    puzzles?: FocusPracticePuzzle[] | null;
+    focus_name?: string | null;
 }
 
 // Kept in sync with SessionSummary on the API.
@@ -51,6 +71,14 @@ export async function startSession(
             target_time_minutes: targetTimeMinutes,
             session_data: sessionData
         }),
+    });
+}
+
+export async function startFocusPractice(username: string, focusCause: string, n = 5): Promise<FocusPracticeStartResponse> {
+    return await request<FocusPracticeStartResponse>('/sessions/focus-practice/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, focus_cause: focusCause, n }),
     });
 }
 
