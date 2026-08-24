@@ -462,6 +462,12 @@ class DiagnosisAuditLog(Base):
 class PuzzleReview(Base):
     __tablename__ = "puzzle_reviews"
     __table_args__ = (
+        Index(
+            "ix_puzzle_reviews_username_context_reviewed_at",
+            "username",
+            "review_context",
+            "reviewed_at",
+        ),
         # Idempotency: a client-supplied review key must be unique per
         # (puzzle, user, session) so a retried/double-submitted POST cannot be
         # recorded (and re-scheduled/re-counted) twice. Rows with a NULL
@@ -517,6 +523,19 @@ class PuzzleReview(Base):
     #   "client_reported" — trust the client's pass/fail (no move to verify)
     # NULL for pre-migration rows.
     source: Mapped[str | None] = mapped_column(String, nullable=True)
+    # The server-owned training mode that recorded this event.  It is telemetry,
+    # not a client claim, and preserves the distinction between an ordinary
+    # spaced-repetition review and extra practice against a future-scheduled
+    # position.
+    review_context: Mapped[str] = mapped_column(
+        String, nullable=False, default="standard", server_default="standard"
+    )
+    # Whether this event was allowed to change the ordinary scheduling state.
+    # Focus-practice rows can be verified and useful without re-anchoring a
+    # future puzzle's interval.
+    affects_scheduling: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )
 
 
 class TrainingSession(Base):
