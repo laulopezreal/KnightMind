@@ -73,6 +73,15 @@ describe('TodaysFocusCard', () => {
         expect(screen.getByText(/nothing from this pattern is due/i)).toBeInTheDocument();
     });
 
+    it('offers one truthful focus-practice action when no ordinary review is ready', () => {
+        show(data({ focus: focus({ trainable_now: 0, practice_available: true, practice_candidate_count: 3 }) }));
+
+        expect(screen.getByRole('link', { name: 'Practice this focus · 3 positions' }))
+            .toHaveAttribute('href', '/puzzles?mode=focus_practice&focus_cause=loose_piece_awareness');
+        expect(screen.queryByRole('link', { name: /train this pattern/i })).not.toBeInTheDocument();
+        expect(screen.queryByText(/nothing from this pattern is due/i)).not.toBeInTheDocument();
+    });
+
     it('still names the habit when nothing is due', () => {
         show(data({ focus: focus({ trainable_now: 0 }) }));
         expect(screen.getByText('Loose Piece Syndrome')).toBeInTheDocument();

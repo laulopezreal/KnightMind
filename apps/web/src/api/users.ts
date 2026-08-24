@@ -230,6 +230,10 @@ export interface TodaysFocus {
     runner_up?: string | null;
     /** Puzzles of this cause trainable right now — not the corpus total. */
     trainable_now?: number;
+    /** Safe server-owned focus-practice candidates, including future reviews. */
+    practice_candidate_count?: number;
+    /** True only when the server can create a bounded focus-practice session. */
+    practice_available?: boolean;
 }
 
 export interface TodaysFocusResponse {

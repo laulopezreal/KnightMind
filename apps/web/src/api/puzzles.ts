@@ -76,6 +76,8 @@ export interface ReviewPuzzleResponse {
     result?: 'pass' | 'fail';
     verified?: boolean;
     source?: 'server_verified' | 'client_reported' | null;
+    review_context?: 'standard' | 'focus_practice';
+    affects_scheduling?: boolean;
     puzzle_info: {
         fen: string;
         best_move: string;
