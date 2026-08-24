@@ -56,12 +56,16 @@ class StartSessionResponse(BaseModel):
 
 
 class FocusPracticeStartRequest(BaseModel):
+    """Server-owned Focus Practice start request contract."""
+
     username: Username
     focus_cause: str
     n: int = Field(default=5, ge=2, le=10)
 
 
 class FocusPracticeStartResponse(BaseModel):
+    """Server-owned Focus Practice start response contract."""
+
     session_id: str
     session_type: Literal["focus_practice"] = "focus_practice"
     focus: dict
