@@ -190,22 +190,30 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
     // between render and effects cannot borrow a later A -> B -> A identity.
     const focusStartEpochRef = useRef(0);
     const focusStartPromiseRef = useRef<Promise<void> | null>(null);
-    const focusStartOwnerRef = useRef<{ username: string; focusCause: string | null; focusPracticeMode: boolean; activeSessionId: string | null; epoch: number } | null>(null);
+    const focusStartOwnerRef = useRef<{ username: string; focusCause: string | null; focusPracticeMode: boolean; activeSessionId: string | null; committedSessionId: string | null; epoch: number } | null>(null);
     const focusStartContextRef = useRef({ username, focusCause, focusPracticeMode, activeSessionId });
     const mountedRef = useRef(true);
     const focusStartContext = { username, focusCause, focusPracticeMode, activeSessionId };
     const previousFocusStartContext = focusStartContextRef.current;
+    const focusStartOwner = focusStartOwnerRef.current;
+    const isOwnCommittedSessionTransition =
+        !!focusStartOwner
+        && previousFocusStartContext.username === focusStartContext.username
+        && previousFocusStartContext.focusCause === focusStartContext.focusCause
+        && previousFocusStartContext.focusPracticeMode === focusStartContext.focusPracticeMode
+        && previousFocusStartContext.activeSessionId === focusStartOwner.activeSessionId
+        && focusStartContext.activeSessionId === focusStartOwner.committedSessionId;
     if (
         previousFocusStartContext.username !== focusStartContext.username
         || previousFocusStartContext.focusCause !== focusStartContext.focusCause
         || previousFocusStartContext.focusPracticeMode !== focusStartContext.focusPracticeMode
-        || previousFocusStartContext.activeSessionId !== focusStartContext.activeSessionId
+        || (previousFocusStartContext.activeSessionId !== focusStartContext.activeSessionId && !isOwnCommittedSessionTransition)
     ) {
         focusStartEpochRef.current += 1;
         focusStartPromiseRef.current = null;
         focusStartOwnerRef.current = null;
-        focusStartContextRef.current = focusStartContext;
     }
+    focusStartContextRef.current = focusStartContext;
 
     useEffect(() => {
         mountedRef.current = true;
@@ -521,11 +529,12 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
 
         if (focusPracticeMode) {
             if (!focusCause) return fail('This focus is no longer available. Return to Today’s Focus and choose a current practice session.');
-            const owner = {
+            const owner: NonNullable<typeof focusStartOwnerRef.current> = {
                 username: username.trim(),
                 focusCause,
                 focusPracticeMode,
                 activeSessionId,
+                committedSessionId: null,
                 epoch: focusStartEpochRef.current + 1,
             };
             const pendingOwner = focusStartOwnerRef.current;
@@ -550,7 +559,7 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
                     && current.username === owner.username
                     && current.focusCause === owner.focusCause
                     && current.focusPracticeMode === owner.focusPracticeMode
-                    && current.activeSessionId === owner.activeSessionId;
+                    && (current.activeSessionId === owner.activeSessionId || current.activeSessionId === owner.committedSessionId);
             };
             const failIfCurrent = (message: string) => {
                 if (!ownsFocusStart()) return;
@@ -565,6 +574,7 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
                     if (!ownsFocusStart()) return;
                     if (response.puzzles.length < 2) return failIfCurrent('There are not enough safe positions for extra practice yet.');
                     if (!ownsFocusStart()) return;
+                    owner.committedSessionId = response.session_id;
                     setActiveSessionId(response.session_id);
                     if (!ownsFocusStart()) return;
                     localStorage.setItem(`knightmind:session:${owner.username}`, response.session_id);

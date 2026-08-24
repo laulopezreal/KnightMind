@@ -503,6 +503,7 @@ export default function Puzzles() {
     const isGenerating = isJobPolling || (job?.status === 'queued' || job?.status === 'running');
     const controlsDisabled = !controlsEnabled || isLoading || isGenerating;
     const generateNewDisabled = !controlsEnabled || isLoading || isGenerating || !userStatus?.has_new_games;
+    const hasValidFocusPracticeIntent = focusPracticeMode && Boolean(focusCause);
     const { selectedModeLabel, screenReaderModeLabel } = getModeLabels(sessionType);
     const modeAvailabilityLabel = sessionType === 'standard' ? 'Active' : 'Beta';
     // No `!username` arm: the page returns ConnectAccountEmpty above, so these
@@ -518,7 +519,9 @@ export default function Puzzles() {
                 ? ((insightsError && !isLoadingStatus && !isRefreshingInsights) ? "Couldn't load your training data." : 'Loading your training data...')
                 : userStatus.puzzles_count === 0
                     ? 'Generate puzzles first to unlock sessions.'
-                    : userStatus.due_count === 0
+                    : focusPracticeMode && !focusCause
+                        ? 'This focus is no longer available. Return to Today’s Focus and choose a current practice session.'
+                    : userStatus.due_count === 0 && !hasValidFocusPracticeIntent
                         ? 'No puzzles are due right now. Generate new puzzles to keep training.'
                         : sessionType !== 'standard'
                             ? 'Only Standard mode can start sessions for now. Switch mode in the sidebar.'
@@ -1169,9 +1172,9 @@ export default function Puzzles() {
                             <button
                                 type="button"
                                 onClick={handleStartSession}
-                                disabled={controlsDisabled || !userStatus || userStatus.puzzles_count === 0 || userStatus.due_count === 0 || sessionType !== 'standard'}
+                                disabled={controlsDisabled || !userStatus || userStatus.puzzles_count === 0 || (userStatus.due_count === 0 && !hasValidFocusPracticeIntent) || sessionType !== 'standard'}
                                 title={startSessionDisabledReason ?? 'Start a new training session'}
-                                className={`px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-opacity km-focus-visible ${(controlsDisabled || !userStatus || userStatus.puzzles_count === 0 || userStatus.due_count === 0 || sessionType !== 'standard') ? 'km-interactive-disabled' : 'hover:opacity-90 cursor-pointer'}`}>
+                                className={`px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-opacity km-focus-visible ${(controlsDisabled || !userStatus || userStatus.puzzles_count === 0 || (userStatus.due_count === 0 && !hasValidFocusPracticeIntent) || sessionType !== 'standard') ? 'km-interactive-disabled' : 'hover:opacity-90 cursor-pointer'}`}>
                                 Start Session
                             </button>
                         )}

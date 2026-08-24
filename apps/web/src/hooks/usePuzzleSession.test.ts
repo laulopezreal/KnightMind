@@ -1,3 +1,5 @@
+import { useState } from 'react';
+import { flushSync } from 'react-dom';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act, waitFor } from '@testing-library/react';
 import { usePuzzleSession, type UsePuzzleSessionOptions, calculateRecentPerformance, getPerformanceTrend } from './usePuzzleSession';
@@ -204,6 +206,37 @@ describe('usePuzzleSession', () => {
         expect(setActiveSessionId).toHaveBeenCalledWith('focus-1');
         expect(result.current.sessionState).toBe('active');
         expect(result.current.sessionSummary?.session_type).toBe('focus_practice');
+    });
+
+    it('keeps its own active-session transition while binding a focus-practice snapshot', async () => {
+        const response = makeFocusPracticeResponse('focus-stateful');
+        mockedStartFocusPractice.mockResolvedValue(response);
+
+        const { result } = renderHook(() => {
+            const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+            const setActiveSessionIdAndRerender = (sessionId: string | null) => {
+                flushSync(() => setActiveSessionId(sessionId));
+            };
+            const session = usePuzzleSession(makeOpts({
+                activeSessionId,
+                setActiveSessionId: setActiveSessionIdAndRerender,
+                focusPracticeMode: true,
+                focusCause: 'loose_piece_awareness',
+                userStatus: { ...mockUserStatus, due_count: 0 },
+            }));
+            return { activeSessionId, session };
+        });
+
+        await act(async () => {
+            await result.current.session.handleStartSession();
+        });
+
+        expect(result.current.activeSessionId).toBe('focus-stateful');
+        expect(localStorage.getItem('knightmind:session:testuser')).toBe('focus-stateful');
+        expect(result.current.session.sessionSummary?.session_id).toBe('focus-stateful');
+        expect(result.current.session.puzzles).toEqual(response.puzzles);
+        expect(result.current.session.currentIndex).toBe(0);
+        expect(result.current.session.sessionState).toBe('active');
     });
 
     it.each([[], null])('treats a %s focus-practice resume snapshot as stale without consulting the due queue', async (snapshot) => {

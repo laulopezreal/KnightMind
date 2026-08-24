@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import Puzzles from './Puzzles';
 import { generatePuzzles } from '../api';
 import { setupMockLocalStorage } from '../test/helpers';
@@ -38,12 +38,14 @@ const mockGetUserStatus = vi.fn();
 const mockGetRecentSessions = vi.fn();
 const mockGetMotifPerformance = vi.fn();
 const mockGetSession = vi.fn();
+const mockStartFocusPractice = vi.fn();
 
 // Puzzles.tsx imports everything from '../api' directly
 vi.mock('../api', () => ({
   generatePuzzles: vi.fn(),
   getDailyPuzzles: vi.fn().mockResolvedValue([]),
   getDuePuzzles: (...args: unknown[]) => mockGetDuePuzzles(...args),
+  startFocusPractice: (...args: unknown[]) => mockStartFocusPractice(...args),
   startSession: vi.fn(),
   completeSession: vi.fn(),
   reviewPuzzle: vi.fn(),
@@ -278,6 +280,58 @@ describe('Puzzles', () => {
         const btn = screen.getByRole('button', { name: /No new games to generate/i });
         expect(btn).toHaveAttribute('title', expect.stringContaining('Sync newer games from Chess.com to generate more puzzles'));
       });
+    });
+  });
+
+  describe('Focus Practice session entry', () => {
+    it('enables due-zero Focus Practice and starts the dedicated server session', async () => {
+      mockSearchParams = new URLSearchParams('mode=focus_practice&focus_cause=loose_piece_awareness');
+      mockGetUserStatus.mockResolvedValue({
+        games_count: 50,
+        puzzles_count: 20,
+        due_count: 0,
+        has_new_games: false,
+      });
+      mockStartFocusPractice.mockResolvedValue({
+        session_id: 'focus-zero-due',
+        session_type: 'focus_practice',
+        focus: { cause: 'loose_piece_awareness', name: 'Loose pieces' },
+        requested_n: 5,
+        returned_count: 2,
+        puzzles: [
+          { id: 'focus-puzzle-1', fen: '8/8/8/8/8/8/8/8 w - - 0 1', side_to_move: 'white', best_move_uci: 'e2e4' },
+          { id: 'focus-puzzle-2', fen: '8/8/8/8/8/8/8/8 w - - 0 1', side_to_move: 'white', best_move_uci: 'd2d4' },
+        ],
+      });
+
+      render(<Puzzles />);
+
+      const start = await screen.findByRole('button', { name: 'Start Session' });
+      await waitFor(() => expect(start).toBeEnabled());
+      await act(async () => {
+        start.click();
+      });
+
+      await waitFor(() => {
+        expect(mockStartFocusPractice).toHaveBeenCalledWith('testplayer', 'loose_piece_awareness', 5);
+      });
+    });
+
+    it('keeps ordinary due-zero sessions and malformed Focus Practice entry disabled', async () => {
+      mockGetUserStatus.mockResolvedValue({
+        games_count: 50,
+        puzzles_count: 20,
+        due_count: 0,
+        has_new_games: false,
+      });
+
+      const { rerender } = render(<Puzzles />);
+      expect(await screen.findByRole('button', { name: 'Start Session' })).toBeDisabled();
+
+      mockSearchParams = new URLSearchParams('mode=focus_practice');
+      rerender(<Puzzles />);
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Start Session' })).toBeDisabled());
+      expect(mockStartFocusPractice).not.toHaveBeenCalled();
     });
   });
 
