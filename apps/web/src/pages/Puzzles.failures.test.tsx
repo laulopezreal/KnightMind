@@ -433,6 +433,66 @@ describe('Puzzles — honest failure handling', () => {
             expect(mockSetCurrentIndex).not.toHaveBeenCalled();
         });
 
+        it('starts a fresh checkable exposure after an ordinary failed retry', async () => {
+            vi.mocked(checkPuzzle)
+                .mockResolvedValueOnce({ correct: false, result: 'fail' } as never)
+                .mockResolvedValueOnce({ correct: true, result: 'pass' } as never);
+            const user = userEvent.setup();
+            render(<Puzzles />);
+            const checkCallsBeforeRetry = vi.mocked(checkPuzzle).mock.calls.length;
+
+            await typeAndCheck(user, 'e2e3');
+            await waitFor(() => expect(screen.getByText('Not this one — take another look.')).toBeInTheDocument());
+
+            await user.click(screen.getByRole('button', { name: /mark as failed/i }));
+            await waitFor(() => expect(mockHandleReviewPuzzle).toHaveBeenCalledWith('fail'));
+
+            const input = screen.getByPlaceholderText('e.g. e2e4');
+            await user.clear(input);
+            await user.type(input, 'e2e4');
+            await user.click(screen.getByRole('button', { name: /check entered move/i }));
+
+            await waitFor(() => expect(screen.getByText('Correct! Excellent.')).toBeInTheDocument());
+            expect(checkPuzzle).toHaveBeenCalledTimes(checkCallsBeforeRetry + 2);
+            expect(mockHandleReviewPuzzle).toHaveBeenLastCalledWith('pass', undefined, 'e2e4');
+            expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(2);
+        });
+
+        it('starts a fresh Focus Practice timeout exposure while stale checks remain rejected', async () => {
+            mockSearchParams = new URLSearchParams('mode=focus_practice&focus_cause=loose_piece_awareness');
+            const staleCheck = deferred<{ correct: boolean; result: string }>();
+            const retryCheck = deferred<{ correct: boolean; result: string }>();
+            vi.mocked(checkPuzzle)
+                .mockReturnValueOnce(staleCheck.promise as never)
+                .mockReturnValueOnce(retryCheck.promise as never);
+            const user = userEvent.setup();
+            render(<Puzzles />);
+            const checkCallsBeforeRetry = vi.mocked(checkPuzzle).mock.calls.length;
+
+            await typeAndCheck(user, 'e2e4');
+            act(() => timedOut?.());
+            await waitFor(() => expect(mockHandleReviewPuzzle).toHaveBeenCalledWith('fail'));
+
+            await user.click(screen.getByRole('button', { name: /mark as failed/i }));
+            const input = screen.getByPlaceholderText('e.g. e2e4');
+            await user.clear(input);
+            await user.type(input, 'e2e4');
+            await user.click(screen.getByRole('button', { name: /check entered move/i }));
+            expect(checkPuzzle).toHaveBeenCalledTimes(checkCallsBeforeRetry + 2);
+
+            staleCheck.resolve({ correct: true, result: 'pass' });
+            await act(async () => { await staleCheck.promise; });
+            await user.clear(input);
+            await user.type(input, 'e2e3');
+            await user.click(screen.getByRole('button', { name: /check entered move/i }));
+            expect(checkPuzzle).toHaveBeenCalledTimes(checkCallsBeforeRetry + 2);
+
+            retryCheck.resolve({ correct: true, result: 'pass' });
+            await waitFor(() => expect(screen.getByText('Correct! Excellent.')).toBeInTheDocument());
+            expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(2);
+            expect(mockHandleReviewPuzzle).toHaveBeenLastCalledWith('pass', undefined, 'e2e4');
+        });
+
         it('keeps a failed reveal decision through a delayed correct check', async () => {
             const pendingCheck = deferred<{ correct: boolean; result: string }>();
             const pendingRevealReview = deferred<boolean>();

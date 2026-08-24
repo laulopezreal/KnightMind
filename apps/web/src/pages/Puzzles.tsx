@@ -444,6 +444,42 @@ export default function Puzzles() {
     // one — so the hint machinery only has the answer once the user asks for it.
     const clue = useClue(revealedMove ?? '', currentPuzzle?.fen ?? '', { maxStage: 3 });
     const clueReset = clue.reset;
+
+    // A persisted failed review ends one exposure of this puzzle, but "Try
+    // Again" deliberately keeps the same puzzle object in place. Advance the
+    // ownership epochs here rather than merely clearing the terminal decision:
+    // late checks and diagnosis finalizers from the failed exposure must stay
+    // stale, while the fresh exposure may accept exactly one new solve check.
+    // This is called only after the failed review has landed.
+    const beginFreshExposureAfterPersistedFail = () => {
+        const terminalDecision = outcomeDecisionRef.current;
+        if (
+            !currentPuzzle ||
+            terminalDecision?.puzzleId !== currentPuzzle.id ||
+            terminalDecision.epoch !== puzzleEpochRef.current ||
+            terminalDecision.result !== 'fail'
+        ) return false;
+
+        puzzleEpochRef.current += 1;
+        diagnosisEpochRef.current += 1;
+        checkingPuzzleRef.current = null;
+        outcomeDecisionRef.current = null;
+        outcomeWriteRef.current = null;
+        diagnosisRequestRef.current = null;
+        diagnosisConfirmationRequestRef.current = null;
+        setDiagnosisResult(null);
+        setDiagnosisLoadingOwner(null);
+        setDiagnosisConfirmationOwner(null);
+        setDiagnosisConfirmationError(null);
+        setStatus('solving');
+        setUserMove('');
+        setGame(new Chess(currentPuzzle.fen));
+        setLinePlyIndex(0);
+        setAttemptedLine([]);
+        setClickFrom(null);
+        clue.reset();
+        return true;
+    };
     const puzzlesAvailable = puzzles.length > 0;
     const isFinalPuzzle = puzzlesAvailable && currentIndex >= puzzles.length - 1;
     // Disable only while the completion API call is in-flight. Once completed,
@@ -1977,13 +2013,7 @@ export default function Puzzles() {
                                                     setActionError("We couldn't save that result — nothing was recorded. Check your connection and try again.");
                                                     return;
                                                 }
-                                                setStatus('solving');
-                                                setUserMove('');
-                                                setGame(new Chess(currentPuzzle.fen));
-                                                // Restart the line from the top for the retry.
-                                                setLinePlyIndex(0);
-                                                setAttemptedLine([]);
-                                                clue.reset();
+                                                beginFreshExposureAfterPersistedFail();
                                             }}
                                             className="px-2 py-3 md:px-6 md:py-4 border border-primary/20 text-primary rounded-sm font-serif text-sm md:text-lg transition-all km-interactive km-focus-visible">
                                             <span className="md:hidden">Try Again</span>
