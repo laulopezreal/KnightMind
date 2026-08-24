@@ -121,6 +121,30 @@ function makeOpts(overrides: Partial<UsePuzzleSessionOptions> = {}): UsePuzzleSe
     };
 }
 
+function deferred<T>() {
+    let resolve!: (value: T) => void;
+    let reject!: (reason?: unknown) => void;
+    const promise = new Promise<T>((res, rej) => {
+        resolve = res;
+        reject = rej;
+    });
+    return { promise, resolve, reject };
+}
+
+function makeFocusPracticeResponse(sessionId: string, cause = 'loose_piece_awareness') {
+    return {
+        session_id: sessionId,
+        session_type: 'focus_practice' as const,
+        focus: { cause, name: 'Loose pieces' },
+        requested_n: 5,
+        returned_count: 2,
+        puzzles: [
+            { ...mockPuzzle, review_policy: 'practice_only' as const, queue_reason: { reason: 'practice' as const, explanation: 'Extra practice.' } },
+            { ...mockPuzzle2, review_policy: 'practice_only' as const, queue_reason: { reason: 'practice' as const, explanation: 'Extra practice.' } },
+        ],
+    };
+}
+
 // ─── Tests ──────────────────────────────────────────────────────────
 
 describe('usePuzzleSession', () => {
@@ -180,6 +204,164 @@ describe('usePuzzleSession', () => {
         expect(setActiveSessionId).toHaveBeenCalledWith('focus-1');
         expect(result.current.sessionState).toBe('active');
         expect(result.current.sessionSummary?.session_type).toBe('focus_practice');
+    });
+
+    it.each([[], null])('treats a %s focus-practice resume snapshot as stale without consulting the due queue', async (snapshot) => {
+        localStorage.setItem('knightmind:session:testuser', 'saved-focus-session');
+        mockedGetSession.mockResolvedValue({
+            ...mockSessionSummary,
+            session_id: 'saved-focus-session',
+            session_type: 'focus_practice',
+            completed_at: null,
+            puzzles: snapshot,
+        } as never);
+        mockedGetDuePuzzles.mockResolvedValue({
+            due_count: 1,
+            returned_count: 1,
+            now: new Date().toISOString(),
+            puzzles: [mockPuzzle],
+        });
+        const setActiveSessionId = vi.fn();
+        const { result } = renderHook(() => usePuzzleSession(makeOpts({ setActiveSessionId })));
+
+        await waitFor(() => expect(result.current.isResumingSession).toBe(false));
+
+        expect(mockedGetDuePuzzles).not.toHaveBeenCalled();
+        expect(result.current.puzzles).toEqual([]);
+        expect(result.current.sessionState).toBe('error');
+        expect(result.current.error).toMatch(/no puzzles left to review/i);
+        expect(setActiveSessionId).toHaveBeenLastCalledWith(null);
+    });
+
+    it('keeps ordinary-session resume on the due queue', async () => {
+        localStorage.setItem('knightmind:session:testuser', 'saved-standard-session');
+        mockedGetSession.mockResolvedValue({
+            ...mockSessionSummary,
+            session_id: 'saved-standard-session',
+            session_type: 'standard',
+            completed_at: null,
+        } as never);
+        mockedGetDuePuzzles.mockResolvedValue({
+            due_count: 1,
+            returned_count: 1,
+            now: new Date().toISOString(),
+            puzzles: [mockPuzzle],
+        });
+        const { result } = renderHook(() => usePuzzleSession(makeOpts()));
+
+        await waitFor(() => expect(result.current.sessionState).toBe('active'));
+        expect(mockedGetDuePuzzles).toHaveBeenCalledTimes(1);
+        expect(result.current.puzzles).toEqual([mockPuzzle]);
+    });
+
+    it('ignores stale focus-start success and finalizer after A-to-B-to-A ownership changes', async () => {
+        const firstA = deferred<ReturnType<typeof makeFocusPracticeResponse>>();
+        const forB = deferred<ReturnType<typeof makeFocusPracticeResponse>>();
+        const secondA = deferred<ReturnType<typeof makeFocusPracticeResponse>>();
+        mockedStartFocusPractice
+            .mockReturnValueOnce(firstA.promise)
+            .mockReturnValueOnce(forB.promise)
+            .mockReturnValueOnce(secondA.promise);
+        const setActiveSessionId = vi.fn();
+        const initial = makeOpts({ username: 'A', focusPracticeMode: true, focusCause: 'cause-a', setActiveSessionId });
+        const { result, rerender } = renderHook((options) => usePuzzleSession(options), { initialProps: initial });
+
+        let firstStart!: Promise<void>;
+        act(() => { firstStart = result.current.handleStartSession(); });
+        rerender({ ...initial, username: 'B', focusCause: 'cause-b' });
+        let bStart!: Promise<void>;
+        act(() => { bStart = result.current.handleStartSession(); });
+        rerender({ ...initial, username: 'A', focusCause: 'cause-a' });
+        let secondStart!: Promise<void>;
+        act(() => { secondStart = result.current.handleStartSession(); });
+
+        await act(async () => {
+            firstA.resolve(makeFocusPracticeResponse('stale-a', 'cause-a'));
+            await firstStart;
+        });
+        expect(setActiveSessionId).not.toHaveBeenCalled();
+        expect(localStorage.getItem('knightmind:session:A')).toBeNull();
+        expect(result.current.isLoading).toBe(true);
+
+        await act(async () => {
+            forB.reject(new Error('stale B failure'));
+            secondA.resolve(makeFocusPracticeResponse('fresh-a', 'cause-a'));
+            await Promise.all([bStart, secondStart]);
+        });
+        expect(setActiveSessionId).toHaveBeenCalledTimes(1);
+        expect(setActiveSessionId).toHaveBeenLastCalledWith('fresh-a');
+        expect(localStorage.getItem('knightmind:session:A')).toBe('fresh-a');
+        expect(result.current.error).toBeNull();
+        expect(result.current.sessionState).toBe('active');
+        expect(result.current.isLoading).toBe(false);
+    });
+
+    it('keeps a newer focus-start error when a stale success resolves', async () => {
+        const stale = deferred<ReturnType<typeof makeFocusPracticeResponse>>();
+        const current = deferred<ReturnType<typeof makeFocusPracticeResponse>>();
+        mockedStartFocusPractice.mockReturnValueOnce(stale.promise).mockReturnValueOnce(current.promise);
+        const initial = makeOpts({ username: 'A', focusPracticeMode: true, focusCause: 'cause-a' });
+        const { result, rerender } = renderHook((options) => usePuzzleSession(options), { initialProps: initial });
+
+        let staleStart!: Promise<void>;
+        act(() => { staleStart = result.current.handleStartSession(); });
+        rerender({ ...initial, focusCause: 'cause-b' });
+        let currentStart!: Promise<void>;
+        act(() => { currentStart = result.current.handleStartSession(); });
+        await act(async () => {
+            current.reject(new Error('current failure'));
+            await currentStart;
+        });
+        await act(async () => {
+            stale.resolve(makeFocusPracticeResponse('stale-a', 'cause-a'));
+            await staleStart;
+        });
+
+        expect(result.current.sessionState).toBe('error');
+        expect(result.current.error).toBe('current failure');
+        expect(result.current.puzzles).toEqual([]);
+        expect(localStorage.getItem('knightmind:session:A')).toBeNull();
+    });
+
+    it('ignores a focus start that resolves after unmount', async () => {
+        const pending = deferred<ReturnType<typeof makeFocusPracticeResponse>>();
+        mockedStartFocusPractice.mockReturnValueOnce(pending.promise);
+        const setActiveSessionId = vi.fn();
+        const { result, unmount } = renderHook(() => usePuzzleSession(makeOpts({
+            focusPracticeMode: true,
+            focusCause: 'cause-a',
+            setActiveSessionId,
+        })));
+
+        let start!: Promise<void>;
+        act(() => { start = result.current.handleStartSession(); });
+        unmount();
+        await act(async () => {
+            pending.resolve(makeFocusPracticeResponse('after-unmount', 'cause-a'));
+            await start;
+        });
+
+        expect(setActiveSessionId).not.toHaveBeenCalled();
+        expect(localStorage.getItem('knightmind:session:testuser')).toBeNull();
+    });
+
+    it('suppresses duplicate focus-start clicks while the same operation is pending', async () => {
+        const pending = deferred<ReturnType<typeof makeFocusPracticeResponse>>();
+        mockedStartFocusPractice.mockReturnValueOnce(pending.promise);
+        const { result } = renderHook(() => usePuzzleSession(makeOpts({ focusPracticeMode: true, focusCause: 'cause-a' })));
+
+        let first!: Promise<void>;
+        let second!: Promise<void>;
+        act(() => {
+            first = result.current.handleStartSession();
+            second = result.current.handleStartSession();
+        });
+        expect(mockedStartFocusPractice).toHaveBeenCalledTimes(1);
+        await act(async () => {
+            pending.resolve(makeFocusPracticeResponse('one-session', 'cause-a'));
+            await Promise.all([first, second]);
+        });
+        expect(result.current.sessionState).toBe('active');
     });
 
     it('should validate username before starting session', async () => {

@@ -185,6 +185,38 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
     const [error, setError] = useState<string | null>(null);
     const [lastFeedback, setLastFeedback] = useState('');
 
+    // A focus-practice start is owned by the exact rendered account/context that
+    // created it. Refs are kept current during render so a response that lands
+    // between render and effects cannot borrow a later A -> B -> A identity.
+    const focusStartEpochRef = useRef(0);
+    const focusStartPromiseRef = useRef<Promise<void> | null>(null);
+    const focusStartOwnerRef = useRef<{ username: string; focusCause: string | null; focusPracticeMode: boolean; activeSessionId: string | null; epoch: number } | null>(null);
+    const focusStartContextRef = useRef({ username, focusCause, focusPracticeMode, activeSessionId });
+    const mountedRef = useRef(true);
+    const focusStartContext = { username, focusCause, focusPracticeMode, activeSessionId };
+    const previousFocusStartContext = focusStartContextRef.current;
+    if (
+        previousFocusStartContext.username !== focusStartContext.username
+        || previousFocusStartContext.focusCause !== focusStartContext.focusCause
+        || previousFocusStartContext.focusPracticeMode !== focusStartContext.focusPracticeMode
+        || previousFocusStartContext.activeSessionId !== focusStartContext.activeSessionId
+    ) {
+        focusStartEpochRef.current += 1;
+        focusStartPromiseRef.current = null;
+        focusStartOwnerRef.current = null;
+        focusStartContextRef.current = focusStartContext;
+    }
+
+    useEffect(() => {
+        mountedRef.current = true;
+        return () => {
+            mountedRef.current = false;
+            focusStartEpochRef.current += 1;
+            focusStartPromiseRef.current = null;
+            focusStartOwnerRef.current = null;
+        };
+    }, []);
+
     // ── localStorage: best streak ──
     useEffect(() => {
         if (!username) {
@@ -274,8 +306,8 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
                 setError(null);
                 setIsLoading(true);
                 try {
-                    const response = session.session_type === 'focus_practice' && session.puzzles
-                        ? { puzzles: session.puzzles }
+                    const response = session.session_type === 'focus_practice'
+                        ? { puzzles: session.puzzles ?? [] }
                         : await getDuePuzzles(
                             username,
                             session.requested_n,
@@ -489,28 +521,85 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
 
         if (focusPracticeMode) {
             if (!focusCause) return fail('This focus is no longer available. Return to Today’s Focus and choose a current practice session.');
-            setIsLoading(true);
-            try {
-                const response = await startFocusPractice(username.trim(), focusCause, 5);
-                if (response.puzzles.length < 2) return fail('There are not enough safe positions for extra practice yet.');
-                setActiveSessionId(response.session_id);
-                localStorage.setItem(`knightmind:session:${username.trim()}`, response.session_id);
-                localStorage.removeItem(`knightmind:sessionState:${username.trim()}`);
-                setSessionSummary({ session_id: response.session_id, session_type: response.session_type, requested_n: response.returned_count, pass_count: 0, fail_count: 0, total_time_ms: 0, created_at: new Date().toISOString(), completed_at: null, current_streak: 0, best_streak: 0, hints_used: 0, focus_cause: response.focus.cause, focus_name: response.focus.name, puzzles: response.puzzles });
-                setPuzzles(response.puzzles);
-                setCurrentIndex(0);
-                setReviewedCount(0);
-                setStreak(0);
-                setHintsUsed(0);
-                setPerformanceHistory([]);
-                setStatus('solving');
-                setSessionState('active');
-            } catch (err) {
-                fail(err instanceof Error ? err.message : 'Couldn’t start focus practice. Try again.');
-            } finally {
-                setIsLoading(false);
+            const owner = {
+                username: username.trim(),
+                focusCause,
+                focusPracticeMode,
+                activeSessionId,
+                epoch: focusStartEpochRef.current + 1,
+            };
+            const pendingOwner = focusStartOwnerRef.current;
+            if (
+                focusStartPromiseRef.current
+                && pendingOwner
+                && pendingOwner.username === owner.username
+                && pendingOwner.focusCause === owner.focusCause
+                && pendingOwner.focusPracticeMode === owner.focusPracticeMode
+                && pendingOwner.activeSessionId === owner.activeSessionId
+                && pendingOwner.epoch === focusStartEpochRef.current
+            ) {
+                return focusStartPromiseRef.current;
             }
-            return;
+
+            focusStartEpochRef.current = owner.epoch;
+            focusStartOwnerRef.current = owner;
+            const ownsFocusStart = () => {
+                const current = focusStartContextRef.current;
+                return mountedRef.current
+                    && focusStartEpochRef.current === owner.epoch
+                    && current.username === owner.username
+                    && current.focusCause === owner.focusCause
+                    && current.focusPracticeMode === owner.focusPracticeMode
+                    && current.activeSessionId === owner.activeSessionId;
+            };
+            const failIfCurrent = (message: string) => {
+                if (!ownsFocusStart()) return;
+                setError(message);
+                setSessionState('error');
+            };
+
+            setIsLoading(true);
+            const operation = (async () => {
+                try {
+                    const response = await startFocusPractice(owner.username, owner.focusCause!, 5);
+                    if (!ownsFocusStart()) return;
+                    if (response.puzzles.length < 2) return failIfCurrent('There are not enough safe positions for extra practice yet.');
+                    if (!ownsFocusStart()) return;
+                    setActiveSessionId(response.session_id);
+                    if (!ownsFocusStart()) return;
+                    localStorage.setItem(`knightmind:session:${owner.username}`, response.session_id);
+                    if (!ownsFocusStart()) return;
+                    localStorage.removeItem(`knightmind:sessionState:${owner.username}`);
+                    if (!ownsFocusStart()) return;
+                    setSessionSummary({ session_id: response.session_id, session_type: response.session_type, requested_n: response.returned_count, pass_count: 0, fail_count: 0, total_time_ms: 0, created_at: new Date().toISOString(), completed_at: null, current_streak: 0, best_streak: 0, hints_used: 0, focus_cause: response.focus.cause, focus_name: response.focus.name, puzzles: response.puzzles });
+                    if (!ownsFocusStart()) return;
+                    setPuzzles(response.puzzles);
+                    if (!ownsFocusStart()) return;
+                    setCurrentIndex(0);
+                    if (!ownsFocusStart()) return;
+                    setReviewedCount(0);
+                    if (!ownsFocusStart()) return;
+                    setStreak(0);
+                    if (!ownsFocusStart()) return;
+                    setHintsUsed(0);
+                    if (!ownsFocusStart()) return;
+                    setPerformanceHistory([]);
+                    if (!ownsFocusStart()) return;
+                    setStatus('solving');
+                    if (!ownsFocusStart()) return;
+                    setSessionState('active');
+                } catch (err) {
+                    failIfCurrent(err instanceof Error ? err.message : 'Couldn’t start focus practice. Try again.');
+                } finally {
+                    if (ownsFocusStart()) {
+                        focusStartPromiseRef.current = null;
+                        focusStartOwnerRef.current = null;
+                        setIsLoading(false);
+                    }
+                }
+            })();
+            focusStartPromiseRef.current = operation;
+            return operation;
         }
 
         let targetAccuracyParam: number | undefined = undefined;
