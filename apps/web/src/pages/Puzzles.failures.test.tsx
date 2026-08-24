@@ -478,7 +478,12 @@ describe('Puzzles — honest failure handling', () => {
             expect(mockHandleReviewPuzzle).toHaveBeenCalledWith('fail');
             expect(mockStartPuzzleTimer).toHaveBeenCalledTimes(1);
 
-            pendingFailReview.resolve(true);
+            pendingFailReview.resolve(false);
+            await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/couldn't save that result/i));
+            expect(mockStartPuzzleTimer).toHaveBeenCalledTimes(1);
+
+            await user.click(screen.getByRole('button', { name: /mark as failed/i }));
+            await waitFor(() => expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(2));
             await waitFor(() => expect(mockStartPuzzleTimer.mock.calls.length).toBeGreaterThan(1));
         });
 
