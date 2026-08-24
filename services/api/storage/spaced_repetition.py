@@ -115,6 +115,8 @@ def insert_puzzle_review(
     client_result: PuzzleResult | str | None = None,
     verified: bool = False,
     source: str | None = None,
+    review_context: str = "standard",
+    affects_scheduling: bool = True,
 ) -> PuzzleReview:
     """
     Record a puzzle review in the database.
@@ -137,6 +139,8 @@ def insert_puzzle_review(
             the puzzle's accepted-solution set.
         source: How the outcome was decided ("server_verified" or
             "client_reported"); None for legacy rows.
+        review_context: Server-owned context for telemetry and feedback.
+        affects_scheduling: Whether this review may change PuzzleStats.
 
     Returns:
         The created PuzzleReview object
@@ -169,6 +173,8 @@ def insert_puzzle_review(
         client_result=client_result_val,
         verified=verified,
         source=source,
+        review_context=review_context,
+        affects_scheduling=affects_scheduling,
     )
     db.add(review)
     db.flush()
