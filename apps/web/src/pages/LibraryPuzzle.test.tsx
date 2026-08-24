@@ -264,12 +264,18 @@ describe('LibraryPuzzle', () => {
             expect(screen.getByText('e2e4')).toBeInTheDocument();
         });
 
-        // Should record as fail (4th arg is time_spent_ms)
+        // The first available Reveal must record one numeric, nonnegative
+        // time_spent_ms value, rather than losing the timer to effect ordering.
         await waitFor(() => {
-            expect(mockReviewPuzzle).toHaveBeenCalledWith(
-                'puzzle-abc', 'testplayer', 'fail', expect.any(Number)
-            );
+            expect(mockReviewPuzzle).toHaveBeenCalledTimes(1);
         });
+        const [puzzleId, username, result, timeSpentMs] = mockReviewPuzzle.mock.calls[0];
+        expect(puzzleId).toBe('puzzle-abc');
+        expect(username).toBe('testplayer');
+        expect(result).toBe('fail');
+        expect(typeof timeSpentMs).toBe('number');
+        expect(Number.isFinite(timeSpentMs)).toBe(true);
+        expect(timeSpentMs).toBeGreaterThanOrEqual(0);
     });
 
     // --- Recorded confirmation ---
