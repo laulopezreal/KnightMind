@@ -103,6 +103,7 @@ export default function Puzzles() {
     // A bias rather than a filter, so — unlike motif — it never leaves the user
     // in a dead-end empty session and needs no escape hatch.
     const focusCause = searchParams.get('focus_cause');
+    const focusPracticeMode = searchParams.get('mode') === 'focus_practice';
     const focusOpening = searchParams.get('focus_opening');
     const focusOpeningScope = searchParams.get('focus_opening_scope');
     const isWarmupMode = searchParams.get('warmup') === 'true';
@@ -184,6 +185,7 @@ export default function Puzzles() {
         warmupMode,
         motifFilter,
         focusCause,
+        focusPracticeMode,
         focusOpening,
         focusOpeningScope,
         userStatus,
@@ -1570,10 +1572,11 @@ export default function Puzzles() {
                                         <div className="bg-primary/5 border border-primary/10 rounded-sm p-4 mb-4 w-full">
                                             <div className="flex justify-between items-center mb-2">
                                                 <span className="font-serif text-primary font-medium">
-                                                    Session in Progress
-                                                    {sessionSummary.session_type && sessionSummary.session_type !== 'standard'
-                                                        ? ` (${sessionSummary.session_type.replace('_', ' ')})`
-                                                        : ''}
+                                                    {sessionSummary.session_type === 'focus_practice'
+                                                        ? 'Focus practice'
+                                                        : sessionSummary.session_type && sessionSummary.session_type !== 'standard'
+                                                            ? `Session in Progress (${sessionSummary.session_type.replace('_', ' ')})`
+                                                            : 'Session in Progress'}
                                                 </span>
                                                 <span className="text-sm font-mono text-primary/70">
                                                     {reviewedCount} / {sessionSummary.requested_n}

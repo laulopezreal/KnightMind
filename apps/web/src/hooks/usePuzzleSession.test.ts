@@ -7,6 +7,7 @@ import { setupMockLocalStorage } from '../test/helpers';
 
 vi.mock('../api', () => ({
     startSession: vi.fn(),
+    startFocusPractice: vi.fn(),
     completeSession: vi.fn(),
     reviewPuzzle: vi.fn(),
     getSession: vi.fn(),
@@ -14,9 +15,10 @@ vi.mock('../api', () => ({
     useHint: vi.fn(),
 }));
 
-import { startSession, completeSession, reviewPuzzle, getSession, getDuePuzzles, useHint, type ReviewPuzzleResponse } from '../api';
+import { startSession, startFocusPractice, completeSession, reviewPuzzle, getSession, getDuePuzzles, useHint, type ReviewPuzzleResponse } from '../api';
 
 const mockedStartSession = vi.mocked(startSession);
+const mockedStartFocusPractice = vi.mocked(startFocusPractice);
 const mockedCompleteSession = vi.mocked(completeSession);
 const mockedReviewPuzzle = vi.mocked(reviewPuzzle);
 const mockedGetSession = vi.mocked(getSession);
@@ -100,6 +102,7 @@ function makeOpts(overrides: Partial<UsePuzzleSessionOptions> = {}): UsePuzzleSe
         warmupMode: false,
         motifFilter: null,
         focusCause: null,
+        focusPracticeMode: false,
         focusOpening: null,
         focusOpeningScope: null,
         userStatus: mockUserStatus,
@@ -147,6 +150,37 @@ describe('usePuzzleSession', () => {
     });
 
     // ── handleStartSession ──
+
+    it('starts a server-owned focus-practice snapshot without consulting the due queue', async () => {
+        mockedStartFocusPractice.mockResolvedValue({
+            session_id: 'focus-1',
+            session_type: 'focus_practice',
+            focus: { cause: 'loose_piece_awareness', name: 'Loose pieces' },
+            requested_n: 5,
+            returned_count: 2,
+            puzzles: [
+                { ...mockPuzzle, review_policy: 'practice_only', queue_reason: { reason: 'practice', explanation: 'Extra practice for your current focus.' } },
+                { ...mockPuzzle2, review_policy: 'practice_only', queue_reason: { reason: 'practice', explanation: 'Extra practice for your current focus.' } },
+            ],
+        });
+        const setActiveSessionId = vi.fn();
+        const { result } = renderHook(() => usePuzzleSession(makeOpts({
+            focusPracticeMode: true,
+            focusCause: 'loose_piece_awareness',
+            userStatus: { ...mockUserStatus, due_count: 0 },
+            setActiveSessionId,
+        })));
+
+        await act(async () => {
+            await result.current.handleStartSession();
+        });
+
+        expect(mockedStartFocusPractice).toHaveBeenCalledWith('testuser', 'loose_piece_awareness', 5);
+        expect(mockedGetDuePuzzles).not.toHaveBeenCalled();
+        expect(setActiveSessionId).toHaveBeenCalledWith('focus-1');
+        expect(result.current.sessionState).toBe('active');
+        expect(result.current.sessionSummary?.session_type).toBe('focus_practice');
+    });
 
     it('should validate username before starting session', async () => {
         const opts = makeOpts({ username: '' });

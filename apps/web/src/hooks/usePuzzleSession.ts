@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import {
     getDuePuzzles,
+    startFocusPractice,
     startSession,
     completeSession,
     reviewPuzzle,
@@ -55,6 +56,7 @@ export interface UsePuzzleSessionOptions {
     motifFilter: string | null;
     /** Mistake cause to bias the queue toward. Never narrows it. */
     focusCause: string | null;
+    focusPracticeMode: boolean;
     /** Opening to bias the queue toward, with its scope. Never narrows it. */
     focusOpening: string | null;
     focusOpeningScope: string | null;
@@ -157,6 +159,7 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
         warmupMode,
         motifFilter,
         focusCause,
+        focusPracticeMode,
         focusOpening,
         focusOpeningScope,
         userStatus,
@@ -271,21 +274,23 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
                 setError(null);
                 setIsLoading(true);
                 try {
-                    const response = await getDuePuzzles(
-                        username,
-                        session.requested_n,
-                        session.session_type || 'standard',
-                        session.target_accuracy,
-                        // The session's own motif and focus, not the URL's. A
-                        // resumed session must be served the way it was
-                        // originally, or the restored index points at a
-                        // different puzzle and the user re-solves one —
-                        // advancing its interval twice.
-                        session.motif || undefined,
-                        session.focus_cause || undefined,
-                        session.focus_opening || undefined,
-                        session.focus_opening_scope || undefined,
-                    );
+                    const response = session.session_type === 'focus_practice' && session.puzzles
+                        ? { puzzles: session.puzzles }
+                        : await getDuePuzzles(
+                            username,
+                            session.requested_n,
+                            session.session_type || 'standard',
+                            session.target_accuracy,
+                            // The session's own motif and focus, not the URL's. A
+                            // resumed session must be served the way it was
+                            // originally, or the restored index points at a
+                            // different puzzle and the user re-solves one —
+                            // advancing its interval twice.
+                            session.motif || undefined,
+                            session.focus_cause || undefined,
+                            session.focus_opening || undefined,
+                            session.focus_opening_scope || undefined,
+                        );
                     setPuzzles(response.puzzles);
 
                     // Restore current index with bounds checking
@@ -403,7 +408,10 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
             // for legacy/no-move flows where the server echoes the client claim.
             const effectiveResult = response.result ?? result;
 
-            if (response.feedback) {
+            if (response.review_context === 'focus_practice' && response.affects_scheduling === false) {
+                setLastFeedback('Practice recorded. Your normal review date is unchanged.');
+                setTimeout(() => setLastFeedback(''), 5000);
+            } else if (response.feedback) {
                 setLastFeedback(response.feedback);
                 setTimeout(() => setLastFeedback(''), 5000);
             }
@@ -471,13 +479,39 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
         if (!username.trim()) return fail('Please enter a username');
         if (!userStatus) return fail('Still loading your training data — try again in a moment.');
         if (userStatus.puzzles_count === 0) return fail('No puzzles available. Generate puzzles first.');
-        if (userStatus.due_count === 0) {
+        if (!focusPracticeMode && userStatus.due_count === 0) {
             return fail('No puzzles are due for review right now. Check back later or generate more puzzles.');
         }
 
         setSessionState('loading');
         setError(null);
         setLastFeedback('');
+
+        if (focusPracticeMode) {
+            if (!focusCause) return fail('This focus is no longer available. Return to Today’s Focus and choose a current practice session.');
+            setIsLoading(true);
+            try {
+                const response = await startFocusPractice(username.trim(), focusCause, 5);
+                if (response.puzzles.length < 2) return fail('There are not enough safe positions for extra practice yet.');
+                setActiveSessionId(response.session_id);
+                localStorage.setItem(`knightmind:session:${username.trim()}`, response.session_id);
+                localStorage.removeItem(`knightmind:sessionState:${username.trim()}`);
+                setSessionSummary({ session_id: response.session_id, session_type: response.session_type, requested_n: response.returned_count, pass_count: 0, fail_count: 0, total_time_ms: 0, created_at: new Date().toISOString(), completed_at: null, current_streak: 0, best_streak: 0, hints_used: 0, focus_cause: response.focus.cause, focus_name: response.focus.name, puzzles: response.puzzles });
+                setPuzzles(response.puzzles);
+                setCurrentIndex(0);
+                setReviewedCount(0);
+                setStreak(0);
+                setHintsUsed(0);
+                setPerformanceHistory([]);
+                setStatus('solving');
+                setSessionState('active');
+            } catch (err) {
+                fail(err instanceof Error ? err.message : 'Couldn’t start focus practice. Try again.');
+            } finally {
+                setIsLoading(false);
+            }
+            return;
+        }
 
         let targetAccuracyParam: number | undefined = undefined;
         let targetTimeMinutesParam: number | undefined = undefined;
@@ -572,6 +606,7 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
         warmupMode,
         motifFilter,
         focusCause,
+        focusPracticeMode,
         focusOpening,
         focusOpeningScope,
         setActiveSessionId,
