@@ -284,6 +284,27 @@ describe('Puzzles', () => {
   });
 
   describe('Focus Practice session entry', () => {
+    it('presents valid due-zero Focus Practice as server-owned extra practice', async () => {
+      mockSearchParams = new URLSearchParams('mode=focus_practice&focus_cause=loose_piece_awareness');
+      mockGetUserStatus.mockResolvedValue({
+        games_count: 50,
+        puzzles_count: 20,
+        due_count: 0,
+        has_new_games: false,
+      });
+
+      render(<Puzzles />);
+
+      expect(await screen.findByRole('heading', { level: 1, name: 'Focus practice' })).toBeInTheDocument();
+      expect(screen.getByText(/Focus practice\s+Active/i)).toBeInTheDocument();
+      expect(screen.getAllByText(/extra practice for the selected focus/i)).toHaveLength(2);
+      expect(screen.getAllByText(/server decides which positions are safe and available/i)).toHaveLength(2);
+      expect(screen.queryByText('Daily Puzzles')).not.toBeInTheDocument();
+      expect(screen.queryByText('STANDARD ACTIVE')).not.toBeInTheDocument();
+      expect(screen.queryByText(/Standard mode uses spaced repetition/i)).not.toBeInTheDocument();
+      expect(screen.queryByText('No puzzles are due for review yet.')).not.toBeInTheDocument();
+    });
+
     it('enables due-zero Focus Practice and starts the dedicated server session', async () => {
       mockSearchParams = new URLSearchParams('mode=focus_practice&focus_cause=loose_piece_awareness');
       mockGetUserStatus.mockResolvedValue({
@@ -308,6 +329,7 @@ describe('Puzzles', () => {
 
       const start = await screen.findByRole('button', { name: 'Start Session' });
       await waitFor(() => expect(start).toBeEnabled());
+      expect(start).toHaveClass('min-h-11');
       await act(async () => {
         start.click();
       });
@@ -331,6 +353,10 @@ describe('Puzzles', () => {
       mockSearchParams = new URLSearchParams('mode=focus_practice');
       rerender(<Puzzles />);
       await waitFor(() => expect(screen.getByRole('button', { name: 'Start Session' })).toBeDisabled());
+      expect(screen.getByRole('heading', { level: 1, name: 'Daily Puzzles' })).toBeInTheDocument();
+      expect(screen.getByText(/Standard\s+Active/i)).toBeInTheDocument();
+      expect(screen.getByText('Standard mode')).toBeInTheDocument();
+      expect(screen.getByText('No puzzles are due for review yet.')).toBeInTheDocument();
       expect(mockStartFocusPractice).not.toHaveBeenCalled();
     });
   });

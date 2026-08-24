@@ -506,6 +506,8 @@ export default function Puzzles() {
     const hasValidFocusPracticeIntent = focusPracticeMode && Boolean(focusCause);
     const { selectedModeLabel, screenReaderModeLabel } = getModeLabels(sessionType);
     const modeAvailabilityLabel = sessionType === 'standard' ? 'Active' : 'Beta';
+    const presentationModeLabel = hasValidFocusPracticeIntent ? 'Focus practice' : selectedModeLabel;
+    const presentationModeAvailabilityLabel = hasValidFocusPracticeIntent ? 'Active' : modeAvailabilityLabel;
     // No `!username` arm: the page returns ConnectAccountEmpty above, so these
     // reasons are only ever read by a signed-in user.
     const startSessionDisabledReason =
@@ -521,6 +523,8 @@ export default function Puzzles() {
                     ? 'Generate puzzles first to unlock sessions.'
                     : focusPracticeMode && !focusCause
                         ? 'This focus is no longer available. Return to Today’s Focus and choose a current practice session.'
+                    : userStatus.due_count === 0 && hasValidFocusPracticeIntent
+                        ? 'Extra practice is available for this focus. The server decides which positions are safe and available.'
                     : userStatus.due_count === 0 && !hasValidFocusPracticeIntent
                         ? 'No puzzles are due right now. Generate new puzzles to keep training.'
                         : sessionType !== 'standard'
@@ -1079,7 +1083,11 @@ export default function Puzzles() {
     // users here already says "Back rank mate", so printing "back_rank_mate"
     // made the two screens disagree mid-flow. Hoisted to a const so the visible
     // heading and its sr-only counterpart below can never drift apart.
-    const pageTitle = motifFilter ? `${formatMotifName(motifFilter)} Puzzles` : 'Daily Puzzles';
+    const pageTitle = hasValidFocusPracticeIntent
+        ? 'Focus practice'
+        : motifFilter
+            ? `${formatMotifName(motifFilter)} Puzzles`
+            : 'Daily Puzzles';
 
     // Every other account-dependent page (Dashboard, Library, Insights, Rating
     // Insights, Openings) swaps to this in place rather than rendering its
@@ -1125,14 +1133,16 @@ export default function Puzzles() {
                         </h1>
                         <div className={`${activeSessionId && currentPuzzle ? 'hidden lg:flex' : 'flex'} items-center gap-2 mb-3`}>
                             <span className="text-xs font-sans uppercase tracking-wider px-2 py-1 rounded-sm border border-primary/20 bg-primary/5 text-primary/80">
-                                {selectedModeLabel} {modeAvailabilityLabel}
+                                {presentationModeLabel} {presentationModeAvailabilityLabel}
                             </span>
                             {sessionType !== 'standard' && (
                                 <span className="text-xs font-sans text-primary/70">Switch to Standard to start sessions.</span>
                             )}
                         </div>
                         <p className={`${activeSessionId && currentPuzzle ? 'hidden lg:block' : ''} text-lg text-primary/70 font-sans`}>
-                            {motifFilter
+                            {hasValidFocusPracticeIntent
+                                ? 'Extra practice for the selected focus. The server decides whether positions are safe and available.'
+                                : motifFilter
                                 ? `Practice ${formatMotifName(motifFilter)} tactical patterns`
                                 : 'Tactical patterns from your own games.'}
                         </p>
@@ -1174,7 +1184,7 @@ export default function Puzzles() {
                                 onClick={handleStartSession}
                                 disabled={controlsDisabled || !userStatus || userStatus.puzzles_count === 0 || (userStatus.due_count === 0 && !hasValidFocusPracticeIntent) || sessionType !== 'standard'}
                                 title={startSessionDisabledReason ?? 'Start a new training session'}
-                                className={`px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-opacity km-focus-visible ${(controlsDisabled || !userStatus || userStatus.puzzles_count === 0 || (userStatus.due_count === 0 && !hasValidFocusPracticeIntent) || sessionType !== 'standard') ? 'km-interactive-disabled' : 'hover:opacity-90 cursor-pointer'}`}>
+                                className={`min-h-11 px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-opacity km-focus-visible ${(controlsDisabled || !userStatus || userStatus.puzzles_count === 0 || (userStatus.due_count === 0 && !hasValidFocusPracticeIntent) || sessionType !== 'standard') ? 'km-interactive-disabled' : 'hover:opacity-90 cursor-pointer'}`}>
                                 Start Session
                             </button>
                         )}
@@ -1220,7 +1230,13 @@ export default function Puzzles() {
                 {/* Mode Information Cards - full width below user status */}
                 {!activeSessionId && (
                     <>
-                        {sessionType === 'standard' ? (
+                        {hasValidFocusPracticeIntent ? (
+                            <div className="p-4 bg-primary/5 border border-primary/20 rounded-sm">
+                                <p className="text-sm text-primary/70 font-sans">
+                                    <strong className="font-medium">Focus practice</strong> gives you extra practice for the selected focus. The server decides whether positions are safe and available.
+                                </p>
+                            </div>
+                        ) : sessionType === 'standard' ? (
                             <div className="p-4 bg-primary/5 border border-primary/20 rounded-sm">
                                 <p className="text-sm text-primary/70 font-sans">
                                     <strong className="font-medium">Standard mode</strong> uses spaced repetition to help you master tactical patterns from your own games.
@@ -1299,6 +1315,13 @@ export default function Puzzles() {
                                     >
                                         Generate Puzzles
                                     </button>
+                                </>
+                            ) : userStatus.due_count === 0 && hasValidFocusPracticeIntent ? (
+                                <>
+                                    <h3 className="font-serif text-xl text-primary">Focus practice is ready</h3>
+                                    <p className="text-primary/70 font-sans">
+                                        Extra practice is available for the selected focus. The server decides which positions are safe and available.
+                                    </p>
                                 </>
                             ) : userStatus.due_count === 0 ? (
                                 <>
