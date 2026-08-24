@@ -478,6 +478,11 @@ export default function Puzzles() {
         setAttemptedLine([]);
         setClickFrom(null);
         clue.reset();
+        // The retry remains the same puzzle object, so the current-puzzle
+        // effect does not run. Restart here only after the failed review has
+        // persisted, which gives this fresh exposure a new elapsed origin and
+        // a full timed-session timeout window.
+        startPuzzleTimer();
         return true;
     };
     const puzzlesAvailable = puzzles.length > 0;

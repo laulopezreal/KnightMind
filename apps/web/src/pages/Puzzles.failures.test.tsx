@@ -24,6 +24,8 @@ let mockSearchParams = new URLSearchParams();
 let mockUsername = 'testplayer';
 let timedOut: (() => void) | null = null;
 let currentSessionReturn: UsePuzzleSessionReturn | null = null;
+let mockSessionType = 'standard';
+const { mockStartPuzzleTimer } = vi.hoisted(() => ({ mockStartPuzzleTimer: vi.fn() }));
 
 vi.mock('react-router-dom', () => ({
     useNavigate: () => vi.fn(),
@@ -39,7 +41,7 @@ vi.mock('../context/ChessUsernameContext', () => ({
 
 vi.mock('../context/PuzzleModeContext', () => ({
     usePuzzleMode: () => ({
-        sessionType: 'standard',
+        sessionType: mockSessionType,
         targetAccuracy: 80,
         setTargetAccuracy: vi.fn(),
         targetTimeMinutes: 10,
@@ -92,7 +94,7 @@ vi.mock('../hooks/usePuzzleInsights', () => ({
 
 vi.mock('../hooks/usePuzzleTimer', () => {
     const stub = {
-        startPuzzleTimer: () => { },
+        startPuzzleTimer: mockStartPuzzleTimer,
         startSessionTimer: () => { },
         cleanup: () => { },
         currentPuzzleTime: 5,
@@ -195,6 +197,8 @@ describe('Puzzles — honest failure handling', () => {
         mockUsername = 'testplayer';
         timedOut = null;
         currentSessionReturn = null;
+        mockSessionType = 'standard';
+        mockStartPuzzleTimer.mockClear();
         mockHandleReviewPuzzle.mockReset().mockResolvedValue(true);
         mockHandleCompleteSession.mockClear();
         mockSetCurrentIndex.mockClear();
@@ -455,6 +459,43 @@ describe('Puzzles — honest failure handling', () => {
             await waitFor(() => expect(screen.getByText('Correct! Excellent.')).toBeInTheDocument());
             expect(checkPuzzle).toHaveBeenCalledTimes(checkCallsBeforeRetry + 2);
             expect(mockHandleReviewPuzzle).toHaveBeenLastCalledWith('pass', undefined, 'e2e4');
+            expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(2);
+        });
+
+        it('restarts the timed exposure only after an ordinary failed review persists', async () => {
+            mockSessionType = 'timed';
+            const pendingFailReview = deferred<boolean>();
+            vi.mocked(checkPuzzle).mockResolvedValueOnce({ correct: false, result: 'fail' } as never);
+            mockHandleReviewPuzzle.mockReturnValueOnce(pendingFailReview.promise);
+            const user = userEvent.setup();
+            render(<Puzzles />);
+
+            await waitFor(() => expect(mockStartPuzzleTimer).toHaveBeenCalledTimes(1));
+            await typeAndCheck(user, 'e2e3');
+            await waitFor(() => expect(screen.getByText('Not this one — take another look.')).toBeInTheDocument());
+
+            await user.click(screen.getByRole('button', { name: /mark as failed/i }));
+            expect(mockHandleReviewPuzzle).toHaveBeenCalledWith('fail');
+            expect(mockStartPuzzleTimer).toHaveBeenCalledTimes(1);
+
+            pendingFailReview.resolve(true);
+            await waitFor(() => expect(mockStartPuzzleTimer.mock.calls.length).toBeGreaterThan(1));
+        });
+
+        it('restarts the timed exposure after a timeout retry and lets its new timeout own one fail', async () => {
+            mockSessionType = 'timed';
+            const user = userEvent.setup();
+            render(<Puzzles />);
+
+            await waitFor(() => expect(mockStartPuzzleTimer).toHaveBeenCalledTimes(1));
+            act(() => timedOut?.());
+            await waitFor(() => expect(mockHandleReviewPuzzle).toHaveBeenCalledWith('fail'));
+
+            await user.click(screen.getByRole('button', { name: /mark as failed/i }));
+            await waitFor(() => expect(mockStartPuzzleTimer.mock.calls.length).toBeGreaterThan(1));
+
+            act(() => timedOut?.());
+            await waitFor(() => expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(2));
             expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(2);
         });
 
