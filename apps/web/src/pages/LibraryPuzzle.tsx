@@ -1,5 +1,5 @@
 import { LOCALE } from '../utils/locale';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { AccessibleChessboard } from '../components/AccessibleChessboard';
 import { Chess } from 'chess.js';
@@ -147,9 +147,9 @@ export default function LibraryPuzzle() {
         resetPuzzleState();
     }
 
-    // The ref write stays in an effect: render must remain pure, and the solve
-    // clock only needs to start once the puzzle is actually on screen.
-    useEffect(() => {
+    // Render remains pure, but timer initialization must precede interaction
+    // with the newly committed puzzle so the first Reveal records its duration.
+    useLayoutEffect(() => {
         if (readyFor) solveStartRef.current = Date.now();
     }, [readyFor]);
 
