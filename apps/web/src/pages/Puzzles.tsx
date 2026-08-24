@@ -1807,6 +1807,9 @@ export default function Puzzles() {
                                             ).join('  ') || '…'
                                             : '…'}
                                     </p>
+                                    {lastFeedback && (
+                                        <p className="text-primary/80 font-sans text-sm mt-2 animate-teedin">{lastFeedback}</p>
+                                    )}
                                 </div>
                             )}
                         </div>

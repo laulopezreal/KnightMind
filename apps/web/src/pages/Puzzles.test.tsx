@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import Puzzles from './Puzzles';
-import { generatePuzzles } from '../api';
+import { generatePuzzles, revealPuzzle, reviewPuzzle, startSession } from '../api';
 import { setupMockLocalStorage } from '../test/helpers';
 
 const mockNavigate = vi.fn();
@@ -338,6 +338,93 @@ describe('Puzzles', () => {
         expect(mockStartFocusPractice).toHaveBeenCalledWith('testplayer', 'loose_piece_awareness', 5);
       });
     });
+
+    it('announces unchanged scheduling after a revealed Focus Practice review', async () => {
+      mockSearchParams = new URLSearchParams('mode=focus_practice&focus_cause=loose_piece_awareness');
+      mockGetUserStatus.mockResolvedValue({
+        games_count: 50,
+        puzzles_count: 20,
+        due_count: 0,
+        has_new_games: false,
+      });
+      mockStartFocusPractice.mockResolvedValue({
+        session_id: 'focus-feedback-session',
+        session_type: 'focus_practice',
+        focus: { cause: 'loose_piece_awareness', name: 'Loose pieces' },
+        requested_n: 5,
+        returned_count: 2,
+        puzzles: [
+          { id: 'focus-feedback-puzzle', fen: '8/8/8/8/8/8/8/8 w - - 0 1', side_to_move: 'white', best_move_uci: 'e2e4' },
+          { id: 'focus-feedback-puzzle-2', fen: '8/8/8/8/8/8/8/8 w - - 0 1', side_to_move: 'white', best_move_uci: 'd2d4' },
+        ],
+      });
+      vi.mocked(reviewPuzzle).mockResolvedValue({
+        result: 'fail',
+        review_context: 'focus_practice',
+        affects_scheduling: false,
+        next_due_at: '2026-08-25T00:00:00Z',
+        interval_days: 1,
+        ease_factor: 2.5,
+        feedback: 'Review recorded.',
+        puzzle_info: { fen: '8/8/8/8/8/8/8/8 w - - 0 1', best_move: 'e2e4', side_to_move: 'white', swing: 1 },
+        stats: { attempts: 1, pass_count: 0, fail_count: 1, last_reviewed_at: '2026-08-24T00:00:00Z', last_result: 'fail' },
+      });
+      vi.mocked(revealPuzzle).mockResolvedValue({ best_move_uci: 'e2e4', accept_moves_uci: ['e2e4'] });
+
+      render(<Puzzles />);
+
+      const start = await screen.findByRole('button', { name: 'Start Session' });
+      await act(async () => {
+        start.click();
+      });
+      const reveal = await screen.findByRole('button', { name: /reveal/i });
+      await act(async () => {
+        reveal.click();
+      });
+
+      const feedback = await screen.findByText('Practice recorded. Your normal review date is unchanged.');
+      expect(feedback.closest('[role="status"]')).toHaveAttribute('aria-live', 'polite');
+    });
+
+    it('does not show Focus Practice scheduling copy after an ordinary revealed review', async () => {
+      mockGetDuePuzzles.mockResolvedValue({
+        due_count: 1,
+        returned_count: 1,
+        now: new Date().toISOString(),
+        puzzles: [
+          { id: 'ordinary-feedback-puzzle', fen: '8/8/8/8/8/8/8/8 w - - 0 1', side_to_move: 'white', best_move_uci: 'e2e4' },
+        ],
+      });
+      vi.mocked(startSession).mockResolvedValue({
+        session_id: 'ordinary-feedback-session',
+        requested_n: 1,
+      });
+      vi.mocked(reviewPuzzle).mockResolvedValue({
+        result: 'fail',
+        next_due_at: '2026-08-25T00:00:00Z',
+        interval_days: 1,
+        ease_factor: 2.5,
+        feedback: 'Review recorded.',
+        puzzle_info: { fen: '8/8/8/8/8/8/8/8 w - - 0 1', best_move: 'e2e4', side_to_move: 'white', swing: 1 },
+        stats: { attempts: 1, pass_count: 0, fail_count: 1, last_reviewed_at: '2026-08-24T00:00:00Z', last_result: 'fail' },
+      });
+      vi.mocked(revealPuzzle).mockResolvedValue({ best_move_uci: 'e2e4', accept_moves_uci: ['e2e4'] });
+      /* The ordinary route must not inherit Focus Practice's scheduler copy. */
+      render(<Puzzles />);
+
+      const start = await screen.findByRole('button', { name: 'Start Session' });
+      await act(async () => {
+        start.click();
+      });
+      const reveal = await screen.findByRole('button', { name: /reveal/i });
+      await act(async () => {
+        reveal.click();
+      });
+
+      await waitFor(() => expect(reviewPuzzle).toHaveBeenCalled());
+      expect(screen.queryByText('Practice recorded. Your normal review date is unchanged.')).not.toBeInTheDocument();
+    });
+
 
     it('keeps ordinary due-zero sessions and malformed Focus Practice entry disabled', async () => {
       mockGetUserStatus.mockResolvedValue({
