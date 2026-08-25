@@ -76,6 +76,7 @@ services:
       # the API starts a second worker in-process, putting Stockfish back on
       # the request path -- the thing separating them was for.
       KNIGHTMIND_WORKER_EXTERNAL: "true"
+      KNIGHTMIND_RESOLUTION_GATE: "true"
       # Shared limiter state. The in-memory store keeps one window PER PROCESS,
       # so the effective limit multiplies by the worker count -- which is what
       # kept this service at `--workers 1`. Setting this is what makes raising
@@ -121,6 +122,7 @@ services:
       # 97, before the deploy's alembic run or an operator's psql.
       KNIGHTMIND_DB_POOL_SIZE: "2"
       KNIGHTMIND_DB_MAX_OVERFLOW: "8"
+      KNIGHTMIND_RESOLUTION_GATE: "true"
     # A job can be mid-analysis when a deploy lands. worker_main handles SIGTERM
     # to finish it; this gives it room to, rather than being killed at the
     # default 10s and left for crash recovery to reclaim after its lease expires.

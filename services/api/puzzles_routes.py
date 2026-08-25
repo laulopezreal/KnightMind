@@ -647,7 +647,7 @@ def create_daily_puzzle_session(
         stats = all_stats.get(p.id)
         resolved = is_resolved(stats)
         if stats and resolved:
-            p_dict["primary_motif"] = stats.primary_motif
+            p_dict["primary_motif"] = usable_motif(stats.primary_motif)
             p_dict["title"] = stats.title
         else:
             p_dict["primary_motif"] = None
@@ -918,7 +918,7 @@ def get_due_puzzles_endpoint(
                     # unlocks it, because a theme categorises the tactic while
                     # the nickname describes it.
                     "primary_motif": (
-                        stats.primary_motif
+                        usable_motif(stats.primary_motif)
                         if motif_is_visible(
                             resolved=due_resolved,
                             puzzle_motif=stats.primary_motif,
@@ -1547,7 +1547,7 @@ def list_puzzles(
                 # filtered browse shows the motif it was filtered by, and
                 # nothing else.
                 primary_motif=(
-                    stats.primary_motif
+                    usable_motif(stats.primary_motif)
                     if (
                         stats
                         and motif_is_visible(
@@ -1683,7 +1683,7 @@ def get_puzzle_detail(
             ply=puzzle.ply,
             resolved=resolved,
         ),
-        primary_motif=(stats.primary_motif if (stats and resolved) else None),
+        primary_motif=(usable_motif(stats.primary_motif) if (stats and resolved) else None),
         difficulty=_swing_to_difficulty(puzzle.swing),
         swing=puzzle.swing,
         fen=puzzle.fen,
@@ -1813,7 +1813,7 @@ def _diagnosis_response(
     return DiagnosisResponse(
         state=state,
         puzzle_id=puzzle_id,
-        primary_motif=row.primary_motif,
+        primary_motif=usable_motif(row.primary_motif),
         primary_cause=cause,
         primary_cause_label=CAUSE_LABELS.get(cause) if cause else None,
         secondary_causes=secondary,
