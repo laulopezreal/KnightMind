@@ -4,6 +4,8 @@ import Home from './Home';
 
 let mockUsername = '';
 const mockSetUsername = vi.fn((u: string) => { mockUsername = u; });
+let jobOnError: ((err: Error) => void) | undefined;
+let jobOnSuccess: (() => void | Promise<void>) | undefined;
 
 vi.mock('react-router-dom', () => ({
   Link: ({ children, to, ...props }: { children: React.ReactNode; to: string; [key: string]: unknown }) => (
@@ -29,7 +31,11 @@ vi.mock('../api/puzzles', () => ({
 }));
 
 vi.mock('../hooks/useJobPolling', () => ({
-  useJobPolling: () => ({ job: null, isPolling: false }),
+  useJobPolling: (_id: string | null, opts?: { onSuccess?: () => void | Promise<void>; onError?: (e: Error) => void }) => {
+    jobOnSuccess = opts?.onSuccess;
+    jobOnError = opts?.onError;
+    return { job: null, isPolling: false };
+  },
 }));
 
 vi.mock('../components/Modal', () => ({
@@ -49,6 +55,8 @@ describe('Home', () => {
     vi.resetAllMocks();
     mockUsername = '';
     mockSetUsername.mockImplementation((u: string) => { mockUsername = u; });
+    jobOnError = undefined;
+    jobOnSuccess = undefined;
 
     const api = await import('../api');
     (api.getImportStatus as ReturnType<typeof vi.fn>).mockResolvedValue({ last_imported_at: null, last_new_games: null });
@@ -365,6 +373,55 @@ describe('Home', () => {
       expect(
         await screen.findByText(/couldn't load your data right now/i),
       ).toBeInTheDocument();
+    });
+  });
+
+  describe('puzzle-generation stall recovery', () => {
+    it('renders honest copy, not "failed", for a stall error', async () => {
+      mockUsername = 'testplayer';
+      render(<Home />);
+
+      const stallError = new Error(
+        'Puzzle generation seems stuck. Check back in a minute; the job may still be running on the server.'
+      ) as Error & { isStall?: boolean };
+      stallError.isStall = true;
+      await act(async () => { jobOnError?.(stallError); });
+
+      expect(await screen.findByText(/Puzzle generation seems stuck/)).toBeInTheDocument();
+      expect(screen.queryByText(/Puzzle generation failed/)).not.toBeInTheDocument();
+    });
+
+    it('does not double the period in the puzzle-generation error copy', async () => {
+      mockUsername = 'testplayer';
+      render(<Home />);
+
+      // A real failure whose message already ends with a period.
+      await act(async () => { jobOnError?.(new Error('Something broke.')); });
+
+      expect(
+        await screen.findByText(/Something broke\. You can generate them manually from the Puzzles page\./)
+      ).toBeInTheDocument();
+      expect(screen.queryByText(/\.\./)).not.toBeInTheDocument();
+    });
+
+    it('lands on the celebration, not the failure banner, when the job completes after a stall', async () => {
+      mockUsername = 'testplayer';
+      render(<Home />);
+
+      // A stall surfaces first (honest copy, no terminal verdict), then the job
+      // completes server-side: the page must recover to the celebration rather
+      // than stay on the failure banner.
+      const stallError = new Error(
+        'Puzzle generation seems stuck. Check back in a minute; the job may still be running on the server.'
+      ) as Error & { isStall?: boolean };
+      stallError.isStall = true;
+      await act(async () => { jobOnError?.(stallError); });
+      expect(screen.getByText(/Puzzle generation seems stuck/)).toBeInTheDocument();
+
+      await act(async () => { await jobOnSuccess?.(); });
+
+      expect(screen.getByText('All Set!')).toBeInTheDocument();
+      expect(screen.queryByText(/Puzzle generation seems stuck/)).not.toBeInTheDocument();
     });
   });
 });
