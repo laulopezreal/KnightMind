@@ -160,7 +160,9 @@ class Job(Base):
     # All three nullable so pre-migration rows and jobs that were never observed
     # by a tab-aware client are represented without a backfill.
     client_id: Mapped[str | None] = mapped_column(String, nullable=True)
-    client_last_seen_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    client_last_seen_at: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True
+    )
     stall_reported_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 

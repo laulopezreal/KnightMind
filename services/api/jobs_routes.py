@@ -97,7 +97,10 @@ def get_job_status(
         else:
             # Same tab: throttle writes to avoid a DB write every 1-second poll.
             last = job.client_last_seen_at
-            if last is None or (now - last.replace(tzinfo=timezone.utc)) >= _CLIENT_SEEN_THROTTLE:
+            if (
+                last is None
+                or (now - last.replace(tzinfo=timezone.utc)) >= _CLIENT_SEEN_THROTTLE
+            ):
                 job.client_last_seen_at = now
                 db.commit()
 

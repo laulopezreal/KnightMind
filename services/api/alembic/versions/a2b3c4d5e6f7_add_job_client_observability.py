@@ -31,7 +31,9 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     op.add_column("jobs", sa.Column("client_id", sa.String(), nullable=True))
-    op.add_column("jobs", sa.Column("client_last_seen_at", sa.DateTime(), nullable=True))
+    op.add_column(
+        "jobs", sa.Column("client_last_seen_at", sa.DateTime(), nullable=True)
+    )
     op.add_column("jobs", sa.Column("stall_reported_at", sa.DateTime(), nullable=True))
 
 

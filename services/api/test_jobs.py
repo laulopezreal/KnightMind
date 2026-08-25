@@ -1217,7 +1217,9 @@ def test_get_job_status_throttles_writes_for_same_client(client, db_session):
     assert job.client_last_seen_at is not None
     # The stored value is still the original (within tolerance of a few ms for
     # commit overhead; just assert it was NOT bumped significantly).
-    diff = abs((job.client_last_seen_at.replace(tzinfo=timezone.utc) - recent).total_seconds())
+    diff = abs(
+        (job.client_last_seen_at.replace(tzinfo=timezone.utc) - recent).total_seconds()
+    )
     assert diff < 1.0, f"Expected throttled (no write), got diff={diff}s"
 
 
@@ -1273,7 +1275,9 @@ def test_stall_report_is_idempotent(client, db_session):
     from datetime import timezone
 
     old_stall = datetime(2026, 1, 1, tzinfo=timezone.utc)
-    job = Job(username="stall-idem", status=JobStatus.RUNNING, stall_reported_at=old_stall)
+    job = Job(
+        username="stall-idem", status=JobStatus.RUNNING, stall_reported_at=old_stall
+    )
     db_session.add(job)
     db_session.commit()
 
@@ -1295,7 +1299,9 @@ def test_stall_report_sets_client_id_if_provided(client, db_session):
     db_session.add(job)
     db_session.commit()
 
-    resp = client.post(f"/jobs/{job.id}/stall-report", headers={"X-Client-Id": "tab-stall"})
+    resp = client.post(
+        f"/jobs/{job.id}/stall-report", headers={"X-Client-Id": "tab-stall"}
+    )
     assert resp.status_code == 200
 
     db_session.expire_all()
@@ -1326,6 +1332,7 @@ def test_migration_applied_client_observability_columns_postgres():
 def test_single_alembic_head(db_session):
     """Sanity: there must be exactly ONE Alembic head in this branch."""
     import subprocess
+
     result = subprocess.run(
         ["uv", "run", "alembic", "heads"],
         capture_output=True,
@@ -1334,4 +1341,3 @@ def test_single_alembic_head(db_session):
     )
     heads = [line.strip() for line in result.stdout.splitlines() if line.strip()]
     assert len(heads) == 1, f"Expected 1 head, got: {heads}"
-
