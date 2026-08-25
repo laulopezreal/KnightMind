@@ -94,7 +94,13 @@ export default function Home() {
       setTimeout(() => navigate('/dashboard'), 3000);
     },
     onError: (err) => {
-      setActionStatus(`Puzzle generation failed: ${err.message}. You can generate them manually from the Puzzles page.`);
+      // The stall error is honest copy ("the job may still be running"), so it
+      // must not be framed as a definitive failure; real failures keep the
+      // "failed:" prefix. Either way, join the manual-hint sentence without
+      // doubling the trailing period.
+      const isStall = (err as Error & { isStall?: boolean }).isStall === true;
+      const lead = isStall ? err.message : `Puzzle generation failed: ${err.message}`;
+      setActionStatus(`${lead.replace(/\.\s*$/, '')}. You can generate them manually from the Puzzles page.`);
       setIsError(true);
       setOnboardingPhase('idle');
       setGeneratingJobId(null);

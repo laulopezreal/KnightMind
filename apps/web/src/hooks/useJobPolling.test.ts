@@ -261,10 +261,10 @@ describe('useJobPolling', () => {
       vi.useRealTimers();
     });
 
-    it('should error a fully frozen RUNNING job once stallTimeoutMs elapses', async () => {
+    it('should surface the stall error for a fully frozen RUNNING job only after a bounded set of unchanged re-checks', async () => {
       const onError = vi.fn();
       // Every field static (status/progress/message/updated_at/heartbeat_at): the
-      // RUNNING worker is genuinely stuck, so it MUST still error.
+      // RUNNING worker is genuinely stuck, so it MUST still surface.
       mockGetJobStatus.mockResolvedValue({
         status: 'running',
         message: 'In progress',
@@ -279,14 +279,23 @@ describe('useJobPolling', () => {
         onError,
       }));
 
+      // The stall window elapses. The client stops polling and starts the
+      // server re-check sequence, but must NOT declare a verdict yet: a single
+      // unchanged signature is not proof the worker is stuck.
       await act(async () => {
         await vi.advanceTimersByTimeAsync(5000);
       });
+      expect(onError).not.toHaveBeenCalled();
 
+      // Three unchanged re-checks (spaced by the cooldown) later, and only then
+      // does the stall surface.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(9000);
+      });
       expect(onError).toHaveBeenCalledTimes(1);
       expect(onError).toHaveBeenCalledWith(
         expect.objectContaining({
-          message: expect.stringContaining('has not made progress for 5 seconds'),
+          message: expect.stringContaining('Puzzle generation seems stuck'),
         })
       );
       expect(onError).toHaveBeenCalledWith(
@@ -294,10 +303,15 @@ describe('useJobPolling', () => {
           message: expect.stringContaining('may still be running on the server'),
         })
       );
-      // The message must not read like the job itself failed after a fixed time.
+      // The honest copy must not read like the job definitively failed or timed out.
       expect(onError).toHaveBeenCalledWith(
         expect.objectContaining({
           message: expect.not.stringContaining('timed out after'),
+        })
+      );
+      expect(onError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.not.stringContaining('Puzzle generation failed'),
         })
       );
 
@@ -305,12 +319,14 @@ describe('useJobPolling', () => {
       expect(result.current.job).toBeNull();
       expect(result.current.isPolling).toBe(false);
 
-      // Polling has stopped: no further requests after the stall error fired
-      const callsAtStall = mockGetJobStatus.mock.calls.length;
+      // Bounded re-checks, no hammering: exactly the 5 observation polls plus
+      // the 3 bounded re-checks fired, and nothing more afterwards.
+      const callsAtVerdict = mockGetJobStatus.mock.calls.length;
+      expect(callsAtVerdict).toBe(5 + 3);
       await act(async () => {
         await vi.advanceTimersByTimeAsync(10000);
       });
-      expect(mockGetJobStatus).toHaveBeenCalledTimes(callsAtStall);
+      expect(mockGetJobStatus).toHaveBeenCalledTimes(callsAtVerdict);
     });
 
     it('should NEVER error a queued job, no matter how long it waits behind the worker', async () => {
@@ -377,10 +393,11 @@ describe('useJobPolling', () => {
       });
       expect(onError).not.toHaveBeenCalled();
 
-      // 5s of frozen RUNNING after the transition -> stall fires now (and would
-      // NOT have, had the window still been counting from job creation).
+      // 5s of frozen RUNNING after the transition -> the stall fires (and would
+      // NOT have, had the window still been counting from job creation), then
+      // the three bounded re-checks confirm it before it surfaces.
       await act(async () => {
-        await vi.advanceTimersByTimeAsync(5000);
+        await vi.advanceTimersByTimeAsync(14_000);
       });
       expect(onError).toHaveBeenCalledTimes(1);
     });
@@ -480,14 +497,15 @@ describe('useJobPolling', () => {
       });
       expect(onError).not.toHaveBeenCalled();
 
-      // 5s after the last advance the stall fires.
+      // The stall fires 5s after the last advance (t=13s), then the three
+      // bounded re-checks confirm it (t=16s/19s/22s) before it surfaces.
       await act(async () => {
-        await vi.advanceTimersByTimeAsync(4000);
+        await vi.advanceTimersByTimeAsync(11_000);
       });
       expect(onError).toHaveBeenCalledTimes(1);
       expect(onError).toHaveBeenCalledWith(
         expect.objectContaining({
-          message: expect.stringContaining('has not made progress'),
+          message: expect.stringContaining('Puzzle generation seems stuck'),
         })
       );
     });
@@ -602,14 +620,140 @@ describe('useJobPolling', () => {
       });
       expect(onError).not.toHaveBeenCalled();
 
+      // The 90s window elapses, then the three bounded re-checks confirm the
+      // job is still frozen before the stall surfaces.
       await act(async () => {
-        await vi.advanceTimersByTimeAsync(1000);
+        await vi.advanceTimersByTimeAsync(10_000);
       });
       expect(onError).toHaveBeenCalledWith(
         expect.objectContaining({
-          message: expect.stringContaining('has not made progress for 90 seconds'),
+          message: expect.stringContaining('Puzzle generation seems stuck'),
         })
       );
+    });
+
+    it('should call onSuccess (not onError) when a stalled job is found succeeded on re-check', async () => {
+      const onError = vi.fn();
+      const onSuccess = vi.fn();
+      // The job stays RUNNING (unchanged) through the stall window, then is
+      // already succeeded by the time the client re-checks the server — exactly
+      // the incident: a backgrounded tab stopped observing a healthy long job
+      // that finished server-side.
+      let calls = 0;
+      mockGetJobStatus.mockImplementation(() => {
+        calls += 1;
+        return Promise.resolve(
+          calls >= 6
+            ? { status: 'succeeded', message: 'Done', progress: 100 }
+            : {
+                status: 'running',
+                message: 'Analyzing game 4 of 30',
+                progress: 12,
+                updated_at: '2026-01-01T00:00:00Z',
+                heartbeat_at: '2026-01-01T00:00:00Z',
+              }
+        );
+      });
+
+      const { result } = renderHook(() => useJobPolling('job-123', {
+        pollInterval: 1000,
+        stallTimeoutMs: 5000,
+        onError,
+        onSuccess,
+      }));
+
+      // Stall window elapses, then the single re-check finds `succeeded`.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5000 + 3000);
+      });
+
+      expect(onSuccess).toHaveBeenCalledTimes(1);
+      expect(onSuccess).toHaveBeenCalledWith(expect.objectContaining({ status: 'succeeded' }));
+      // The recovery path must NOT surface the stall error.
+      expect(onError).not.toHaveBeenCalled();
+      // Job resolved to succeeded and polling stops.
+      expect(result.current.job?.status).toBe('succeeded');
+    });
+
+    it('should surface the real error when a stalled job is found failed on re-check', async () => {
+      const onError = vi.fn();
+      let calls = 0;
+      mockGetJobStatus.mockImplementation(() => {
+        calls += 1;
+        return Promise.resolve(
+          calls >= 6
+            ? { status: 'failed', message: 'Stockfish crashed', error: 'Worker OOM' }
+            : {
+                status: 'running',
+                message: 'In progress',
+                progress: 5,
+                updated_at: '2026-01-01T00:00:00Z',
+                heartbeat_at: '2026-01-01T00:00:00Z',
+              }
+        );
+      });
+
+      renderHook(() => useJobPolling('job-123', {
+        pollInterval: 1000,
+        stallTimeoutMs: 5000,
+        onError,
+      }));
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5000 + 3000);
+      });
+
+      expect(onError).toHaveBeenCalledTimes(1);
+      expect(onError).toHaveBeenCalledWith(
+        expect.objectContaining({ message: 'Worker OOM' })
+      );
+    });
+
+    it('should resume polling when the job advanced while the client was stalled (transient gap)', async () => {
+      const onError = vi.fn();
+      let calls = 0;
+      mockGetJobStatus.mockImplementation(() => {
+        calls += 1;
+        // The re-check (call 6) observes the job has advanced since the last
+        // signature the client saw before the stall window closed.
+        return Promise.resolve(
+          calls >= 6
+            ? {
+                status: 'running',
+                message: 'Analyzing game 7 of 30',
+                progress: 21,
+                updated_at: '2026-01-01T00:00:00Z',
+                heartbeat_at: '2026-01-01T00:00:00Z',
+              }
+            : {
+                status: 'running',
+                message: 'Analyzing game 4 of 30',
+                progress: 12,
+                updated_at: '2026-01-01T00:00:00Z',
+                heartbeat_at: '2026-01-01T00:00:00Z',
+              }
+        );
+      });
+
+      const { result } = renderHook(() => useJobPolling('job-123', {
+        pollInterval: 1000,
+        stallTimeoutMs: 5000,
+        onError,
+      }));
+
+      // Stall fires, then the re-check sees forward progress again.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5000 + 3000);
+      });
+
+      expect(onError).not.toHaveBeenCalled();
+      expect(result.current.job?.progress).toBe(21);
+      // The poll loop is alive again: further polls keep firing.
+      const callsAfterResume = mockGetJobStatus.mock.calls.length;
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5000);
+      });
+      expect(mockGetJobStatus.mock.calls.length).toBeGreaterThan(callsAfterResume);
     });
   });
 });
