@@ -1134,3 +1134,210 @@ async def test_a_raising_followup_cannot_undo_a_succeeded_generation(
     db_session.expire_all()
     assert db_session.get(Job, job.id).status == JobStatus.SUCCEEDED
     assert db_session.get(Job, job.id).error_message is None
+
+
+# ---------------------------------------------------------------------------
+# Client-observability: X-Client-Id header tracking and stall-report endpoint
+# ---------------------------------------------------------------------------
+
+
+def test_get_job_status_response_includes_observability_fields(client, db_session):
+    """JobStatusResponse always includes client_id, client_last_seen_at, and
+    stall_reported_at — even when all three are NULL (pre-observation job)."""
+    job = Job(username="obs-null", status=JobStatus.RUNNING)
+    db_session.add(job)
+    db_session.commit()
+
+    data = client.get(f"/jobs/{job.id}").json()
+    assert "client_id" in data
+    assert "client_last_seen_at" in data
+    assert "stall_reported_at" in data
+    assert data["client_id"] is None
+    assert data["client_last_seen_at"] is None
+    assert data["stall_reported_at"] is None
+
+
+def test_get_job_status_first_sighting_sets_client_id(client, db_session):
+    """First X-Client-Id sighting writes client_id and client_last_seen_at."""
+    job = Job(username="obs-first", status=JobStatus.RUNNING)
+    db_session.add(job)
+    db_session.commit()
+
+    data = client.get(f"/jobs/{job.id}", headers={"X-Client-Id": "tab-abc"}).json()
+    assert data["client_id"] == "tab-abc"
+    assert data["client_last_seen_at"] is not None
+
+    db_session.expire_all()
+    job = db_session.get(Job, job.id)
+    assert job.client_id == "tab-abc"
+    assert job.client_last_seen_at is not None
+
+
+def test_get_job_status_new_tab_overwrites_client_id(client, db_session):
+    """A different client-id (new tab) overwrites the stored client_id."""
+    from datetime import timezone
+
+    old_seen = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    job = Job(
+        username="obs-newtab",
+        status=JobStatus.RUNNING,
+        client_id="tab-old",
+        client_last_seen_at=old_seen,
+    )
+    db_session.add(job)
+    db_session.commit()
+
+    data = client.get(f"/jobs/{job.id}", headers={"X-Client-Id": "tab-new"}).json()
+    assert data["client_id"] == "tab-new"
+    # client_last_seen_at should be updated to now (> old_seen)
+    new_seen_str = data["client_last_seen_at"]
+    assert new_seen_str is not None
+
+
+def test_get_job_status_throttles_writes_for_same_client(client, db_session):
+    """Same client-id within < 5 s does NOT update client_last_seen_at."""
+    from datetime import timezone
+
+    # Set client_last_seen_at to "just now" so the throttle kicks in.
+    recent = datetime.now(timezone.utc)
+    job = Job(
+        username="obs-throttle",
+        status=JobStatus.RUNNING,
+        client_id="tab-same",
+        client_last_seen_at=recent,
+    )
+    db_session.add(job)
+    db_session.commit()
+
+    client.get(f"/jobs/{job.id}", headers={"X-Client-Id": "tab-same"})
+
+    db_session.expire_all()
+    job = db_session.get(Job, job.id)
+    # Should NOT have moved (throttled).
+    assert job.client_last_seen_at is not None
+    # The stored value is still the original (within tolerance of a few ms for
+    # commit overhead; just assert it was NOT bumped significantly).
+    diff = abs(
+        (job.client_last_seen_at.replace(tzinfo=timezone.utc) - recent).total_seconds()
+    )
+    assert diff < 1.0, f"Expected throttled (no write), got diff={diff}s"
+
+
+def test_get_job_status_no_header_does_not_write(client, db_session):
+    """Request without X-Client-Id leaves client columns untouched."""
+    job = Job(username="obs-noheader", status=JobStatus.RUNNING)
+    db_session.add(job)
+    db_session.commit()
+
+    client.get(f"/jobs/{job.id}")  # no header
+
+    db_session.expire_all()
+    job = db_session.get(Job, job.id)
+    assert job.client_id is None
+    assert job.client_last_seen_at is None
+
+
+def test_get_job_status_does_not_write_for_terminal_job(client, db_session):
+    """client_last_seen_at is NOT updated for a SUCCEEDED/FAILED/CANCELED job."""
+    job = Job(username="obs-terminal", status=JobStatus.SUCCEEDED)
+    db_session.add(job)
+    db_session.commit()
+
+    client.get(f"/jobs/{job.id}", headers={"X-Client-Id": "tab-late"})
+
+    db_session.expire_all()
+    job = db_session.get(Job, job.id)
+    assert job.client_id is None
+    assert job.client_last_seen_at is None
+
+
+def test_stall_report_sets_stall_reported_at(client, db_session):
+    """POST /jobs/{id}/stall-report marks stall_reported_at and returns status."""
+    job = Job(username="stall-mark", status=JobStatus.RUNNING)
+    db_session.add(job)
+    db_session.commit()
+
+    resp = client.post(f"/jobs/{job.id}/stall-report")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["stall_reported_at"] is not None
+    # Should NOT change job lifecycle.
+    assert data["status"] == JobStatus.RUNNING
+
+    db_session.expire_all()
+    job = db_session.get(Job, job.id)
+    assert job.stall_reported_at is not None
+    assert job.status == JobStatus.RUNNING
+
+
+def test_stall_report_is_idempotent(client, db_session):
+    """Re-posting stall-report just refreshes the timestamp; no error."""
+    from datetime import timezone
+
+    old_stall = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    job = Job(
+        username="stall-idem", status=JobStatus.RUNNING, stall_reported_at=old_stall
+    )
+    db_session.add(job)
+    db_session.commit()
+
+    resp = client.post(f"/jobs/{job.id}/stall-report")
+    assert resp.status_code == 200
+    data = resp.json()
+    # stall_reported_at must be refreshed (later than old_stall)
+    assert data["stall_reported_at"] is not None
+    new_stall = datetime.fromisoformat(data["stall_reported_at"])
+    # Allow for serialisation without tzinfo
+    if new_stall.tzinfo is None:
+        new_stall = new_stall.replace(tzinfo=timezone.utc)
+    assert new_stall > old_stall
+
+
+def test_stall_report_sets_client_id_if_provided(client, db_session):
+    """X-Client-Id on stall-report is stored as client_id."""
+    job = Job(username="stall-cid", status=JobStatus.RUNNING)
+    db_session.add(job)
+    db_session.commit()
+
+    resp = client.post(
+        f"/jobs/{job.id}/stall-report", headers={"X-Client-Id": "tab-stall"}
+    )
+    assert resp.status_code == 200
+
+    db_session.expire_all()
+    assert db_session.get(Job, job.id).client_id == "tab-stall"
+
+
+def test_stall_report_not_found(client):
+    """Unknown job id returns 404."""
+    resp = client.post("/jobs/no-such-job/stall-report")
+    assert resp.status_code == 404
+
+
+@pytest.mark.postgres
+def test_migration_applied_client_observability_columns_postgres():
+    """Migration smoke: after `alembic upgrade head`, the real Postgres jobs
+    table has the three client-observability columns added by this migration."""
+    import os
+
+    from sqlalchemy import inspect
+
+    pg_engine = create_engine(os.environ["KNIGHTMIND_TEST_POSTGRES_URL"])
+    cols = {c["name"] for c in inspect(pg_engine).get_columns("jobs")}
+    assert "client_id" in cols
+    assert "client_last_seen_at" in cols
+    assert "stall_reported_at" in cols
+
+
+def test_single_alembic_head(db_session):
+    """Sanity: there must be exactly ONE Alembic head in this branch."""
+    import subprocess
+
+    result = subprocess.run(
+        ["uv", "run", "alembic", "heads"],
+        capture_output=True,
+        text=True,
+        cwd=os.path.dirname(os.path.abspath(__file__)),
+    )
+    heads = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    assert len(heads) == 1, f"Expected 1 head, got: {heads}"
