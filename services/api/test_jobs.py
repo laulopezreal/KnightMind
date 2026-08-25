@@ -1337,7 +1337,7 @@ def test_single_alembic_head(db_session):
         ["uv", "run", "alembic", "heads"],
         capture_output=True,
         text=True,
-        cwd="/home/lauureal/.hermes/kanban/boards/knightmind/workspaces/job-client-observability-20260825/services/api",
+        cwd=os.path.dirname(os.path.abspath(__file__)),
     )
     heads = [line.strip() for line in result.stdout.splitlines() if line.strip()]
     assert len(heads) == 1, f"Expected 1 head, got: {heads}"
