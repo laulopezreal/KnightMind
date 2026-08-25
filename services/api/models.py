@@ -154,6 +154,16 @@ class Job(Base):
     # Nullable so pre-migration rows exist as NULL; recovery falls back to
     # updated_at/created_at for those.
     heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Client-observability columns: record which browser tab last polled this
+    # job and when, and whether the tab's stall detector ever fired. These are
+    # purely additive observability markers — they do not affect job lifecycle.
+    # All three nullable so pre-migration rows and jobs that were never observed
+    # by a tab-aware client are represented without a backfill.
+    client_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    client_last_seen_at: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True
+    )
+    stall_reported_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class FenEvalCache(Base):

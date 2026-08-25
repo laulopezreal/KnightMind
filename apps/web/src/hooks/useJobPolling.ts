@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { getJobStatus, type JobStatusResponse } from '../api';
+import { getJobStatus, reportJobStall, type JobStatusResponse } from '../api';
 
 interface JobPollingOptions {
     pollInterval?: number;
@@ -109,6 +109,10 @@ export function useJobPolling(jobId: string | null, options: JobPollingOptions =
         const surfaceStallError = () => {
             clearTimeout(stallTimerId);
             clearTimeout(stallRecheckId);
+            // Fire-and-forget observability: tell the server the stall detector
+            // fired so the incident is diagnosable from the job row alone.
+            // Swallow errors — this must never affect the UI or the error surfaced.
+            reportJobStall(jobId).catch(() => undefined);
             setJob(null);
             const err = new Error(
                 'Puzzle generation seems stuck. Check back in a minute; the job may still be running on the server.'
