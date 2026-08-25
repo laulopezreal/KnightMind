@@ -1,4 +1,5 @@
 import { request } from './core';
+import { TAB_CLIENT_ID } from './clientId';
 
 export interface HealthResponse {
     ok: boolean;
@@ -48,6 +49,12 @@ export interface JobStatusResponse {
     heartbeat_at?: string;
     result?: unknown;
     error?: string;
+    /** Which browser tab last polled this job (set by the server from X-Client-Id). */
+    client_id?: string | null;
+    /** When that tab last sent X-Client-Id to GET /jobs/{id}. */
+    client_last_seen_at?: string | null;
+    /** When the tab's stall detector reported a stall via POST /jobs/{id}/stall-report. */
+    stall_reported_at?: string | null;
 }
 
 export interface OpsStatusResponse {
@@ -115,14 +122,27 @@ export async function getStorageReport(username?: string): Promise<StorageReport
     return await request<StorageReportResponse>(`/ops/storage/report${suffix ? `?${suffix}` : ''}`);
 }
 
-/** Fetches current status of a background job. */
+/** Fetches current status of a background job. Sends X-Client-Id so the server
+ *  can record which tab is observing and when (client-observability). */
 export async function getJobStatus(jobId: string): Promise<JobStatusResponse> {
-    return await request<JobStatusResponse>(`/jobs/${jobId}`);
+    return await request<JobStatusResponse>(`/jobs/${jobId}`, {
+        headers: { 'X-Client-Id': TAB_CLIENT_ID },
+    });
 }
 
 /** Cancels a queued or running job. */
 export async function cancelJob(jobId: string): Promise<JobStatusResponse> {
     return await request<JobStatusResponse>(`/jobs/${jobId}/cancel`, {
         method: 'POST',
+    });
+}
+
+/** Fire-and-forget: tells the server that this tab's stall detector fired.
+ *  Pure observability — does not change job lifecycle. Errors are intentionally
+ *  swallowed by the caller (useJobPolling) so this never affects the UI. */
+export async function reportJobStall(jobId: string): Promise<JobStatusResponse> {
+    return await request<JobStatusResponse>(`/jobs/${jobId}/stall-report`, {
+        method: 'POST',
+        headers: { 'X-Client-Id': TAB_CLIENT_ID },
     });
 }

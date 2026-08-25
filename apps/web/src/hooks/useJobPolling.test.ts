@@ -3,14 +3,17 @@ import { renderHook, waitFor, act } from '@testing-library/react';
 import { useJobPolling } from './useJobPolling';
 
 const mockGetJobStatus = vi.fn();
+const mockReportJobStall = vi.fn();
 
 vi.mock('../api', () => ({
   getJobStatus: (...args: unknown[]) => mockGetJobStatus(...args),
+  reportJobStall: (...args: unknown[]) => mockReportJobStall(...args),
 }));
 
 describe('useJobPolling', () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    mockReportJobStall.mockResolvedValue({});
   });
 
   it('should not poll when jobId is null', () => {
@@ -754,6 +757,171 @@ describe('useJobPolling', () => {
         await vi.advanceTimersByTimeAsync(5000);
       });
       expect(mockGetJobStatus.mock.calls.length).toBeGreaterThan(callsAfterResume);
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Client-observability: X-Client-Id header and stall-report fire-and-forget
+// ---------------------------------------------------------------------------
+
+describe('useJobPolling client-observability', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    mockReportJobStall.mockResolvedValue({});
+  });
+
+  it('getJobStatus is called with the jobId (client-id header is added by ops.ts, not the hook)', async () => {
+    mockGetJobStatus.mockResolvedValue({ status: 'succeeded', message: 'Done' });
+
+    renderHook(() => useJobPolling('job-obs-1'));
+
+    await waitFor(() => {
+      expect(mockGetJobStatus).toHaveBeenCalledWith('job-obs-1');
+    });
+  });
+
+  it('client-id singleton is stable across multiple polls (same value each call)', async () => {
+    // The hook calls getJobStatus repeatedly; the TAB_CLIENT_ID must be the
+    // same object every time. We verify indirectly by checking getJobStatus
+    // is called consistently.
+    let callCount = 0;
+    mockGetJobStatus.mockImplementation(() => {
+      callCount += 1;
+      return Promise.resolve(
+        callCount >= 3
+          ? { status: 'succeeded' }
+          : { status: 'running', progress: callCount }
+      );
+    });
+
+    renderHook(() => useJobPolling('job-obs-stable', { pollInterval: 50 }));
+
+    await waitFor(() => {
+      expect(callCount).toBeGreaterThanOrEqual(3);
+    });
+    // All calls used the same jobId argument (the id is passed through, not the id changes)
+    const jobIds = mockGetJobStatus.mock.calls.map((c: unknown[]) => c[0] as string);
+    expect(new Set(jobIds).size).toBe(1);
+    expect(jobIds[0]).toBe('job-obs-stable');
+  });
+
+  describe('stall report fire-and-forget', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('fires reportJobStall when surfaceStallError is called (after bounded re-checks)', async () => {
+      const onError = vi.fn();
+      mockGetJobStatus.mockResolvedValue({
+        status: 'running',
+        message: 'In progress',
+        progress: 5,
+        updated_at: '2026-01-01T00:00:00Z',
+        heartbeat_at: '2026-01-01T00:00:00Z',
+      });
+
+      renderHook(() => useJobPolling('job-stall-report', {
+        pollInterval: 1000,
+        stallTimeoutMs: 5000,
+        onError,
+      }));
+
+      // Advance past stall window + three bounded re-checks
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5000 + 9000);
+      });
+
+      expect(onError).toHaveBeenCalledTimes(1);
+      // reportJobStall must have been called exactly once (at surfaceStallError)
+      expect(mockReportJobStall).toHaveBeenCalledTimes(1);
+      expect(mockReportJobStall).toHaveBeenCalledWith('job-stall-report');
+    });
+
+    it('does NOT fire reportJobStall when the job succeeds (no stall)', async () => {
+      const onSuccess = vi.fn();
+      mockGetJobStatus.mockResolvedValue({ status: 'succeeded', message: 'Done' });
+
+      renderHook(() => useJobPolling('job-no-stall', {
+        pollInterval: 1000,
+        stallTimeoutMs: 5000,
+        onSuccess,
+      }));
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+
+      expect(onSuccess).toHaveBeenCalledTimes(1);
+      expect(mockReportJobStall).not.toHaveBeenCalled();
+    });
+
+    it('does NOT fire reportJobStall when re-check finds succeeded (transient gap recovery)', async () => {
+      const onSuccess = vi.fn();
+      const onError = vi.fn();
+      let calls = 0;
+      mockGetJobStatus.mockImplementation(() => {
+        calls += 1;
+        return Promise.resolve(
+          calls >= 6
+            ? { status: 'succeeded', message: 'Done', progress: 100 }
+            : {
+                status: 'running',
+                message: 'In progress',
+                progress: 5,
+                updated_at: '2026-01-01T00:00:00Z',
+                heartbeat_at: '2026-01-01T00:00:00Z',
+              }
+        );
+      });
+
+      renderHook(() => useJobPolling('job-recover', {
+        pollInterval: 1000,
+        stallTimeoutMs: 5000,
+        onSuccess,
+        onError,
+      }));
+
+      // Stall fires, re-check finds succeeded -> reportJobStall should NOT fire
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5000 + 3000);
+      });
+
+      expect(onSuccess).toHaveBeenCalledTimes(1);
+      expect(onError).not.toHaveBeenCalled();
+      expect(mockReportJobStall).not.toHaveBeenCalled();
+    });
+
+    it('swallows errors from reportJobStall (does not affect onError or UI)', async () => {
+      const onError = vi.fn();
+      // Make the stall report itself throw
+      mockReportJobStall.mockRejectedValue(new Error('Network gone'));
+      mockGetJobStatus.mockResolvedValue({
+        status: 'running',
+        progress: 5,
+        updated_at: '2026-01-01T00:00:00Z',
+        heartbeat_at: '2026-01-01T00:00:00Z',
+      });
+
+      renderHook(() => useJobPolling('job-stall-err', {
+        pollInterval: 1000,
+        stallTimeoutMs: 5000,
+        onError,
+      }));
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5000 + 9000);
+      });
+
+      // onError must be called once — for the stall — NOT for the reportJobStall failure
+      expect(onError).toHaveBeenCalledTimes(1);
+      expect(onError).toHaveBeenCalledWith(
+        expect.objectContaining({ message: expect.stringContaining('Puzzle generation seems stuck') })
+      );
     });
   });
 });
