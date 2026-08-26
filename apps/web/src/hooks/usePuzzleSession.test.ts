@@ -618,6 +618,41 @@ describe('usePuzzleSession', () => {
         expect(result.current.streak).toBe(0);
     });
 
+    it('folds the fresh server stats back into the reviewed queue item (#Y2: stale "0/0")', async () => {
+        const opts = makeOpts({ activeSessionId: 's1' });
+        const { result } = renderHook(() => usePuzzleSession(opts));
+
+        act(() => {
+            result.current.setPuzzles([mockPuzzle, mockPuzzle2]);
+        });
+
+        mockedReviewPuzzle.mockResolvedValue(makeReviewResponse({
+            next_due_at: '2025-03-01',
+            stats: {
+                attempts: 5,
+                pass_count: 3,
+                fail_count: 2,
+                last_reviewed_at: '2025-02-01T10:00:00Z',
+                last_result: 'pass',
+            },
+        }));
+
+        await act(async () => {
+            await result.current.handleReviewPuzzle('pass');
+        });
+
+        // The reviewed puzzle carries the server's post-review stats, so the
+        // post-solve stats box can't render the stale pre-attempt numbers.
+        const reviewed = result.current.puzzles.find(p => p.id === mockPuzzle.id)!;
+        expect(reviewed.attempts).toBe(5);
+        expect(reviewed.pass_count).toBe(3);
+        expect(reviewed.fail_count).toBe(2);
+        expect(reviewed.next_due_at).toBe('2025-03-01');
+        // Only the reviewed item changes.
+        const other = result.current.puzzles.find(p => p.id === mockPuzzle2.id)!;
+        expect(other.attempts).toBeUndefined();
+    });
+
     it('sends a client_review_id idempotency key with the review', async () => {
         const opts = makeOpts({ activeSessionId: 's1' });
         const { result } = renderHook(() => usePuzzleSession(opts));

@@ -468,6 +468,26 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
 
             setPerformanceHistory(prev => [...prev, { time: Date.now(), result: effectiveResult }]);
 
+            // Fold the fresh server stats back into the queue item. The scored
+            // /puzzles/due payload was fetched before this attempt, so the
+            // post-solve stats box otherwise renders the STALE numbers — a
+            // first-attempt puzzle showed "Puzzle Stats: 0/0" directly under
+            // "Recorded." Keyed by id: harmless if the user already moved on.
+            const reviewedPuzzleId = currentPuzzle.id;
+            if (response.stats) {
+                setPuzzles(prev => prev.map(p => p.id === reviewedPuzzleId
+                    ? {
+                        ...p,
+                        attempts: response.stats.attempts,
+                        pass_count: response.stats.pass_count,
+                        fail_count: response.stats.fail_count,
+                        last_reviewed_at: response.stats.last_reviewed_at,
+                        last_result: response.stats.last_result,
+                        next_due_at: response.next_due_at,
+                    }
+                    : p));
+            }
+
             const effectiveStreak = effectiveResult === 'pass' ? streak + 1 : 0;
             checkAchievements({ streak: effectiveStreak, currentPuzzleTime: timer.currentPuzzleTime });
 
