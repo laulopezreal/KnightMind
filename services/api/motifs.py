@@ -10,6 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from services.api.analytics_confidence import MIN_ATTEMPTS_FOR_MOTIF_RANK
+from services.api.diagnosis.clusters import usable_motif
 from services.api.models import PuzzleStats
 
 MotifRank = Literal["needs_work", "learning", "mastered"]
@@ -91,7 +92,16 @@ def get_user_motif_performance(db: Session, username: str) -> MotifPerformanceRe
 
     motifs = []
     for row in results:
-        motif_name = row.primary_motif
+        # "blunder" is the placeholder classification assign_primary_motif
+        # falls back to when no tactic was identified — a row with no motif,
+        # not a pattern one can master. The identity design (step 7, #409)
+        # already strips it from every puzzle payload via usable_motif();
+        # this aggregation is the same contract at analytics grain. Without
+        # the filter it surfaces as the user's #1 "Weak Area", which is
+        # exactly the label the design retires.
+        motif_name = usable_motif(row.primary_motif)
+        if motif_name is None:
+            continue
         total = row.total_puzzles
         passed = row.passed or 0
         attempts = row.attempts or 0
