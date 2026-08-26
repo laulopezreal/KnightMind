@@ -63,12 +63,27 @@ while IFS= read -r network_id; do
   done < <(docker network inspect -f '{{range .IPAM.Config}}{{if .Subnet}}{{println .Subnet}}{{end}}{{end}}' "$network_id" 2>/dev/null || true)
 done < <(docker network ls -q 2>/dev/null || true)
 
-# Also discover from live Linux bridge addresses, catching bridges whose Docker
-# metadata is absent but interface remains.
-while IFS= read -r cidr; do
-  [ -n "$cidr" ] || continue
-  SUBNETS["$cidr"]=1
-done < <(ip -o -4 addr show type bridge 2>/dev/null | awk '{print $4}' | python3 -c '
+# Discover the real bridge device names FIRST. `ip -o link show type bridge`
+# is the reliable filter; `ip -o -4 addr show type bridge` is NOT on this
+# iproute2 — it returns every interface's addresses (lo, enp8s0, tailscale0
+# included), which would add throw-routes for the host's public IP, the
+# Tailscale IP and loopback into table 52.
+while IFS= read -r bridge; do
+  [ -n "$bridge" ] || continue
+  BRIDGES["$bridge"]=1
+done < <(ip -o link show type bridge 2>/dev/null | awk -F': ' '{print $2}' | cut -d'@' -f1)
+
+# Then read each real bridge's own subnet, catching bridges whose Docker
+# metadata is absent but the interface remains. Only actual bridge devices
+# are queried, so table 52 never sees a non-Docker address.
+for bridge in "${!BRIDGES[@]}"; do
+  if ! ip link show "$bridge" >/dev/null 2>&1; then
+    continue
+  fi
+  while IFS= read -r cidr; do
+    [ -n "$cidr" ] || continue
+    SUBNETS["$cidr"]=1
+  done < <(ip -o -4 addr show dev "$bridge" 2>/dev/null | awk '{print $4}' | python3 -c '
 import ipaddress, sys
 seen=set()
 for line in sys.stdin:
@@ -83,11 +98,7 @@ for line in sys.stdin:
         seen.add(net)
         print(net)
 ')
-
-while IFS= read -r bridge; do
-  [ -n "$bridge" ] || continue
-  BRIDGES["$bridge"]=1
-done < <(ip -o link show type bridge 2>/dev/null | awk -F': ' '{print $2}' | cut -d'@' -f1)
+done
 
 for subnet in "${!SUBNETS[@]}"; do
   ip route replace throw "$subnet" table 52

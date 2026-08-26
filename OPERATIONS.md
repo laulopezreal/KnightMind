@@ -506,6 +506,57 @@ helper on every tailscaled start or restart. That fix only applies once the
 unit file is reinstalled — the install block above must be re-run after
 pulling it.
 
+### Recurrence on 2026-08-26: tailscale rebuilt routing in place, and a heal timer now guards it
+
+On 2026-08-26 the exact symptom recurred even though the unit had run
+successfully at boot (status 0/SUCCESS on 2026-08-20). Tailscale rebuilt its
+routing **in place** — policy rule `5270: from all lookup 52` stayed, table 52
+was rewritten to only `default dev tailscale0`, and both the throw-routes and
+the `iif <bridge> lookup main` rules vanished — with **no tailscaled restart**
+to re-trigger the unit. Host -> container traffic hung again (Caddy ->
+`127.0.0.1:8000` -> docker-proxy -> `172.18.0.4`), exactly like 2026-08-12.
+
+The fix adds a periodic re-assertion layer on top of the existing oneshot, so a
+silent in-place rebuild is repaired within the timer interval instead of
+waiting for someone to notice:
+
+- `/home/lauureal/apps/knightmind/deploy/tailscale-docker-route-exceptions-heal.service` —
+  oneshot that runs the same idempotent script.
+- `/home/lauureal/apps/knightmind/deploy/tailscale-docker-route-exceptions-heal.timer` —
+  every 2 minutes (`OnCalendar=*:0/2`, `OnBootSec=1min`).
+
+Install once as root:
+
+```bash
+sudo cp /home/lauureal/apps/knightmind/deploy/tailscale-docker-route-exceptions-heal.service /etc/systemd/system/
+sudo cp /home/lauureal/apps/knightmind/deploy/tailscale-docker-route-exceptions-heal.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now tailscale-docker-route-exceptions-heal.timer
+```
+
+Verify the cadence:
+
+```bash
+systemctl list-timers tailscale-docker-route-exceptions-heal.timer --no-pager
+systemctl status tailscale-docker-route-exceptions-heal.timer --no-pager -l
+```
+
+Also fixed on 2026-08-26: the script discovered bridge subnets via
+`ip -o -4 addr show type bridge`, which on this iproute2 returns **every**
+interface's addresses (lo, enp8s0, tailscale0 included), not just bridges. That
+added throw-routes for the host public IP, the Tailscale IP and loopback into
+table 52. The script now builds the real bridge-name list first
+(`ip -o link show type bridge`) and reads each bridge's own subnet, so table 52
+only ever receives Docker-bridge throws. Stray throws added by the older
+script are not auto-removed by `ip route replace`; delete them once after
+deploying the fixed script:
+
+```bash
+ip route del throw 65.108.67.53 table 52 2>/dev/null || true
+ip route del throw 100.67.182.77 table 52 2>/dev/null || true
+ip route del throw 127.0.0.0/8 table 52 2>/dev/null || true
+```
+
 Manual one-shot repair is only the fallback if the service is missing or inactive:
 
 ```bash
