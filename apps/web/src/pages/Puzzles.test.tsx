@@ -241,6 +241,38 @@ describe('Puzzles', () => {
     });
   });
 
+  // Regression tests for #411: motif ratios must be internally consistent.
+  // `passed` counts passing ATTEMPTS; dividing it by `total_puzzles` rendered
+  // impossible ratios like "50/16 correct — 34%" on live production data.
+  describe('Weak Areas ratio arithmetic', () => {
+    it('renders passed/attempts (never passed/total_puzzles) and only the weakest motifs', async () => {
+      mockGetMotifPerformance.mockResolvedValue({
+        motifs: [
+          { name: 'pin', total_puzzles: 16, passed: 50, accuracy: 50 / 145, rank: 'needs_work', attempts: 145, insufficient_data: false },
+          { name: 'fork', total_puzzles: 3, passed: 3, accuracy: 0.5, rank: 'needs_work', attempts: 6, insufficient_data: false },
+          // needs_work but NOT in weakest_motifs: must not render in Weak Areas.
+          { name: 'back_rank', total_puzzles: 2, passed: 2, accuracy: 0.66, rank: 'needs_work', attempts: 3, insufficient_data: true },
+        ],
+        weakest_motifs: ['pin', 'fork'],
+      });
+
+      render(<Puzzles />);
+
+      // Both render sites (Weak Areas + Pattern Mastery) use passed/attempts.
+      const pinRatios = await screen.findAllByText(/50\/145 attempts correct/);
+      expect(pinRatios.length).toBeGreaterThanOrEqual(1);
+      expect(screen.queryByText(/50\/16/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/3\/2\b/)).not.toBeInTheDocument();
+
+      // Weak Areas shows only the API's reliable weakest picks; back_rank
+      // (insufficient data) appears in Pattern Mastery but not as a weakness.
+      const weakSection = screen.getByText('Your Weak Areas').closest('section')!;
+      expect(within(weakSection).getByText('Pin')).toBeInTheDocument();
+      expect(within(weakSection).getByText('Fork')).toBeInTheDocument();
+      expect(within(weakSection).queryByText('Back Rank')).not.toBeInTheDocument();
+    });
+  });
+
   // Regression test for issue #145: games imported + puzzles exist + generation unavailable
   describe('Generate disabled state copy', () => {
     it('shows context-aware copy and button label when games imported, puzzles exist, and no new games', async () => {

@@ -215,7 +215,11 @@ export function MistakeDiagnosisCard({
                 )}
 
                 {phase && (
-                    <p className="font-sans text-xs text-primary/70 capitalize">{phase}</p>
+                    <p className="font-sans text-xs text-primary/70">
+                        {/* Labelled, not a bare capitalized word: an orphaned
+                            "Opening" at the card's foot read as debris. */}
+                        Game phase: <span className="capitalize">{phase}</span>
+                    </p>
                 )}
             </div>
         </Shell>

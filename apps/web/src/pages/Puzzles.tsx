@@ -556,6 +556,11 @@ export default function Puzzles() {
         // "loading or generating" to wait on — don't show a start reason at all.
         activeSessionId
             ? null
+            : sessionState === 'completed'
+                // Post-summary the old branch fell through to "Please wait for
+                // the current task to finish" — there is no task; the session
+                // is done and the summary card below has the real CTA.
+                ? 'Session finished — your summary is below.'
             : controlsDisabled
                 ? 'Please wait for the current task to finish.'
                 : !userStatus
@@ -929,8 +934,10 @@ export default function Puzzles() {
                 }
             } catch {
                 // A failed request must not cost the rung: let the next press
-                // try the ladder rather than stranding the user.
+                // try the ladder rather than stranding the user. But say so --
+                // a silent no-op reads as a dead button on flaky connections.
                 setMotifHintAsked(false);
+                setActionError("We couldn't fetch that hint — check your connection and tap Hint again.");
                 return;
             }
         }
@@ -1493,13 +1500,22 @@ export default function Puzzles() {
                     </h3>
                     <div className="space-y-2">
                         {motifPerformance.motifs
-                            .filter(m => m.rank === 'needs_work')
+                            // weakest_motifs, not every needs_work row: the API
+                            // already picks the bottom 2 reliable weaknesses
+                            // (insufficient-data motifs excluded). Rendering the
+                            // full needs_work list duplicated Pattern Mastery
+                            // below almost row-for-row on the same page.
+                            .filter(m => motifPerformance.weakest_motifs.includes(m.name))
                             .map(motif => (
                                 <div key={motif.name} className="flex justify-between items-center p-3 bg-negative-soft rounded-sm">
                                     <div>
                                         <span className="font-serif text-primary">{formatMotifName(motif.name)}</span>
                                         <span className="text-xs text-primary/70 ml-2">
-                                            {motif.passed}/{motif.total_puzzles} correct
+                                            {/* passed/attempts, matching the % beside it.
+                                                passed counts passing ATTEMPTS, so dividing
+                                                by total_puzzles rendered impossible ratios
+                                                like "50/16 correct". */}
+                                            {motif.passed}/{motif.attempts} attempts correct
                                         </span>
                                     </div>
                                     <div className="flex items-center gap-2">
@@ -1777,7 +1793,10 @@ export default function Puzzles() {
                                                     Same fix the sidebar nav already made — an alpha
                                                     colour also lets tooling compute the ratio, which
                                                     element opacity defeats. */}
-                                                <span className="text-base font-normal text-primary/70 ml-2 font-sans">
+                                                {/* whitespace-nowrap: without it the counter wraps
+                                                    mid-token after long opening names and the title
+                                                    reads "…move 18 1" with "/ 2" on the next line. */}
+                                                <span className="text-base font-normal text-primary/70 ml-2 font-sans whitespace-nowrap">
                                                     {currentIndex + 1} / {puzzles.length}
                                                 </span>
                                             </span>
@@ -2134,7 +2153,10 @@ export default function Puzzles() {
                                     <h4 className="font-serif text-primary mb-1">{formatMotifName(motif.name)}</h4>
                                     <div className="flex justify-between text-sm">
                                         <span className="text-primary/70">
-                                            {motif.passed}/{motif.total_puzzles} solved
+                                            {/* passed/attempts, matching the % and the bar.
+                                                total_puzzles as denominator produced
+                                                "50/16 solved" — see #411. */}
+                                            {motif.passed}/{motif.attempts} attempts correct
                                         </span>
                                         <span className={`font-mono ${rank.figure}`}>
                                             {Math.round(motif.accuracy * 100)}%
