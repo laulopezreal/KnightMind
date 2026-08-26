@@ -1,0 +1,20 @@
+# Install with:
+#   sudo cp /home/lauureal/apps/knightmind/deploy/tailscale-docker-route-exceptions-heal.timer /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now tailscale-docker-route-exceptions-heal.timer
+#
+# Re-asserts the Tailscale table 52 Docker route exceptions every 2 minutes.
+# See tailscale-docker-route-exceptions-heal.service for why a cadence is needed.
+
+[Unit]
+Description=Periodically re-assert Tailscale table 52 Docker route exceptions
+Documentation=file:/home/lauureal/apps/knightmind/OPERATIONS.md
+
+[Timer]
+OnBootSec=1min
+OnCalendar=*:0/2
+AccuracySec=15s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

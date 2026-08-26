@@ -1,0 +1,41 @@
+# Install with:
+#   sudo cp /home/lauureal/apps/knightmind/deploy/tailscale-docker-route-exceptions-heal.service /etc/systemd/system/
+#   sudo cp /home/lauureal/apps/knightmind/deploy/tailscale-docker-route-exceptions-heal.timer /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now tailscale-docker-route-exceptions-heal.timer
+#
+# Purpose: periodic re-assertion of the Docker-bridge route exceptions that the
+# boot/restart unit (tailscale-docker-route-exceptions.service) installs once.
+#
+# Why a timer on top of the existing oneshot:
+#   The existing unit fires on boot and whenever tailscaled fully restarts
+#   (PartOf=tailscaled.service). That did not cover the failure observed on
+#   2026-08-26: tailscale rebuilt its routing rules IN PLACE — policy rule
+#   `5270: from all lookup 52` stayed, table 52 was rewritten to only
+#   `default dev tailscale0`, and both the throw-routes AND the
+#   `iif <bridge> lookup main` rules vanished — with no tailscaled restart to
+#   re-trigger the unit. Host -> container traffic then hung again (Caddy ->
+#   127.0.0.1:8000 -> docker-proxy -> 172.18.0.4), exactly like 2026-08-12.
+#
+#   This timer re-runs the same idempotent script on a fixed cadence. The
+#   script uses `ip route replace throw` and delete-then-add `iif` rules, so a
+#   re-run is safe and converges to the correct state whether or not anything
+#   was wiped. Worst-case API/container downtime on a future recurrence drops
+#   from "until someone notices" to the timer interval.
+#
+# Kept as a SEPARATE unit (rather than editing the existing one) so the proven
+# boot/restart path from #375 is untouched and the cadence is independently
+# inspectable/enable-able.
+
+[Unit]
+Description=Periodic re-assertion of Tailscale table 52 Docker route exceptions
+Documentation=file:/home/lauureal/apps/knightmind/OPERATIONS.md
+Wants=docker.service tailscaled.service
+After=docker.service tailscaled.service network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/home/lauureal/apps/knightmind/deploy/tailscale-docker-route-exceptions.sh
+
+[Install]
+WantedBy=multi-user.target
