@@ -1683,7 +1683,9 @@ def get_puzzle_detail(
             ply=puzzle.ply,
             resolved=resolved,
         ),
-        primary_motif=(usable_motif(stats.primary_motif) if (stats and resolved) else None),
+        primary_motif=(
+            usable_motif(stats.primary_motif) if (stats and resolved) else None
+        ),
         difficulty=_swing_to_difficulty(puzzle.swing),
         swing=puzzle.swing,
         fen=puzzle.fen,
