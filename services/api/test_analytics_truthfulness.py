@@ -285,3 +285,43 @@ def test_motif_performance_low_attempts_not_called_weakness(client_with_db, db_s
     assert pin["attempts"] == 1
     assert pin["insufficient_data"] is True
     assert "pin" not in data["weakest_motifs"]
+
+
+def test_motif_performance_excludes_blunder_placeholder(client_with_db, db_session):
+    """`blunder` is the no-motif placeholder, not a trainable pattern.
+
+    usable_motif() strips it from every puzzle payload (identity design step
+    7, #409); the analytics aggregation must apply the same contract or the
+    placeholder resurfaces as the user's #1 "Weak Area" on the training page.
+    """
+    _ensure_puzzle(db_session, "bl1", "perfuser2")
+    _ensure_puzzle(db_session, "bl2", "perfuser2")
+    db_session.add(
+        PuzzleStats(
+            puzzle_id="bl1",
+            username="perfuser2",
+            primary_motif="blunder",
+            attempts=20,
+            pass_count=5,
+        )
+    )
+    db_session.add(
+        PuzzleStats(
+            puzzle_id="bl2",
+            username="perfuser2",
+            primary_motif="fork",
+            attempts=10,
+            pass_count=6,
+        )
+    )
+    db_session.commit()
+
+    resp = client_with_db.get("/users/perfuser2/motifs/performance")
+    assert resp.status_code == 200
+    data = resp.json()
+    names = [m["name"] for m in data["motifs"]]
+    assert "blunder" not in names
+    assert "fork" in names
+    assert "blunder" not in data["weakest_motifs"]
+    # The placeholder must not inflate the practiced-motif count either.
+    assert data["total_motifs_practiced"] == len(names)
