@@ -1,6 +1,6 @@
 import { LOCALE } from '../utils/locale';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { AccessibleChessboard } from '../components/AccessibleChessboard';
 import { Chess } from 'chess.js';
 import { useChessUsername } from '../context/ChessUsernameContext';
@@ -27,6 +27,12 @@ function formatSolveTime(ms: number): string {
 export default function LibraryPuzzle() {
     const { puzzleId } = useParams<{ puzzleId: string }>();
     const { username } = useChessUsername();
+
+    // Session-origin context: when the user arrives from the session summary
+    // via a Review link, we carry ?from=session so the back affordance returns
+    // them there instead of the Library list.
+    const [searchParams] = useSearchParams();
+    const fromSession = searchParams.get('from') === 'session';
 
     const [game, setGame] = useState(new Chess());
     const [status, setStatus] = useState<SolveStatus>('solving');
@@ -298,8 +304,8 @@ export default function LibraryPuzzle() {
         return (
             <div className="space-y-12 animate-teedin">
                 <section>
-                    <Link to="/library" className="text-primary/70 hover:text-primary mb-4 inline-block font-sans text-sm tracking-widest uppercase transition-colors">
-                        ← Back to Library
+                    <Link to={fromSession ? '/puzzles' : '/library'} className="text-primary/70 hover:text-primary mb-4 inline-block font-sans text-sm tracking-widest uppercase transition-colors">
+                        {fromSession ? '← Back to Session Summary' : '← Back to Library'}
                     </Link>
                     <h1 className="text-3xl md:text-4xl font-serif text-primary">Puzzle</h1>
                 </section>
@@ -316,8 +322,8 @@ export default function LibraryPuzzle() {
         return (
             <div className="space-y-12 animate-teedin">
                 <section>
-                    <Link to="/library" className="text-primary/70 hover:text-primary mb-4 inline-block font-sans text-sm tracking-widest uppercase transition-colors">
-                        ← Back to Library
+                    <Link to={fromSession ? '/puzzles' : '/library'} className="text-primary/70 hover:text-primary mb-4 inline-block font-sans text-sm tracking-widest uppercase transition-colors">
+                        {fromSession ? '← Back to Session Summary' : '← Back to Library'}
                     </Link>
                     <h1 className="text-3xl md:text-4xl font-serif text-primary">Puzzle</h1>
                 </section>
@@ -336,8 +342,8 @@ export default function LibraryPuzzle() {
         return (
             <div className="space-y-12 animate-teedin">
                 <section>
-                    <Link to="/library" className="text-primary/70 hover:text-primary mb-4 inline-block font-sans text-sm tracking-widest uppercase transition-colors">
-                        ← Back to Library
+                    <Link to={fromSession ? '/puzzles' : '/library'} className="text-primary/70 hover:text-primary mb-4 inline-block font-sans text-sm tracking-widest uppercase transition-colors">
+                        {fromSession ? '← Back to Session Summary' : '← Back to Library'}
                     </Link>
                     <h1 className="text-3xl md:text-4xl font-serif text-primary mb-4">Puzzle</h1>
                     {notFound ? (
@@ -370,8 +376,8 @@ export default function LibraryPuzzle() {
         <div className="space-y-12 animate-teedin">
             {/* Back link + Header */}
             <section>
-                <Link to="/library" className="text-primary/70 hover:text-primary mb-4 inline-block font-sans text-sm tracking-widest uppercase transition-colors">
-                    ← Back to Library
+                <Link to={fromSession ? '/puzzles' : '/library'} className="text-primary/70 hover:text-primary mb-4 inline-block font-sans text-sm tracking-widest uppercase transition-colors">
+                    {fromSession ? '← Back to Session Summary' : '← Back to Library'}
                 </Link>
                 <h1 className="text-3xl md:text-4xl font-serif text-primary">
                     {puzzle.display_name}
@@ -570,10 +576,10 @@ export default function LibraryPuzzle() {
 
                         {(status === 'correct' || status === 'revealed') && (
                             <Link
-                                to="/library"
+                                to={fromSession ? '/puzzles' : '/library'}
                                 className="block w-full px-6 py-4 bg-green-600 text-white rounded-sm font-serif text-lg text-center transition-all km-interactive km-focus-visible"
                             >
-                                Back to Library
+                                {fromSession ? 'Back to Session Summary' : 'Back to Library'}
                             </Link>
                         )}
                     </div>

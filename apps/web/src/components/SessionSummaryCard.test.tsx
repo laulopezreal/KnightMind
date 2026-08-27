@@ -211,7 +211,7 @@ describe('SessionSummaryCard', () => {
     expect(screen.getByText('12 Mar · Sicilian · move 18')).toBeInTheDocument();
     expect(screen.getByText('King safety blindness')).toBeInTheDocument();
     const reviewLink = screen.getByRole('link', { name: /review/i });
-    expect(reviewLink).toHaveAttribute('href', '/library/p-abc');
+    expect(reviewLink).toHaveAttribute('href', '/library/p-abc?from=session');
   });
 
   it('shows honest copy when missed puzzle has no diagnosed cause', () => {
@@ -260,5 +260,67 @@ describe('SessionSummaryCard', () => {
     );
 
     expect(screen.getByText(/missed puzzles \(2\)/i)).toBeInTheDocument();
+  });
+
+  // --- YELLOW-1 regression: Review hit-target contract ---
+  it('Review link carries min-h-[44px] and min-w-[44px] for WCAG 2.5.5 touch target', () => {
+    const summary = {
+      ...mockSessionSummary,
+      missed_puzzles: [
+        {
+          puzzle_id: 'p-abc',
+          display_name: 'Test puzzle',
+          cause: null,
+          cause_label: null,
+        },
+      ],
+    };
+
+    render(
+      <MemoryRouter>
+        <SessionSummaryCard
+          sessionSummary={summary}
+          achievements={[]}
+          onStartNewSession={vi.fn()}
+        />
+      </MemoryRouter>
+    );
+
+    const reviewLink = screen.getByRole('link', { name: /review test puzzle/i });
+    // Class guards the 44×44 contract — if removed the touch target regresses.
+    expect(reviewLink).toHaveClass('min-h-[44px]');
+    expect(reviewLink).toHaveClass('min-w-[44px]');
+    // Flex layout is what makes the min-h/w apply as the interactive area.
+    expect(reviewLink).toHaveClass('inline-flex');
+    expect(reviewLink).toHaveClass('items-center');
+    expect(reviewLink).toHaveClass('justify-center');
+  });
+
+  // --- YELLOW-2 regression: Review URL carries ?from=session ---
+  it('Review link href includes ?from=session for session-origin back-navigation', () => {
+    const summary = {
+      ...mockSessionSummary,
+      missed_puzzles: [
+        {
+          puzzle_id: 'p-xyz',
+          display_name: 'Another puzzle',
+          cause: 'some_cause',
+          cause_label: 'Some cause',
+        },
+      ],
+    };
+
+    render(
+      <MemoryRouter>
+        <SessionSummaryCard
+          sessionSummary={summary}
+          achievements={[]}
+          onStartNewSession={vi.fn()}
+        />
+      </MemoryRouter>
+    );
+
+    const reviewLink = screen.getByRole('link', { name: /review another puzzle/i });
+    expect(reviewLink).toHaveAttribute('href', '/library/p-xyz?from=session');
   });
 });

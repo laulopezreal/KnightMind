@@ -12,6 +12,7 @@ import { ApiError } from '../api/core';
 
 vi.mock('react-router-dom', () => ({
     useParams: () => ({ puzzleId: 'p1' }),
+    useSearchParams: () => [new URLSearchParams(), vi.fn()],
     Link: ({ children, to }: { children: React.ReactNode; to: string }) => <a href={to}>{children}</a>,
 }));
 

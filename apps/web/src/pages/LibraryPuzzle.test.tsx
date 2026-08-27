@@ -5,12 +5,14 @@ import LibraryPuzzle from './LibraryPuzzle';
 let mockUsername = 'testplayer';
 let mockPuzzleId = 'puzzle-abc';
 
+let mockSearchParams = new URLSearchParams();
 const mockNavigate = vi.fn();
 vi.mock('react-router-dom', () => ({
     useParams: () => ({ puzzleId: mockPuzzleId }),
     // ConnectAccountEmpty (the no-username branch) calls this. Its absence is
     // why that branch could not be tested at all.
     useNavigate: () => mockNavigate,
+    useSearchParams: () => [mockSearchParams, vi.fn()],
     Link: ({ children, to, ...props }: { children: React.ReactNode; to: string; [key: string]: unknown }) => (
         <a href={to} {...props}>{children}</a>
     ),
@@ -108,6 +110,7 @@ describe('LibraryPuzzle', () => {
         vi.resetAllMocks();
         mockUsername = 'testplayer';
         mockPuzzleId = 'puzzle-abc';
+        mockSearchParams = new URLSearchParams();
         // Honour the requested id. The real endpoint always echoes back the
         // row it matched, and a fixed id here makes `puzzle?.id === puzzleId`
         // permanently false after navigation — which silently satisfies every
@@ -652,5 +655,52 @@ describe('LibraryPuzzle', () => {
         ).toBeInTheDocument();
         expect(screen.queryByText(/loading puzzle/i)).not.toBeInTheDocument();
         expect(mockGetLibraryPuzzle).not.toHaveBeenCalled();
+    });
+
+    describe('back-navigation context', () => {
+        it('shows Back to Library and links to /library when no session origin', async () => {
+            // Normal entry: no ?from=session param.
+            mockSearchParams = new URLSearchParams();
+            render(<LibraryPuzzle />);
+            await waitFor(() => expect(screen.getByText('Deadly Fork')).toBeInTheDocument());
+
+            const backLink = screen.getByRole('link', { name: /back to library/i });
+            expect(backLink).toHaveAttribute('href', '/library');
+        });
+
+        it('shows Back to Session Summary and links to /puzzles when from=session', async () => {
+            mockSearchParams = new URLSearchParams('from=session');
+            render(<LibraryPuzzle />);
+            await waitFor(() => expect(screen.getByText('Deadly Fork')).toBeInTheDocument());
+
+            // Header back-link must say "Back to Session Summary" and point to /puzzles.
+            const backLink = screen.getByRole('link', { name: /back to session summary/i });
+            expect(backLink).toHaveAttribute('href', '/puzzles');
+        });
+
+        it('post-completion button targets /puzzles when from=session', async () => {
+            mockSearchParams = new URLSearchParams('from=session');
+            render(<LibraryPuzzle />);
+            await waitFor(() => expect(screen.getByText('Reveal')).toBeInTheDocument());
+            fireEvent.click(screen.getByText('Reveal'));
+
+            // After completion both the header back-link AND the green CTA show.
+            // The green CTA is the second match; both must point to /puzzles.
+            const links = await screen.findAllByRole('link', { name: /back to session summary/i });
+            expect(links.length).toBeGreaterThanOrEqual(2);
+            links.forEach(link => expect(link).toHaveAttribute('href', '/puzzles'));
+        });
+
+        it('post-completion button targets /library when no session origin', async () => {
+            mockSearchParams = new URLSearchParams();
+            render(<LibraryPuzzle />);
+            await waitFor(() => expect(screen.getByText('Reveal')).toBeInTheDocument());
+            fireEvent.click(screen.getByText('Reveal'));
+
+            // After completion both the header back-link AND the green CTA show.
+            const links = await screen.findAllByRole('link', { name: /back to library/i });
+            expect(links.length).toBeGreaterThanOrEqual(2);
+            links.forEach(link => expect(link).toHaveAttribute('href', '/library'));
+        });
     });
 });

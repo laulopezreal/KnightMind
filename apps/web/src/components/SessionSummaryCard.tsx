@@ -136,9 +136,12 @@ export function SessionSummaryCard({
                                         </span>
                                     )}
                                 </div>
+                                {/* min-h/min-w 44px: WCAG 2.5.5 touch-target contract.
+                                    The flex wrapper expands the interactive area without
+                                    visually bloating the row — the text stays text-xs. */}
                                 <Link
-                                    to={`/library/${mp.puzzle_id}`}
-                                    className="flex-shrink-0 text-xs font-serif text-primary/70 underline underline-offset-2 hover:text-primary transition-colors km-focus-visible"
+                                    to={`/library/${mp.puzzle_id}?from=session`}
+                                    className="km-review-link flex-shrink-0 inline-flex items-center justify-center min-h-[44px] min-w-[44px] text-xs font-serif text-primary/70 underline underline-offset-2 hover:text-primary transition-colors km-focus-visible"
                                     aria-label={`Review ${mp.display_name}`}
                                 >
                                     Review
