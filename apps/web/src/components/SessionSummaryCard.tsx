@@ -51,7 +51,7 @@ export function SessionSummaryCard({
     return (
         <section className="bg-primary/5 border border-positive-soft rounded-sm p-8 backdrop-blur-sm animate-teedin">
             <div className="flex items-center mb-6">
-                <div className="shrink-0 h-8 w-8 rounded-full bg-positive-fill flex items-center justify-center mr-3">
+                <div className="shrink-0 size-8 rounded-full bg-positive-fill flex items-center justify-center mr-3">
                     <svg className="h-5 w-5 text-positive" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                     </svg>
