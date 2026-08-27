@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom';
 import { LOCALE } from '../utils/locale';
 import { type SessionSummary } from '../api';
 import { AnimatedNumber } from './AnimatedNumber';
@@ -39,6 +40,10 @@ export function SessionSummaryCard({
         : accuracy >= 0.5
         ? 'Session complete — solid work'
         : 'Session complete — tough one, keep at it';
+
+    const missedPuzzles = sessionSummary.missed_puzzles;
+    const hasMissed = missedPuzzles && missedPuzzles.length > 0;
+
     // Token-only success treatment: a raw green-500 fill with a white tick is a
     // fixed pair that cannot clear contrast in both themes, and it was the only
     // green of its kind in the app. The soft tint + positive ink reads as
@@ -104,6 +109,45 @@ export function SessionSummaryCard({
                     </div>
                 )}
             </div>
+
+            {/* Missed Puzzles — teach, not just count */}
+            {hasMissed && (
+                <div className="mb-6">
+                    <h3 className="text-lg font-serif text-primary mb-3">
+                        {missedPuzzles.length === 1 ? 'Missed puzzle' : `Missed puzzles (${missedPuzzles.length})`}
+                    </h3>
+                    <ul className="space-y-2" aria-label="Missed puzzles">
+                        {missedPuzzles.map(mp => (
+                            <li
+                                key={mp.puzzle_id}
+                                className="flex items-center justify-between gap-3 bg-negative/5 border border-negative/20 rounded-sm px-4 py-3"
+                            >
+                                <div className="min-w-0">
+                                    <span className="block text-sm font-serif text-primary truncate">
+                                        {mp.display_name}
+                                    </span>
+                                    {mp.cause_label ? (
+                                        <span className="block text-xs text-primary/60 mt-0.5">
+                                            {mp.cause_label}
+                                        </span>
+                                    ) : (
+                                        <span className="block text-xs text-primary/40 mt-0.5 italic">
+                                            Cause not yet diagnosed
+                                        </span>
+                                    )}
+                                </div>
+                                <Link
+                                    to={`/library/${mp.puzzle_id}`}
+                                    className="flex-shrink-0 text-xs font-serif text-primary/70 underline underline-offset-2 hover:text-primary transition-colors km-focus-visible"
+                                    aria-label={`Review ${mp.display_name}`}
+                                >
+                                    Review
+                                </Link>
+                            </li>
+                        ))}
+                    </ul>
+                </div>
+            )}
 
             {/* Achievements Earned */}
             {achievements.filter(a => a.earned).length > 0 && (
