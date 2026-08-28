@@ -17,6 +17,16 @@ export interface FocusPracticeStartResponse {
     puzzles: FocusPracticePuzzle[];
 }
 
+/** A puzzle the user failed in a session, with its server-owned diagnosis cause.
+ *  No solutions, FEN, or best moves are included. */
+export interface MissedPuzzleSummary {
+    puzzle_id: string;
+    display_name: string;
+    cause: string | null;
+    cause_label: string | null;
+}
+
+// Kept in sync with SessionSummary on the API.
 export interface SessionSummary {
     session_id: string;
     requested_n: number;
@@ -45,9 +55,11 @@ export interface SessionSummary {
     selected_items?: Array<{ puzzle_id: string; position: number; review_policy: FocusPracticeReviewPolicy }> | null;
     puzzles?: FocusPracticePuzzle[] | null;
     focus_name?: string | null;
+    /** Missed puzzles with server-owned cause labels. Only set on completed
+     *  sessions with at least one failure. No FEN or solutions included. */
+    missed_puzzles?: MissedPuzzleSummary[] | null;
 }
 
-// Kept in sync with SessionSummary on the API.
 export async function getSession(sessionId: string): Promise<SessionSummary> {
     return await request<SessionSummary>(`/sessions/${sessionId}`);
 }

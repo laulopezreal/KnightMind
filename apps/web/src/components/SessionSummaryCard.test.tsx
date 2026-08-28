@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { MemoryRouter } from 'react-router-dom';
 import { SessionSummaryCard } from './SessionSummaryCard';
 
 const mockSessionSummary = {
@@ -157,5 +158,169 @@ describe('SessionSummaryCard', () => {
     );
 
     expect(screen.queryByText('Achievements Earned')).not.toBeInTheDocument();
+  });
+
+  it('shows no missed-puzzle section when session has no failures', () => {
+    render(
+      <SessionSummaryCard
+        sessionSummary={{ ...mockSessionSummary, fail_count: 0, pass_count: 10, missed_puzzles: null }}
+        achievements={[]}
+        onStartNewSession={vi.fn()}
+      />
+    );
+
+    expect(screen.queryByText(/missed puzzle/i)).not.toBeInTheDocument();
+  });
+
+  it('shows no missed-puzzle section when missed_puzzles is an empty array', () => {
+    render(
+      <SessionSummaryCard
+        sessionSummary={{ ...mockSessionSummary, missed_puzzles: [] }}
+        achievements={[]}
+        onStartNewSession={vi.fn()}
+      />
+    );
+
+    expect(screen.queryByText(/missed puzzle/i)).not.toBeInTheDocument();
+  });
+
+  it('shows missed puzzles with cause label and review link', () => {
+    const summary = {
+      ...mockSessionSummary,
+      missed_puzzles: [
+        {
+          puzzle_id: 'p-abc',
+          display_name: '12 Mar · Sicilian · move 18',
+          cause: 'king_safety_blindness',
+          cause_label: 'King safety blindness',
+        },
+      ],
+    };
+
+    render(
+      <MemoryRouter>
+        <SessionSummaryCard
+          sessionSummary={summary}
+          achievements={[]}
+          onStartNewSession={vi.fn()}
+        />
+      </MemoryRouter>
+    );
+
+    expect(screen.getByText(/missed puzzle/i)).toBeInTheDocument();
+    expect(screen.getByText('12 Mar · Sicilian · move 18')).toBeInTheDocument();
+    expect(screen.getByText('King safety blindness')).toBeInTheDocument();
+    const reviewLink = screen.getByRole('link', { name: /review/i });
+    expect(reviewLink).toHaveAttribute('href', '/library/p-abc?from=session');
+  });
+
+  it('shows honest copy when missed puzzle has no diagnosed cause', () => {
+    const summary = {
+      ...mockSessionSummary,
+      missed_puzzles: [
+        {
+          puzzle_id: 'p-xyz',
+          display_name: '14 Apr · move 22',
+          cause: null,
+          cause_label: null,
+        },
+      ],
+    };
+
+    render(
+      <MemoryRouter>
+        <SessionSummaryCard
+          sessionSummary={summary}
+          achievements={[]}
+          onStartNewSession={vi.fn()}
+        />
+      </MemoryRouter>
+    );
+
+    expect(screen.getByText(/cause not yet diagnosed/i)).toBeInTheDocument();
+  });
+
+  it('shows plural heading when multiple puzzles were missed', () => {
+    const summary = {
+      ...mockSessionSummary,
+      missed_puzzles: [
+        { puzzle_id: 'p-1', display_name: 'move 10', cause: null, cause_label: null },
+        { puzzle_id: 'p-2', display_name: 'move 15', cause: null, cause_label: null },
+      ],
+    };
+
+    render(
+      <MemoryRouter>
+        <SessionSummaryCard
+          sessionSummary={summary}
+          achievements={[]}
+          onStartNewSession={vi.fn()}
+        />
+      </MemoryRouter>
+    );
+
+    expect(screen.getByText(/missed puzzles \(2\)/i)).toBeInTheDocument();
+  });
+
+  // --- YELLOW-1 regression: Review hit-target contract ---
+  it('Review link carries min-h-[44px] and min-w-[44px] for WCAG 2.5.5 touch target', () => {
+    const summary = {
+      ...mockSessionSummary,
+      missed_puzzles: [
+        {
+          puzzle_id: 'p-abc',
+          display_name: 'Test puzzle',
+          cause: null,
+          cause_label: null,
+        },
+      ],
+    };
+
+    render(
+      <MemoryRouter>
+        <SessionSummaryCard
+          sessionSummary={summary}
+          achievements={[]}
+          onStartNewSession={vi.fn()}
+        />
+      </MemoryRouter>
+    );
+
+    const reviewLink = screen.getByRole('link', { name: /review test puzzle/i });
+    // Class guards the 44×44 contract — if removed the touch target regresses.
+    expect(reviewLink).toHaveClass('min-h-[44px]');
+    expect(reviewLink).toHaveClass('min-w-[44px]');
+    // Flex layout is what makes the min-h/w apply as the interactive area.
+    expect(reviewLink).toHaveClass('inline-flex');
+    expect(reviewLink).toHaveClass('items-center');
+    expect(reviewLink).toHaveClass('justify-center');
+  });
+
+  // --- YELLOW-2 regression: Review URL carries ?from=session ---
+  it('Review link href includes ?from=session for session-origin back-navigation', () => {
+    const summary = {
+      ...mockSessionSummary,
+      missed_puzzles: [
+        {
+          puzzle_id: 'p-xyz',
+          display_name: 'Another puzzle',
+          cause: 'some_cause',
+          cause_label: 'Some cause',
+        },
+      ],
+    };
+
+    render(
+      <MemoryRouter>
+        <SessionSummaryCard
+          sessionSummary={summary}
+          achievements={[]}
+          onStartNewSession={vi.fn()}
+        />
+      </MemoryRouter>
+    );
+
+    const reviewLink = screen.getByRole('link', { name: /review another puzzle/i });
+    expect(reviewLink).toHaveAttribute('href', '/library/p-xyz?from=session');
   });
 });
