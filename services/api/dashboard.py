@@ -68,6 +68,18 @@ class ScheduleData(BaseModel):
     next_review_at: datetime | None
 
 
+class DailyPractice(BaseModel):
+    """Server-derived daily completion state.
+
+    Observational only. Derived from completed TrainingSession records using
+    the established UTC day_boundary rule. Never alters SRS, streak, or
+    selection semantics.
+    """
+
+    completed_today: bool
+    completed_session_at: datetime | None
+
+
 class DashboardSummary(BaseModel):
     """Complete dashboard summary."""
 
@@ -79,6 +91,7 @@ class DashboardSummary(BaseModel):
     recent_form: RecentFormData
     schedule: ScheduleData
     needs_warmup: bool
+    daily_practice: DailyPractice
 
 
 class TrendDataPoint(BaseModel):
@@ -267,6 +280,50 @@ def calculate_training_streak(db: Session, username: str) -> int:
     return streak
 
 
+def calculate_daily_practice(db: Session, username: str) -> DailyPractice:
+    """Derive the server-owned daily-completion state.
+
+    Queries the most recent completed TrainingSession whose completed_at falls
+    on utc_today() according to the established UTC day_boundary rule. No write
+    or mutation occurs during this read.
+
+    Rules (from the product spec):
+    - completed_today is true exactly when the user has at least one completed
+      TrainingSession whose completed_at maps to the current UTC day.
+    - completed_session_at is the newest qualifying timestamp (UTC aware), or
+      None when completed_today is False.
+
+    Implementation note: uses a datetime range (>= day_start, < day_end) rather
+    than func.date(col) == string, because func.date() returns a date on Postgres
+    and a string on SQLite while string comparison of a VARCHAR parameter fails on
+    Postgres. The range approach is backend-agnostic and aligns with the UTC
+    boundary semantics documented in day_boundary.py.
+    """
+    today = utc_today()
+    day_start = datetime(today.year, today.month, today.day, 0, 0, 0)
+    day_end = day_start + timedelta(days=1)
+
+    stmt = (
+        select(TrainingSession.completed_at)
+        .where(
+            TrainingSession.username == username,
+            TrainingSession.completed_at.isnot(None),
+            TrainingSession.completed_at >= day_start,
+            TrainingSession.completed_at < day_end,
+        )
+        .order_by(desc(TrainingSession.completed_at))
+        .limit(1)
+    )
+
+    latest_ts = db.scalars(stmt).first()
+
+    if latest_ts is None:
+        return DailyPractice(completed_today=False, completed_session_at=None)
+
+    aware_ts = latest_ts.replace(tzinfo=timezone.utc)
+    return DailyPractice(completed_today=True, completed_session_at=aware_ts)
+
+
 @router.get("/{username}/dashboard", response_model=DashboardSummary)
 def get_dashboard_summary(
     username: Username,
@@ -338,6 +395,9 @@ def get_dashboard_summary(
         due_now=due_now, due_in_4h=due_in_4h_count, next_review_at=next_review
     )
 
+    # Server-owned daily-completion state. Read-only; no mutation.
+    daily_practice = calculate_daily_practice(db, username)
+
     return DashboardSummary(
         username=username,
         last_session_at=last_session_at,
@@ -347,6 +407,7 @@ def get_dashboard_summary(
         recent_form=recent_form,
         schedule=schedule,
         needs_warmup=needs_warmup,
+        daily_practice=daily_practice,
     )
 
 
@@ -531,6 +592,7 @@ def get_tricky_puzzles(
     ).all()
 
     def _display(stat, puzzle, game) -> str:
+        """Return the resolved display name for a struggling-puzzle card."""
         # Gated. This card filters fail_count >= 2, precisely the population
         # §6 writes nicknames for -- and any row whose next_due_at has passed
         # is re-due, i.e. about to be attempted again. Serving the recall

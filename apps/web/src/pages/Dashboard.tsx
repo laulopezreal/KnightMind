@@ -250,6 +250,7 @@ export default function Dashboard() {
                     needsWarmup={dashboardData.needs_warmup}
                     daysSinceLastSession={dashboardData.days_since_last_session}
                     totalSessions={dashboardData.total_sessions}
+                    completedToday={dashboardData.daily_practice.completed_today}
                     onStartSession={() => navigate(trainEntryDestination({
                         totalSessions: dashboardData.total_sessions,
                         dueCount: dashboardData.schedule.due_now,
