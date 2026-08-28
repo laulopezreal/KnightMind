@@ -37,7 +37,11 @@ vi.mock('../api/sessions', () => ({
     getRecentSessions: (...a: unknown[]) => mockGetRecentSessions(...a),
 }));
 
-vi.mock('../components/HeroTrainCard', () => ({ HeroTrainCard: () => <div data-testid="hero-card" /> }));
+vi.mock('../components/HeroTrainCard', () => ({
+    HeroTrainCard: ({ completedToday }: { completedToday?: boolean }) => (
+        <div data-testid="hero-card" data-completed-today={String(completedToday)} />
+    ),
+}));
 vi.mock('../components/RecentlyTrickyCard', () => ({ RecentlyTrickyCard: () => <div /> }));
 vi.mock('../components/MomentumCard', () => ({ MomentumCard: () => <div data-testid="momentum-card" /> }));
 vi.mock('../components/StreakCard', () => ({ StreakCard: () => <div data-testid="streak-card" /> }));
@@ -317,11 +321,6 @@ describe('Dashboard data states', () => {
     // ── Daily practice completion state ──
 
     it('passes completed_today=true from dashboard to HeroTrainCard', async () => {
-        // This test uses a transparent mock that renders the completedToday prop
-        // as a data attribute so we can assert the Dashboard wired it correctly.
-        const { HeroTrainCard: RealHero } = await import('../components/HeroTrainCard');
-        vi.mocked(RealHero as unknown as (...args: unknown[]) => unknown);
-
         mockGetDashboardSummary.mockReset();
         mockGetDashboardSummary.mockResolvedValue({
             ...SUMMARY,
@@ -329,20 +328,8 @@ describe('Dashboard data states', () => {
             daily_practice: { completed_today: true, completed_session_at: '2026-08-28T12:00:00Z' },
         });
 
-        // Temporarily use a transparent mock to capture the completedToday prop
-        const { HeroTrainCard } = await import('../components/HeroTrainCard');
-        // The existing mock is a stub; assert the summary field is present
-        // and the hero card rendered (completedToday is passed through the prop).
         render(<Dashboard />);
-        await waitFor(() => expect(screen.getByTestId('hero-card')).toBeInTheDocument());
-
-        // If this call succeeded, the dashboard loaded with completed_today=true.
-        // The HeroTrainCard component's own tests verify the rendering.
-        expect(mockGetDashboardSummary).toHaveBeenCalled();
-        const callResult = await mockGetDashboardSummary.mock.results[0].value;
-        expect(callResult.daily_practice.completed_today).toBe(true);
-        // Suppress unused import warning
-        void HeroTrainCard;
+        await waitFor(() => expect(screen.getByTestId('hero-card')).toHaveAttribute('data-completed-today', 'true'));
     });
 
     it('dashboard loads correctly when completed_today=false', async () => {
@@ -355,7 +342,6 @@ describe('Dashboard data states', () => {
         render(<Dashboard />);
         await waitFor(() => expect(screen.getByTestId('hero-card')).toBeInTheDocument());
 
-        const callResult = await mockGetDashboardSummary.mock.results[0].value;
-        expect(callResult.daily_practice.completed_today).toBe(false);
+        expect(screen.getByTestId('hero-card')).toHaveAttribute('data-completed-today', 'false');
     });
 });

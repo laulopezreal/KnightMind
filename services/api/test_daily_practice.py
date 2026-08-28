@@ -32,6 +32,7 @@ from services.api.models import TrainingSession
 @pytest.fixture
 def client_with_db(db_session, monkeypatch):
     """Provide a TestClient wired to the test db_session via dependency override."""
+
     def override_get_db():
         """Yield the shared test db_session in place of the real get_db dependency."""
         yield db_session
@@ -108,7 +109,9 @@ def test_utc_midnight_boundary_yesterday(client_with_db, db_session):
     """A session one second before today's UTC midnight is in the previous day."""
     today = utc_today()
     # One second before today's start = yesterday.
-    yesterday_end = datetime(today.year, today.month, today.day, 0, 0, 0) - timedelta(seconds=1)
+    yesterday_end = datetime(today.year, today.month, today.day, 0, 0, 0) - timedelta(
+        seconds=1
+    )
     _add_session(db_session, "boundary_dp1", completed_at=yesterday_end)
 
     data = _dashboard(client_with_db, "boundary_dp1")
