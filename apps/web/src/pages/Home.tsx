@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { importChessComGames, getImportStatus, validateChessComUser, getUserStatus, ApiError } from '../api';
-import type { UserStatus } from '../api';
+import { importChessComGames, getImportStatus, validateChessComUser, getUserStatus, type UserStatus } from '../api/users';
+import { ApiError } from '../api/core';
 import { generatePuzzles } from '../api/puzzles';
 import { useChessUsername } from '../context/ChessUsernameContext';
 import { formatRelativeTime } from '../utils/time';

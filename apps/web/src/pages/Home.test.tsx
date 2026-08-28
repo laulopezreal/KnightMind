@@ -26,6 +26,18 @@ vi.mock('../api', () => ({
   ApiError: class extends Error { detail?: string },
 }));
 
+vi.mock('../api/users', async () => {
+  const barrel = await vi.importMock<typeof import('../api')>('../api');
+  return {
+    importChessComGames: barrel.importChessComGames,
+    getImportStatus: barrel.getImportStatus,
+    validateChessComUser: barrel.validateChessComUser,
+    getUserStatus: barrel.getUserStatus,
+  };
+});
+
+vi.mock('../api/core', () => ({ ApiError: class extends Error { detail?: string } }));
+
 vi.mock('../api/puzzles', () => ({
   generatePuzzles: vi.fn(),
 }));

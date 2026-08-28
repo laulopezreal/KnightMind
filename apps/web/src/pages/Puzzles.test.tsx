@@ -60,6 +60,57 @@ vi.mock('../api', () => ({
   ApiError: class extends Error { detail?: string },
 }));
 
+// Sub-module mocks: forward to the barrel mock factory so vi.mocked() on
+// barrel imports and impl calls on sub-modules share the same mock state.
+vi.mock('../api/puzzles', async () => {
+  const barrel = await vi.importMock<typeof import('../api')>('../api');
+  return {
+    generatePuzzles: barrel.generatePuzzles,
+    getDailyPuzzles: barrel.getDailyPuzzles,
+    getDuePuzzles: barrel.getDuePuzzles,
+    checkPuzzle: barrel.checkPuzzle,
+    revealPuzzle: barrel.revealPuzzle,
+    reviewPuzzle: barrel.reviewPuzzle,
+    requestMotifHint: vi.fn(),
+    confirmPuzzleDiagnosis: vi.fn(),
+    getPuzzleDiagnosis: vi.fn(),
+    ApiError: class extends Error { detail?: string },
+  };
+});
+
+vi.mock('../api/ops', async () => {
+  const barrel = await vi.importMock<typeof import('../api')>('../api');
+  return {
+    cancelJob: barrel.cancelJob,
+    getJobStatus: vi.fn(),
+    reportJobStall: vi.fn(),
+  };
+});
+
+vi.mock('../api/core', () => ({
+  ApiError: class extends Error { detail?: string },
+}));
+
+vi.mock('../api/sessions', async () => {
+  const barrel = await vi.importMock<typeof import('../api')>('../api');
+  return {
+    startSession: barrel.startSession,
+    startFocusPractice: (...args: unknown[]) => mockStartFocusPractice(...args),
+    completeSession: barrel.completeSession,
+    getSession: (...args: unknown[]) => mockGetSession(...args),
+    useHint: barrel.useHint,
+  };
+});
+
+vi.mock('../api/users', () => ({
+  getUserStatus: (...args: unknown[]) => mockGetUserStatus(...args),
+  getRecentSessions: (...args: unknown[]) => mockGetRecentSessions(...args),
+  getMotifPerformance: (...args: unknown[]) => mockGetMotifPerformance(...args),
+  validateChessComUser: vi.fn(),
+  importChessComGames: vi.fn(),
+  getImportStatus: vi.fn(),
+}));
+
 vi.mock('../components/JobStatusCard', () => ({
   JobStatusCard: () => null,
 }));
