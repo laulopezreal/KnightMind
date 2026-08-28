@@ -1,16 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react';
-import {
-    getDuePuzzles,
-    startFocusPractice,
-    startSession,
-    completeSession,
-    reviewPuzzle,
-    getSession,
-    useHint as requestHint,
-    type Puzzle,
-    type SessionSummary,
-    type UserStatus,
-} from '../api';
+import { getDuePuzzles, reviewPuzzle, type Puzzle } from '../api/puzzles';
+import { startFocusPractice, startSession, completeSession, getSession, useHint as requestHint, type SessionSummary } from '../api/sessions';
+import type { UserStatus } from '../api/users';
 import type { UsePuzzleTimerReturn } from './usePuzzleTimer';
 
 // ─── Types ──────────────────────────────────────────────────────────

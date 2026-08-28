@@ -7,15 +7,48 @@ import { setupMockLocalStorage } from '../test/helpers';
 
 // ─── Mocks ──────────────────────────────────────────────────────────
 
-vi.mock('../api', () => ({
-    startSession: vi.fn(),
-    startFocusPractice: vi.fn(),
-    completeSession: vi.fn(),
-    reviewPuzzle: vi.fn(),
-    getSession: vi.fn(),
-    getDuePuzzles: vi.fn(),
-    useHint: vi.fn(),
+const {
+    mockStartSession,
+    mockStartFocusPractice,
+    mockCompleteSession,
+    mockReviewPuzzle,
+    mockGetSession,
+    mockGetDuePuzzles,
+    mockUseHint,
+} = vi.hoisted(() => ({
+    mockStartSession: vi.fn(),
+    mockStartFocusPractice: vi.fn(),
+    mockCompleteSession: vi.fn(),
+    mockReviewPuzzle: vi.fn(),
+    mockGetSession: vi.fn(),
+    mockGetDuePuzzles: vi.fn(),
+    mockUseHint: vi.fn(),
 }));
+
+vi.mock('../api', () => ({
+    startSession: mockStartSession,
+    startFocusPractice: mockStartFocusPractice,
+    completeSession: mockCompleteSession,
+    reviewPuzzle: mockReviewPuzzle,
+    getSession: mockGetSession,
+    getDuePuzzles: mockGetDuePuzzles,
+    useHint: mockUseHint,
+}));
+
+vi.mock('../api/puzzles', () => ({
+    reviewPuzzle: mockReviewPuzzle,
+    getDuePuzzles: mockGetDuePuzzles,
+}));
+
+vi.mock('../api/sessions', () => ({
+    startSession: mockStartSession,
+    startFocusPractice: mockStartFocusPractice,
+    completeSession: mockCompleteSession,
+    getSession: mockGetSession,
+    useHint: mockUseHint,
+}));
+
+vi.mock('../api/users', () => ({}));
 
 import { startSession, startFocusPractice, completeSession, reviewPuzzle, getSession, getDuePuzzles, useHint, type ReviewPuzzleResponse } from '../api';
 

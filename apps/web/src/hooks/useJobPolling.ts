@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { getJobStatus, reportJobStall, type JobStatusResponse } from '../api';
+import { getJobStatus, reportJobStall, type JobStatusResponse } from '../api/ops';
 
 interface JobPollingOptions {
     pollInterval?: number;
@@ -67,9 +67,12 @@ export function useJobPolling(jobId: string | null, options: JobPollingOptions =
             return;
         }
 
-        let timeoutId: ReturnType<typeof setTimeout>;
-        let stallTimerId: ReturnType<typeof setTimeout>;
-        let stallRecheckId: ReturnType<typeof setTimeout>;
+        let timeoutId: ReturnType<typeof setTimeout> = setTimeout(() => undefined, 0);
+        clearTimeout(timeoutId);
+        let stallTimerId: ReturnType<typeof setTimeout> = setTimeout(() => undefined, 0);
+        clearTimeout(stallTimerId);
+        let stallRecheckId: ReturnType<typeof setTimeout> = setTimeout(() => undefined, 0);
+        clearTimeout(stallRecheckId);
         let isMounted = true;
         let stalled = false;
         let currentBackoff = pollInterval;

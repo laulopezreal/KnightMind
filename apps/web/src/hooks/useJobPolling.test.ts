@@ -10,6 +10,11 @@ vi.mock('../api', () => ({
   reportJobStall: (...args: unknown[]) => mockReportJobStall(...args),
 }));
 
+vi.mock('../api/ops', () => ({
+  getJobStatus: (...args: unknown[]) => mockGetJobStatus(...args),
+  reportJobStall: (...args: unknown[]) => mockReportJobStall(...args),
+}));
+
 describe('useJobPolling', () => {
   beforeEach(() => {
     vi.resetAllMocks();
