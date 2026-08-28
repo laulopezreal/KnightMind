@@ -66,6 +66,51 @@ vi.mock('../api', () => ({
     ApiError: class extends Error { detail?: string },
 }));
 
+vi.mock('../api/puzzles', async () => {
+    const barrel = await vi.importMock<typeof import('../api')>('../api');
+    return {
+        generatePuzzles: barrel.generatePuzzles,
+        getDailyPuzzles: barrel.getDailyPuzzles,
+        getDuePuzzles: barrel.getDuePuzzles,
+        checkPuzzle: barrel.checkPuzzle,
+        revealPuzzle: barrel.revealPuzzle,
+        reviewPuzzle: barrel.reviewPuzzle,
+        requestMotifHint: barrel.requestMotifHint,
+        confirmPuzzleDiagnosis: vi.fn(),
+        getPuzzleDiagnosis: vi.fn(),
+    };
+});
+
+vi.mock('../api/ops', async () => {
+    const barrel = await vi.importMock<typeof import('../api')>('../api');
+    return { cancelJob: barrel.cancelJob, getJobStatus: vi.fn(), reportJobStall: vi.fn() };
+});
+
+vi.mock('../api/core', () => ({ ApiError: class extends Error { detail?: string } }));
+
+vi.mock('../api/sessions', async () => {
+    const barrel = await vi.importMock<typeof import('../api')>('../api');
+    return {
+        startSession: barrel.startSession,
+        startFocusPractice: vi.fn(),
+        completeSession: barrel.completeSession,
+        getSession: barrel.getSession,
+        useHint: barrel.useHint,
+    };
+});
+
+vi.mock('../api/users', async () => {
+    const barrel = await vi.importMock<typeof import('../api')>('../api');
+    return {
+        getUserStatus: barrel.getUserStatus,
+        getRecentSessions: barrel.getRecentSessions,
+        getMotifPerformance: barrel.getMotifPerformance,
+        validateChessComUser: vi.fn(),
+        importChessComGames: vi.fn(),
+        getImportStatus: vi.fn(),
+    };
+});
+
 vi.mock('../hooks/useAchievements', () => ({
     useAchievements: () => ({
         achievements: [],

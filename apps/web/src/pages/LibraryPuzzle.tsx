@@ -577,7 +577,7 @@ export default function LibraryPuzzle() {
                         {(status === 'correct' || status === 'revealed') && (
                             <Link
                                 to={fromSession ? '/puzzles' : '/library'}
-                                className="block w-full px-6 py-4 bg-green-600 text-white rounded-sm font-serif text-lg text-center transition-all km-interactive km-focus-visible"
+                                className="block w-full px-6 py-4 bg-green-600 text-white rounded-sm font-serif text-lg text-center transition-colors km-interactive km-focus-visible"
                             >
                                 {fromSession ? 'Back to Session Summary' : 'Back to Library'}
                             </Link>

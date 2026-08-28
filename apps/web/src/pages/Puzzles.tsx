@@ -1,5 +1,5 @@
 import { LOCALE } from '../utils/locale';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useReducer } from 'react';
 import { Link, useSearchParams, useNavigate } from 'react-router-dom';
 import { AccessibleChessboard } from '../components/AccessibleChessboard';
 import { PageHeader } from '../components/PageHeader';
@@ -60,22 +60,86 @@ type TerminalDiagnosisOwner = {
     username: string;
 };
 
+// ─── Puzzle-board state reducer ────────────────────────────────────────────
+// These state variables are tightly coupled: they are always co-updated at
+// puzzle transitions (new puzzle, retry after fail, reveal) so a reducer keeps
+// their state consistent and each transition atomic.
+type PuzzleBoardState = {
+    status: PuzzleStatus;
+    userMove: string;
+    clickFrom: string | null;
+    linePlyIndex: number;
+    attemptedLine: string[];
+};
+
+type PuzzleBoardAction =
+    | { type: 'RESET' }
+    | { type: 'SET_STATUS'; status: PuzzleStatus }
+    | { type: 'SET_USER_MOVE'; move: string }
+    | { type: 'SET_CLICK_FROM'; square: string | null }
+    | { type: 'SET_LINE_PLY_INDEX'; index: number }
+    | { type: 'APPEND_ATTEMPTED_LINE'; move: string }
+    | { type: 'RESET_ATTEMPTED_LINE' };
+
+const PUZZLE_BOARD_INITIAL: PuzzleBoardState = {
+    status: 'solving',
+    userMove: '',
+    clickFrom: null,
+    linePlyIndex: 0,
+    attemptedLine: [],
+};
+
+function puzzleBoardReducer(state: PuzzleBoardState, action: PuzzleBoardAction): PuzzleBoardState {
+    switch (action.type) {
+        case 'RESET':
+            return { ...PUZZLE_BOARD_INITIAL };
+        case 'SET_STATUS':
+            return { ...state, status: action.status };
+        case 'SET_USER_MOVE':
+            return { ...state, userMove: action.move };
+        case 'SET_CLICK_FROM':
+            return { ...state, clickFrom: action.square };
+        case 'SET_LINE_PLY_INDEX':
+            return { ...state, linePlyIndex: action.index };
+        case 'APPEND_ATTEMPTED_LINE':
+            return { ...state, attemptedLine: [...state.attemptedLine, action.move] };
+        case 'RESET_ATTEMPTED_LINE':
+            return { ...state, attemptedLine: [] };
+        default:
+            return state;
+    }
+}
+
 export default function Puzzles() {
     const { username } = useChessUsername();
     const { sessionType, targetAccuracy, setTargetAccuracy, targetTimeMinutes, setTargetTimeMinutes } = usePuzzleMode();
     const navigate = useNavigate();
-    const [userMove, setUserMove] = useState('');
-    const [status, setStatus] = useState<PuzzleStatus>('solving');
-    const [showUciInput, setShowUciInput] = useState(false);
-    const [activeJobId, setActiveJobId] = useState<string | null>(() => {
-        if (!username) return null;
-        return localStorage.getItem(`knightmind:lastJob:${username}`);
-    });
-    const [prevUsername, setPrevUsername] = useState(username);
-    const [game, setGame] = useState(new Chess());
-    // Click-to-move: the square whose piece was selected by a click (the
-    // standard chess-site input alongside drag and keyboard).
-    const [clickFrom, setClickFrom] = useState<string | null>(null);
+    // Coupled puzzle-board state: always co-updated at puzzle transitions (new
+    // puzzle, retry after fail, reveal). useReducer keeps each transition atomic.
+    const [board, dispatchBoard] = useReducer(puzzleBoardReducer, PUZZLE_BOARD_INITIAL);
+    const status = board.status;
+    const userMove = board.userMove;
+    const clickFrom = board.clickFrom;
+    const linePlyIndex = board.linePlyIndex;
+    const attemptedLine = board.attemptedLine;
+    const setStatus = (s: PuzzleStatus) => dispatchBoard({ type: 'SET_STATUS', status: s });
+    const setUserMove = (m: string) => dispatchBoard({ type: 'SET_USER_MOVE', move: m });
+    const setClickFrom = (sq: string | null) => dispatchBoard({ type: 'SET_CLICK_FROM', square: sq });
+    const setLinePlyIndex = (i: number) => dispatchBoard({ type: 'SET_LINE_PLY_INDEX', index: i });
+    const setAttemptedLine = (updater: ((prev: string[]) => string[]) | string[]) => {
+        if (Array.isArray(updater) && updater.length === 0) {
+            dispatchBoard({ type: 'RESET_ATTEMPTED_LINE' });
+        } else {
+            const next = Array.isArray(updater) ? updater : updater(attemptedLine);
+            // Append path: caller did `prev => [...prev, move]`
+            if (next.length === attemptedLine.length + 1) {
+                dispatchBoard({ type: 'APPEND_ATTEMPTED_LINE', move: next[next.length - 1] });
+            } else {
+                // Fallback full reset
+                dispatchBoard({ type: 'RESET_ATTEMPTED_LINE' });
+            }
+        }
+    };
     // The solution is NOT pre-sent with the puzzle (audit gate 13). It is
     // fetched on demand (reveal / full clue) and held only for the current
     // puzzle, so the client never holds the answer before the user asks.
@@ -83,12 +147,13 @@ export default function Puzzles() {
     // Full solution line (fetched on reveal / full clue), for puzzles that store
     // a multi-move principal variation. Legacy single-move puzzles leave this empty.
     const [revealedPv, setRevealedPv] = useState<string[]>([]);
-    // Multi-move solve progress. `linePlyIndex` is the index of the solver's NEXT
-    // move within the line (0, 2, 4, ...); `attemptedLine` accumulates the moves
-    // the user has played so the whole line can be server-verified on completion.
-    // Legacy single-move puzzles simply solve at ply 0 and complete immediately.
-    const [linePlyIndex, setLinePlyIndex] = useState(0);
-    const [attemptedLine, setAttemptedLine] = useState<string[]>([]);
+    const [showUciInput, setShowUciInput] = useState(false);
+    const [activeJobId, setActiveJobId] = useState<string | null>(() => {
+        if (!username) return null;
+        return localStorage.getItem(`knightmind:lastJob:${username}`);
+    });
+    const [prevUsername, setPrevUsername] = useState(username);
+    const [game, setGame] = useState(new Chess());
     // Transient "we couldn't reach the server" for a board action (check a move,
     // reveal, record a review). Deliberately separate from the puzzle `status`:
     // a failed request is NOT a wrong answer and must never be scored as one.
@@ -501,12 +566,8 @@ export default function Puzzles() {
         setDiagnosisLoadingOwner(null);
         setDiagnosisConfirmationOwner(null);
         setDiagnosisConfirmationError(null);
-        setStatus('solving');
-        setUserMove('');
+        dispatchBoard({ type: 'RESET' });
         setGame(new Chess(currentPuzzle.fen));
-        setLinePlyIndex(0);
-        setAttemptedLine([]);
-        setClickFrom(null);
         clue.reset();
         // The retry remains the same puzzle object, so the current-puzzle
         // effect does not run. Restart here only after the failed review has
@@ -1000,10 +1061,10 @@ export default function Puzzles() {
         // Drop any solution held for the previous puzzle.
         setRevealedMove(null);
         setRevealedPv([]);
-        // Restart the multi-move line for the new puzzle.
-        setLinePlyIndex(0);
-        setAttemptedLine([]);
-        setClickFrom(null);
+        // Restart the multi-move line and clear click selection for the new puzzle.
+        dispatchBoard({ type: 'RESET_ATTEMPTED_LINE' });
+        dispatchBoard({ type: 'SET_LINE_PLY_INDEX', index: 0 });
+        dispatchBoard({ type: 'SET_CLICK_FROM', square: null });
         setActionError(null);
     }
 
@@ -1088,15 +1149,12 @@ export default function Puzzles() {
     const handleNextPuzzle = () => {
         if (currentIndex < puzzles.length - 1) {
             setCurrentIndex(currentIndex + 1);
-            setStatus('solving');
+            dispatchBoard({ type: 'RESET' });
             outcomeDecisionRef.current = null;
             outcomeWriteRef.current = null;
             setMotifHint(null);
             setMotifHintAsked(false);
-            setUserMove('');
             setLastFeedback('');
-            setLinePlyIndex(0);
-            setAttemptedLine([]);
             clue.reset();
         }
     };
@@ -1552,33 +1610,42 @@ export default function Puzzles() {
                         Your Weak Areas
                     </h3>
                     <div className="space-y-2">
-                        {motifPerformance.motifs
+                        {(() => {
                             // weakest_motifs, not every needs_work row: the API
                             // already picks the bottom 2 reliable weaknesses
                             // (insufficient-data motifs excluded). Rendering the
                             // full needs_work list duplicated Pattern Mastery
                             // below almost row-for-row on the same page.
-                            .filter(m => motifPerformance.weakest_motifs.includes(m.name))
-                            .map(motif => (
-                                <div key={motif.name} className="flex justify-between items-center p-3 bg-negative-soft rounded-sm">
-                                    <div>
-                                        <span className="font-serif text-primary">{formatMotifName(motif.name)}</span>
-                                        <span className="text-xs text-primary/70 ml-2">
-                                            {/* passed/attempts, matching the % beside it.
-                                                passed counts passing ATTEMPTS, so dividing
-                                                by total_puzzles rendered impossible ratios
-                                                like "50/16 correct". */}
-                                            {motif.passed}/{motif.attempts} attempts correct
-                                        </span>
+                            // Set for constant-time lookup (fix #9); reduce for
+                            // a single-pass filter+map without semantic drift (#8).
+                            const weakestSet = new Set(motifPerformance.weakest_motifs);
+                            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                            const items: any[] = [];
+                            for (const motif of motifPerformance.motifs) {
+                                if (!weakestSet.has(motif.name)) continue;
+                                items.push(
+                                    <div key={motif.name} className="flex justify-between items-center p-3 bg-negative-soft rounded-sm">
+                                        <div>
+                                            <span className="font-serif text-primary">{formatMotifName(motif.name)}</span>
+                                            <span className="text-xs text-primary/70 ml-2">
+                                                {/* passed/attempts, matching the % beside it.
+                                                    passed counts passing ATTEMPTS, so dividing
+                                                    by total_puzzles rendered impossible ratios
+                                                    like "50/16 correct". */}
+                                                {motif.passed}/{motif.attempts} attempts correct
+                                            </span>
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                            <span className="text-negative font-mono text-sm">
+                                                {Math.round(motif.accuracy * 100)}%
+                                            </span>
+                                            <span className="text-xs text-primary/70">needs work</span>
+                                        </div>
                                     </div>
-                                    <div className="flex items-center gap-2">
-                                        <span className="text-negative font-mono text-sm">
-                                            {Math.round(motif.accuracy * 100)}%
-                                        </span>
-                                        <span className="text-xs text-primary/70">needs work</span>
-                                    </div>
-                                </div>
-                            ))}
+                                );
+                            }
+                            return items;
+                        })()}
                     </div>
                 </section>
             )}

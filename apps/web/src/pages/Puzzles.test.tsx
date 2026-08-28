@@ -61,7 +61,6 @@ vi.mock('../api', () => ({
   ApiError: class extends Error { detail?: string },
 }));
 
-
 // Sub-module mocks: forward to the barrel mock factory so vi.mocked() on
 // barrel imports and impl calls on sub-modules share the same mock state.
 vi.mock('../api/puzzles', async () => {
@@ -113,7 +112,6 @@ vi.mock('../api/users', () => ({
   importChessComGames: vi.fn(),
   getImportStatus: vi.fn(),
 }));
-
 
 vi.mock('../components/JobStatusCard', () => ({
   JobStatusCard: () => null,
