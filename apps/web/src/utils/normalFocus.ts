@@ -8,7 +8,9 @@ import type { TodaysFocus, TodaysFocusResponse } from '../api/users';
 export function resolveValidatedNormalFocus(
     requestedCause: string | null,
     response: TodaysFocusResponse,
+    expectedUsername?: string,
 ): TodaysFocus | null {
+    if (expectedUsername && response.username !== expectedUsername) return null;
     if (!requestedCause || response.focus?.cause !== requestedCause) return null;
     return response.focus;
 }

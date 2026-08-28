@@ -192,7 +192,7 @@ export default function Puzzles() {
         }
         setNormalFocusValidationPending(true);
         getTodaysFocus(username).then(response => {
-            if (current) setValidatedNormalFocus(resolveValidatedNormalFocus(focusCause, response));
+            if (current) setValidatedNormalFocus(resolveValidatedNormalFocus(focusCause, response, username));
         }).catch(() => {
             // A failed validation is the safe ordinary-training fallback.
         }).finally(() => {

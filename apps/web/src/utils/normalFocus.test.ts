@@ -34,4 +34,10 @@ describe('resolveValidatedNormalFocus', () => {
             username: 'alice', focus, below_threshold: 0, pending: 0,
         })).toBeNull();
     });
+
+    it('rejects a focus response belonging to another user', () => {
+        expect(resolveValidatedNormalFocus(focus.cause, {
+            username: 'mallory', focus, below_threshold: 0, pending: 0,
+        }, 'alice')).toBeNull();
+    });
 });

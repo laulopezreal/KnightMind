@@ -96,7 +96,7 @@ export function HeroTrainCard({
   // Only the caught-up branch (non-completed-today) prints the next-review time
   // in the body. Scope the caption-suppression guard to exactly that branch.
   const nextReviewShownInBody =
-    !isFirstTime && !needsWarmup && !isCompletedToday && isZeroDue && dueIn4h === 0 && !!nextReviewAt;
+    !isFirstTime && !needsWarmup && isZeroDue && dueIn4h === 0 && !!nextReviewAt;
 
   return (
     <section

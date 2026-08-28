@@ -93,6 +93,21 @@ describe('HeroTrainCard', () => {
     expect(screen.queryByText(/^Next review:/)).not.toBeInTheDocument();
   });
 
+  it('does not duplicate next-review guidance after completing the caught-up day', () => {
+    render(
+      <HeroTrainCard
+        {...defaultProps}
+        completedToday={true}
+        dueCount={0}
+        dueIn4h={0}
+        nextReviewAt="2025-01-15T14:00:00Z"
+      />
+    );
+
+    expect(screen.getByText(/Your next review is in 2h/i)).toBeInTheDocument();
+    expect(screen.queryByText(/^Next review:/)).not.toBeInTheDocument();
+  });
+
   it('does not claim "0 puzzles waiting" for a first-timer with nothing generated', () => {
     render(<HeroTrainCard {...defaultProps} totalSessions={0} dueCount={0} />);
 

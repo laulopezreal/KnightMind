@@ -39,6 +39,7 @@ const mockGetRecentSessions = vi.fn();
 const mockGetMotifPerformance = vi.fn();
 const mockGetSession = vi.fn();
 const mockStartFocusPractice = vi.fn();
+const mockGetTodaysFocus = vi.fn();
 
 // Puzzles.tsx imports everything from '../api' directly
 vi.mock('../api', () => ({
@@ -106,6 +107,7 @@ vi.mock('../api/users', () => ({
   getUserStatus: (...args: unknown[]) => mockGetUserStatus(...args),
   getRecentSessions: (...args: unknown[]) => mockGetRecentSessions(...args),
   getMotifPerformance: (...args: unknown[]) => mockGetMotifPerformance(...args),
+  getTodaysFocus: (...args: unknown[]) => mockGetTodaysFocus(...args),
   validateChessComUser: vi.fn(),
   importChessComGames: vi.fn(),
   getImportStatus: vi.fn(),
@@ -162,6 +164,7 @@ describe('Puzzles', () => {
     mockGetRecentSessions.mockResolvedValue([]);
     mockGetMotifPerformance.mockResolvedValue({ motifs: [], weakest_motifs: [] });
     mockGetSession.mockRejectedValue(new Error('No session'));
+    mockGetTodaysFocus.mockResolvedValue({ username: 'testplayer', focus: null, below_threshold: 0, pending: 0 });
   });
 
   afterEach(() => {
@@ -528,6 +531,65 @@ describe('Puzzles', () => {
       expect(screen.getByText('Standard mode')).toBeInTheDocument();
       expect(screen.getByText('No puzzles are due for review yet.')).toBeInTheDocument();
       expect(mockStartFocusPractice).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('normal focus validation', () => {
+    const focus = {
+      cause: 'loose_piece_awareness',
+      name: 'Loose Piece Syndrome',
+      description: 'Scan loose pieces.',
+      mistakes: 9,
+      recent_mistakes: 4,
+      accuracy: 0.4,
+      priority: 12,
+      rationale: '9 diagnosed mistakes.',
+    };
+    const duePuzzle = {
+      id: 'normal-focus-puzzle',
+      fen: '8/8/8/8/8/8/8/8 w - - 0 1',
+      side_to_move: 'white',
+      best_move_uci: 'e2e4',
+    };
+
+    it.each<[string, string, () => void]>([
+      ['failed validation', 'loose_piece_awareness', () => mockGetTodaysFocus.mockRejectedValue(new Error('validation failed'))],
+      ['missing focus', 'loose_piece_awareness', () => mockGetTodaysFocus.mockResolvedValue({ username: 'testplayer', focus: null, below_threshold: 0, pending: 0 })],
+      ['stale mismatched focus', 'loose_piece_awareness', () => mockGetTodaysFocus.mockResolvedValue({ username: 'testplayer', focus: { ...focus, cause: 'king_safety_blindness' }, below_threshold: 0, pending: 0 })],
+      ['arbitrary focus', 'arbitrary', () => mockGetTodaysFocus.mockResolvedValue({ username: 'testplayer', focus, below_threshold: 0, pending: 0 })],
+      ['unauthorized response', 'loose_piece_awareness', () => mockGetTodaysFocus.mockResolvedValue({ username: 'other-player', focus, below_threshold: 0, pending: 0 })],
+    ] as const)('renders ordinary Standard training and omits focus_cause for %s', async (_label, requestedCause, configure) => {
+      configure();
+      mockSearchParams = new URLSearchParams(`focus_cause=${requestedCause}`);
+      mockGetUserStatus.mockResolvedValue({ games_count: 50, puzzles_count: 20, due_count: 1, has_new_games: false });
+      mockGetDuePuzzles.mockResolvedValue({ due_count: 1, returned_count: 1, now: new Date().toISOString(), puzzles: [duePuzzle] });
+      vi.mocked(startSession).mockResolvedValue({ session_id: 'normal-session', requested_n: 1 });
+
+      render(<Puzzles />);
+      const start = await screen.findByRole('button', { name: 'Start Session' });
+      await waitFor(() => expect(start).toBeEnabled());
+      await act(async () => start.click());
+
+      await waitFor(() => expect(startSession).toHaveBeenCalled());
+      const sessionArgs = vi.mocked(startSession).mock.calls[0];
+      expect(sessionArgs[5]).not.toEqual(expect.objectContaining({ focus_cause: expect.anything() }));
+      expect(screen.getByText(/Standard\s+Active/i)).toBeInTheDocument();
+    });
+
+    it('preserves a valid current focus in Standard session creation', async () => {
+      mockSearchParams = new URLSearchParams('focus_cause=loose_piece_awareness');
+      mockGetTodaysFocus.mockResolvedValue({ username: 'testplayer', focus, below_threshold: 0, pending: 0 });
+      mockGetUserStatus.mockResolvedValue({ games_count: 50, puzzles_count: 20, due_count: 1, has_new_games: false });
+      mockGetDuePuzzles.mockResolvedValue({ due_count: 1, returned_count: 1, now: new Date().toISOString(), puzzles: [duePuzzle] });
+      vi.mocked(startSession).mockResolvedValue({ session_id: 'valid-focus-session', requested_n: 1 });
+
+      render(<Puzzles />);
+      const start = await screen.findByRole('button', { name: 'Start Session' });
+      await waitFor(() => expect(start).toBeEnabled());
+      await act(async () => start.click());
+
+      await waitFor(() => expect(startSession).toHaveBeenCalled());
+      expect(vi.mocked(startSession).mock.calls[0][5]).toEqual(expect.objectContaining({ focus_cause: focus.cause }));
     });
   });
 
