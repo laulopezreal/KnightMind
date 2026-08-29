@@ -98,6 +98,13 @@ export interface ScheduleData {
     next_review_at: string | null;
 }
 
+export interface DailyPractice {
+    /** Server-derived. True when the user has at least one completed session on today's UTC day. */
+    completed_today: boolean;
+    /** ISO UTC timestamp of the most recent qualifying completion, or null. */
+    completed_session_at: string | null;
+}
+
 export interface DashboardSummary {
     username: string;
     last_session_at: string | null;
@@ -107,6 +114,7 @@ export interface DashboardSummary {
     recent_form: RecentFormData;
     schedule: ScheduleData;
     needs_warmup: boolean;
+    daily_practice: DailyPractice;
 }
 
 export interface TrendDataPoint {

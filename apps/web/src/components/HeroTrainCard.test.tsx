@@ -93,6 +93,21 @@ describe('HeroTrainCard', () => {
     expect(screen.queryByText(/^Next review:/)).not.toBeInTheDocument();
   });
 
+  it('does not duplicate next-review guidance after completing the caught-up day', () => {
+    render(
+      <HeroTrainCard
+        {...defaultProps}
+        completedToday={true}
+        dueCount={0}
+        dueIn4h={0}
+        nextReviewAt="2025-01-15T14:00:00Z"
+      />
+    );
+
+    expect(screen.getByText(/Your next review is in 2h/i)).toBeInTheDocument();
+    expect(screen.queryByText(/^Next review:/)).not.toBeInTheDocument();
+  });
+
   it('does not claim "0 puzzles waiting" for a first-timer with nothing generated', () => {
     render(<HeroTrainCard {...defaultProps} totalSessions={0} dueCount={0} />);
 
@@ -151,6 +166,55 @@ describe('HeroTrainCard', () => {
 
     const section = screen.getByRole('region', { name: /train today/i });
     expect(section).toBeInTheDocument();
+  });
+
+  it('shows completed-today hero with due puzzles remaining', () => {
+    render(<HeroTrainCard {...defaultProps} completedToday={true} dueCount={5} />);
+
+    expect(screen.getByText("Today's training is complete")).toBeInTheDocument();
+    expect(screen.getByText(/You completed a training session today/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Train more' })).toBeInTheDocument();
+    // Due count still visible (as availability, not obligation)
+    expect(screen.getByText('5')).toBeInTheDocument();
+  });
+
+  it('shows completed-today hero with no due puzzles (prefixed caught-up)', () => {
+    render(<HeroTrainCard {...defaultProps} completedToday={true} dueCount={0} />);
+
+    expect(screen.getByText("Today's training is complete")).toBeInTheDocument();
+    const body = screen.getByText(/Today's training is complete\./i);
+    expect(body).toBeInTheDocument();
+    // Secondary optional button is Browse Puzzles since due=0
+    expect(screen.getByRole('button', { name: 'Browse Puzzles' })).toBeInTheDocument();
+  });
+
+  it('does not enter completed-today state for a first-time user', () => {
+    // A first-timer who somehow sent completedToday=true should still onboard normally.
+    render(<HeroTrainCard {...defaultProps} completedToday={true} totalSessions={0} dueCount={7} />);
+
+    expect(screen.queryByText("Today's training is complete")).not.toBeInTheDocument();
+    expect(screen.getByText('Ready to Start Training?')).toBeInTheDocument();
+  });
+
+  it('does not enter completed-today state for a warmup user', () => {
+    render(
+      <HeroTrainCard
+        {...defaultProps}
+        completedToday={true}
+        needsWarmup={true}
+        daysSinceLastSession={10}
+      />
+    );
+
+    expect(screen.queryByText("Today's training is complete")).not.toBeInTheDocument();
+    expect(screen.getByText('Welcome Back')).toBeInTheDocument();
+  });
+
+  it('pre-completion states remain unchanged when completedToday is false', () => {
+    render(<HeroTrainCard {...defaultProps} completedToday={false} dueCount={3} />);
+
+    expect(screen.getByText('Train Today')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Start Session' })).toBeInTheDocument();
   });
 
   it('renders and fires the optional secondary action (smart hero shortcut)', async () => {

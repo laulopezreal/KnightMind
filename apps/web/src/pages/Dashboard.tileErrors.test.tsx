@@ -71,6 +71,7 @@ const SUMMARY = {
     },
     training_streak_days: 4,
     last_session_at: null,
+    daily_practice: { completed_today: false, completed_session_at: null },
 };
 
 describe('Dashboard tile containment', () => {

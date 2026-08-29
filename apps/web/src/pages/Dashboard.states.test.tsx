@@ -37,7 +37,11 @@ vi.mock('../api/sessions', () => ({
     getRecentSessions: (...a: unknown[]) => mockGetRecentSessions(...a),
 }));
 
-vi.mock('../components/HeroTrainCard', () => ({ HeroTrainCard: () => <div data-testid="hero-card" /> }));
+vi.mock('../components/HeroTrainCard', () => ({
+    HeroTrainCard: ({ completedToday }: { completedToday?: boolean }) => (
+        <div data-testid="hero-card" data-completed-today={String(completedToday)} />
+    ),
+}));
 vi.mock('../components/RecentlyTrickyCard', () => ({ RecentlyTrickyCard: () => <div /> }));
 vi.mock('../components/MomentumCard', () => ({ MomentumCard: () => <div data-testid="momentum-card" /> }));
 vi.mock('../components/StreakCard', () => ({ StreakCard: () => <div data-testid="streak-card" /> }));
@@ -59,6 +63,7 @@ const SUMMARY = {
     },
     training_streak_days: 0,
     last_session_at: null,
+    daily_practice: { completed_today: false, completed_session_at: null },
 };
 
 function setOnline(value: boolean) {
@@ -311,5 +316,32 @@ describe('Dashboard data states', () => {
         render(<Dashboard />);
         expect(await screen.findByTestId('momentum-card')).toBeInTheDocument();
         expect(screen.getByTestId('streak-card')).toBeInTheDocument();
+    });
+
+    // ── Daily practice completion state ──
+
+    it('passes completed_today=true from dashboard to HeroTrainCard', async () => {
+        mockGetDashboardSummary.mockReset();
+        mockGetDashboardSummary.mockResolvedValue({
+            ...SUMMARY,
+            schedule: { due_now: 3, due_in_4h: 0, next_review_at: null },
+            daily_practice: { completed_today: true, completed_session_at: '2026-08-28T12:00:00Z' },
+        });
+
+        render(<Dashboard />);
+        await waitFor(() => expect(screen.getByTestId('hero-card')).toHaveAttribute('data-completed-today', 'true'));
+    });
+
+    it('dashboard loads correctly when completed_today=false', async () => {
+        mockGetDashboardSummary.mockReset();
+        mockGetDashboardSummary.mockResolvedValue({
+            ...SUMMARY,
+            daily_practice: { completed_today: false, completed_session_at: null },
+        });
+
+        render(<Dashboard />);
+        await waitFor(() => expect(screen.getByTestId('hero-card')).toBeInTheDocument());
+
+        expect(screen.getByTestId('hero-card')).toHaveAttribute('data-completed-today', 'false');
     });
 });

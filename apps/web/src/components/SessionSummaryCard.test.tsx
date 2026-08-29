@@ -4,6 +4,19 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { SessionSummaryCard } from './SessionSummaryCard';
 
+// SessionSummaryCard renders a <Link> (Back to Dashboard). Mock Link as a plain
+// anchor so tests that do not need routing can render without MemoryRouter.
+// Tests that explicitly assert href/routing behaviour use MemoryRouter directly.
+vi.mock('react-router-dom', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('react-router-dom')>();
+  return {
+    ...actual,
+    Link: ({ children, to, ...props }: { children: React.ReactNode; to: string; [key: string]: unknown }) => (
+      <a href={String(to)} {...props}>{children}</a>
+    ),
+  };
+});
+
 const mockSessionSummary = {
   session_id: 'session-1',
   requested_n: 10,
@@ -130,7 +143,7 @@ describe('SessionSummaryCard', () => {
     expect(onStartNewSession).toHaveBeenCalledTimes(1);
   });
 
-  it('renders the primary CTA with a solid fill, not the no-op bg-primary', () => {
+  it('renders Back to Dashboard as the primary link with solid fill', () => {
     render(
       <SessionSummaryCard
         sessionSummary={mockSessionSummary}
@@ -139,11 +152,11 @@ describe('SessionSummaryCard', () => {
       />
     );
 
-    // bg-primary/text-bg-primary generated no CSS (unregistered tokens), so the
-    // button read as plain text. It must use the theme-aware fill utilities.
-    const cta = screen.getByRole('button', { name: 'Start New Session' });
-    expect(cta).toHaveClass('bg-primary');
-    expect(cta).toHaveClass('text-bg-primary');
+    // Back to Dashboard is the primary closeout: solid bg-primary fill.
+    const link = screen.getByRole('link', { name: 'Back to Dashboard' });
+    expect(link).toHaveClass('bg-primary');
+    expect(link).toHaveClass('text-bg-primary');
+    expect(link).toHaveAttribute('href', '/dashboard');
   });
 
   it('should not show achievements section when none earned', () => {
@@ -322,5 +335,78 @@ describe('SessionSummaryCard', () => {
 
     const reviewLink = screen.getByRole('link', { name: /review another puzzle/i });
     expect(reviewLink).toHaveAttribute('href', '/library/p-xyz?from=session');
+  });
+
+  // --- Daily ritual closeout: Back to Dashboard primary, Start New Session secondary ---
+
+  it('renders Back to Dashboard as primary closeout link', () => {
+    render(
+      <MemoryRouter>
+        <SessionSummaryCard
+          sessionSummary={mockSessionSummary}
+          achievements={[]}
+          onStartNewSession={vi.fn()}
+        />
+      </MemoryRouter>
+    );
+
+    const link = screen.getByRole('link', { name: 'Back to Dashboard' });
+    expect(link).toBeInTheDocument();
+    expect(link).toHaveAttribute('href', '/dashboard');
+    // Primary style: solid bg-primary fill
+    expect(link).toHaveClass('bg-primary');
+    expect(link).toHaveClass('text-bg-primary');
+  });
+
+  it('renders Start New Session as quieter secondary action', () => {
+    render(
+      <MemoryRouter>
+        <SessionSummaryCard
+          sessionSummary={mockSessionSummary}
+          achievements={[]}
+          onStartNewSession={vi.fn()}
+        />
+      </MemoryRouter>
+    );
+
+    const btn = screen.getByRole('button', { name: 'Start New Session' });
+    expect(btn).toBeInTheDocument();
+    // Secondary style: outline border, not the solid fill
+    expect(btn).toHaveClass('border');
+    expect(btn).not.toHaveClass('bg-primary');
+  });
+
+  it('calls onStartNewSession when Start New Session is clicked', async () => {
+    const user = userEvent.setup();
+    const onStartNewSession = vi.fn();
+
+    render(
+      <MemoryRouter>
+        <SessionSummaryCard
+          sessionSummary={mockSessionSummary}
+          achievements={[]}
+          onStartNewSession={onStartNewSession}
+        />
+      </MemoryRouter>
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Start New Session' }));
+    expect(onStartNewSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not show a false completion message for a session with 0 puzzles', () => {
+    render(
+      <MemoryRouter>
+        <SessionSummaryCard
+          sessionSummary={{ ...mockSessionSummary, pass_count: 0, fail_count: 0 }}
+          achievements={[]}
+          onStartNewSession={vi.fn()}
+        />
+      </MemoryRouter>
+    );
+
+    // The generic "Session complete" headline is honest; no false celebration.
+    expect(screen.getByText('Session complete')).toBeInTheDocument();
+    expect(screen.queryByText(/all due puzzles are complete/i)).not.toBeInTheDocument();
   });
 });

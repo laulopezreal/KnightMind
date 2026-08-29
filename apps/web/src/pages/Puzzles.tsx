@@ -6,6 +6,7 @@ import { PageHeader } from '../components/PageHeader';
 import { ConnectAccountEmpty } from '../components/ConnectAccountEmpty';
 import { Chess } from 'chess.js';
 import { generatePuzzles, getDailyPuzzles, checkPuzzle, confirmPuzzleDiagnosis, getPuzzleDiagnosis, revealPuzzle, requestMotifHint, type PuzzleDiagnosis } from '../api/puzzles';
+import { getTodaysFocus, type TodaysFocus } from '../api/users';
 import { cancelJob } from '../api/ops';
 import { ApiError } from '../api/core';
 import { JobStatusCard } from '../components/JobStatusCard';
@@ -25,6 +26,7 @@ import { usePuzzleSession, type PuzzleStatus } from '../hooks/usePuzzleSession';
 import { getModeLabels, getPuzzleActionA11yCopy, getSessionDetailsA11yCopy } from '../utils/a11yCopy';
 import { formatMotifName } from '../utils/motif';
 import { uciLineToSan } from '../utils/chess';
+import { resolveValidatedNormalFocus } from '../utils/normalFocus';
 
 // Mastery ranks, styled from one lookup. The panel tint, the percentage and the
 // bar used to be three parallel ternaries — the figure already used the theme
@@ -175,6 +177,32 @@ export default function Puzzles() {
     const focusOpeningScope = searchParams.get('focus_opening_scope');
     const isWarmupMode = searchParams.get('warmup') === 'true';
 
+    // A normal-focus URL is only an intent. The current server planner is the
+    // authority that decides whether that cause is still this user's focus.
+    // Never derive trust from the URL's shape or display it before this read
+    // resolves. Focus Practice keeps its own server-owned start contract.
+    const [validatedNormalFocus, setValidatedNormalFocus] = useState<TodaysFocus | null>(null);
+    const [normalFocusValidationPending, setNormalFocusValidationPending] = useState(false);
+    useEffect(() => {
+        let current = true;
+        setValidatedNormalFocus(null);
+        if (!username || !focusCause || focusPracticeMode || sessionType !== 'standard') {
+            setNormalFocusValidationPending(false);
+            return () => { current = false; };
+        }
+        setNormalFocusValidationPending(true);
+        getTodaysFocus(username).then(response => {
+            if (current) setValidatedNormalFocus(resolveValidatedNormalFocus(focusCause, response, username));
+        }).catch(() => {
+            // A failed validation is the safe ordinary-training fallback.
+        }).finally(() => {
+            if (current) setNormalFocusValidationPending(false);
+        });
+        return () => { current = false; };
+    }, [focusCause, focusPracticeMode, sessionType, username]);
+
+    const effectiveFocusCause = focusPracticeMode ? focusCause : validatedNormalFocus?.cause ?? null;
+
     // Warmup state
     const [warmupMode, setWarmupMode] = useState(isWarmupMode);
     const [showSessionDetails, setShowSessionDetails] = useState(false);
@@ -251,7 +279,7 @@ export default function Puzzles() {
         targetTimeMinutes,
         warmupMode,
         motifFilter,
-        focusCause,
+        focusCause: effectiveFocusCause,
         focusPracticeMode,
         focusOpening,
         focusOpeningScope,
@@ -605,7 +633,7 @@ export default function Puzzles() {
     });
 
     const isGenerating = isJobPolling || (job?.status === 'queued' || job?.status === 'running');
-    const controlsDisabled = !controlsEnabled || isLoading || isGenerating;
+    const controlsDisabled = !controlsEnabled || isLoading || isGenerating || normalFocusValidationPending;
     const generateNewDisabled = !controlsEnabled || isLoading || isGenerating || !userStatus?.has_new_games;
     const hasValidFocusPracticeIntent = focusPracticeMode && Boolean(focusCause);
     const { selectedModeLabel, screenReaderModeLabel } = getModeLabels(sessionType);
@@ -1344,6 +1372,29 @@ export default function Puzzles() {
                                     <strong className="font-medium">Focus practice</strong> gives you extra practice for the selected focus. The server decides whether positions are safe and available.
                                 </p>
                             </div>
+                        ) : validatedNormalFocus && sessionType === 'standard' ? (
+                            <>
+                                {/* Today's Focus trust label: the cause was chosen from the Dashboard
+                                    but the session entry gave no visible confirmation. This panel
+                                    names the selected focus and honestly describes the queue so the
+                                    user can trust that their choice was heard. */}
+                                <div className="p-4 bg-primary/5 border border-primary/20 rounded-sm">
+                                    <p className="text-sm text-primary/70 font-sans">
+                                        <strong className="font-medium">
+                                            Today&apos;s focus: {validatedNormalFocus.name}
+                                        </strong>
+                                    </p>
+                                    <p className="text-sm text-primary/70 font-sans mt-1">
+                                        This session prioritises eligible due puzzles from this focus and may top up from the ordinary due queue. The session does not exclusively contain focus puzzles.
+                                    </p>
+                                </div>
+                                <div className="p-4 bg-primary/5 border border-primary/20 rounded-sm">
+                                    <p className="text-sm text-primary/70 font-sans">
+                                        <strong className="font-medium">Standard mode</strong> uses spaced repetition to help you master tactical patterns from your own games.
+                                        Complete 5 puzzles per session with immediate feedback on each move.
+                                    </p>
+                                </div>
+                            </>
                         ) : sessionType === 'standard' ? (
                             <div className="p-4 bg-primary/5 border border-primary/20 rounded-sm">
                                 <p className="text-sm text-primary/70 font-sans">
