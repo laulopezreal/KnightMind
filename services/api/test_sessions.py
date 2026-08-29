@@ -8,9 +8,16 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from sqlalchemy import select
 
-from services.api.models import Game, Puzzle, PuzzleResult, TrainingSession
+from services.api.models import (
+    Game,
+    Puzzle,
+    PuzzleDiagnosis,
+    PuzzleResult,
+    TrainingSession,
+)
 from services.api.sessions import (
     CompleteSessionRequest,
+    MissedPuzzleSummary,
     StartSessionRequest,
     UseHintRequest,
     complete_session,
@@ -462,3 +469,233 @@ async def test_motif_survives_hint_and_completion_summaries(db_session):
         started.session_id, CompleteSessionRequest(username="testuser"), db_session
     )
     assert completed.motif == "skewer"
+
+
+# ---------------------------------------------------------------------------
+# Missed-puzzle teaching panel (G1)
+# ---------------------------------------------------------------------------
+
+
+def _add_diagnosis(db, puzzle_id: str, username: str, cause: str | None) -> None:
+    """Insert a minimal PuzzleDiagnosis row so missed-puzzle tests can verify causes."""
+    existing = db.get(PuzzleDiagnosis, (puzzle_id, username))
+    if existing is not None:
+        existing.primary_cause = cause
+        db.flush()
+        return
+    db.add(
+        PuzzleDiagnosis(
+            puzzle_id=puzzle_id,
+            username=username,
+            primary_cause=cause,
+            status="ok",
+            insufficient_evidence=False,
+        )
+    )
+    db.flush()
+
+
+@pytest.mark.asyncio
+async def test_complete_session_with_fails_returns_missed_puzzles(db_session):
+    """A completed session with failures must list each missed puzzle once."""
+    session_id = str(uuid.uuid4())
+    puzzle_id = f"p-{uuid.uuid4()}"
+    _ensure_puzzle(db_session, puzzle_id, "testuser")
+    _add_diagnosis(db_session, puzzle_id, "testuser", "king_safety_blindness")
+
+    db_session.add(
+        TrainingSession(
+            id=session_id,
+            username="testuser",
+            requested_n=5,
+            pass_count=3,
+            fail_count=1,
+            total_time_ms=30000,
+        )
+    )
+    db_session.flush()
+
+    # Record a failed review in this session.
+    insert_puzzle_review(
+        db_session,
+        puzzle_id=puzzle_id,
+        username="testuser",
+        result=PuzzleResult.FAIL,
+        session_id=session_id,
+    )
+
+    result = await complete_session(
+        session_id, CompleteSessionRequest(username="testuser"), db_session
+    )
+
+    assert result.missed_puzzles is not None
+    assert len(result.missed_puzzles) == 1
+    mp = result.missed_puzzles[0]
+    assert isinstance(mp, MissedPuzzleSummary)
+    assert mp.puzzle_id == puzzle_id
+    assert mp.cause == "king_safety_blindness"
+    assert mp.cause_label == "King safety blindness"
+    assert mp.display_name  # Non-empty provenance string.
+    # Privacy: no FEN or solution fields on MissedPuzzleSummary.
+    assert not hasattr(mp, "fen")
+    assert not hasattr(mp, "best_move_uci")
+
+
+@pytest.mark.asyncio
+async def test_complete_session_no_fails_returns_no_missed_puzzles(db_session):
+    """A perfect session must not attach an empty missed-puzzle panel."""
+    session_id = str(uuid.uuid4())
+    db_session.add(
+        TrainingSession(
+            id=session_id,
+            username="testuser",
+            requested_n=5,
+            pass_count=5,
+            fail_count=0,
+            total_time_ms=20000,
+        )
+    )
+    db_session.commit()
+
+    result = await complete_session(
+        session_id, CompleteSessionRequest(username="testuser"), db_session
+    )
+    assert result.missed_puzzles is None
+
+
+@pytest.mark.asyncio
+async def test_missed_puzzle_without_diagnosis_returns_none_cause(db_session):
+    """A failed puzzle with no diagnosis row must still appear, with null cause."""
+    session_id = str(uuid.uuid4())
+    puzzle_id = f"p-{uuid.uuid4()}"
+    _ensure_puzzle(db_session, puzzle_id, "testuser")
+    # Deliberately no diagnosis row.
+
+    db_session.add(
+        TrainingSession(
+            id=session_id,
+            username="testuser",
+            requested_n=5,
+            pass_count=0,
+            fail_count=1,
+            total_time_ms=10000,
+        )
+    )
+    db_session.flush()
+    insert_puzzle_review(
+        db_session,
+        puzzle_id=puzzle_id,
+        username="testuser",
+        result=PuzzleResult.FAIL,
+        session_id=session_id,
+    )
+
+    result = await complete_session(
+        session_id, CompleteSessionRequest(username="testuser"), db_session
+    )
+
+    assert result.missed_puzzles is not None
+    assert len(result.missed_puzzles) == 1
+    mp = result.missed_puzzles[0]
+    assert mp.puzzle_id == puzzle_id
+    assert mp.cause is None
+    assert mp.cause_label is None
+
+
+@pytest.mark.asyncio
+async def test_missed_puzzles_deduplicated_for_retried_puzzle(db_session):
+    """A puzzle failed multiple times in one session must appear only once."""
+    session_id = str(uuid.uuid4())
+    puzzle_id = f"p-{uuid.uuid4()}"
+    _ensure_puzzle(db_session, puzzle_id, "testuser")
+
+    db_session.add(
+        TrainingSession(
+            id=session_id,
+            username="testuser",
+            requested_n=5,
+            pass_count=0,
+            fail_count=3,
+            total_time_ms=15000,
+        )
+    )
+    db_session.flush()
+    for _ in range(3):
+        insert_puzzle_review(
+            db_session,
+            puzzle_id=puzzle_id,
+            username="testuser",
+            result=PuzzleResult.FAIL,
+            session_id=session_id,
+        )
+
+    result = await complete_session(
+        session_id, CompleteSessionRequest(username="testuser"), db_session
+    )
+
+    assert result.missed_puzzles is not None
+    assert len(result.missed_puzzles) == 1
+
+
+def test_get_session_completed_with_fails_returns_missed_puzzles(db_session):
+    """GET /sessions/{id} must also return missed puzzles for completed sessions."""
+    session_id = str(uuid.uuid4())
+    puzzle_id = f"p-{uuid.uuid4()}"
+    _ensure_puzzle(db_session, puzzle_id, "testuser")
+    _add_diagnosis(db_session, puzzle_id, "testuser", "alignment_blindness")
+
+    db_session.add(
+        TrainingSession(
+            id=session_id,
+            username="testuser",
+            requested_n=5,
+            pass_count=2,
+            fail_count=1,
+            total_time_ms=25000,
+            completed_at=datetime.now(timezone.utc),
+        )
+    )
+    db_session.flush()
+    insert_puzzle_review(
+        db_session,
+        puzzle_id=puzzle_id,
+        username="testuser",
+        result=PuzzleResult.FAIL,
+        session_id=session_id,
+    )
+
+    summary = get_session(session_id, db_session)
+    assert summary.missed_puzzles is not None
+    assert len(summary.missed_puzzles) == 1
+    assert summary.missed_puzzles[0].cause == "alignment_blindness"
+
+
+def test_get_session_incomplete_returns_no_missed_puzzles(db_session):
+    """An in-progress session must not surface missed puzzles even with fail reviews."""
+    session_id = str(uuid.uuid4())
+    puzzle_id = f"p-{uuid.uuid4()}"
+    _ensure_puzzle(db_session, puzzle_id, "testuser")
+
+    db_session.add(
+        TrainingSession(
+            id=session_id,
+            username="testuser",
+            requested_n=5,
+            pass_count=0,
+            fail_count=1,
+            total_time_ms=5000,
+            # completed_at is None — session still in progress.
+        )
+    )
+    db_session.flush()
+    insert_puzzle_review(
+        db_session,
+        puzzle_id=puzzle_id,
+        username="testuser",
+        result=PuzzleResult.FAIL,
+        session_id=session_id,
+    )
+
+    summary = get_session(session_id, db_session)
+    # Incomplete session: no teaching panel.
+    assert summary.missed_puzzles is None

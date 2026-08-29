@@ -19,7 +19,16 @@ from services.api.db import get_db
 from services.api.diagnosis.causes import CAUSE_LABELS
 from services.api.diagnosis.planner import plan_focus
 from services.api.identity import assert_owns_username, require_account
-from services.api.models import Account, PuzzleStats, TrainingSession
+from services.api.models import (
+    Account,
+    Game,
+    Puzzle,
+    PuzzleDiagnosis,
+    PuzzleResult,
+    PuzzleReview,
+    PuzzleStats,
+    TrainingSession,
+)
 from services.api.puzzles.provenance import resolve_display_name
 from services.api.puzzles.resolution import is_resolved
 from services.api.ratings_auto import auto_snapshot
@@ -111,10 +120,137 @@ class SessionSummary(BaseModel):
     # rather than merely biasing it, so losing it on resume changes the set of
     # puzzles, not just their order.
     motif: str | None = None
+    # Missed puzzles: only populated for a completed session with failures.
+    # Each entry names the puzzle and its diagnosis cause (server-owned).
+    # No solutions, FEN, or best moves are included.
+    missed_puzzles: list["MissedPuzzleSummary"] | None = None
+
+
+class MissedPuzzleSummary(BaseModel):
+    """A puzzle the user failed in a session, with its diagnosis cause.
+
+    Only puzzle_id and safe display fields are included.  Solutions, FEN, and
+    best moves are never surfaced here — the library route owns those and guards
+    them behind the same ownership check.
+    """
+
+    puzzle_id: str
+    display_name: str
+    cause: str | None = None
+    cause_label: str | None = None
 
 
 class UseHintRequest(BaseModel):
     username: Username
+
+
+def _missed_puzzles_for_session(
+    db: Session, username: str, session_id: str
+) -> list[MissedPuzzleSummary]:
+    """Return one entry per failed puzzle in this session, with cause labels.
+
+    Deduplicates: if the user retried the same puzzle multiple times in one
+    session and failed all of them, it appears once.  The query joins
+    PuzzleReview → Puzzle → PuzzleStats → PuzzleDiagnosis in a single pass;
+    the display name is resolved the same way as every other puzzle route.
+
+    Ownership is already enforced by the caller (the session row belongs to
+    ``username``), so the WHERE clause only needs the session_id and username.
+    """
+    # Collect failed puzzle_ids for this session (dedup via DISTINCT).
+    fail_ids_stmt = (
+        select(PuzzleReview.puzzle_id)
+        .where(
+            PuzzleReview.session_id == session_id,
+            PuzzleReview.username == username,
+            PuzzleReview.result == PuzzleResult.FAIL,
+        )
+        .distinct()
+    )
+    fail_puzzle_ids = list(db.scalars(fail_ids_stmt).all())
+    if not fail_puzzle_ids:
+        return []
+
+    # Batch-load puzzles, stats, and diagnoses for those ids.
+    puzzles: dict[str, Puzzle] = {
+        row.id: row
+        for row in db.scalars(
+            select(Puzzle).where(
+                Puzzle.id.in_(fail_puzzle_ids),
+                Puzzle.username == username,
+            )
+        ).all()
+    }
+    stats_map: dict[str, PuzzleStats] = {
+        row.puzzle_id: row
+        for row in db.scalars(
+            select(PuzzleStats).where(
+                PuzzleStats.puzzle_id.in_(fail_puzzle_ids),
+                PuzzleStats.username == username,
+            )
+        ).all()
+    }
+    diagnoses: dict[str, PuzzleDiagnosis] = {
+        row.puzzle_id: row
+        for row in db.scalars(
+            select(PuzzleDiagnosis).where(
+                PuzzleDiagnosis.puzzle_id.in_(fail_puzzle_ids),
+                PuzzleDiagnosis.username == username,
+            )
+        ).all()
+    }
+
+    # Batch end_times via a game join (same pattern as puzzles_routes).
+    source_game_ids = {
+        p.source_game_id for p in puzzles.values() if getattr(p, "source_game_id", None)
+    }
+    end_times_by_game: dict[str, int] = {}
+    if source_game_ids:
+        end_times_by_game = {
+            game_id: end_time
+            for game_id, end_time in db.execute(
+                select(Game.game_id, Game.end_time).where(
+                    Game.username == username,
+                    Game.game_id.in_(source_game_ids),
+                )
+            ).all()
+        }
+
+    result = []
+    for puzzle_id in fail_puzzle_ids:
+        puzzle = puzzles.get(puzzle_id)
+        if puzzle is None:
+            continue  # Puzzle deleted; skip gracefully.
+        s = stats_map.get(puzzle_id)
+        diag = diagnoses.get(puzzle_id)
+
+        end_time = end_times_by_game.get(
+            getattr(puzzle, "source_game_id", None) or "", None
+        )
+        display_name = resolve_display_name(
+            title=s.title if s else None,
+            end_time=end_time,
+            ply=getattr(puzzle, "ply", None),
+            opening_name=diag.opening_name if diag else None,
+            resolved=is_resolved(s),
+        )
+
+        # Prefer user-confirmed cause, then computed primary cause.
+        raw_cause = None
+        if diag:
+            raw_cause = diag.user_confirmed_cause or (
+                diag.primary_cause if not diag.insufficient_evidence else None
+            )
+
+        result.append(
+            MissedPuzzleSummary(
+                puzzle_id=puzzle_id,
+                display_name=display_name,
+                cause=raw_cause,
+                cause_label=CAUSE_LABELS.get(raw_cause) if raw_cause else None,
+            )
+        )
+    return result
 
 
 def focus_practice_candidate_count(db: Session, username: str, cause: str) -> int:
@@ -435,6 +571,11 @@ def get_session(
         focus_opening=session_data.get("focus_opening"),
         focus_opening_scope=session_data.get("focus_opening_scope"),
         motif=session_data.get("motif"),
+        missed_puzzles=(
+            _missed_puzzles_for_session(db, session.username, session.id)
+            if session.completed_at is not None and session.fail_count > 0
+            else None
+        ),
     )
 
 
@@ -476,6 +617,11 @@ async def complete_session(
 
     # Build response before auto-snapshot so a rollback inside
     # auto_snapshot cannot expire the ORM-managed session object.
+    missed = (
+        _missed_puzzles_for_session(db, session.username, session_id)
+        if session.fail_count > 0
+        else None
+    )
     result = SessionSummary(
         session_id=session.id,
         requested_n=session.requested_n,
@@ -494,6 +640,7 @@ async def complete_session(
         focus_opening=(session.session_data or {}).get("focus_opening"),
         focus_opening_scope=(session.session_data or {}).get("focus_opening_scope"),
         motif=(session.session_data or {}).get("motif"),
+        missed_puzzles=missed or None,
     )
 
     # Best-effort auto-snapshot after response is built

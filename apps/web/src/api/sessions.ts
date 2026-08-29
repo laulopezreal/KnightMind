@@ -60,7 +60,6 @@ export interface SessionSummary {
     missed_puzzles?: MissedPuzzleSummary[] | null;
 }
 
-// Kept in sync with SessionSummary on the API.
 export async function getSession(sessionId: string): Promise<SessionSummary> {
     return await request<SessionSummary>(`/sessions/${sessionId}`);
 }
