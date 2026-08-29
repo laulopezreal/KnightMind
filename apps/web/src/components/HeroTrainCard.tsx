@@ -9,6 +9,8 @@ interface HeroTrainCardProps {
   totalSessions: number;
   /** Puzzles that become due within the next 4 hours (already excludes due_now). */
   dueIn4h?: number;
+  /** Server-derived: user has at least one completed session on today's UTC day. */
+  completedToday?: boolean;
   onStartSession: () => void;
   /**
    * Optional targeted-training shortcut (e.g. "Train your weakest: Back rank"),
@@ -25,6 +27,7 @@ export function HeroTrainCard({
   daysSinceLastSession,
   totalSessions,
   dueIn4h = 0,
+  completedToday = false,
   onStartSession,
   secondaryAction
 }: HeroTrainCardProps) {
@@ -32,10 +35,16 @@ export function HeroTrainCard({
   const isFirstTime = totalSessions === 0;
   const isZeroDue = dueCount === 0;
 
+  // completed-today states take precedence over Train Today / caught-up, but
+  // not over first-time or warmup (which need different actions).
+  const isCompletedToday = completedToday && !isFirstTime && !needsWarmup;
+
   const title = isFirstTime
     ? 'Ready to Start Training?'
     : needsWarmup
     ? 'Welcome Back'
+    : isCompletedToday
+    ? "Today's training is complete"
     : isZeroDue
     ? 'All Caught Up'
     : 'Train Today';
@@ -58,6 +67,11 @@ export function HeroTrainCard({
       : `You have ${dueCount} puzzle${dueCount !== 1 ? 's' : ''} waiting. Complete your first session to see your tactical profile!`
     : needsWarmup
     ? `You've been away ${daysSinceLastSession} days. Let's do a quick warmup to see what stuck!`
+    : isCompletedToday && !isZeroDue
+    ? `You completed a training session today. More puzzles are ready whenever you want to keep going.`
+    : isCompletedToday && isZeroDue
+    // Prepend the honest completion acknowledgement, then the regular caught-up guidance.
+    ? `Today's training is complete. ${caughtUpText}`
     : isZeroDue
     ? caughtUpText
     : 'Most people improve by solving these today.';
@@ -73,15 +87,14 @@ export function HeroTrainCard({
     ? 'Start First Session'
     : needsWarmup
     ? 'Start Warmup (5 puzzles)'
+    : isCompletedToday && !isZeroDue
+    ? 'Train more'
     : isZeroDue
     ? 'Browse Puzzles'
     : 'Start Session';
 
-  // Only the caught-up branch prints the next-review time in the body, and that
-  // branch is reached only after isFirstTime and needsWarmup fall through. Scope
-  // the caption-suppression guard to exactly that branch — a broader guard would
-  // hide the caption in the warmup/first-time states, where the body never states
-  // the review time, dropping the information entirely.
+  // Only the caught-up branch (non-completed-today) prints the next-review time
+  // in the body. Scope the caption-suppression guard to exactly that branch.
   const nextReviewShownInBody =
     !isFirstTime && !needsWarmup && isZeroDue && dueIn4h === 0 && !!nextReviewAt;
 
