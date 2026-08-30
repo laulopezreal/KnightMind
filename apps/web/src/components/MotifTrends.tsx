@@ -86,11 +86,10 @@ export function MotifTrends({ trends, windowDays }: MotifTrendsProps) {
             </p>
 
             <div
-                className="h-80"
                 role="img"
                 aria-label="Line chart showing accuracy trends over time for different tactical patterns"
             >
-                <ResponsiveContainer width="100%" height="100%">
+                <ResponsiveContainer width="100%" height={320}>
                     <LineChart data={chartData}>
                         <CartesianGrid strokeDasharray="3 3" stroke="var(--border-primary)" opacity={0.2} />
                         <XAxis
