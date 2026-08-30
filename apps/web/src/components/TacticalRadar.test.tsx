@@ -1,5 +1,5 @@
-import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { afterEach, describe, it, expect, vi } from 'vitest';
+import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { TacticalRadar } from './TacticalRadar';
 import type { MotifPerformance } from '../api/users';
@@ -11,7 +11,9 @@ vi.mock('recharts', () => ({
   PolarGrid: () => <div />,
   PolarAngleAxis: () => <div />,
   PolarRadiusAxis: () => <div />,
-  ResponsiveContainer: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  ResponsiveContainer: ({ children, height }: { children: React.ReactNode; height: number }) => (
+    <div data-testid="responsive-container" data-height={height}>{children}</div>
+  ),
 }));
 
 // Factory with reliable-sample defaults; override per test as needed.
@@ -26,6 +28,8 @@ const m = (over: Partial<MotifPerformance> & { name: string; accuracy: number; r
 describe('TacticalRadar', () => {
   const user = userEvent.setup();
   const onMotifClick = vi.fn();
+
+  afterEach(() => vi.unstubAllGlobals());
 
   it('should show empty state when no motifs', () => {
     render(<TacticalRadar motifs={[]} onMotifClick={onMotifClick} />);
@@ -54,6 +58,64 @@ describe('TacticalRadar', () => {
     render(<TacticalRadar motifs={motifs} onMotifClick={onMotifClick} />);
 
     expect(screen.getByTestId('radar-chart')).toBeInTheDocument();
+  });
+
+  it('should provide a concrete responsive height for the radar chart', () => {
+    const motifs = [
+      m({ name: 'Fork', accuracy: 0.8, rank: 'mastered' }),
+      m({ name: 'Pin', accuracy: 0.7, rank: 'learning' }),
+      m({ name: 'Skewer', accuracy: 0.6, rank: 'learning' }),
+    ];
+
+    render(<TacticalRadar motifs={motifs} onMotifClick={onMotifClick} />);
+
+    expect(screen.getByTestId('responsive-container')).toHaveAttribute('data-height', '256');
+  });
+
+  it('should use the desktop radar height at the desktop breakpoint', () => {
+    vi.stubGlobal('matchMedia', () => ({
+      matches: true,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    }));
+    const motifs = [
+      m({ name: 'Fork', accuracy: 0.8, rank: 'mastered' }),
+      m({ name: 'Pin', accuracy: 0.7, rank: 'learning' }),
+      m({ name: 'Skewer', accuracy: 0.6, rank: 'learning' }),
+    ];
+
+    render(<TacticalRadar motifs={motifs} onMotifClick={onMotifClick} />);
+
+    expect(screen.getByTestId('responsive-container')).toHaveAttribute('data-height', '384');
+  });
+
+  it('should update the radar height and remove the same breakpoint listener on unmount', () => {
+    const mediaQuery = {
+      matches: true,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    };
+    vi.stubGlobal('matchMedia', () => mediaQuery);
+    const motifs = [
+      m({ name: 'Fork', accuracy: 0.8, rank: 'mastered' }),
+      m({ name: 'Pin', accuracy: 0.7, rank: 'learning' }),
+      m({ name: 'Skewer', accuracy: 0.6, rank: 'learning' }),
+    ];
+
+    const { unmount } = render(<TacticalRadar motifs={motifs} onMotifClick={onMotifClick} />);
+
+    expect(screen.getByTestId('responsive-container')).toHaveAttribute('data-height', '384');
+    const changeListener = mediaQuery.addEventListener.mock.calls[0][1] as (event: MediaQueryListEvent) => void;
+
+    act(() => {
+      changeListener({ matches: false } as MediaQueryListEvent);
+    });
+
+    expect(screen.getByTestId('responsive-container')).toHaveAttribute('data-height', '256');
+
+    unmount();
+
+    expect(mediaQuery.removeEventListener).toHaveBeenCalledWith('change', changeListener);
   });
 
   it('should show weakest motif with practice button', () => {

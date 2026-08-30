@@ -11,7 +11,9 @@ vi.mock('recharts', () => ({
   CartesianGrid: () => <div />,
   Tooltip: () => <div />,
   Legend: () => <div />,
-  ResponsiveContainer: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  ResponsiveContainer: ({ children, height }: { children: React.ReactNode; height: number }) => (
+    <div data-testid="responsive-container" data-height={height}>{children}</div>
+  ),
 }));
 
 describe('MotifTrends', () => {
@@ -48,6 +50,26 @@ describe('MotifTrends', () => {
     render(<MotifTrends trends={trends} windowDays={30} />);
 
     expect(screen.getByTestId('line-chart')).toBeInTheDocument();
+  });
+
+  it('should provide a concrete responsive height for the trend chart', () => {
+    const trends = [{
+      motif: 'Fork',
+      trend: 'up' as const,
+      change: 0.15,
+      start_accuracy: 0.7,
+      end_accuracy: 0.85,
+      total_reviews: 20,
+      insufficient_data: false,
+      data_points: [
+        { date: '2025-01-10', accuracy: 0.7 },
+        { date: '2025-01-15', accuracy: 0.85 },
+      ],
+    }];
+
+    render(<MotifTrends trends={trends} windowDays={30} />);
+
+    expect(screen.getByTestId('responsive-container')).toHaveAttribute('data-height', '320');
   });
 
   it('should show trend summaries for up to 3 motifs', () => {
