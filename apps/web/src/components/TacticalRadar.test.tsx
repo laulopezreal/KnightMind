@@ -1,5 +1,5 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { TacticalRadar } from './TacticalRadar';
 import type { MotifPerformance } from '../api/users';
@@ -87,6 +87,35 @@ describe('TacticalRadar', () => {
     render(<TacticalRadar motifs={motifs} onMotifClick={onMotifClick} />);
 
     expect(screen.getByTestId('responsive-container')).toHaveAttribute('data-height', '384');
+  });
+
+  it('should update the radar height and remove the same breakpoint listener on unmount', () => {
+    const mediaQuery = {
+      matches: false,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    };
+    vi.stubGlobal('matchMedia', () => mediaQuery);
+    const motifs = [
+      m({ name: 'Fork', accuracy: 0.8, rank: 'mastered' }),
+      m({ name: 'Pin', accuracy: 0.7, rank: 'learning' }),
+      m({ name: 'Skewer', accuracy: 0.6, rank: 'learning' }),
+    ];
+
+    const { unmount } = render(<TacticalRadar motifs={motifs} onMotifClick={onMotifClick} />);
+
+    expect(screen.getByTestId('responsive-container')).toHaveAttribute('data-height', '256');
+    const changeListener = mediaQuery.addEventListener.mock.calls[0][1] as (event: MediaQueryListEvent) => void;
+
+    act(() => {
+      changeListener({ matches: true } as MediaQueryListEvent);
+    });
+
+    expect(screen.getByTestId('responsive-container')).toHaveAttribute('data-height', '384');
+
+    unmount();
+
+    expect(mediaQuery.removeEventListener).toHaveBeenCalledWith('change', changeListener);
   });
 
   it('should show weakest motif with practice button', () => {
