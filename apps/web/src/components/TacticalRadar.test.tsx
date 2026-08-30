@@ -91,7 +91,7 @@ describe('TacticalRadar', () => {
 
   it('should update the radar height and remove the same breakpoint listener on unmount', () => {
     const mediaQuery = {
-      matches: false,
+      matches: true,
       addEventListener: vi.fn(),
       removeEventListener: vi.fn(),
     };
@@ -104,14 +104,14 @@ describe('TacticalRadar', () => {
 
     const { unmount } = render(<TacticalRadar motifs={motifs} onMotifClick={onMotifClick} />);
 
-    expect(screen.getByTestId('responsive-container')).toHaveAttribute('data-height', '256');
+    expect(screen.getByTestId('responsive-container')).toHaveAttribute('data-height', '384');
     const changeListener = mediaQuery.addEventListener.mock.calls[0][1] as (event: MediaQueryListEvent) => void;
 
     act(() => {
-      changeListener({ matches: true } as MediaQueryListEvent);
+      changeListener({ matches: false } as MediaQueryListEvent);
     });
 
-    expect(screen.getByTestId('responsive-container')).toHaveAttribute('data-height', '384');
+    expect(screen.getByTestId('responsive-container')).toHaveAttribute('data-height', '256');
 
     unmount();
 
