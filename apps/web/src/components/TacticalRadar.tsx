@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ResponsiveContainer } from 'recharts';
 import { type MotifPerformance } from '../api/users';
 import { formatMotifName } from '../utils/motif';
@@ -9,6 +9,22 @@ interface TacticalRadarProps {
 }
 
 export function TacticalRadar({ motifs, onMotifClick }: TacticalRadarProps) {
+    const [isDesktop, setIsDesktop] = useState(() =>
+        typeof window !== 'undefined' &&
+        typeof window.matchMedia === 'function' &&
+        window.matchMedia('(min-width: 768px)').matches
+    );
+
+    useEffect(() => {
+        if (typeof window.matchMedia !== 'function') return;
+
+        const mediaQuery = window.matchMedia('(min-width: 768px)');
+        const handleChange = (event: MediaQueryListEvent) => setIsDesktop(event.matches);
+
+        mediaQuery.addEventListener('change', handleChange);
+        return () => mediaQuery.removeEventListener('change', handleChange);
+    }, []);
+
     // Transform data for recharts
     const radarData = useMemo(() =>
         motifs.map(m => ({
@@ -85,11 +101,10 @@ export function TacticalRadar({ motifs, onMotifClick }: TacticalRadarProps) {
             </p>
 
             <div
-                className="h-64 md:h-96"
                 role="img"
                 aria-label={`Radar chart showing accuracy across different tactical motifs: ${motifs.map(m => `${m.name} ${Math.round(m.accuracy * 100)}%`).join(', ')}`}
             >
-                <ResponsiveContainer width="100%" height="100%">
+                <ResponsiveContainer width="100%" height={isDesktop ? 384 : 256}>
                     <RadarChart data={radarData}>
                         <PolarGrid stroke="var(--border-primary)" strokeOpacity={0.2} />
                         <PolarAngleAxis
