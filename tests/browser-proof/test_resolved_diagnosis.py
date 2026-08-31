@@ -16,8 +16,8 @@ Proves at both desktop (1280x800) and mobile (390x844):
      (Point 5 is demonstrated by the RED build section at the bottom of this script.)
 
 Usage:
-  python3 /tmp/knightmind-browser-proof/test_resolved_diagnosis.py
-  
+  python3 tests/browser-proof/test_resolved_diagnosis.py
+
   Artifacts:
     /tmp/knightmind-bproof-artifacts/desktop_diagnosis_visible.png
     /tmp/knightmind-bproof-artifacts/mobile_diagnosis_visible.png
@@ -437,9 +437,11 @@ def run_test(viewport_name, width, height, page, static_origin, username="testpl
     ]
     real_errors = [e for e in console_errors if not any(ig in e for ig in ignorable)]
     if real_errors:
-        print(f"  [WARN] Console errors: {real_errors}", flush=True)
-    # We don't fail on console warnings — only on real errors that break functionality.
-    print(f"  [OK] Console errors: {len(real_errors)} real errors (acceptable: 0)", flush=True)
+        page.screenshot(path=str(ARTIFACTS / f"{viewport_name}_console_errors.png"), full_page=True)
+        raise AssertionError(
+            f"{viewport_name}: {len(real_errors)} non-allowlisted browser console error(s): {real_errors}"
+        )
+    print(f"  [OK] Console errors: 0 real errors", flush=True)
 
     # ── 7. Move to puzzle 2 → diagnosis clears ────────────────────
     next_btn = page.locator('button:has-text("Next Puzzle"), button:has-text("Next puzzle"), button:has-text("Move on")')

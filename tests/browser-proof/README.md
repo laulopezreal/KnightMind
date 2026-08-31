@@ -1,8 +1,8 @@
 # Browser proof: resolved-outcome diagnosis
 
-Candidate: `f8520fa0b4aff702bdb398c5933eb26a0630d8a2`  
-Pre-fix parent: `392e7c8`  
-Branch: `test/resolved-diagnosis-browser-proof`  
+Candidate: `f8520fa0b4aff702bdb398c5933eb26a0630d8a2`
+Pre-fix parent: `392e7c8`
+Branch: `test/resolved-diagnosis-browser-proof`
 Task: `t_cdb7bc04`
 
 ## What this proves
@@ -12,36 +12,44 @@ Task: `t_cdb7bc04`
 ### Checks (both desktop 1280x800 and mobile 390x844)
 
 1. After a correct move and a successful review, the diagnosis card renders visibly:
-   - Heading ("Mistake diagnosis")  
+   - Heading ("Mistake diagnosis")
    - Cause label ("Loose piece awareness")
    - Explanation prose
    - Evidence (best move, eval swing)
    - "Next time" recommendation
 2. No horizontal overflow at 390x844.
-3. Zero real browser console errors.
+3. Zero real browser console errors (assertion — any non-allowlisted error fails the test).
 4. Moving to the next puzzle clears the prior diagnosis.
 5. `test_prefixed_red.py` confirms the same sequence against `392e7c8` produces NO diagnosis card (RED).
 
 ## How to run
 
+From the repository root, use the included runner:
+
 ```bash
-# Build the candidate bundle once (done automatically by the task)
+bash tests/browser-proof/run.sh
+```
+
+Or run steps individually:
+
+```bash
+# Build the candidate bundle once
 cd apps/web
-node /home/lauureal/git/knightmind/apps/web/node_modules/vite/bin/vite.js build \
-  --outDir /tmp/knightmind-bproof-dist
+npx vite build --outDir /tmp/knightmind-bproof-dist
+cd ../..
 
 # Run GREEN test (candidate)
-python3.12 tests/browser-proof/test_resolved_diagnosis.py
+python3 tests/browser-proof/test_resolved_diagnosis.py
 
 # Run RED test (pre-fix 392e7c8) — confirms original bug
 # Requires pre-fix bundle at /tmp/knightmind-prefix-dist
-python3.12 tests/browser-proof/test_prefixed_red.py
+python3 tests/browser-proof/test_prefixed_red.py
 ```
 
 ## Results (run 2026-08-31)
 
-GREEN: `RESULT: PASS` — both desktop and mobile  
-RED: `RED CONFIRMED` — pre-fix build shows no diagnosis card  
+GREEN: `RESULT: PASS` — both desktop and mobile
+RED: `RED CONFIRMED` — pre-fix build shows no diagnosis card
 
 Artifacts (screenshots) written to `/tmp/knightmind-bproof-artifacts/`.
 
