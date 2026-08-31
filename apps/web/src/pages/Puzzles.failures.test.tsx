@@ -747,6 +747,7 @@ describe('Puzzles — honest failure handling', () => {
             const pendingReview = deferred<boolean>();
             mockHandleReviewPuzzle.mockReturnValue(pendingReview.promise);
             currentSessionReturn = makeSessionReturn();
+            const sessionBaseline: UsePuzzleSessionReturn = currentSessionReturn;
             const user = userEvent.setup();
             const { rerender } = render(<Puzzles />);
 
@@ -760,7 +761,7 @@ describe('Puzzles — honest failure handling', () => {
             // requestDiagnosisForResolvedOutcome call exactly as production does.
             await act(async () => {
                 currentSessionReturn = {
-                    ...currentSessionReturn,
+                    ...sessionBaseline,
                     puzzles: [{ ...puzzle, attempts: 1, pass_count: 1 }, { ...puzzle, id: 'p2' }],
                 };
                 pendingReview.resolve(true);
