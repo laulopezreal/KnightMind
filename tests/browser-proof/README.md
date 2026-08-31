@@ -1,0 +1,53 @@
+# Browser proof: resolved-outcome diagnosis
+
+Candidate: `f8520fa0b4aff702bdb398c5933eb26a0630d8a2`  
+Pre-fix parent: `392e7c8`  
+Branch: `test/resolved-diagnosis-browser-proof`  
+Task: `t_cdb7bc04`
+
+## What this proves
+
+`test_resolved_diagnosis.py` runs a headless Chromium browser session (Playwright system install) against the candidate Vite production bundle, with all API calls intercepted via synthetic fixtures. No production state is touched.
+
+### Checks (both desktop 1280x800 and mobile 390x844)
+
+1. After a correct move and a successful review, the diagnosis card renders visibly:
+   - Heading ("Mistake diagnosis")  
+   - Cause label ("Loose piece awareness")
+   - Explanation prose
+   - Evidence (best move, eval swing)
+   - "Next time" recommendation
+2. No horizontal overflow at 390x844.
+3. Zero real browser console errors.
+4. Moving to the next puzzle clears the prior diagnosis.
+5. `test_prefixed_red.py` confirms the same sequence against `392e7c8` produces NO diagnosis card (RED).
+
+## How to run
+
+```bash
+# Build the candidate bundle once (done automatically by the task)
+cd apps/web
+node /home/lauureal/git/knightmind/apps/web/node_modules/vite/bin/vite.js build \
+  --outDir /tmp/knightmind-bproof-dist
+
+# Run GREEN test (candidate)
+python3.12 tests/browser-proof/test_resolved_diagnosis.py
+
+# Run RED test (pre-fix 392e7c8) — confirms original bug
+# Requires pre-fix bundle at /tmp/knightmind-prefix-dist
+python3.12 tests/browser-proof/test_prefixed_red.py
+```
+
+## Results (run 2026-08-31)
+
+GREEN: `RESULT: PASS` — both desktop and mobile  
+RED: `RED CONFIRMED` — pre-fix build shows no diagnosis card  
+
+Artifacts (screenshots) written to `/tmp/knightmind-bproof-artifacts/`.
+
+## Constraints
+
+- No new npm dependency added. Uses system Playwright (`python3.12 -m playwright` / `playwright@1.58.0`).
+- No lockfile or CI workflow changes.
+- No production API called. Playwright `route()` intercepts all `https://knightmind-api.onrender.com/**` calls.
+- No product behavior changed. Tests only read the DOM, never write to it beyond filling the move input.
