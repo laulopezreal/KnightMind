@@ -703,6 +703,82 @@ describe('Puzzles — honest failure handling', () => {
             expect(getPuzzleDiagnosis).toHaveBeenCalledTimes(1);
         });
 
+        it('renders the diagnosis card even when the review hook folds fresh stats back into the same puzzle (same-id reference change)', async () => {
+            // This regression guards against the root cause: the real handleReviewPuzzle
+            // calls setPuzzles to fold updated stats into the puzzle queue item,
+            // creating a new puzzle object with the same id. Before the fix this
+            // incremented puzzleEpochRef, which invalidated the in-flight diagnosis
+            // owner and caused the diagnosis card to never render.
+            const pendingReview = deferred<boolean>();
+            mockHandleReviewPuzzle.mockReturnValue(pendingReview.promise);
+            currentSessionReturn = makeSessionReturn();
+            const user = userEvent.setup();
+            const { rerender } = render(<Puzzles />);
+
+            await typeAndCheck(user, 'e2e4');
+            await waitFor(() => expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(1));
+            expect(getPuzzleDiagnosis).not.toHaveBeenCalled();
+
+            // Simulate the stats-fold reference change that happens in the real hook
+            // when setPuzzles updates the queue item with post-review server stats.
+            currentSessionReturn = {
+                ...currentSessionReturn,
+                puzzles: [{ ...puzzle, attempts: 1, pass_count: 1 }, { ...puzzle, id: 'p2' }],
+            };
+            rerender(<Puzzles />);
+
+            // Resolve the review — diagnosis must still be requested and rendered.
+            pendingReview.resolve(true);
+
+            await waitFor(() =>
+                expect(getPuzzleDiagnosis).toHaveBeenCalledWith('p1', 'testplayer', true),
+            );
+            expect(await screen.findByText('Loose piece awareness')).toBeInTheDocument();
+            expect(getPuzzleDiagnosis).toHaveBeenCalledTimes(1);
+        });
+
+        it('renders the diagnosis card even when the puzzle reference changes (stats-fold) during review resolution', async () => {
+            // Regression for the root cause: the real handleReviewPuzzle calls
+            // setPuzzles() in its .then() callback to fold updated server stats into
+            // the puzzle queue, creating a new same-id puzzle reference. Before the
+            // fix, this incremented puzzleEpochRef which invalidated the diagnosis
+            // owner check in requestDiagnosisForResolvedOutcome, silently dropping
+            // the diagnosis and leaving the card blank with no console error.
+            const pendingReview = deferred<boolean>();
+            mockHandleReviewPuzzle.mockReturnValue(pendingReview.promise);
+            currentSessionReturn = makeSessionReturn();
+            const user = userEvent.setup();
+            const { rerender } = render(<Puzzles />);
+
+            await typeAndCheck(user, 'e2e4');
+            await waitFor(() => expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(1));
+            expect(getPuzzleDiagnosis).not.toHaveBeenCalled();
+
+            // Resolve the review and simultaneously trigger the same-id reference
+            // change that the real hook's setPuzzles call would cause. The rerender
+            // must land in the same act() as the resolution so it races with the
+            // requestDiagnosisForResolvedOutcome call exactly as production does.
+            await act(async () => {
+                currentSessionReturn = {
+                    ...currentSessionReturn,
+                    puzzles: [{ ...puzzle, attempts: 1, pass_count: 1 }, { ...puzzle, id: 'p2' }],
+                };
+                pendingReview.resolve(true);
+                await pendingReview.promise;
+                rerender(<Puzzles />);
+                // Drain microtasks so requestDiagnosisForResolvedOutcome runs while
+                // the updated puzzleEpochRef is in effect.
+                await Promise.resolve();
+                await Promise.resolve();
+            });
+
+            await waitFor(() =>
+                expect(getPuzzleDiagnosis).toHaveBeenCalledWith('p1', 'testplayer', true),
+            );
+            expect(await screen.findByText('Loose piece awareness')).toBeInTheDocument();
+            expect(getPuzzleDiagnosis).toHaveBeenCalledTimes(1);
+        });
+
         it('does not schedule diagnosis from a deferred terminal write after an A-to-B-to-A identity boundary', async () => {
             const pendingReview = deferred<boolean>();
             mockHandleReviewPuzzle.mockReturnValue(pendingReview.promise);
