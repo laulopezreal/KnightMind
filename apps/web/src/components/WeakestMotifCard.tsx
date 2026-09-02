@@ -5,6 +5,8 @@ import type { MotifPerformance } from '../api/users';
 
 interface WeakestMotifCardProps {
   motifs: MotifPerformance[];
+  /** Suppress the generic motif route when Today's Focus owns the priority path. */
+  trainingEnabled?: boolean;
 }
 
 const RANK_LABEL: Record<MotifPerformance['rank'], string> = {
@@ -65,7 +67,7 @@ function subLine(weakest: MotifPerformance): string {
  * only motifs with enough attempts count, so one unlucky puzzle is never a
  * "weakness".
  */
-export function WeakestMotifCard({ motifs }: WeakestMotifCardProps) {
+export function WeakestMotifCard({ motifs, trainingEnabled = true }: WeakestMotifCardProps) {
   const { weakest, allStrong } = weakestMotif(motifs);
 
   const insightsLink = (
@@ -111,12 +113,14 @@ export function WeakestMotifCard({ motifs }: WeakestMotifCardProps) {
       sub={subLine(weakest)}
       footer={
         <div className="flex items-center gap-4">
-          <Link
-            to={`/puzzles?motif=${encodeURIComponent(weakest.name)}`}
-            className="km-interactive km-focus-visible text-sm font-serif px-4 py-1.5 bg-primary text-bg-primary rounded-sm transition-opacity hover:opacity-90"
-          >
-            Train this
-          </Link>
+          {trainingEnabled && (
+            <Link
+              to={`/puzzles?motif=${encodeURIComponent(weakest.name)}`}
+              className="km-interactive km-focus-visible inline-flex min-h-11 items-center text-sm font-serif px-4 py-2 bg-primary text-bg-primary rounded-sm transition-opacity hover:opacity-90"
+            >
+              Train this
+            </Link>
+          )}
           {insightsLink}
         </div>
       }

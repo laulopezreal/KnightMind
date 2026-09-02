@@ -39,14 +39,21 @@ vi.mock('../api/sessions', () => ({
 
 vi.mock('../components/HeroTrainCard', () => ({
     HeroTrainCard: ({ completedToday }: { completedToday?: boolean }) => (
-        <div data-testid="hero-card" data-completed-today={String(completedToday)} />
+        <div
+            data-testid="hero-card"
+            data-completed-today={String(completedToday)}
+        />
     ),
 }));
 vi.mock('../components/RecentlyTrickyCard', () => ({ RecentlyTrickyCard: () => <div /> }));
 vi.mock('../components/MomentumCard', () => ({ MomentumCard: () => <div data-testid="momentum-card" /> }));
 vi.mock('../components/StreakCard', () => ({ StreakCard: () => <div data-testid="streak-card" /> }));
 vi.mock('../components/RecentSessionsCard', () => ({ RecentSessionsCard: () => <div /> }));
-vi.mock('../components/WeakestMotifCard', () => ({ WeakestMotifCard: () => <div data-testid="weakest-card" /> }));
+vi.mock('../components/WeakestMotifCard', () => ({
+    WeakestMotifCard: ({ trainingEnabled }: { trainingEnabled?: boolean }) => (
+        <div data-testid="weakest-card" data-training-enabled={String(trainingEnabled)} />
+    ),
+}));
 vi.mock('../components/RatingDeltaCard', () => ({ RatingDeltaCard: () => <div data-testid="rating-card" /> }));
 
 const SUMMARY = {
@@ -244,6 +251,52 @@ describe('Dashboard data states', () => {
         // has no link role. The destination is asserted in the card's own
         // tests; here the point is that the count reached the dashboard.
         expect(screen.getByText(/3 ready/i)).toBeInTheDocument();
+    });
+
+    it('puts the evidence-backed focus directly after the default path and suppresses competing weakest-motif actions', async () => {
+        mockGetDashboardSummary.mockResolvedValue({
+            ...SUMMARY,
+            schedule: { due_now: 8, due_in_4h: 0, next_review_at: null },
+        });
+        mockGetMotifPerformance.mockResolvedValue({
+            motifs: [{ name: 'fork', total_puzzles: 10, passed: 4, accuracy: 0.4, rank: 'needs_work', attempts: 10, insufficient_data: false }],
+            weakest_motifs: ['fork'], total_motifs_practiced: 1,
+        });
+        mockGetTodaysFocus.mockResolvedValue({
+            username: 'alice',
+            focus: {
+                cause: 'loose_piece_awareness', name: 'Loose Piece Syndrome',
+                description: 'You skip the scan.', mistakes: 9, recent_mistakes: 4,
+                accuracy: 0.4, priority: 12, rationale: '9 diagnosed mistakes.',
+                runner_up: null, trainable_now: 3,
+            },
+            below_threshold: 0, pending: 0,
+        });
+
+        render(<Dashboard />);
+
+        const hero = await screen.findByTestId('hero-card');
+        const focus = await screen.findByRole('region', { name: /today’s focus/i });
+        const weakest = await screen.findByTestId('weakest-card');
+        expect(weakest).toHaveAttribute('data-training-enabled', 'false');
+        expect(hero.compareDocumentPosition(focus) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+        expect(focus.compareDocumentPosition(weakest) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    });
+
+    it('keeps one subordinate weakest-motif route when no evidence-backed focus is available', async () => {
+        mockGetDashboardSummary.mockResolvedValue({
+            ...SUMMARY,
+            schedule: { due_now: 8, due_in_4h: 0, next_review_at: null },
+        });
+        mockGetMotifPerformance.mockResolvedValue({
+            motifs: [{ name: 'fork', total_puzzles: 10, passed: 4, accuracy: 0.4, rank: 'needs_work', attempts: 10, insufficient_data: false }],
+            weakest_motifs: ['fork'], total_motifs_practiced: 1,
+        });
+
+        render(<Dashboard />);
+
+        expect(await screen.findByTestId('hero-card')).toBeInTheDocument();
+        expect(screen.getByTestId('weakest-card')).toHaveAttribute('data-training-enabled', 'true');
     });
 
     it('renders no focus card when there is nothing to recommend', async () => {

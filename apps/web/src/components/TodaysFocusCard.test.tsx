@@ -55,7 +55,9 @@ describe('TodaysFocusCard', () => {
 
     it('says how many of the pattern are ready', () => {
         show(data());
-        expect(screen.getByRole('link', { name: /5 ready/i })).toBeInTheDocument();
+        const action = screen.getByRole('link', { name: /5 ready/i });
+        expect(action).toBeInTheDocument();
+        expect(action).toHaveClass('min-h-11');
     });
 
     it('does not promise a session of exactly that size', () => {
