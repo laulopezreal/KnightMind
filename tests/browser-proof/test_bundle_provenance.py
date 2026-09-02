@@ -10,6 +10,7 @@ from bundle_provenance import (
     MANIFEST_NAME,
     assert_build_inputs_clean,
     certify_build,
+    load_certified_bundle,
     validate_manifest,
     write_manifest,
 )
@@ -98,6 +99,39 @@ class BundleProvenanceTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, r"^bundle provenance mismatch$"):
                     validate_manifest(str(self.dist), COMMIT)
                 target.write_text(original, encoding="utf-8")
+
+    def test_loaded_bundle_is_immutable_and_detached_from_later_replacements(self):
+        write_manifest(self.dist, COMMIT)
+        served = load_certified_bundle(str(self.dist), COMMIT)
+        certified_bytes = served["assets/app.js"]
+
+        self._replace_file(self.dist / "assets/app.js", b"console.log('replaced')\n")
+
+        self.assertEqual(served["assets/app.js"], certified_bytes)
+        with self.assertRaises(TypeError):
+            served["assets/app.js"] = b"mutated"
+
+    def test_replacement_after_validation_cannot_enter_loaded_bundle(self):
+        write_manifest(self.dist, COMMIT)
+        original_inventory = __import__("bundle_provenance")._bundle_inventory
+        mutated = False
+
+        def mutate_after_inventory(path):
+            nonlocal mutated
+            inventory = original_inventory(path)
+            if not mutated:
+                mutated = True
+                self._replace_file(
+                    self.dist / "assets/app.js", b"console.log('post-validation')\n"
+                )
+            return inventory
+
+        with mock.patch(
+            "bundle_provenance._bundle_inventory", side_effect=mutate_after_inventory
+        ):
+            with self.assertRaisesRegex(RuntimeError, r"^bundle provenance mismatch$"):
+                load_certified_bundle(str(self.dist), COMMIT)
+        self.assertTrue(mutated)
 
     def test_added_bundle_file_is_rejected(self):
         write_manifest(self.dist, COMMIT)
@@ -347,6 +381,23 @@ class BundleProvenanceTests(unittest.TestCase):
         artifact.write_text("generated", encoding="utf-8")
         assert_build_inputs_clean(repo)
 
+    def test_untracked_build_inputs_are_rejected(self):
+        repo = self._make_repo()
+        cases = (
+            "apps/web/public/injected.txt",
+            "apps/web/src/injected.ts",
+            "apps/web/vite.config.js",
+            "apps/web/.env.production.local",
+        )
+        for relative_path in cases:
+            with self.subTest(relative_path=relative_path):
+                target = repo / relative_path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text("untracked build input\n", encoding="utf-8")
+                with self.assertRaises(RuntimeError):
+                    assert_build_inputs_clean(repo)
+                target.unlink()
+
     def test_dirty_tracked_build_source_is_rejected(self):
         repo = self._make_repo()
         source = repo / "apps/web/src/App.tsx"
@@ -403,8 +454,9 @@ class BundleProvenanceTests(unittest.TestCase):
         self.assertTrue(mutated)
 
     @staticmethod
-    def _replace_file(path):
-        contents = path.read_bytes()
+    def _replace_file(path, contents=None):
+        if contents is None:
+            contents = path.read_bytes()
         path.unlink()
         path.write_bytes(contents)
 

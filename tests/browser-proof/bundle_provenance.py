@@ -9,6 +9,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+from types import MappingProxyType
 
 SHA_RE = re.compile(r"[0-9a-f]{40}\Z")
 DIGEST_RE = re.compile(r"[0-9a-f]{64}\Z")
@@ -19,6 +20,21 @@ VITE_ENV_FILES = (
     ".env.production",
     ".env.production.local",
 )
+BUILD_INPUT_FILES = {
+    "index.html",
+    "package.json",
+    "package-lock.json",
+    "vite.config.js",
+    "vite.config.mjs",
+    "vite.config.cjs",
+    "vite.config.ts",
+    "vite.config.mts",
+    "vite.config.cts",
+    "vitest.config.ts",
+    "tsconfig.json",
+    "tsconfig.app.json",
+    "tsconfig.node.json",
+}
 STAT_IDENTITY_FIELDS = (
     "st_dev",
     "st_ino",
@@ -218,6 +234,19 @@ def certify_build(repo_root, dist, commit):
     write_manifest(dist, commit)
 
 
+def _is_build_input(path):
+    pure_path = pathlib.PurePosixPath(path)
+    return (
+        len(pure_path.parts) >= 4
+        and pure_path.parts[:3]
+        in (("apps", "web", "src"), ("apps", "web", "public"))
+    ) or (
+        len(pure_path.parts) == 3
+        and pure_path.parts[:2] == ("apps", "web")
+        and pure_path.name in BUILD_INPUT_FILES
+    )
+
+
 def assert_build_inputs_clean(repo_root):
     """Reject build inputs that could make a bundle differ from clean HEAD."""
     repo_root = pathlib.Path(repo_root).resolve()
@@ -236,41 +265,49 @@ def assert_build_inputs_clean(repo_root):
             "Vite environment files are not allowed for commit-bound proof: "
             + ", ".join(vite_files)
         )
-    tracked = subprocess.check_output(
-        ["git", "-C", str(repo_root), "ls-files", "apps/web"], text=True
-    ).splitlines()
-    relevant = [
+    changed = [
         path
-        for path in tracked
-        if path.startswith(("apps/web/src/", "apps/web/public/"))
-        or pathlib.PurePosixPath(path).name
-        in {
-            "index.html",
-            "package.json",
-            "package-lock.json",
-            "vite.config.ts",
-            "vitest.config.ts",
-            "tsconfig.json",
-            "tsconfig.app.json",
-            "tsconfig.node.json",
-        }
+        for path in subprocess.check_output(
+            [
+                "git",
+                "-C",
+                str(repo_root),
+                "diff",
+                "--name-only",
+                "-z",
+                "HEAD",
+                "--",
+                "apps/web",
+            ],
+            text=True,
+        ).split("\0")
+        if path and _is_build_input(path)
     ]
-    changed = subprocess.check_output(
-        [
-            "git",
-            "-C",
-            str(repo_root),
-            "diff",
-            "--name-only",
-            "HEAD",
-            "--",
-            *sorted(relevant),
-        ],
-        text=True,
-    ).splitlines()
     if changed:
         raise RuntimeError(
-            "tracked build input is dirty against HEAD: " + ", ".join(changed)
+            "tracked build input is dirty against HEAD: " + ", ".join(sorted(changed))
+        )
+    untracked = [
+        path
+        for path in subprocess.check_output(
+            [
+                "git",
+                "-C",
+                str(repo_root),
+                "ls-files",
+                "--others",
+                "-z",
+                "--",
+                "apps/web",
+            ],
+            text=True,
+        ).split("\0")
+        if path and _is_build_input(path)
+    ]
+    if untracked:
+        raise RuntimeError(
+            "untracked build input is not commit-bound: "
+            + ", ".join(sorted(untracked))
         )
 
 
@@ -343,6 +380,54 @@ def validate_manifest(dist, expected_commit):
         raise RuntimeError("bundle provenance mismatch") from exc
     if payload["inventory"] != actual_inventory:
         raise RuntimeError("bundle provenance mismatch")
+    return payload
+
+
+def _load_inventory_file(path, expected_digest):
+    initial_stat = os.stat(path, follow_symlinks=False)
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags)
+    try:
+        opened_stat = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(initial_stat.st_mode)
+            or not stat.S_ISREG(opened_stat.st_mode)
+            or _stat_identity(initial_stat) != _stat_identity(opened_stat)
+        ):
+            raise ValueError("bundle entry changed before immutable load")
+        chunks = []
+        digest = hashlib.sha256()
+        while True:
+            chunk = os.read(descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            digest.update(chunk)
+        if (
+            _stat_identity(opened_stat) != _stat_identity(os.fstat(descriptor))
+            or digest.hexdigest() != expected_digest
+        ):
+            raise ValueError("bundle entry changed during immutable load")
+        return b"".join(chunks)
+    finally:
+        os.close(descriptor)
+
+
+def load_certified_bundle(dist, expected_commit):
+    """Load certified bytes into an immutable artifact detached from source paths."""
+    payload = validate_manifest(dist, expected_commit)
+    expected_dist = pathlib.Path(dist)
+    try:
+        bundle = {
+            item["path"]: _load_inventory_file(
+                expected_dist / pathlib.PurePosixPath(item["path"]), item["sha256"]
+            )
+            for item in payload["inventory"]
+        }
+        validate_manifest(dist, expected_commit)
+    except (TypeError, ValueError, OSError, RuntimeError) as exc:
+        raise RuntimeError("bundle provenance mismatch") from exc
+    return MappingProxyType(bundle)
 
 
 if __name__ == "__main__":

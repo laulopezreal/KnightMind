@@ -8,7 +8,7 @@
 #
 # What it does:
 #   1. Refuses dirty or environment-modified inputs, then builds the candidate
-#      Vite bundle to /tmp/knightmind-bproof-dist and writes a manifest bound
+#      Vite bundle in a private staging directory and writes a manifest bound
 #      to the exact checkout SHA and SHA-256 inventory of every bundle file
 #   2. Runs the GREEN test (should PASS on the candidate branch)
 #   3. Optionally runs the RED pre-fix probe if PREFIXED_DIST is set
@@ -22,7 +22,10 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-DIST="/tmp/knightmind-bproof-dist"
+STAGING="$(mktemp -d /tmp/knightmind-bproof.XXXXXX)"
+trap 'rm -rf -- "$STAGING"' EXIT
+DIST="$STAGING/dist"
+export BPROOF_DIST="$DIST"
 COMMIT="$(git -C "$REPO_ROOT" rev-parse HEAD)"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 
@@ -42,7 +45,6 @@ from bundle_provenance import assert_build_inputs_clean
 
 assert_build_inputs_clean(pathlib.Path(sys.argv[2]))
 PY
-rm -rf -- "$DIST"
 cd "$REPO_ROOT/apps/web"
 npx vite build --outDir "$DIST"
 cd "$REPO_ROOT"
