@@ -19,6 +19,14 @@ VITE_ENV_FILES = (
     ".env.production",
     ".env.production.local",
 )
+STAT_IDENTITY_FIELDS = (
+    "st_dev",
+    "st_ino",
+    "st_mode",
+    "st_size",
+    "st_mtime_ns",
+    "st_ctime_ns",
+)
 
 
 def _valid_commit(value):
@@ -57,10 +65,9 @@ def _hash_regular_file(path, initial_stat):
         opened_stat = os.fstat(descriptor)
         if not stat.S_ISREG(opened_stat.st_mode):
             raise ValueError("bundle entry is not regular")
-        identity = ("st_dev", "st_ino", "st_mode", "st_size", "st_mtime_ns")
         if any(
             getattr(initial_stat, field) != getattr(opened_stat, field)
-            for field in identity
+            for field in STAT_IDENTITY_FIELDS
         ):
             raise ValueError("bundle entry changed during inventory")
         digest = hashlib.sha256()
@@ -72,12 +79,36 @@ def _hash_regular_file(path, initial_stat):
         final_stat = os.fstat(descriptor)
         if any(
             getattr(opened_stat, field) != getattr(final_stat, field)
-            for field in identity
+            for field in STAT_IDENTITY_FIELDS
         ):
             raise ValueError("bundle entry changed during inventory")
         return digest.hexdigest()
     finally:
         os.close(descriptor)
+
+
+def _stat_identity(value):
+    return tuple(getattr(value, field) for field in STAT_IDENTITY_FIELDS)
+
+
+def _snapshot_directory(directory):
+    """Capture entries and prove the directory stayed stable during enumeration."""
+    before = os.stat(directory, follow_symlinks=False)
+    if not stat.S_ISDIR(before.st_mode):
+        raise ValueError("bundle entry is not a directory")
+    with os.scandir(directory) as iterator:
+        entries = sorted(
+            (
+                entry.name,
+                entry.path,
+                entry.stat(follow_symlinks=False),
+            )
+            for entry in iterator
+        )
+    after = os.stat(directory, follow_symlinks=False)
+    if _stat_identity(before) != _stat_identity(after):
+        raise ValueError("bundle directory changed during inventory")
+    return entries, _stat_identity(after)
 
 
 def _bundle_inventory(dist):
@@ -86,26 +117,38 @@ def _bundle_inventory(dist):
     inventory = []
 
     def visit(directory):
-        with os.scandir(directory) as iterator:
-            entries = sorted(iterator, key=lambda entry: entry.name)
-        for entry in entries:
-            relative = pathlib.Path(entry.path).relative_to(dist).as_posix()
+        entries, directory_identity = _snapshot_directory(directory)
+        initial_entries = [
+            (name, _stat_identity(entry_stat))
+            for name, _entry_path, entry_stat in entries
+        ]
+        for _name, entry_path, entry_stat in entries:
+            relative = pathlib.Path(entry_path).relative_to(dist).as_posix()
             if relative == MANIFEST_NAME:
                 continue
             if not _safe_inventory_path(relative):
                 raise ValueError("unsafe bundle entry")
-            entry_stat = entry.stat(follow_symlinks=False)
             if stat.S_ISDIR(entry_stat.st_mode):
-                visit(pathlib.Path(entry.path))
+                visit(pathlib.Path(entry_path))
             elif stat.S_ISREG(entry_stat.st_mode):
                 inventory.append(
                     {
                         "path": relative,
-                        "sha256": _hash_regular_file(entry.path, entry_stat),
+                        "sha256": _hash_regular_file(entry_path, entry_stat),
                     }
                 )
             else:
                 raise ValueError("bundle entry is not regular")
+        final_entries, final_directory_identity = _snapshot_directory(directory)
+        if (
+            directory_identity != final_directory_identity
+            or initial_entries
+            != [
+                (name, _stat_identity(entry_stat))
+                for name, _entry_path, entry_stat in final_entries
+            ]
+        ):
+            raise ValueError("bundle directory changed during inventory")
 
     visit(dist)
     inventory.sort(key=lambda item: item["path"])

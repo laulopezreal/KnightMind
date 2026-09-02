@@ -17,6 +17,25 @@ from bundle_provenance import (
 COMMIT = "a" * 40
 
 
+class _MutatingScandir:
+    def __init__(self, iterator, mutate):
+        self.iterator = iterator
+        self.mutate = mutate
+
+    def __enter__(self):
+        self.iterator.__enter__()
+        return self
+
+    def __iter__(self):
+        return iter(self.iterator)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        result = self.iterator.__exit__(exc_type, exc_value, traceback)
+        if exc_type is None:
+            self.mutate()
+        return result
+
+
 class BundleProvenanceTests(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
@@ -85,6 +104,50 @@ class BundleProvenanceTests(unittest.TestCase):
         (self.dist / "assets/added.js").write_text("added\n", encoding="utf-8")
         with self.assertRaisesRegex(RuntimeError, r"^bundle provenance mismatch$"):
             validate_manifest(str(self.dist), COMMIT)
+
+    def test_root_addition_after_scandir_enumeration_is_rejected(self):
+        write_manifest(self.dist, COMMIT)
+        injected = self.dist / "injected.js"
+
+        self._assert_scan_mutation_rejected(
+            self.dist,
+            lambda: injected.write_text("injected\n", encoding="utf-8"),
+        )
+
+    def test_root_and_nested_directory_entry_mutations_are_rejected(self):
+        cases = (
+            (
+                "root directory addition",
+                self.dist,
+                lambda: (self.dist / "injected").mkdir(),
+            ),
+            (
+                "nested file addition",
+                self.dist / "assets",
+                lambda: (self.dist / "assets/injected.js").write_text(
+                    "injected\n", encoding="utf-8"
+                ),
+            ),
+            (
+                "root file replacement",
+                self.dist,
+                lambda: self._replace_file(self.dist / "index.html"),
+            ),
+            (
+                "nested file replacement",
+                self.dist / "assets",
+                lambda: self._replace_file(self.dist / "assets/app.js"),
+            ),
+        )
+        for label, directory, mutate in cases:
+            with self.subTest(label=label):
+                write_manifest(self.dist, COMMIT)
+                self._assert_scan_mutation_rejected(directory, mutate)
+                injected = directory / ("injected" if directory == self.dist else "injected.js")
+                if injected.is_dir():
+                    injected.rmdir()
+                elif injected.exists():
+                    injected.unlink()
 
     def test_deleted_bundle_file_is_rejected(self):
         write_manifest(self.dist, COMMIT)
@@ -321,6 +384,29 @@ class BundleProvenanceTests(unittest.TestCase):
         payload = json.loads((self.dist / MANIFEST_NAME).read_text(encoding="utf-8"))
         payload.update(overrides)
         (self.dist / MANIFEST_NAME).write_text(json.dumps(payload), encoding="utf-8")
+
+    def _assert_scan_mutation_rejected(self, directory, mutate):
+        original_scandir = os.scandir
+        mutated = False
+
+        def racing_scandir(path):
+            nonlocal mutated
+            iterator = original_scandir(path)
+            if not mutated and pathlib.Path(path) == directory:
+                mutated = True
+                return _MutatingScandir(iterator, mutate)
+            return iterator
+
+        with mock.patch("bundle_provenance.os.scandir", side_effect=racing_scandir):
+            with self.assertRaisesRegex(RuntimeError, r"^bundle provenance mismatch$"):
+                validate_manifest(str(self.dist), COMMIT)
+        self.assertTrue(mutated)
+
+    @staticmethod
+    def _replace_file(path):
+        contents = path.read_bytes()
+        path.unlink()
+        path.write_bytes(contents)
 
     def _make_repo(self):
         repo = pathlib.Path(self.temp_dir.name) / "repo"
