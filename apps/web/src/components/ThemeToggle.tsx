@@ -13,7 +13,7 @@ export default function ThemeToggle() {
             tabIndex={0}
             onClick={toggleTheme}
             onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleTheme(); } }}
-            className="w-[130px] h-[50px] flex justify-center items-center scale-85 origin-center select-none km-interactive km-focus-visible rounded-full"
+            className="w-28 h-11 flex justify-center items-center select-none km-interactive km-focus-visible rounded-full"
         >
             <div className="relative h-10 w-28 rounded-full border-2 border-primary flex items-center overflow-hidden bg-toggle-bg transition-slow">
                 {/* Track icons signal this is a day/night theme switch. Colored with

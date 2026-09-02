@@ -52,7 +52,7 @@ export function RatingDeltaCard({ data, timeControlLabel }: RatingDeltaCardProps
           </div>
           <Link
             to="/rating-insights"
-            className="km-interactive km-focus-visible km-inline-link text-primary text-xs font-medium underline decoration-primary/30 underline-offset-4 transition-colors shrink-0"
+            className="km-interactive km-focus-visible km-inline-link inline-flex min-h-11 min-w-11 items-center justify-center text-primary text-xs font-medium underline decoration-primary/30 underline-offset-4 transition-colors shrink-0"
           >
             Details
           </Link>
