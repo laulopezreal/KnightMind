@@ -109,10 +109,17 @@ def validate_manifest(dist, expected_commit):
     """Fail closed unless the manifest exactly identifies this checkout and dist."""
     try:
         expected_dist = _expected_artifact_path(dist)
+        if type(dist) is not str or dist != str(expected_dist):
+            raise ValueError("artifact path is not canonical")
     except (TypeError, ValueError, OSError, RuntimeError) as exc:
         raise RuntimeError("bundle provenance malformed") from exc
     try:
         target = manifest_path(expected_dist)
+        if target.is_symlink():
+            raise ValueError("manifest target is a symlink")
+    except (TypeError, ValueError, OSError, RuntimeError) as exc:
+        raise RuntimeError("bundle provenance malformed") from exc
+    try:
         with target.open(encoding="utf-8") as handle:
             payload = json.load(handle)
     except (TypeError, ValueError, OSError, RuntimeError, json.JSONDecodeError) as exc:

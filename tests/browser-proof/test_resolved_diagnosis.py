@@ -54,7 +54,7 @@ DIST = pathlib.Path("/tmp/knightmind-bproof-dist")
 if not (DIST / "index.html").exists():
     sys.exit(f"FAIL: Built dist not found at {DIST}. Run the Vite build first.")
 try:
-    validate_manifest(DIST, current_commit())
+    validate_manifest(str(DIST), current_commit())
 except RuntimeError as exc:
     sys.exit(f"FAIL: {exc}")
 
