@@ -45,7 +45,7 @@ rm -rf -- "$DIST"
 cd "$REPO_ROOT/apps/web"
 npx vite build --outDir "$DIST"
 cd "$REPO_ROOT"
-python3 "$SCRIPT_DIR/bundle_provenance.py" write "$DIST" "$COMMIT"
+python3 "$SCRIPT_DIR/bundle_provenance.py" certify "$REPO_ROOT" "$DIST" "$COMMIT"
 
 # ── 2. GREEN test ──────────────────────────────────────────────────
 echo ""

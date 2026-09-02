@@ -1,6 +1,6 @@
 # Browser proof: resolved-outcome diagnosis
 
-last_edited_at: 2026-09-02T07:55:43+02:00
+last_edited_at: 2026-09-02T09:35:39+02:00
 
 Candidate: the exact commit checked out when the proof runs, printed as `Candidate commit (runtime checkout)`
 Original proof branch: `test/resolved-diagnosis-browser-proof`
@@ -41,8 +41,8 @@ python3 tests/browser-proof/bundle_provenance.py check .
 cd apps/web
 npx vite build --outDir /tmp/knightmind-bproof-dist
 cd ../..
-python3 tests/browser-proof/bundle_provenance.py write \
-  /tmp/knightmind-bproof-dist "$(git rev-parse HEAD)"
+python3 tests/browser-proof/bundle_provenance.py certify \
+  . /tmp/knightmind-bproof-dist "$(git rev-parse HEAD)"
 
 # Run GREEN test (the current checkout, whose SHA is recorded at runtime)
 python3 tests/browser-proof/test_resolved_diagnosis.py
@@ -55,9 +55,9 @@ python3 tests/browser-proof/test_prefixed_red.py
 `test_resolved_diagnosis.py` rejects a missing, malformed, stale, or mismatched
 manifest before it starts a static server or browser runtime. The normal runner
 also rejects dirty tracked Vite inputs and Vite environment overrides/files before
-the build, then writes the manifest only after a successful build. Direct/manual
+the build, then rechecks them immediately before writing the manifest. Direct/manual
 builds are provenance-ready only when they use the same pre-build guard and
-post-build manifest command shown above.
+post-build certification command shown above.
 
 ## Results (run 2026-08-31)
 

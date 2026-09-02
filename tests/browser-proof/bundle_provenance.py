@@ -49,6 +49,12 @@ def write_manifest(dist, commit):
         raise
 
 
+def certify_build(repo_root, dist, commit):
+    """Recheck build inputs immediately before certifying a completed bundle."""
+    assert_build_inputs_clean(repo_root)
+    write_manifest(dist, commit)
+
+
 def assert_build_inputs_clean(repo_root):
     """Reject build inputs that could make a bundle differ from clean HEAD."""
     repo_root = pathlib.Path(repo_root).resolve()
@@ -94,13 +100,13 @@ def assert_build_inputs_clean(repo_root):
 
 def validate_manifest(dist, expected_commit):
     """Fail closed unless the manifest exactly identifies this checkout and dist."""
-    dist = pathlib.Path(dist).resolve()
-    target = manifest_path(dist)
     try:
+        dist = pathlib.Path(dist).resolve()
+        target = manifest_path(dist)
         with target.open(encoding="utf-8") as handle:
             payload = json.load(handle)
-    except (FileNotFoundError, OSError, json.JSONDecodeError) as exc:
-        raise RuntimeError(f"bundle provenance missing or malformed: {target}") from exc
+    except (FileNotFoundError, OSError, ValueError, json.JSONDecodeError) as exc:
+        raise RuntimeError("bundle provenance missing or malformed") from exc
     if (
         not isinstance(payload, dict)
         or type(payload.get("version")) is not int
@@ -108,9 +114,14 @@ def validate_manifest(dist, expected_commit):
         or set(payload) != {"version", "commit", "dist"}
         or not _valid_commit(payload.get("commit"))
         or not isinstance(payload.get("dist"), str)
-        or pathlib.Path(payload["dist"]).resolve() != dist
     ):
-        raise RuntimeError(f"bundle provenance malformed: {target}")
+        raise RuntimeError("bundle provenance malformed")
+    try:
+        manifest_dist = pathlib.Path(payload["dist"]).resolve()
+    except (OSError, ValueError) as exc:
+        raise RuntimeError("bundle provenance malformed") from exc
+    if manifest_dist != dist:
+        raise RuntimeError("bundle provenance malformed")
     if not _valid_commit(expected_commit):
         raise RuntimeError(f"bundle provenance expected commit is malformed: {expected_commit!r}")
     if payload["commit"] != expected_commit:
@@ -125,7 +136,10 @@ if __name__ == "__main__":
         assert_build_inputs_clean(sys.argv[2])
     elif len(sys.argv) == 4 and sys.argv[1] == "write":
         write_manifest(sys.argv[2], sys.argv[3])
+    elif len(sys.argv) == 5 and sys.argv[1] == "certify":
+        certify_build(sys.argv[2], sys.argv[3], sys.argv[4])
     else:
         raise SystemExit(
-            f"usage: {sys.argv[0]} check REPO_ROOT | write DIST COMMIT"
+            f"usage: {sys.argv[0]} check REPO_ROOT | write DIST COMMIT | "
+            "certify REPO_ROOT DIST COMMIT"
         )

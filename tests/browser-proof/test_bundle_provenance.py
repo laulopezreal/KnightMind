@@ -9,6 +9,7 @@ from unittest import mock
 from bundle_provenance import (
     MANIFEST_NAME,
     assert_build_inputs_clean,
+    certify_build,
     validate_manifest,
     write_manifest,
 )
@@ -79,6 +80,11 @@ class BundleProvenanceTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "malformed"):
             validate_manifest(self.dist, COMMIT)
 
+    def test_embedded_nul_manifest_dist_is_rejected_as_malformed(self):
+        self._write_manifest(dist="\0")
+        with self.assertRaisesRegex(RuntimeError, r"^bundle provenance malformed"):
+            validate_manifest(self.dist, COMMIT)
+
     def test_clean_build_inputs_allow_unrelated_untracked_proof_artifact(self):
         repo = self._make_repo()
         artifact = repo / "tests/browser-proof/generated-proof.txt"
@@ -93,6 +99,16 @@ class BundleProvenanceTests(unittest.TestCase):
         subprocess.run(["git", "-C", str(repo), "add", str(source.relative_to(repo))], check=True)
         with self.assertRaisesRegex(RuntimeError, "tracked build input is dirty"):
             assert_build_inputs_clean(repo)
+
+    def test_post_check_dirty_build_source_is_denied_before_manifest_write(self):
+        repo = self._make_repo()
+        assert_build_inputs_clean(repo)
+        (repo / "apps/web/src/App.tsx").write_text(
+            "export default 'mutated after build'\n", encoding="utf-8"
+        )
+        with self.assertRaisesRegex(RuntimeError, "tracked build input is dirty"):
+            certify_build(repo, self.dist, COMMIT)
+        self.assertFalse((self.dist / MANIFEST_NAME).exists())
 
     def test_vite_environment_override_is_rejected(self):
         repo = self._make_repo()
