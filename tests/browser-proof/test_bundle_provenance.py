@@ -16,6 +16,52 @@ from bundle_provenance import (
 )
 
 COMMIT = "a" * 40
+ROOT_BUILD_INPUT_FILES = (
+    ".env",
+    ".env.local",
+    ".env.production",
+    ".env.production.local",
+    ".npmrc",
+    ".postcssrc",
+    ".postcssrc.cjs",
+    ".postcssrc.cts",
+    ".postcssrc.js",
+    ".postcssrc.json",
+    ".postcssrc.mjs",
+    ".postcssrc.mts",
+    ".postcssrc.ts",
+    ".postcssrc.yaml",
+    ".postcssrc.yml",
+    "package-lock.json",
+    "package.json",
+    "postcss.config.cjs",
+    "postcss.config.cts",
+    "postcss.config.js",
+    "postcss.config.mjs",
+    "postcss.config.mts",
+    "postcss.config.ts",
+    "tailwind.config.cjs",
+    "tailwind.config.cts",
+    "tailwind.config.js",
+    "tailwind.config.mjs",
+    "tailwind.config.mts",
+    "tailwind.config.ts",
+    "tsconfig.app.json",
+    "tsconfig.json",
+    "tsconfig.node.json",
+    "vite.config.cjs",
+    "vite.config.cts",
+    "vite.config.js",
+    "vite.config.mjs",
+    "vite.config.mts",
+    "vite.config.ts",
+    "vitest.config.cjs",
+    "vitest.config.cts",
+    "vitest.config.js",
+    "vitest.config.mjs",
+    "vitest.config.mts",
+    "vitest.config.ts",
+)
 
 
 class _MutatingScandir:
@@ -386,17 +432,53 @@ class BundleProvenanceTests(unittest.TestCase):
         cases = (
             "apps/web/public/injected.txt",
             "apps/web/src/injected.ts",
-            "apps/web/vite.config.js",
-            "apps/web/.env.production.local",
+            *(f"apps/web/{name}" for name in ROOT_BUILD_INPUT_FILES),
         )
         for relative_path in cases:
             with self.subTest(relative_path=relative_path):
                 target = repo / relative_path
+                if target.exists():
+                    target.unlink()
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_text("untracked build input\n", encoding="utf-8")
-                with self.assertRaises(RuntimeError):
-                    assert_build_inputs_clean(repo)
-                target.unlink()
+                try:
+                    with self.assertRaises(RuntimeError):
+                        assert_build_inputs_clean(repo)
+                finally:
+                    target.unlink(missing_ok=True)
+
+    def test_ignored_build_inputs_are_rejected(self):
+        repo = self._make_repo()
+        cases = (
+            "apps/web/src/ignored.ts",
+            "apps/web/public/ignored.txt",
+            "apps/web/.env.production.local",
+            "apps/web/.npmrc",
+            "apps/web/postcss.config.js",
+            "apps/web/tailwind.config.js",
+            "apps/web/tsconfig.node.json",
+            "apps/web/vite.config.mts",
+            "apps/web/package-lock.json",
+        )
+        exclude = repo / ".git/info/exclude"
+        exclude.write_text("\n".join(cases) + "\n", encoding="utf-8")
+        for relative_path in cases:
+            with self.subTest(relative_path=relative_path):
+                target = repo / relative_path
+                if target.exists():
+                    target.unlink()
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text("ignored build input\n", encoding="utf-8")
+                ignored = subprocess.run(
+                    ["git", "-C", str(repo), "check-ignore", "-q", relative_path],
+                    check=False,
+                )
+                try:
+                    self.assertEqual(ignored.returncode, 0)
+                    with self.assertRaises(RuntimeError):
+                        assert_build_inputs_clean(repo)
+                finally:
+                    target.unlink(missing_ok=True)
 
     def test_dirty_tracked_build_source_is_rejected(self):
         repo = self._make_repo()
