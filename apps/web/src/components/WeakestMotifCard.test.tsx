@@ -97,6 +97,14 @@ describe('WeakestMotifCard', () => {
     expect(screen.getByRole('link', { name: 'Train this' })).toHaveAttribute('href', '/puzzles?motif=back_rank');
   });
 
+  it('keeps the diagnosis but removes its competing training action when a daily focus exists', () => {
+    render(<WeakestMotifCard motifs={[motif({ name: 'back_rank', accuracy: 0.39 })]} trainingEnabled={false} />);
+
+    expect(screen.getByText('Back Rank')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Train this' })).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'See all motifs' })).toBeInTheDocument();
+  });
+
   it('shows a "not enough data" state when no motif is reliable', () => {
     render(<WeakestMotifCard motifs={[motif({ insufficient_data: true, accuracy: 0.2 })]} />);
     expect(screen.getByText(/Not enough attempts/)).toBeInTheDocument();

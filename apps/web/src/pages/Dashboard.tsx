@@ -5,12 +5,10 @@ import {
     getTrickyPuzzles,
     getMotifPerformance,
     getUserStatus,
-    type MotifPerformanceResponse,
 } from '../api/users';
 import { getRatingExplain } from '../api/ratings';
 import { getTodaysFocus } from '../api/users';
 import { getRecentSessions } from '../api/sessions';
-import { formatMotifName, weakestMotif } from '../utils/motif';
 import { TC_LABEL, type TimeControl } from '../utils/ratings';
 import { useChessUsername } from '../context/ChessUsernameContext';
 import { HeroTrainCard } from '../components/HeroTrainCard';
@@ -52,12 +50,6 @@ function DashboardShell({ children }: { children: ReactNode }) {
             {children}
         </div>
     );
-}
-
-/** Reliable weakest motif to lead with, or null when all-strong / no reliable data. */
-function weakestReliable(resp: MotifPerformanceResponse | null) {
-    const { weakest, allStrong } = weakestMotif(resp?.motifs ?? []);
-    return allStrong ? null : weakest;
 }
 
 export default function Dashboard() {
@@ -183,19 +175,7 @@ export default function Dashboard() {
         );
     }
 
-    // Smart hero shortcut: in the everyday "Train Today" state, offer a one-click
-    // targeted session on the user's weakest motif. Suppressed for first-timers,
-    // warmups, and caught-up (0 due) — where a different action already leads.
-    const weakest = weakestReliable(motifPerf);
-    const heroSecondary = weakest
-        && dashboardData.total_sessions > 0
-        && !dashboardData.needs_warmup
-        && dashboardData.schedule.due_now > 0
-        ? {
-            label: `Or train your weakest: ${formatMotifName(weakest.name)}`,
-            onClick: () => navigate(`/puzzles?motif=${encodeURIComponent(weakest.name)}`),
-        }
-        : undefined;
+    const hasTodaysFocus = Boolean(todaysFocus?.focus);
 
     // Only surface a tile once it has something real to say. Otherwise a
     // brand-new user (no games, no practised motifs) gets two dead "—" tiles
@@ -256,9 +236,18 @@ export default function Dashboard() {
                         dueCount: dashboardData.schedule.due_now,
                         needsWarmup: dashboardData.needs_warmup,
                     }))}
-                    secondaryAction={heroSecondary}
                 />
             </CardErrorBoundary>
+
+            {/* The server-backed priority route belongs directly after the
+                ordinary daily default. A diagnosed focus also owns the only
+                targeted-training action on this screen, so generic weakest-
+                motif actions are suppressed below rather than competing. */}
+            {todaysFocus && (
+                <CardErrorBoundary label="Today's focus">
+                    <TodaysFocusCard data={todaysFocus} />
+                </CardErrorBoundary>
+            )}
 
             {/* IMPROVEMENT STRIP: outcome (rating Δ) + diagnosis (weakest motif) —
                 the loop's "is it working?" and "what next?". Loads independently of
@@ -279,20 +268,15 @@ export default function Dashboard() {
                             )}
                             {hasMotifTile && motifPerf && (
                                 <CardErrorBoundary label="Weakest motif">
-                                    <WeakestMotifCard motifs={motifPerf.motifs} />
+                                    <WeakestMotifCard
+                                        motifs={motifPerf.motifs}
+                                        trainingEnabled={!hasTodaysFocus}
+                                    />
                                 </CardErrorBoundary>
                             )}
                         </>
                     )}
                 </div>
-            )}
-
-            {/* Today's focus — the daily card the spec asks for. Above Recently
-                Tricky because it says what to do, not what happened. */}
-            {todaysFocus && (
-                <CardErrorBoundary label="Today's focus">
-                    <TodaysFocusCard data={todaysFocus} />
-                </CardErrorBoundary>
             )}
 
             {/* SECTION 2: Recently Tricky */}

@@ -18,11 +18,13 @@ describe('HeroTrainCard', () => {
     onStartSession: vi.fn(),
   };
 
-  it('should display due count', () => {
+  it('frames the due count as optional availability beside a five-puzzle standard session', () => {
     render(<HeroTrainCard {...defaultProps} />);
 
     expect(screen.getByText('5')).toBeInTheDocument();
-    expect(screen.getByText('puzzles due')).toBeInTheDocument();
+    expect(screen.getByText('puzzles available for review')).toBeInTheDocument();
+    expect(screen.getByText(/standard session is 5 puzzles/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Start Standard Session (5 puzzles)' })).toBeInTheDocument();
   });
 
   it('should show "Train Today" title for normal state', () => {
@@ -139,7 +141,7 @@ describe('HeroTrainCard', () => {
     const onStartSession = vi.fn();
     render(<HeroTrainCard {...defaultProps} onStartSession={onStartSession} />);
 
-    await user.click(screen.getByText('Start Session'));
+    await user.click(screen.getByText('Start Standard Session (5 puzzles)'));
     expect(onStartSession).toHaveBeenCalledTimes(1);
   });
 
@@ -158,7 +160,7 @@ describe('HeroTrainCard', () => {
   it('should use singular "puzzle" for dueCount of 1', () => {
     render(<HeroTrainCard {...defaultProps} dueCount={1} />);
 
-    expect(screen.getByText('puzzle due')).toBeInTheDocument();
+    expect(screen.getByText('puzzle available for review')).toBeInTheDocument();
   });
 
   it('should have proper aria-labelledby', () => {
@@ -173,7 +175,7 @@ describe('HeroTrainCard', () => {
 
     expect(screen.getByText("Today's training is complete")).toBeInTheDocument();
     expect(screen.getByText(/You completed a training session today/i)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Train more' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Train more (5 puzzles)' })).toBeInTheDocument();
     // Due count still visible (as availability, not obligation)
     expect(screen.getByText('5')).toBeInTheDocument();
   });
@@ -214,21 +216,12 @@ describe('HeroTrainCard', () => {
     render(<HeroTrainCard {...defaultProps} completedToday={false} dueCount={3} />);
 
     expect(screen.getByText('Train Today')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Start Session' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Start Standard Session (5 puzzles)' })).toBeInTheDocument();
   });
 
-  it('renders and fires the optional secondary action (smart hero shortcut)', async () => {
-    const onClick = vi.fn();
-    render(<HeroTrainCard {...defaultProps} secondaryAction={{ label: 'Or train your weakest: Back rank', onClick }} />);
-
-    const link = screen.getByRole('button', { name: 'Or train your weakest: Back rank' });
-    await user.click(link);
-    expect(onClick).toHaveBeenCalledTimes(1);
-  });
-
-  it('omits the secondary action when not provided', () => {
+  it('gives the daily default a 44px minimum target', () => {
     render(<HeroTrainCard {...defaultProps} />);
-    expect(screen.queryByText(/train your weakest/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Start Standard Session (5 puzzles)' })).toHaveClass('min-h-11');
   });
 
   it('renders the CTA with a solid fill via the registered primary token', () => {
@@ -236,7 +229,7 @@ describe('HeroTrainCard', () => {
 
     // bg-accent never generated CSS (no --color-accent token), so the CTA read as
     // plain text. It now uses the registered bg-primary/text-bg-primary fill.
-    const cta = screen.getByRole('button', { name: 'Start Session' });
+    const cta = screen.getByRole('button', { name: 'Start Standard Session (5 puzzles)' });
     expect(cta).toHaveClass('bg-primary');
     expect(cta).toHaveClass('text-bg-primary');
     expect(cta).not.toHaveClass('bg-accent');

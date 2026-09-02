@@ -12,12 +12,6 @@ interface HeroTrainCardProps {
   /** Server-derived: user has at least one completed session on today's UTC day. */
   completedToday?: boolean;
   onStartSession: () => void;
-  /**
-   * Optional targeted-training shortcut (e.g. "Train your weakest: Back rank"),
-   * shown as a subtle link under the primary CTA. The caller decides when it's
-   * meaningful — typically only in the everyday "Train Today" state.
-   */
-  secondaryAction?: { label: string; onClick: () => void };
 }
 
 export function HeroTrainCard({
@@ -28,8 +22,7 @@ export function HeroTrainCard({
   totalSessions,
   dueIn4h = 0,
   completedToday = false,
-  onStartSession,
-  secondaryAction
+  onStartSession
 }: HeroTrainCardProps) {
   // Determine the state and messaging
   const isFirstTime = totalSessions === 0;
@@ -64,7 +57,7 @@ export function HeroTrainCard({
       // First-timer with nothing generated yet: don't claim "0 puzzles
       // waiting" (self-contradicting) — point them at the real next step.
       ? 'Import your Chess.com games to generate your first set of puzzles.'
-      : `You have ${dueCount} puzzle${dueCount !== 1 ? 's' : ''} waiting. Complete your first session to see your tactical profile!`
+      : `Your first session is 5 puzzles. ${dueCount} puzzle${dueCount !== 1 ? 's are' : ' is'} available for review.`
     : needsWarmup
     ? `You've been away ${daysSinceLastSession} days. Let's do a quick warmup to see what stuck!`
     : isCompletedToday && !isZeroDue
@@ -74,7 +67,7 @@ export function HeroTrainCard({
     ? `Today's training is complete. ${caughtUpText}`
     : isZeroDue
     ? caughtUpText
-    : 'Most people improve by solving these today.';
+    : 'A Standard session is 5 puzzles. The rest stay available whenever you want them.';
 
   // A first-timer with nothing due has no session to start — the supporting
   // copy already tells them to import, so the CTA must agree. The same
@@ -88,10 +81,10 @@ export function HeroTrainCard({
     : needsWarmup
     ? 'Start Warmup (5 puzzles)'
     : isCompletedToday && !isZeroDue
-    ? 'Train more'
+    ? 'Train more (5 puzzles)'
     : isZeroDue
     ? 'Browse Puzzles'
-    : 'Start Session';
+    : 'Start Standard Session (5 puzzles)';
 
   // Only the caught-up branch (non-completed-today) prints the next-review time
   // in the body. Scope the caption-suppression guard to exactly that branch.
@@ -127,7 +120,7 @@ export function HeroTrainCard({
                 {dueCount}
               </p>
               <p className="text-primary/70 text-sm font-sans mt-1">
-                puzzle{dueCount !== 1 ? 's' : ''} due
+                puzzle{dueCount !== 1 ? 's' : ''} available for review
               </p>
             </div>
           )}
@@ -135,7 +128,7 @@ export function HeroTrainCard({
           <button
             type="button"
             onClick={onStartSession}
-            className="px-8 py-3 bg-primary text-bg-primary rounded-sm font-serif text-lg transition-opacity hover:opacity-90 cursor-pointer km-focus-visible"
+            className="min-h-11 px-8 py-3 bg-primary text-bg-primary rounded-sm font-serif text-lg transition-opacity hover:opacity-90 cursor-pointer km-focus-visible"
           >
             {buttonText}
           </button>
@@ -146,15 +139,6 @@ export function HeroTrainCard({
             </p>
           )}
 
-          {secondaryAction && (
-            <button
-              type="button"
-              onClick={secondaryAction.onClick}
-              className="mt-3 text-sm font-sans font-normal text-primary/70 underline decoration-primary/30 underline-offset-4 km-interactive km-focus-visible transition-colors"
-            >
-              {secondaryAction.label}
-            </button>
-          )}
         </div>
       </div>
     </section>
