@@ -7,20 +7,27 @@
 #   bash /path/to/repo/tests/browser-proof/run.sh
 #
 # What it does:
-#   1. Builds the candidate Vite bundle to /tmp/knightmind-bproof-dist
+#   1. Refuses dirty or environment-modified inputs, then builds the candidate
+#      Vite bundle in a private staging directory and writes a manifest bound
+#      to the exact checkout SHA and SHA-256 inventory of every bundle file
 #   2. Runs the GREEN test (should PASS on the candidate branch)
 #   3. Optionally runs the RED pre-fix probe if PREFIXED_DIST is set
 #
 # Requirements:
 #   - Node.js (for Vite)
-#   - python3 with Playwright installed:
-#       python3 -m playwright install chromium
+#   - Python with Playwright installed (override with PYTHON_BIN=python3.12):
+#       python3.12 -m playwright install chromium
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-DIST="/tmp/knightmind-bproof-dist"
+STAGING="$(mktemp -d /tmp/knightmind-bproof.XXXXXX)"
+trap 'rm -rf -- "$STAGING"' EXIT
+DIST="$STAGING/dist"
+export BPROOF_DIST="$DIST"
+COMMIT="$(git -C "$REPO_ROOT" rev-parse HEAD)"
+PYTHON_BIN="${PYTHON_BIN:-python3}"
 
 echo "=== KnightMind browser proof: resolved-outcome diagnosis ==="
 echo "Repo root : $REPO_ROOT"
@@ -29,21 +36,31 @@ echo ""
 
 # ── 1. Build ───────────────────────────────────────────────────────
 echo "--- Building Vite production bundle ---"
+"$PYTHON_BIN" - "$SCRIPT_DIR" "$REPO_ROOT" <<'PY'
+import pathlib
+import sys
+
+sys.path.insert(0, sys.argv[1])
+from bundle_provenance import assert_build_inputs_clean
+
+assert_build_inputs_clean(pathlib.Path(sys.argv[2]))
+PY
 cd "$REPO_ROOT/apps/web"
 npx vite build --outDir "$DIST"
 cd "$REPO_ROOT"
+"$PYTHON_BIN" "$SCRIPT_DIR/bundle_provenance.py" certify "$REPO_ROOT" "$DIST" "$COMMIT"
 
 # ── 2. GREEN test ──────────────────────────────────────────────────
 echo ""
 echo "--- Running GREEN test (candidate) ---"
-python3 "$SCRIPT_DIR/test_resolved_diagnosis.py"
+"$PYTHON_BIN" "$SCRIPT_DIR/test_resolved_diagnosis.py"
 
 # ── 3. RED probe (optional) ────────────────────────────────────────
 PREFIXED_DIST="${PREFIXED_DIST:-/tmp/knightmind-prefix-dist}"
 if [ -f "$PREFIXED_DIST/index.html" ]; then
     echo ""
     echo "--- Running RED probe (pre-fix bundle at $PREFIXED_DIST) ---"
-    python3 "$SCRIPT_DIR/test_prefixed_red.py"
+    "$PYTHON_BIN" "$SCRIPT_DIR/test_prefixed_red.py"
 else
     echo ""
     echo "[SKIP] RED probe: pre-fix bundle not found at $PREFIXED_DIST"

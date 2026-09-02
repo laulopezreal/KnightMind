@@ -34,8 +34,9 @@ import sys
 import threading
 import http.server
 import time
+import urllib.request
 
-from playwright.sync_api import sync_playwright, Route, Request
+from bundle_provenance import load_certified_bundle
 
 ARTIFACTS = pathlib.Path("/tmp/knightmind-bproof-artifacts")
 ARTIFACTS.mkdir(exist_ok=True)
@@ -50,16 +51,22 @@ def current_commit():
         text=True,
     ).strip()
 
-DIST = pathlib.Path("/tmp/knightmind-bproof-dist")
+DIST = pathlib.Path(os.environ.get("BPROOF_DIST", "/tmp/knightmind-bproof-dist"))
 if not (DIST / "index.html").exists():
     sys.exit(f"FAIL: Built dist not found at {DIST}. Run the Vite build first.")
+try:
+    BUNDLE = load_certified_bundle(str(DIST), current_commit())
+except RuntimeError as exc:
+    sys.exit(f"FAIL: {exc}")
+
+from playwright.sync_api import sync_playwright, Route, Request
 
 # ──────────────────────────────────────────────────────────────────
 # Minimal static file server for the built bundle
 # ──────────────────────────────────────────────────────────────────
 
 class SPAHandler(http.server.BaseHTTPRequestHandler):
-    """Serves /tmp/knightmind-bproof-dist. Falls back to index.html for SPA routes."""
+    """Serve only the immutable in-memory artifact loaded after certification."""
     def log_message(self, *args):
         pass
 
@@ -67,9 +74,8 @@ class SPAHandler(http.server.BaseHTTPRequestHandler):
         path = self.path.split("?")[0]
         if path == "/":
             path = "/index.html"
-        target = DIST / path.lstrip("/")
-        if target.exists() and target.is_file():
-            data = target.read_bytes()
+        data = BUNDLE.get(path.lstrip("/"))
+        if data is not None:
             self.send_response(200)
             if path.endswith(".html"):
                 ct = "text/html"
@@ -85,7 +91,7 @@ class SPAHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(data)
         else:
             # SPA fallback
-            data = (DIST / "index.html").read_bytes()
+            data = BUNDLE["index.html"]
             self.send_response(200)
             self.send_header("Content-Type", "text/html")
             self.send_header("Content-Length", str(len(data)))
@@ -462,7 +468,17 @@ def run_test(viewport_name, width, height, page, static_origin, username="testpl
     assert next_btn.count() > 0, \
         f"{viewport_name}: Required next-puzzle control not found; cannot prove diagnosis clearing"
     next_btn.first.click()
-    page.wait_for_selector("text=BProof Test Puzzle 2", timeout=3000)
+    # Below `lg`, the puzzle title is intentionally hidden. Require its exact
+    # identity in the mounted DOM, then prove the responsive surface rendered the
+    # transition using the viewport-specific visible puzzle indicator.
+    puzzle_2_title = page.get_by_text("BProof Test Puzzle 2", exact=False)
+    puzzle_2_title.wait_for(state="attached", timeout=3000)
+    if width == 390:
+        page.locator('[data-testid="mobile-puzzle-context"]').get_by_text(
+            "2/2", exact=True
+        ).wait_for(state="visible", timeout=3000)
+    else:
+        puzzle_2_title.wait_for(state="visible", timeout=3000)
     page.wait_for_function(
         "() => !document.body.innerText.includes('Loose piece awareness')",
         timeout=3000,
@@ -488,8 +504,17 @@ def main():
     print(f"Dist: {DIST}", flush=True)
     print(f"Artifacts: {ARTIFACTS}\n", flush=True)
 
+    replacement = DIST / ".post-validation-index.html"
+    replacement.write_bytes(b"post-validation replacement must never be served\n")
+    os.replace(replacement, DIST / "index.html")
+
     server, origin = start_static_server(port=19801)
     print(f"Static server at {origin}", flush=True)
+    with urllib.request.urlopen(origin, timeout=3) as response:
+        served_index = response.read()
+    assert served_index == BUNDLE["index.html"], \
+        "static server read the post-validation replacement from disk"
+    print("  [OK] Post-validation replacement cannot alter served bytes", flush=True)
 
     failures = []
 
