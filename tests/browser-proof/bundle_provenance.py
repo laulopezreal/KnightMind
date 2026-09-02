@@ -26,6 +26,13 @@ def manifest_path(dist):
     return pathlib.Path(dist) / MANIFEST_NAME
 
 
+def _expected_artifact_path(dist):
+    """Return the one existing canonical directory accepted by validation."""
+    if not isinstance(dist, (str, os.PathLike)):
+        raise TypeError("artifact path must be path-like")
+    return pathlib.Path(dist).resolve(strict=True)
+
+
 def write_manifest(dist, commit):
     """Atomically record the checkout that produced a successfully built dist."""
     dist = pathlib.Path(dist).resolve()
@@ -101,11 +108,14 @@ def assert_build_inputs_clean(repo_root):
 def validate_manifest(dist, expected_commit):
     """Fail closed unless the manifest exactly identifies this checkout and dist."""
     try:
-        dist = pathlib.Path(dist).resolve()
-        target = manifest_path(dist)
+        expected_dist = _expected_artifact_path(dist)
+    except (TypeError, ValueError, OSError, RuntimeError) as exc:
+        raise RuntimeError("bundle provenance malformed") from exc
+    try:
+        target = manifest_path(expected_dist)
         with target.open(encoding="utf-8") as handle:
             payload = json.load(handle)
-    except (FileNotFoundError, OSError, ValueError, json.JSONDecodeError) as exc:
+    except (TypeError, ValueError, OSError, RuntimeError, json.JSONDecodeError) as exc:
         raise RuntimeError("bundle provenance missing or malformed") from exc
     if (
         not isinstance(payload, dict)
@@ -116,19 +126,18 @@ def validate_manifest(dist, expected_commit):
         or not isinstance(payload.get("dist"), str)
     ):
         raise RuntimeError("bundle provenance malformed")
-    try:
-        manifest_dist = pathlib.Path(payload["dist"]).resolve()
-    except (OSError, ValueError) as exc:
-        raise RuntimeError("bundle provenance malformed") from exc
-    if manifest_dist != dist:
+    if payload["dist"] != str(expected_dist):
         raise RuntimeError("bundle provenance malformed")
+    try:
+        manifest_dist = pathlib.Path(payload["dist"])
+        if manifest_dist.is_symlink() or manifest_dist.resolve(strict=True) != expected_dist:
+            raise RuntimeError("manifest artifact path is not canonical")
+    except (TypeError, ValueError, OSError, RuntimeError) as exc:
+        raise RuntimeError("bundle provenance malformed") from exc
     if not _valid_commit(expected_commit):
-        raise RuntimeError(f"bundle provenance expected commit is malformed: {expected_commit!r}")
+        raise RuntimeError("bundle provenance malformed")
     if payload["commit"] != expected_commit:
-        raise RuntimeError(
-            "bundle provenance mismatch: "
-            f"manifest={payload['commit']} checkout={expected_commit}"
-        )
+        raise RuntimeError("bundle provenance mismatch")
 
 
 if __name__ == "__main__":

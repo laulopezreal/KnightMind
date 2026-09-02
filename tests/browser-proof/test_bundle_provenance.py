@@ -72,18 +72,74 @@ class BundleProvenanceTests(unittest.TestCase):
         write_manifest(self.dist, COMMIT)
         for commit in (True, "A" * 40, "a" * 39):
             with self.subTest(commit=commit):
-                with self.assertRaisesRegex(RuntimeError, "expected commit"):
+                with self.assertRaisesRegex(RuntimeError, r"^bundle provenance malformed$"):
                     validate_manifest(self.dist, commit)
+
+    def test_malformed_expected_commit_error_does_not_leak_input(self):
+        write_manifest(self.dist, COMMIT)
+        with self.assertRaisesRegex(RuntimeError, r"^bundle provenance malformed$"):
+            validate_manifest(self.dist, "caller-secret")
 
     def test_invalid_dist_path_is_rejected(self):
         self._write_manifest(dist=str(self.dist / "other"))
         with self.assertRaisesRegex(RuntimeError, "malformed"):
             validate_manifest(self.dist, COMMIT)
 
+    def test_manifest_dist_must_be_the_exact_canonical_absolute_path(self):
+        alias = pathlib.Path(self.temp_dir.name) / "dist-alias"
+        alias.symlink_to(self.dist, target_is_directory=True)
+        variants = (
+            f"{self.dist}/.",
+            str(self.dist) + "//",
+            os.path.relpath(self.dist),
+            str(alias),
+            str(self.dist).replace("/", "\\"),
+            str(self.dist.parent / "missing"),
+        )
+        for manifest_dist in variants:
+            with self.subTest(manifest_dist=manifest_dist):
+                self._write_manifest(dist=manifest_dist)
+                with self.assertRaisesRegex(RuntimeError, r"^bundle provenance malformed$"):
+                    validate_manifest(self.dist, COMMIT)
+
+    def test_symlinked_manifest_target_is_rejected(self):
+        alias = pathlib.Path(self.temp_dir.name) / "dist-alias"
+        alias.symlink_to(self.dist, target_is_directory=True)
+        self._write_manifest(dist=str(alias))
+        with self.assertRaisesRegex(RuntimeError, r"^bundle provenance malformed$"):
+            validate_manifest(self.dist, COMMIT)
+
     def test_embedded_nul_manifest_dist_is_rejected_as_malformed(self):
         self._write_manifest(dist="\0")
         with self.assertRaisesRegex(RuntimeError, r"^bundle provenance malformed"):
             validate_manifest(self.dist, COMMIT)
+
+    def test_path_resolution_failures_are_bounded_and_redacted(self):
+        loop = pathlib.Path(self.temp_dir.name) / "loop"
+        loop.symlink_to(loop)
+        write_manifest(self.dist, COMMIT)
+        with self.assertRaisesRegex(RuntimeError, r"^bundle provenance malformed$"):
+            validate_manifest(loop, COMMIT)
+
+    def test_expected_dist_type_coercions_are_rejected_as_malformed(self):
+        write_manifest(self.dist, COMMIT)
+        for invalid_dist in (
+            None,
+            True,
+            7,
+            b"dist",
+            "\0",
+            self.dist / "missing",
+            object(),
+        ):
+            with self.subTest(invalid_dist=type(invalid_dist).__name__):
+                with self.assertRaisesRegex(RuntimeError, r"^bundle provenance malformed$"):
+                    validate_manifest(invalid_dist, COMMIT)
+
+    def test_mismatch_error_does_not_leak_commits(self):
+        write_manifest(self.dist, COMMIT)
+        with self.assertRaisesRegex(RuntimeError, r"^bundle provenance mismatch$"):
+            validate_manifest(self.dist, "b" * 40)
 
     def test_clean_build_inputs_allow_unrelated_untracked_proof_artifact(self):
         repo = self._make_repo()
