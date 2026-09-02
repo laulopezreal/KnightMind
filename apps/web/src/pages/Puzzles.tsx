@@ -338,17 +338,27 @@ export default function Puzzles() {
         diagnosisOwner: TerminalDiagnosisOwner;
     } | null>(null);
     if (puzzleInstanceRef.current !== currentPuzzle) {
+        // A same-id reference change (e.g. the review hook calling setPuzzles to
+        // fold fresh server stats back into the queue item) must NOT reset the
+        // diagnosis epoch, in-flight diagnosis result, or diagnosis loading state:
+        // the puzzle is still the same position and the diagnosis request is valid.
+        // Any in-flight confirmation is tied to the previous object and must be
+        // dropped on any reference change (including same-id rehydration).
+        // Puzzle-check ownership needs a fresh epoch on any reference change.
+        const isSamePuzzle = puzzleInstanceRef.current?.id === currentPuzzle?.id;
         puzzleInstanceRef.current = currentPuzzle;
         puzzleEpochRef.current += 1;
-        diagnosisEpochRef.current += 1;
         checkingPuzzleRef.current = null;
-        outcomeDecisionRef.current = null;
-        outcomeWriteRef.current = null;
-        setDiagnosisResult(null);
-        setDiagnosisLoadingOwner(null);
         diagnosisConfirmationRequestRef.current = null;
         setDiagnosisConfirmationOwner(null);
         setDiagnosisConfirmationError(null);
+        if (!isSamePuzzle) {
+            diagnosisEpochRef.current += 1;
+            outcomeDecisionRef.current = null;
+            outcomeWriteRef.current = null;
+            setDiagnosisResult(null);
+            setDiagnosisLoadingOwner(null);
+        }
     }
     if (diagnosisUsernameRef.current !== username) {
         diagnosisUsernameRef.current = username;
@@ -365,7 +375,6 @@ export default function Puzzles() {
     const activeDiagnosis =
         diagnosisOwner &&
         diagnosisOwner.puzzleId === currentPuzzle?.id &&
-        diagnosisOwner.puzzleEpoch === puzzleEpochRef.current &&
         diagnosisOwner.epoch === diagnosisEpochRef.current &&
         diagnosisOwner.username === username
             ? diagnosisResult?.diagnosis ?? null
@@ -373,19 +382,16 @@ export default function Puzzles() {
     const diagnosisLoading =
         !!diagnosisLoadingOwner &&
         diagnosisLoadingOwner.puzzleId === currentPuzzle?.id &&
-        diagnosisLoadingOwner.puzzleEpoch === puzzleEpochRef.current &&
         diagnosisLoadingOwner.epoch === diagnosisEpochRef.current &&
         diagnosisLoadingOwner.username === username;
     const diagnosisConfirmationSaving =
         !!diagnosisConfirmationOwner &&
         diagnosisConfirmationOwner.puzzleId === currentPuzzle?.id &&
-        diagnosisConfirmationOwner.puzzleEpoch === puzzleEpochRef.current &&
         diagnosisConfirmationOwner.epoch === diagnosisEpochRef.current &&
         diagnosisConfirmationOwner.username === username;
     const activeDiagnosisConfirmationError =
         diagnosisConfirmationError &&
         diagnosisConfirmationError.owner.puzzleId === currentPuzzle?.id &&
-        diagnosisConfirmationError.owner.puzzleEpoch === puzzleEpochRef.current &&
         diagnosisConfirmationError.owner.epoch === diagnosisEpochRef.current &&
         diagnosisConfirmationError.owner.username === username
             ? diagnosisConfirmationError.message
@@ -394,7 +400,6 @@ export default function Puzzles() {
     const requestDiagnosisForResolvedOutcome = (owner: TerminalDiagnosisOwner) => {
         if (
             currentPuzzleIdRef.current !== owner.puzzleId ||
-            puzzleEpochRef.current !== owner.puzzleEpoch ||
             diagnosisEpochRef.current !== owner.diagnosisEpoch ||
             currentUsernameRef.current !== owner.username
         ) return;
