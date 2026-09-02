@@ -468,7 +468,17 @@ def run_test(viewport_name, width, height, page, static_origin, username="testpl
     assert next_btn.count() > 0, \
         f"{viewport_name}: Required next-puzzle control not found; cannot prove diagnosis clearing"
     next_btn.first.click()
-    page.wait_for_selector("text=BProof Test Puzzle 2", timeout=3000)
+    # Below `lg`, the puzzle title is intentionally hidden. Require its exact
+    # identity in the mounted DOM, then prove the responsive surface rendered the
+    # transition using the viewport-specific visible puzzle indicator.
+    puzzle_2_title = page.get_by_text("BProof Test Puzzle 2", exact=False)
+    puzzle_2_title.wait_for(state="attached", timeout=3000)
+    if width == 390:
+        page.locator('[data-testid="mobile-puzzle-context"]').get_by_text(
+            "2/2", exact=True
+        ).wait_for(state="visible", timeout=3000)
+    else:
+        puzzle_2_title.wait_for(state="visible", timeout=3000)
     page.wait_for_function(
         "() => !document.body.innerText.includes('Loose piece awareness')",
         timeout=3000,
