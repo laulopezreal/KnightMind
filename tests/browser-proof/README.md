@@ -1,8 +1,10 @@
 # Browser proof: resolved-outcome diagnosis
 
-Candidate: `f8520fa0b4aff702bdb398c5933eb26a0630d8a2`
-Pre-fix parent: `392e7c8`
-Branch: `test/resolved-diagnosis-browser-proof`
+last_edited_at: 2026-09-02T06:50:13+02:00
+
+Candidate: the exact commit checked out when the proof runs, printed as `Candidate commit (runtime checkout)`
+Original proof branch: `test/resolved-diagnosis-browser-proof`
+Pre-fix comparison bundle: `392e7c8` (used only by the optional RED probe)
 Task: `t_cdb7bc04`
 
 ## What this proves
@@ -20,7 +22,7 @@ Task: `t_cdb7bc04`
 2. No horizontal overflow at 390x844.
 3. Zero real browser console errors (assertion — any non-allowlisted error fails the test).
 4. Moving to the next puzzle clears the prior diagnosis.
-5. `test_prefixed_red.py` confirms the same sequence against `392e7c8` produces NO diagnosis card (RED).
+5. `test_prefixed_red.py` confirms the same sequence against the pre-fix comparison bundle (`392e7c8`) produces NO diagnosis card (RED).
 
 ## How to run
 
@@ -38,7 +40,7 @@ cd apps/web
 npx vite build --outDir /tmp/knightmind-bproof-dist
 cd ../..
 
-# Run GREEN test (candidate)
+# Run GREEN test (the current checkout, whose SHA is recorded at runtime)
 python3 tests/browser-proof/test_resolved_diagnosis.py
 
 # Run RED test (pre-fix 392e7c8) — confirms original bug

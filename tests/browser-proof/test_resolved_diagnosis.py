@@ -2,8 +2,8 @@
 Browser proof: resolved-outcome diagnosis renders after stats-fold (same-id reference change).
 
 Task: t_cdb7bc04
-Branch: test/resolved-diagnosis-browser-proof
-Candidate: f8520fa0b4aff702bdb398c5933eb26a0630d8a2
+Proof origin: test/resolved-diagnosis-browser-proof (original proof branch)
+Candidate: the checked-out commit, recorded at runtime
 Pre-fix parent: 392e7c8
 
 Proves at both desktop (1280x800) and mobile (390x844):
@@ -12,7 +12,7 @@ Proves at both desktop (1280x800) and mobile (390x844):
   2. The diagnosis section is reachable and does not overflow horizontally on mobile.
   3. Browser console errors are empty after navigation and after resolution.
   4. Moving to a different puzzle clears the prior diagnosis.
-  5. The test passes against the candidate (f8520fa) and fails against pre-fix (392e7c8).
+  5. The test passes against the checked-out candidate and fails against pre-fix (392e7c8).
      (Point 5 is demonstrated by the RED build section at the bottom of this script.)
 
 Usage:
@@ -29,6 +29,7 @@ Usage:
 import json
 import os
 import pathlib
+import subprocess
 import sys
 import threading
 import http.server
@@ -38,6 +39,16 @@ from playwright.sync_api import sync_playwright, Route, Request
 
 ARTIFACTS = pathlib.Path("/tmp/knightmind-bproof-artifacts")
 ARTIFACTS.mkdir(exist_ok=True)
+
+REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
+
+
+def current_commit():
+    """Return the exact commit that supplied the bundle under test."""
+    return subprocess.check_output(
+        ["git", "-C", str(REPO_ROOT), "rev-parse", "HEAD"],
+        text=True,
+    ).strip()
 
 DIST = pathlib.Path("/tmp/knightmind-bproof-dist")
 if not (DIST / "index.html").exists():
@@ -334,14 +345,14 @@ def run_test(viewport_name, width, height, page, static_origin, username="testpl
     page.goto(static_origin)
     page.evaluate(f"localStorage.setItem('knightmind:chesscom_username', '{username}')")
 
-    # Navigate to /puzzles
-    page.goto(f"{static_origin}/puzzles")
-    page.wait_for_load_state("networkidle", timeout=8000)
-
-    # Check for console errors at start
+    # Register before navigation so route-load errors are included in the proof.
     console_errors = []
     page.on("console", lambda msg: console_errors.append(msg.text()) if msg.type == "error" else None)
     page.on("pageerror", lambda exc: console_errors.append(str(exc)))
+
+    # Navigate to /puzzles
+    page.goto(f"{static_origin}/puzzles")
+    page.wait_for_load_state("networkidle", timeout=8000)
 
     # ── 1. Start session ──────────────────────────────────────────
     start_btn = page.locator('button:has-text("Start Session")')
@@ -448,29 +459,32 @@ def run_test(viewport_name, width, height, page, static_origin, username="testpl
     if next_btn.count() == 0:
         # Try pressing the next-puzzle button via aria-label
         next_btn = page.locator('[aria-label*="next" i], [aria-label*="Next" i]')
-    if next_btn.count() > 0:
-        next_btn.first.click()
-        page.wait_for_timeout(500)
-        # After moving on, the prior diagnosis card must be gone or replaced
-        # (it belongs to puzzle 1; puzzle 2 has a pending diagnosis with no content)
-        p1_cause = page.locator('text=Loose piece awareness')
-        # Give it a moment to clear
-        page.wait_for_timeout(400)
-        p1_cause_count = p1_cause.count()
-        page.screenshot(path=str(ARTIFACTS / f"{viewport_name}_puzzle2_diagnosis_cleared.png"), full_page=True)
-        assert p1_cause_count == 0, \
-            f"{viewport_name}: Prior puzzle diagnosis ('Loose piece awareness') still visible after moving to puzzle 2"
-        print(f"  [OK] Moving to puzzle 2 clears the prior diagnosis", flush=True)
-        print(f"  Screenshot: {ARTIFACTS}/{viewport_name}_puzzle2_diagnosis_cleared.png", flush=True)
-    else:
-        print(f"  [SKIP] Could not find 'Next Puzzle' button; skipping clear-check", flush=True)
+    assert next_btn.count() > 0, \
+        f"{viewport_name}: Required next-puzzle control not found; cannot prove diagnosis clearing"
+    next_btn.first.click()
+    page.wait_for_selector("text=BProof Test Puzzle 2", timeout=3000)
+    page.wait_for_function(
+        "() => !document.body.innerText.includes('Loose piece awareness')",
+        timeout=3000,
+    )
+    # After moving on, the prior diagnosis card must be gone or replaced.
+    p1_cause = page.locator('text=Loose piece awareness')
+    p1_cause_count = p1_cause.count()
+    page.screenshot(path=str(ARTIFACTS / f"{viewport_name}_puzzle2_diagnosis_cleared.png"), full_page=True)
+    assert p1_cause_count == 0, \
+        f"{viewport_name}: Prior puzzle diagnosis ('Loose piece awareness') still visible after moving to puzzle 2"
+    print(f"  [OK] Moving to puzzle 2 clears the prior diagnosis", flush=True)
+    print(f"  Screenshot: {ARTIFACTS}/{viewport_name}_puzzle2_diagnosis_cleared.png", flush=True)
 
     return True
 
 
 def main():
     print("KnightMind browser proof: resolved-outcome diagnosis", flush=True)
-    print(f"Candidate commit: f8520fa0b4aff702bdb398c5933eb26a0630d8a2", flush=True)
+    commit = current_commit()
+    assert len(commit) == 40 and all(char in "0123456789abcdef" for char in commit), \
+        f"Unexpected candidate commit SHA: {commit!r}"
+    print(f"Candidate commit (runtime checkout): {commit}", flush=True)
     print(f"Dist: {DIST}", flush=True)
     print(f"Artifacts: {ARTIFACTS}\n", flush=True)
 
