@@ -7,7 +7,9 @@
 #   bash /path/to/repo/tests/browser-proof/run.sh
 #
 # What it does:
-#   1. Builds the candidate Vite bundle to /tmp/knightmind-bproof-dist
+#   1. Refuses dirty or environment-modified inputs, then builds the candidate
+#      Vite bundle to /tmp/knightmind-bproof-dist and writes a manifest bound
+#      to the exact checkout SHA
 #   2. Runs the GREEN test (should PASS on the candidate branch)
 #   3. Optionally runs the RED pre-fix probe if PREFIXED_DIST is set
 #
@@ -21,6 +23,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 DIST="/tmp/knightmind-bproof-dist"
+COMMIT="$(git -C "$REPO_ROOT" rev-parse HEAD)"
 
 echo "=== KnightMind browser proof: resolved-outcome diagnosis ==="
 echo "Repo root : $REPO_ROOT"
@@ -29,9 +32,20 @@ echo ""
 
 # ── 1. Build ───────────────────────────────────────────────────────
 echo "--- Building Vite production bundle ---"
+python3 - "$SCRIPT_DIR" "$REPO_ROOT" <<'PY'
+import pathlib
+import sys
+
+sys.path.insert(0, sys.argv[1])
+from bundle_provenance import assert_build_inputs_clean
+
+assert_build_inputs_clean(pathlib.Path(sys.argv[2]))
+PY
+rm -rf -- "$DIST"
 cd "$REPO_ROOT/apps/web"
 npx vite build --outDir "$DIST"
 cd "$REPO_ROOT"
+python3 "$SCRIPT_DIR/bundle_provenance.py" write "$DIST" "$COMMIT"
 
 # ── 2. GREEN test ──────────────────────────────────────────────────
 echo ""

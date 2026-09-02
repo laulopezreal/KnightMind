@@ -35,7 +35,7 @@ import threading
 import http.server
 import time
 
-from playwright.sync_api import sync_playwright, Route, Request
+from bundle_provenance import validate_manifest
 
 ARTIFACTS = pathlib.Path("/tmp/knightmind-bproof-artifacts")
 ARTIFACTS.mkdir(exist_ok=True)
@@ -53,6 +53,12 @@ def current_commit():
 DIST = pathlib.Path("/tmp/knightmind-bproof-dist")
 if not (DIST / "index.html").exists():
     sys.exit(f"FAIL: Built dist not found at {DIST}. Run the Vite build first.")
+try:
+    validate_manifest(DIST, current_commit())
+except RuntimeError as exc:
+    sys.exit(f"FAIL: {exc}")
+
+from playwright.sync_api import sync_playwright, Route, Request
 
 # ──────────────────────────────────────────────────────────────────
 # Minimal static file server for the built bundle
