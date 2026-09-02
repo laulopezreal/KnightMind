@@ -14,7 +14,6 @@ from bundle_provenance import (
     write_manifest,
 )
 
-
 COMMIT = "a" * 40
 
 
@@ -24,6 +23,9 @@ class BundleProvenanceTests(unittest.TestCase):
         self.dist = pathlib.Path(self.temp_dir.name) / "dist"
         self.dist.mkdir()
         (self.dist / "index.html").write_text("<html></html>", encoding="utf-8")
+        assets = self.dist / "assets"
+        assets.mkdir()
+        (assets / "app.js").write_text("console.log('clean')\n", encoding="utf-8")
 
     def tearDown(self):
         self.temp_dir.cleanup()
@@ -56,6 +58,113 @@ class BundleProvenanceTests(unittest.TestCase):
         (self.dist / MANIFEST_NAME).write_text("not json", encoding="utf-8")
         with self.assertRaisesRegex(RuntimeError, "missing or malformed"):
             validate_manifest(str(self.dist), COMMIT)
+
+    def test_manifest_inventory_is_deterministic_and_content_bound(self):
+        write_manifest(self.dist, COMMIT)
+        payload = json.loads((self.dist / MANIFEST_NAME).read_text(encoding="utf-8"))
+        self.assertEqual(payload["version"], 2)
+        self.assertEqual(
+            [item["path"] for item in payload["inventory"]],
+            ["assets/app.js", "index.html"],
+        )
+        self.assertTrue(all(len(item["sha256"]) == 64 for item in payload["inventory"]))
+
+    def test_changed_bundle_files_are_rejected(self):
+        for relative_path in ("index.html", "assets/app.js"):
+            with self.subTest(relative_path=relative_path):
+                write_manifest(self.dist, COMMIT)
+                target = self.dist / relative_path
+                original = target.read_text(encoding="utf-8")
+                target.write_text(original + "mutated", encoding="utf-8")
+                with self.assertRaisesRegex(RuntimeError, r"^bundle provenance mismatch$"):
+                    validate_manifest(str(self.dist), COMMIT)
+                target.write_text(original, encoding="utf-8")
+
+    def test_added_bundle_file_is_rejected(self):
+        write_manifest(self.dist, COMMIT)
+        (self.dist / "assets/added.js").write_text("added\n", encoding="utf-8")
+        with self.assertRaisesRegex(RuntimeError, r"^bundle provenance mismatch$"):
+            validate_manifest(str(self.dist), COMMIT)
+
+    def test_deleted_bundle_file_is_rejected(self):
+        write_manifest(self.dist, COMMIT)
+        (self.dist / "assets/app.js").unlink()
+        with self.assertRaisesRegex(RuntimeError, r"^bundle provenance mismatch$"):
+            validate_manifest(str(self.dist), COMMIT)
+
+    def test_symlinked_bundle_entry_is_rejected(self):
+        write_manifest(self.dist, COMMIT)
+        target = self.dist / "assets/app.js"
+        target.unlink()
+        target.symlink_to(self.dist / "index.html")
+        with self.assertRaisesRegex(RuntimeError, r"^bundle provenance mismatch$"):
+            validate_manifest(str(self.dist), COMMIT)
+
+    def test_nonregular_bundle_entry_is_rejected(self):
+        write_manifest(self.dist, COMMIT)
+        os.mkfifo(self.dist / "assets/pipe")
+        with self.assertRaisesRegex(RuntimeError, r"^bundle provenance mismatch$"):
+            validate_manifest(str(self.dist), COMMIT)
+
+    def test_unreadable_bundle_entry_is_rejected_without_disclosure(self):
+        write_manifest(self.dist, COMMIT)
+        original_open = os.open
+
+        def deny_app(path, flags):
+            if pathlib.Path(path).name == "app.js":
+                raise PermissionError("sensitive-host-path")
+            return original_open(path, flags)
+
+        with mock.patch("bundle_provenance.os.open", side_effect=deny_app):
+            with self.assertRaisesRegex(RuntimeError, r"^bundle provenance mismatch$"):
+                validate_manifest(str(self.dist), COMMIT)
+
+    def test_malformed_inventory_or_digest_is_rejected(self):
+        malformed_values = (
+            None,
+            {},
+            [],
+            [{"path": "index.html", "sha256": "not-a-digest"}],
+            [{"path": "index.html", "sha256": "A" * 64}],
+            [{"path": "index.html", "sha256": "a" * 64, "extra": True}],
+            [
+                {"path": "index.html", "sha256": "a" * 64},
+                {"path": "index.html", "sha256": "b" * 64},
+            ],
+        )
+        for inventory in malformed_values:
+            with self.subTest(inventory=inventory):
+                self._write_manifest(inventory=inventory)
+                with self.assertRaisesRegex(RuntimeError, r"^bundle provenance malformed$"):
+                    validate_manifest(str(self.dist), COMMIT)
+
+    def test_unsafe_inventory_paths_are_rejected_without_disclosure(self):
+        unsafe_paths = (
+            "../index.html",
+            "/index.html",
+            "assets/../index.html",
+            "assets\\app.js",
+            "./index.html",
+            "assets/secret\n.js",
+            MANIFEST_NAME,
+            "",
+        )
+        for unsafe_path in unsafe_paths:
+            with self.subTest(unsafe_path=repr(unsafe_path)):
+                self._write_manifest(
+                    inventory=[{"path": unsafe_path, "sha256": "a" * 64}]
+                )
+                with self.assertRaisesRegex(RuntimeError, r"^bundle provenance malformed$"):
+                    validate_manifest(str(self.dist), COMMIT)
+
+    def test_manifest_writer_refuses_symlinked_target(self):
+        target = self.dist / MANIFEST_NAME
+        outside = pathlib.Path(self.temp_dir.name) / "outside.json"
+        outside.write_text("untouched", encoding="utf-8")
+        target.symlink_to(outside)
+        with self.assertRaisesRegex(ValueError, "must not be a symlink"):
+            write_manifest(self.dist, COMMIT)
+        self.assertEqual(outside.read_text(encoding="utf-8"), "untouched")
 
     def test_mismatched_manifest_is_rejected(self):
         write_manifest(self.dist, COMMIT)
@@ -122,11 +231,18 @@ class BundleProvenanceTests(unittest.TestCase):
         manifest_target = self.dist / MANIFEST_NAME
         linked_manifest = pathlib.Path(self.temp_dir.name) / "linked-manifest.json"
         linked_manifest.write_text(
-            json.dumps({"version": 1, "commit": COMMIT, "dist": str(self.dist)}),
+            json.dumps(
+                {"version": 2, "commit": COMMIT, "dist": str(self.dist), "inventory": []}
+            ),
             encoding="utf-8",
         )
         manifest_target.symlink_to(linked_manifest)
         with self.assertRaisesRegex(RuntimeError, r"^bundle provenance malformed$"):
+            validate_manifest(str(self.dist), COMMIT)
+
+    def test_nonregular_manifest_target_is_rejected_without_blocking(self):
+        (self.dist / MANIFEST_NAME).mkdir()
+        with self.assertRaisesRegex(RuntimeError, r"^bundle provenance missing or malformed$"):
             validate_manifest(str(self.dist), COMMIT)
 
     def test_embedded_nul_manifest_dist_is_rejected_as_malformed(self):
@@ -201,7 +317,8 @@ class BundleProvenanceTests(unittest.TestCase):
             assert_build_inputs_clean(repo)
 
     def _write_manifest(self, **overrides):
-        payload = {"version": 1, "commit": COMMIT, "dist": str(self.dist)}
+        write_manifest(self.dist, COMMIT)
+        payload = json.loads((self.dist / MANIFEST_NAME).read_text(encoding="utf-8"))
         payload.update(overrides)
         (self.dist / MANIFEST_NAME).write_text(json.dumps(payload), encoding="utf-8")
 

@@ -1,6 +1,6 @@
 # Browser proof: resolved-outcome diagnosis
 
-last_edited_at: 2026-09-02T09:35:39+02:00
+last_edited_at: 2026-09-02T15:51:46+02:00
 
 Candidate: the exact commit checked out when the proof runs, printed as `Candidate commit (runtime checkout)`
 Original proof branch: `test/resolved-diagnosis-browser-proof`
@@ -29,7 +29,7 @@ Task: `t_cdb7bc04`
 From the repository root, use the included runner:
 
 ```bash
-bash tests/browser-proof/run.sh
+PYTHON_BIN=python3.12 bash tests/browser-proof/run.sh
 ```
 
 Or run steps individually:
@@ -53,7 +53,10 @@ python3 tests/browser-proof/test_prefixed_red.py
 ```
 
 `test_resolved_diagnosis.py` rejects a missing, malformed, stale, or mismatched
-manifest before it starts a static server or browser runtime. The normal runner
+manifest before it starts a static server or browser runtime. Certification records
+the exact sorted SHA-256 inventory of all regular bundle files. Validation recomputes
+that inventory and rejects changed, added, deleted, unreadable, symlinked, nonregular,
+or unsafe entries before browser execution. The normal runner
 also rejects dirty tracked Vite inputs and Vite environment overrides/files before
 the build, then rechecks them immediately before writing the manifest. Direct/manual
 builds are provenance-ready only when they use the same pre-build guard and
