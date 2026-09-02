@@ -73,7 +73,7 @@ export function WeakestMotifCard({ motifs, trainingEnabled = true }: WeakestMoti
   const insightsLink = (
     <Link
       to="/insights"
-      className="km-interactive km-focus-visible km-inline-link text-primary text-xs font-medium underline decoration-primary/30 underline-offset-4 transition-colors"
+      className="km-interactive km-focus-visible km-inline-link inline-flex min-h-11 items-center text-primary text-xs font-medium underline decoration-primary/30 underline-offset-4 transition-colors"
     >
       See all motifs
     </Link>

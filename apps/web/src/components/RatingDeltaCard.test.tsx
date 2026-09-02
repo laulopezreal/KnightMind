@@ -1,10 +1,13 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import type { AnchorHTMLAttributes } from 'react';
 import { RatingDeltaCard } from './RatingDeltaCard';
 import type { ExplainResponse } from '../api/ratings';
 
 vi.mock('react-router-dom', () => ({
-  Link: ({ children, to }: { children: React.ReactNode; to: string }) => <a href={to}>{children}</a>,
+  Link: ({ children, to, ...props }: AnchorHTMLAttributes<HTMLAnchorElement> & { to: string }) => (
+    <a href={to} {...props}>{children}</a>
+  ),
 }));
 
 const resp = (over: Partial<ExplainResponse>): ExplainResponse => ({
@@ -44,6 +47,8 @@ describe('RatingDeltaCard', () => {
   it('renders a sparkline when the series has enough points and links to details', () => {
     const { container } = render(<RatingDeltaCard data={resp({})} timeControlLabel="Rapid" />);
     expect(container.querySelector('svg polyline')).not.toBeNull();
-    expect(screen.getByRole('link', { name: 'Details' })).toHaveAttribute('href', '/rating-insights');
+    const details = screen.getByRole('link', { name: 'Details' });
+    expect(details).toHaveAttribute('href', '/rating-insights');
+    expect(details).toHaveClass('min-h-11', 'min-w-11');
   });
 });
