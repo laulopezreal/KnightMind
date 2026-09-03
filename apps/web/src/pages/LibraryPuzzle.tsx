@@ -4,7 +4,7 @@ import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { AccessibleChessboard } from '../components/AccessibleChessboard';
 import { Chess } from 'chess.js';
 import { useChessUsername } from '../context/ChessUsernameContext';
-import { checkPuzzle, getLibraryPuzzle, getPuzzleDiagnosis, getSimilarPuzzles, revealPuzzle, reviewPuzzle, type LibraryPuzzle as LibraryPuzzleType, type PuzzleDiagnosis, type SimilarPuzzlesResponse } from '../api/puzzles';
+import { checkPuzzle, getLibraryPuzzle, getPuzzleDiagnosis, getSimilarPuzzles, revealPuzzle, reviewPuzzle, type LibraryPuzzleDetail, type PuzzleDiagnosis, type SimilarPuzzlesResponse } from '../api/puzzles';
 import { MistakeDiagnosisCard } from '../components/MistakeDiagnosisCard';
 import { SimilarWeaknessCard } from '../components/SimilarWeaknessCard';
 import { ApiError } from '../api/core';
@@ -44,9 +44,19 @@ export default function LibraryPuzzle() {
     const [isRevealing, setIsRevealing] = useState(false);
     const checkRequestRef = useRef<symbol | null>(null);
     const revealRequestRef = useRef<symbol | null>(null);
+    const recordRequestRef = useRef(false);
+    const solverPlyIndexRef = useRef(0);
+    const solveGenerationRef = useRef(0);
     const activePuzzleKey = `${username ?? ''}:${puzzleId ?? ''}`;
     const activePuzzleKeyRef = useRef(activePuzzleKey);
     activePuzzleKeyRef.current = activePuzzleKey;
+
+    useEffect(() => () => {
+        solveGenerationRef.current += 1;
+        checkRequestRef.current = null;
+        revealRequestRef.current = null;
+        recordRequestRef.current = false;
+    }, []);
 
     // Solve timer
     const solveStartRef = useRef<number>(0);
@@ -55,7 +65,6 @@ export default function LibraryPuzzle() {
     const [recorded, setRecorded] = useState(false);
     const [nextDueAt, setNextDueAt] = useState<string | null>(null);
     const [feedback, setFeedback] = useState('');
-    const [isRecording, setIsRecording] = useState(false);
     const [solveTimeMs, setSolveTimeMs] = useState<number | null>(null);
     const [recordError, setRecordError] = useState<string | null>(null);
 
@@ -88,6 +97,9 @@ export default function LibraryPuzzle() {
         setIsRevealing(false);
         checkRequestRef.current = null;
         revealRequestRef.current = null;
+        recordRequestRef.current = false;
+        solverPlyIndexRef.current = 0;
+        solveGenerationRef.current += 1;
         setRecorded(false);
         setNextDueAt(null);
         setFeedback('');
@@ -108,7 +120,7 @@ export default function LibraryPuzzle() {
         error,
         busy: isLoading,
         reload: fetchPuzzle,
-    } = useAsyncData<{ puzzle: LibraryPuzzleType }>(
+    } = useAsyncData<{ puzzle: LibraryPuzzleDetail }>(
         async () => {
             try {
                 const found = await getLibraryPuzzle(puzzleId!, username!);
@@ -160,7 +172,7 @@ export default function LibraryPuzzle() {
     // change that refetches it -- both of which an id-keyed guard silently
     // skipped, carrying a revealed solution and a stale solve clock into the
     // next load.
-    const [readyFor, setReadyFor] = useState<{ puzzle: LibraryPuzzleType } | null>(null);
+    const [readyFor, setReadyFor] = useState<{ puzzle: LibraryPuzzleDetail } | null>(null);
     if (loaded && loaded !== readyFor) {
         setReadyFor(loaded);
         // Safe in render: the fetcher already parsed this FEN, so it cannot throw.
@@ -231,21 +243,36 @@ export default function LibraryPuzzle() {
     }, [resolved, username, puzzleId, similar]);
 
     const handleRecordResult = async (result: 'pass' | 'fail') => {
-        if (!puzzle || !username || isRecording) return;
-        setIsRecording(true);
+        if (!puzzle || !username || recordRequestRef.current) return;
+        const requestKey = activePuzzleKey;
+        const generation = solveGenerationRef.current;
+        recordRequestRef.current = true;
         setRecordError(null);
         const elapsed = solveStartRef.current > 0 ? Date.now() - solveStartRef.current : undefined;
         if (elapsed) setSolveTimeMs(elapsed);
         try {
             const res = await reviewPuzzle(puzzle.id, username, result, elapsed);
+            if (
+                activePuzzleKeyRef.current !== requestKey ||
+                solveGenerationRef.current !== generation
+            ) return;
             setRecorded(true);
             setNextDueAt(res.next_due_at);
             setFeedback(res.feedback);
         } catch (err) {
+            if (
+                activePuzzleKeyRef.current !== requestKey ||
+                solveGenerationRef.current !== generation
+            ) return;
             console.error('Failed to record result:', err);
             setRecordError(err instanceof Error ? err.message : 'Failed to save your result. Please try again.');
         } finally {
-            setIsRecording(false);
+            if (
+                activePuzzleKeyRef.current === requestKey &&
+                solveGenerationRef.current === generation
+            ) {
+                recordRequestRef.current = false;
+            }
         }
     };
 
@@ -253,20 +280,70 @@ export default function LibraryPuzzle() {
         if (!puzzle || !username || checkRequestRef.current || revealRequestRef.current) return;
         const requestKey = activePuzzleKey;
         const requestToken = Symbol('library-puzzle-check');
+        const generation = solveGenerationRef.current;
+        const plyIndex = solverPlyIndexRef.current;
         checkRequestRef.current = requestToken;
         setIsChecking(true);
         setActionError(null);
         try {
-            const result = await checkPuzzle(puzzle.id, username, attemptedMove);
-            if (activePuzzleKeyRef.current !== requestKey) return;
-            if (result.correct) {
-                setStatus('correct');
-                void handleRecordResult('pass');
-            } else {
+            const result = await checkPuzzle(puzzle.id, username, attemptedMove, plyIndex);
+            if (
+                checkRequestRef.current !== requestToken ||
+                activePuzzleKeyRef.current !== requestKey ||
+                solveGenerationRef.current !== generation
+            ) return;
+            if (!result.correct) {
+                if (rollbackFen) setGame(new Chess(rollbackFen));
                 setStatus('incorrect');
+                return;
             }
+
+            if (result.complete === false) {
+                const nextPlyIndex = result.next_ply_index;
+                const reply = result.reply?.toLowerCase();
+                if (
+                    !reply ||
+                    typeof nextPlyIndex !== 'number' ||
+                    !Number.isInteger(nextPlyIndex) ||
+                    nextPlyIndex <= plyIndex
+                ) {
+                    throw new Error('Incomplete check response did not include a valid continuation');
+                }
+
+                const continuation = new Chess(rollbackFen ?? game.fen());
+                const solverMove = continuation.move({
+                    from: attemptedMove.slice(0, 2),
+                    to: attemptedMove.slice(2, 4),
+                    promotion: attemptedMove.slice(4, 5) || undefined,
+                });
+                const forcedReply = continuation.move({
+                    from: reply.slice(0, 2),
+                    to: reply.slice(2, 4),
+                    promotion: reply.slice(4, 5) || undefined,
+                });
+                if (!solverMove || !forcedReply) {
+                    throw new Error('Incomplete check response contained an invalid continuation');
+                }
+
+                solverPlyIndexRef.current = nextPlyIndex;
+                setGame(new Chess(continuation.fen()));
+                setUserMove('');
+                setStatus('solving');
+                return;
+            }
+
+            if (result.complete !== true) {
+                throw new Error('Correct check response did not confirm line completion');
+            }
+
+            setStatus('correct');
+            void handleRecordResult('pass');
         } catch (err) {
-            if (activePuzzleKeyRef.current !== requestKey) return;
+            if (
+                checkRequestRef.current !== requestToken ||
+                activePuzzleKeyRef.current !== requestKey ||
+                solveGenerationRef.current !== generation
+            ) return;
             console.error('Failed to check move:', err);
             if (rollbackFen) setGame(new Chess(rollbackFen));
             setStatus('solving');
@@ -307,12 +384,17 @@ export default function LibraryPuzzle() {
         if (!puzzle || !username || revealRequestRef.current || checkRequestRef.current) return;
         const requestKey = activePuzzleKey;
         const requestToken = Symbol('library-puzzle-reveal');
+        const generation = solveGenerationRef.current;
         revealRequestRef.current = requestToken;
         setIsRevealing(true);
         setActionError(null);
         try {
             const result = await revealPuzzle(puzzle.id, username);
-            if (activePuzzleKeyRef.current !== requestKey) return;
+            if (
+                revealRequestRef.current !== requestToken ||
+                activePuzzleKeyRef.current !== requestKey ||
+                solveGenerationRef.current !== generation
+            ) return;
             const bestMove = result.best_move_uci?.toLowerCase();
             if (!bestMove) throw new Error('Reveal response did not include a move');
 
@@ -327,7 +409,11 @@ export default function LibraryPuzzle() {
             setStatus('revealed');
             void handleRecordResult('fail');
         } catch (err) {
-            if (activePuzzleKeyRef.current !== requestKey) return;
+            if (
+                revealRequestRef.current !== requestToken ||
+                activePuzzleKeyRef.current !== requestKey ||
+                solveGenerationRef.current !== generation
+            ) return;
             console.error('Failed to reveal solution:', err);
             setActionError("We couldn't load the solution — you're still on this puzzle. Check your connection and try again.");
         } finally {
@@ -345,6 +431,7 @@ export default function LibraryPuzzle() {
         setStatus('solving');
         setUserMove('');
         setActionError(null);
+        solverPlyIndexRef.current = 0;
         setGame(new Chess(puzzle.fen));
         solveStartRef.current = Date.now();
     };

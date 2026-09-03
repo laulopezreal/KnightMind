@@ -2,6 +2,19 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { API_BASE } from './core';
 import { getLibraryPuzzle } from './puzzles';
 
+function assertInitialDetailIsAnswerless(
+    puzzle: Awaited<ReturnType<typeof getLibraryPuzzle>>,
+) {
+    // @ts-expect-error Initial detail must not expose the best move.
+    void puzzle.best_move_uci;
+    // @ts-expect-error Initial detail must not expose accepted moves.
+    void puzzle.accept_moves_uci;
+    // @ts-expect-error Initial detail must not expose the solution line.
+    void puzzle.solution_pv;
+}
+
+void assertInitialDetailIsAnswerless;
+
 const mockFetch = vi.fn();
 vi.stubGlobal('fetch', mockFetch);
 

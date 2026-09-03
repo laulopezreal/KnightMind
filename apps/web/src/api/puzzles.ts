@@ -226,6 +226,9 @@ export interface LibraryPuzzle {
     diagnosis_summary: PuzzleDiagnosisSummary | null;
 }
 
+/** Initial Library detail. Solution-bearing fields are available only via revealPuzzle(). */
+export type LibraryPuzzleDetail = Omit<LibraryPuzzle, 'best_move_uci'>;
+
 export interface LibraryCorpusStats {
     total: number;
     due: number;
@@ -268,11 +271,11 @@ export interface LibraryListParams {
 export async function getLibraryPuzzle(
     puzzleId: string,
     username: string
-): Promise<LibraryPuzzle> {
+): Promise<LibraryPuzzleDetail> {
     // Initial detail is answerless. Move checks and explicit reveal use their
     // dedicated server-authoritative endpoints below.
     const params = new URLSearchParams({ username });
-    return await request<LibraryPuzzle>(`/puzzles/${encodeURIComponent(puzzleId)}?${params}`);
+    return await request<LibraryPuzzleDetail>(`/puzzles/${encodeURIComponent(puzzleId)}?${params}`);
 }
 
 /** How closely a sibling puzzle matches, widest last. */
@@ -349,12 +352,12 @@ export interface CheckPuzzleResponse {
     // next line ply). Safe to auto-play — it is the forced response, never the
     // solver's upcoming answer, which the server never sends. null for a wrong
     // move, a legacy single-move puzzle, or the final ply of the line.
-    reply?: string | null;
+    reply: string | null;
     // True once the whole line is solved (or, for a legacy puzzle, on the one
     // correct move) — record the verified pass at this point.
-    complete?: boolean;
+    complete: boolean;
     // The solver's next move index in the line (this ply + 2). null when done.
-    next_ply_index?: number | null;
+    next_ply_index: number | null;
 }
 
 export interface RevealPuzzleResponse {
