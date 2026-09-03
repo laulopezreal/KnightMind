@@ -212,9 +212,6 @@ export interface LibraryPuzzle {
     swing: number;
     fen: string;
     side_to_move: string;
-    // Deliberately absent from the initial detail payload. Fetch it only through
-    // revealPuzzle() after an explicit user action.
-    best_move_uci?: string;
     status: PuzzleStatus;
     attempts: number;
     pass_count: number;
@@ -227,7 +224,7 @@ export interface LibraryPuzzle {
 }
 
 /** Initial Library detail. Solution-bearing fields are available only via revealPuzzle(). */
-export type LibraryPuzzleDetail = Omit<LibraryPuzzle, 'best_move_uci'>;
+export type LibraryPuzzleDetail = LibraryPuzzle;
 
 export interface LibraryCorpusStats {
     total: number;

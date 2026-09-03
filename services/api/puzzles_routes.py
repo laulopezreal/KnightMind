@@ -157,14 +157,6 @@ class PuzzleListItem(BaseModel):
     swing: float
     fen: str
     side_to_move: str
-    # Solution fields are gated: they are populated only when the caller opts in
-    # with ?reveal=true (owner asking to see the answer). Otherwise they are None
-    # / empty so the Library browse surface can't passively echo the solution
-    # into a scored /due session (dim 13).
-    best_move_uci: str | None = None
-    # Full set of accepted solutions (multi-PV equivalence set). Falls back to
-    # [best_move_uci] for puzzles generated before this was persisted.
-    accept_moves_uci: list[str] = []
     status: str  # "new" | "due" | "learning" | "mastered"
     attempts: int
     pass_count: int
@@ -174,6 +166,13 @@ class PuzzleListItem(BaseModel):
     next_due_at: datetime | None
     created_at: datetime | None
     diagnosis_summary: PuzzleDiagnosisSummary | None = None
+
+
+class PuzzleDetail(PuzzleListItem):
+    """Library detail shape when the caller explicitly opts into the answer."""
+
+    best_move_uci: str | None = None
+    accept_moves_uci: list[str] = []
 
 
 def _puzzle_diagnosis_summary(
@@ -996,17 +995,12 @@ def _strip_puzzle_solutions_enabled() -> bool:
     Rollout flag — ``KNIGHTMIND_STRIP_PUZZLE_SOLUTIONS`` (default OFF). Mirrors
     the ``KNIGHTMIND_REQUIRE_AUTH`` flag-reading pattern in ``identity.py``.
 
-    OFF (default): solutions are INCLUDED in browse/training payloads —
-    ``/puzzles/due`` & ``/daily-puzzle-sessions`` do NOT strip, and
-    ``/puzzles/list`` & ``/puzzles/{id}`` include the solution regardless of
-    ``?reveal``. This is the pre-audit behavior, backward-compatible with the
-    old client-grading frontend and harmless to the new frontend (which grades
-    via ``/check`` and ignores the extra fields). It lets the new API deploy
-    before the new frontend is live, order-independently.
+    OFF (default): solutions remain in the legacy ``/puzzles/due`` and
+    ``/daily-puzzle-sessions`` payloads for rollout compatibility.
 
-    ON: the strict anti-cheat behavior — strip on ``/due`` & ``/daily`` and gate
-    ``/list`` & ``/{id}`` behind ``?reveal=true``. Flip it (no redeploy needed)
-    once the new frontend is confirmed live.
+    ON: those legacy training payloads strip solutions. Library list and detail
+    use their own deterministic contracts regardless of this flag: list is
+    always answerless, while detail requires its explicit ``?reveal=true`` path.
 
     Server-side verification (``/check``, ``/reveal``, ``/review``) is unaffected
     by this flag either way.
@@ -1225,11 +1219,6 @@ def list_puzzles(
     ),
     limit: int = Query(50, ge=1, le=100, description="Page size"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
-    reveal: bool = Query(
-        False,
-        description="Include the solution (best_move_uci/accept_moves_uci). "
-        "Off by default so the browse surface can't echo the answer.",
-    ),
     db: Session = Depends(get_db),
     account: Account | None = Depends(require_account),
 ):
@@ -1241,10 +1230,6 @@ def list_puzzles(
 
     assert_owns_username(account, username, db)
 
-    # When the strip flag is OFF (default) the solution is always included so the
-    # old client-grading frontend keeps working; ?reveal only matters when the
-    # strict gate is ON.
-    reveal_solution = reveal or not _strip_puzzle_solutions_enabled()
     # naive-UTC bound for SQL comparisons against naive next_due_at columns
     # (see spaced_repetition module note); an aware now would misclassify on
     # Postgres with a non-UTC session TimeZone.
@@ -1563,11 +1548,6 @@ def list_puzzles(
                 swing=puzzle.swing,
                 fen=puzzle.fen,
                 side_to_move=puzzle.side_to_move,
-                # Gated on ?reveal=true (dim 13) only when the strip flag is ON.
-                # When OFF (default) the solution is always included so the old
-                # client-grading frontend keeps working.
-                best_move_uci=puzzle.best_move_uci if reveal_solution else None,
-                accept_moves_uci=_accept_moves(puzzle) if reveal_solution else [],
                 status=row_status,
                 attempts=stats.attempts if stats else 0,
                 pass_count=stats.pass_count if stats else 0,
@@ -1608,7 +1588,7 @@ def list_puzzles(
 
 @router.get(
     "/puzzles/{puzzle_id}",
-    response_model=PuzzleListItem,
+    response_model=PuzzleDetail,
 )
 def get_puzzle_detail(
     puzzle_id: str,
@@ -1678,7 +1658,7 @@ def get_puzzle_detail(
         else None
     )
     resolved = is_resolved(stats)
-    item = PuzzleListItem(
+    item = PuzzleDetail(
         id=puzzle.id,
         title=(stats.title if (stats and resolved) else None),
         display_name=resolve_display_name(
