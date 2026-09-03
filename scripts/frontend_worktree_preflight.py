@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Certify an isolated KnightMind frontend worktree before worker dispatch."""
+"""Check practical frontend worktree readiness before worker dispatch."""
 
 import argparse
 import datetime
@@ -271,6 +271,15 @@ def _check_dependencies(state):
     }
 
 
+def _prepare_dependencies(state, timeout):
+    _run(
+        ["npm", "ci", "--ignore-scripts"],
+        cwd=state["frontend"],
+        classification="isolated frontend dependency preparation",
+        timeout=timeout,
+    )
+
+
 def _test_target(state, raw_target):
     target = pathlib.PurePosixPath(raw_target)
     if (
@@ -519,18 +528,49 @@ def _load_and_verify_marker(
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(
-        description="Certify an isolated KnightMind frontend worktree before dispatch."
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=(
+            "Practical workflow readiness control for an isolated KnightMind frontend "
+            "worktree. It checks clean/ref state, worktree-local dependencies, and a real "
+            "focused Vitest result."
+        ),
+        epilog=(
+            "Supported workflow: run with --prepare and --test-target to perform "
+            "worktree-local `npm ci --ignore-scripts` from package-lock.json and then "
+            "write the default marker; run --verify-marker later without a path. "
+            "This is not an integrity attestation, adversarial sandbox, or defense "
+            "against a same-UID actor able to change the candidate or marker."
+        ),
     )
-    parser.add_argument("--worktree", required=True)
-    parser.add_argument("--ref", required=True)
-    parser.add_argument("--marker-dir", required=True)
+    parser.add_argument("--worktree", required=True, help="exact isolated linked worktree root")
+    parser.add_argument("--ref", required=True, help="commit/ref that must equal candidate HEAD")
+    parser.add_argument(
+        "--marker-dir",
+        default=str(_canonical_marker_root()),
+        help="marker root (default: %(default)s)",
+    )
     parser.add_argument("--timeout-seconds", type=int, default=120)
+    parser.add_argument(
+        "--prepare",
+        action="store_true",
+        help="run worktree-local npm ci --ignore-scripts before the readiness probe",
+    )
     action = parser.add_mutually_exclusive_group(required=True)
-    action.add_argument("--test-target")
-    action.add_argument("--verify-marker")
+    action.add_argument(
+        "--test-target", help="focused test path relative to apps/web"
+    )
+    action.add_argument(
+        "--verify-marker",
+        nargs="?",
+        const="",
+        metavar="PATH",
+        help="verify the marker for this worktree (default path when PATH is omitted)",
+    )
     args = parser.parse_args(argv)
     if not 1 <= args.timeout_seconds <= 600:
         parser.error("--timeout-seconds must be between 1 and 600")
+    if args.prepare and args.verify_marker is not None:
+        parser.error("--prepare is only valid with --test-target")
     return args
 
 
@@ -539,7 +579,7 @@ def main(argv=None):
     try:
         state = _worktree_state(args.worktree, args.ref, require_clean=False)
         _validate_marker_root_arg(args.marker_dir, state)
-        if args.verify_marker:
+        if args.verify_marker is not None:
             marker_dir, marker_dir_fd = _safe_marker_dir(
                 args.marker_dir, state, create=False
             )
@@ -551,7 +591,8 @@ def main(argv=None):
                         "stale marker: certified dependency evidence changed"
                     ) from error
                 marker, payload = _load_and_verify_marker(
-                    args.verify_marker,
+                    args.verify_marker
+                    or str(marker_dir / f"{_marker_key(state)}.json"),
                     marker_dir,
                     marker_dir_fd,
                     state,
@@ -571,6 +612,9 @@ def main(argv=None):
         else:
             if state["status"]:
                 raise PreflightError("candidate Git worktree is not clean")
+            if args.prepare:
+                _prepare_dependencies(state, args.timeout_seconds)
+                state = _worktree_state(args.worktree, args.ref)
             dependencies = _check_dependencies(state)
             marker_dir, marker_dir_fd = _safe_marker_dir(
                 args.marker_dir, state, create=True

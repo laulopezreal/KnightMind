@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 PREFLIGHT = REPO_ROOT / "scripts" / "frontend_worktree_preflight.py"
@@ -138,7 +139,14 @@ testResults:[{name:path.resolve(target),status:'passed',assertionResults:[{statu
         hidden = {"name": "web", "lockfileVersion": 3, "packages": lock["packages"]}
         (modules / ".package-lock.json").write_text(json.dumps(hidden), encoding="utf-8")
 
-    def _run(self, worktree=None, ref="HEAD", verify_marker=None, marker_dir=None):
+    def _run(
+        self,
+        worktree=None,
+        ref="HEAD",
+        verify_marker=None,
+        marker_dir=None,
+        include_marker_dir=True,
+    ):
         command = [
             sys.executable,
             str(PREFLIGHT),
@@ -146,13 +154,15 @@ testResults:[{name:path.resolve(target),status:'passed',assertionResults:[{statu
             str(worktree or self.candidate),
             "--ref",
             ref,
-            "--marker-dir",
-            str(marker_dir or self.marker_dir),
             "--timeout-seconds",
             "5",
         ]
+        if include_marker_dir:
+            command.extend(["--marker-dir", str(marker_dir or self.marker_dir)])
         if verify_marker is not None:
-            command.extend(["--verify-marker", str(verify_marker)])
+            command.append("--verify-marker")
+            if verify_marker:
+                command.append(str(verify_marker))
         else:
             command.extend(["--test-target", "focused.test.js"])
         return subprocess.run(command, text=True, capture_output=True)
@@ -169,14 +179,48 @@ testResults:[{name:path.resolve(target),status:'passed',assertionResults:[{statu
         self.assertEqual(result.returncode, 0, result.stderr)
         return pathlib.Path(json.loads(result.stdout)["marker"])
 
-    def test_bound_candidate_passes_and_marker_verifies(self):
+    def test_prepared_candidate_passes_and_marker_verifies(self):
         marker = self._certify()
         self.assertTrue(marker.is_file())
         verified = self._run(verify_marker=marker)
         self.assertEqual(verified.returncode, 0, verified.stderr)
         self.assertEqual(json.loads(verified.stdout)["status"], "verified")
 
-    def test_exit_zero_bin_wrapper_cannot_supply_readiness_proof(self):
+    def test_default_marker_root_and_implicit_marker_path_are_runnable(self):
+        self._prepare_dependencies()
+        certified = self._run(include_marker_dir=False)
+        self.assertEqual(certified.returncode, 0, certified.stderr)
+        marker = pathlib.Path(json.loads(certified.stdout)["marker"])
+        self.assertEqual(marker.parent, self.marker_dir)
+
+        verified = self._run(verify_marker="", include_marker_dir=False)
+        self.assertEqual(verified.returncode, 0, verified.stderr)
+        self.assertEqual(json.loads(verified.stdout)["marker"], str(marker))
+
+    def test_prepare_dependencies_runs_lockfile_install_in_candidate(self):
+        script_globals = runpy.run_path(str(PREFLIGHT), run_name="preflight_test")
+        frontend = self.candidate / "apps" / "web"
+        with mock.patch.dict(
+            script_globals["_prepare_dependencies"].__globals__, {"_run": mock.Mock()}
+        ) as globals_:
+            script_globals["_prepare_dependencies"]({"frontend": frontend}, 37)
+            globals_["_run"].assert_called_once_with(
+                ["npm", "ci", "--ignore-scripts"],
+                cwd=frontend,
+                classification="isolated frontend dependency preparation",
+                timeout=37,
+            )
+
+    def test_help_states_practical_workflow_boundary(self):
+        result = subprocess.run(
+            [sys.executable, str(PREFLIGHT), "--help"], text=True, capture_output=True
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("workflow readiness control", result.stdout)
+        self.assertIn("npm ci --ignore-scripts", result.stdout)
+        self.assertIn("not an integrity attestation", result.stdout)
+
+    def test_invalid_local_launcher_shape_is_rejected(self):
         self._prepare_dependencies(exit_zero_wrapper=True)
         result = self._run()
         self.assertNotEqual(result.returncode, 0)
@@ -188,13 +232,13 @@ testResults:[{name:path.resolve(target),status:'passed',assertionResults:[{statu
         self.assertIn("dependency", result.stderr.lower())
         self.assertFalse(self._expected_marker().exists())
 
-    def test_minimal_forged_marker_is_rejected(self):
+    def test_incomplete_marker_is_rejected(self):
         self._prepare_dependencies()
         self.marker_dir.mkdir(parents=True, mode=0o700, exist_ok=True)
-        forged = self._expected_marker()
-        forged.write_text('{"version":1,"status":"ready"}', encoding="utf-8")
-        forged.chmod(0o600)
-        result = self._run(verify_marker=forged)
+        incomplete = self._expected_marker()
+        incomplete.write_text('{"version":1,"status":"ready"}', encoding="utf-8")
+        incomplete.chmod(0o600)
+        result = self._run(verify_marker=incomplete)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("marker", result.stderr.lower())
 
@@ -214,7 +258,7 @@ testResults:[{name:path.resolve(target),status:'passed',assertionResults:[{statu
         result = self._run(verify_marker=marker)
         self.assertNotEqual(result.returncode, 0)
 
-    def test_symlink_marker_is_rejected(self):
+    def test_non_regular_marker_is_rejected(self):
         marker = self._certify()
         backing = self.marker_dir / f".{marker.stem}.backing.json"
         marker.replace(backing)
@@ -228,13 +272,13 @@ testResults:[{name:path.resolve(target),status:'passed',assertionResults:[{statu
         result = self._run(verify_marker=alias)
         self.assertNotEqual(result.returncode, 0)
 
-    def test_arbitrary_external_marker_root_is_rejected(self):
+    def test_nonstandard_marker_root_is_rejected(self):
         self._prepare_dependencies()
         result = self._run(marker_dir=self.root / "other-markers")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("marker root", result.stderr.lower())
 
-    def test_insecure_marker_root_mode_is_rejected(self):
+    def test_marker_root_requires_expected_local_permissions(self):
         self._prepare_dependencies()
         script_globals = runpy.run_path(str(PREFLIGHT), run_name="preflight_test")
         unsafe = self.root / "unsafe-marker-root"
@@ -258,6 +302,20 @@ testResults:[{name:path.resolve(target),status:'passed',assertionResults:[{statu
         result = self._run(verify_marker=marker)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("stale marker", result.stderr.lower())
+
+    def test_marker_is_rejected_after_head_drift(self):
+        marker = self._certify()
+        self._git("commit", "--allow-empty", "-m", "advance candidate", cwd=self.candidate)
+        result = self._run(ref="HEAD", verify_marker=marker)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("stale marker", result.stderr.lower())
+
+    def test_requested_ref_must_match_head(self):
+        self._prepare_dependencies()
+        self._git("commit", "--allow-empty", "-m", "advance candidate", cwd=self.candidate)
+        result = self._run(ref="HEAD~1")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("requested ref does not match HEAD", result.stderr)
 
     def test_marker_is_rejected_after_dependency_drift(self):
         marker = self._certify()

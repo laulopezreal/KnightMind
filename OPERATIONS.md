@@ -1,5 +1,5 @@
 ---
-last_edited_at: 2026-08-06T00:49:34+02:00
+last_edited_at: 2026-09-03T16:38:58+02:00
 ---
 # KnightMind Operations
 
@@ -9,6 +9,29 @@ last_edited_at: 2026-08-06T00:49:34+02:00
 - Project docs/status capsule: `/home/lauureal/projects/knightmind/`
 - Upstream repo: `https://github.com/laulopezreal/KnightMind`
 - Live DB backup folder: `/home/lauureal/backups/knightmind/`
+
+## Frontend worker readiness
+
+Before dispatching frontend work, run the repository preflight from the clean linked
+worktree. The supported preparation path installs from that worktree's lockfile, never
+from the canonical checkout:
+
+```bash
+WT=/absolute/path/to/isolated-worktree
+REF=$(git -C "$WT" rev-parse HEAD)
+python "$WT/scripts/frontend_worktree_preflight.py" \
+  --worktree "$WT" --ref "$REF" --prepare \
+  --test-target src/utils/trainEntry.test.ts
+python "$WT/scripts/frontend_worktree_preflight.py" \
+  --worktree "$WT" --ref "$REF" --verify-marker
+```
+
+`--prepare` runs `npm ci --ignore-scripts` inside `apps/web`, then the preflight checks
+the clean/ref state, local dependency evidence, and an actual passing focused Vitest
+result. The marker becomes stale after HEAD, lockfile, test-target, or dependency drift.
+This is a practical workflow readiness control. It is not an adversarial sandbox,
+integrity attestation, or defense against a same-UID actor able to alter the candidate
+or its evidence.
 
 ## Infra organization from now on
 
