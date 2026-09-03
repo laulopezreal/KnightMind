@@ -668,7 +668,7 @@ export default function Puzzles() {
                     : userStatus.due_count === 0 && hasValidFocusPracticeIntent
                         ? 'Extra practice is available for this focus. The server decides which positions are safe and available.'
                     : userStatus.due_count === 0 && !hasValidFocusPracticeIntent
-                        ? 'No puzzles are due right now. Generate new puzzles to keep training.'
+                        ? 'No puzzles are ready to practise right now. Generate new puzzles to keep training.'
                         : sessionType !== 'standard'
                             ? 'Only Standard mode can start sessions for now. Switch mode in the sidebar.'
                             : null;
@@ -684,7 +684,7 @@ export default function Puzzles() {
                         : userStatus.games_count === 0
                             ? 'No games imported yet. Sync games from Chess.com to get started.'
                             : userStatus.due_count > 0
-                                ? `All imported games are already processed. Train your ${userStatus.due_count} due puzzle${userStatus.due_count === 1 ? '' : 's'}, or sync newer games from Chess.com.`
+                                ? `All imported games are already processed. You have ${userStatus.due_count} puzzle${userStatus.due_count === 1 ? '' : 's'} ready to practise, or sync newer games from Chess.com.`
                                 : 'All imported games are already processed. Sync newer games from Chess.com to generate more puzzles.'
                     : null;
     const generateButtonLabel = isGenerating
@@ -1296,7 +1296,7 @@ export default function Puzzles() {
                                 to="/puzzles"
                                 className="mt-2 inline-block text-sm font-sans text-primary/70 km-interactive km-focus-visible km-inline-link underline decoration-primary/30 underline-offset-4"
                             >
-                                Train everything that&apos;s due instead
+                                Train everything that&apos;s ready to practise instead
                             </Link>
                         )}
                     </div>
@@ -1390,7 +1390,7 @@ export default function Puzzles() {
                                         </strong>
                                     </p>
                                     <p className="text-sm text-primary/70 font-sans mt-1">
-                                        This session prioritises eligible due puzzles from this focus and may top up from the ordinary due queue. The session does not exclusively contain focus puzzles.
+                                        This session prioritises puzzles ready to practise from this focus and may top up from the ordinary practice queue. The session does not exclusively contain focus puzzles.
                                     </p>
                                 </div>
                                 <div className="p-4 bg-primary/5 border border-primary/20 rounded-sm">
@@ -1509,10 +1509,10 @@ export default function Puzzles() {
                             ) : (
                                 <>
                                     <h3 className="font-serif text-xl text-primary">
-                                        {userStatus.due_count} puzzle{userStatus.due_count === 1 ? '' : 's'} ready
+                                        {userStatus.due_count} puzzle{userStatus.due_count === 1 ? '' : 's'} ready to practise
                                     </h3>
                                     <p className="text-primary/70 font-sans">
-                                        Start a session to review your due puzzles.
+                                        Start a session to practise them.
                                     </p>
                                 </>
                             )}

@@ -327,10 +327,13 @@ describe('Puzzles', () => {
     });
   });
 
-  // Regression test for issue #145: games imported + puzzles exist + generation unavailable
-  describe('Generate disabled state copy', () => {
-    it('shows context-aware copy and button label when games imported, puzzles exist, and no new games', async () => {
-      // Exact scenario from issue #145: 840 games, 60 puzzles, 4 due, no unprocessed games
+  // The status endpoint's due_count is the broader trainable count: scheduled
+  // reviews plus never-reviewed puzzles. Train must not present it as the
+  // Library's narrower scheduled-due count.
+  describe('Trainable versus scheduled-due copy', () => {
+    it('calls the broader Train count ready to practise when no new games remain', async () => {
+      // Exact scenario from issue #145: 840 games, 60 puzzles, 4 trainable,
+      // no unprocessed games.
       mockGetUserStatus.mockResolvedValue({
         games_count: 840,
         puzzles_count: 60,
@@ -341,16 +344,17 @@ describe('Puzzles', () => {
       render(<Puzzles />);
 
       await waitFor(() => {
-        // Visible helper text should guide user to train due puzzles
         expect(
-          screen.getByText(/All imported games are already processed\. Train your 4 due puzzles/i)
+          screen.getByText(/All imported games are already processed\. You have 4 puzzles ready to practise/i)
         ).toBeInTheDocument();
       });
+      expect(screen.getByRole('heading', { name: '4 puzzles ready to practise' })).toBeInTheDocument();
+      expect(screen.queryByText(/4 due puzzles/i)).not.toBeInTheDocument();
       // Button label should reflect state, not generic "Generate New"
       expect(screen.getByRole('button', { name: /No new games to generate/i })).toBeInTheDocument();
     });
 
-    it('sets button title to sync-only message when no due puzzles remain', async () => {
+    it('reserves due-for-review language for the scheduled-review state', async () => {
       // When due_count=0, startSessionDisabledReason takes the <p> slot;
       // verify the generate reason is still surfaced as the button tooltip
       mockGetUserStatus.mockResolvedValue({
@@ -366,6 +370,8 @@ describe('Puzzles', () => {
         const btn = screen.getByRole('button', { name: /No new games to generate/i });
         expect(btn).toHaveAttribute('title', expect.stringContaining('Sync newer games from Chess.com to generate more puzzles'));
       });
+      expect(screen.getByText('No puzzles are due for review yet.')).toBeInTheDocument();
+      expect(screen.queryByText(/due puzzles/i)).not.toBeInTheDocument();
     });
   });
 
