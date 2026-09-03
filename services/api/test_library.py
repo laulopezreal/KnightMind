@@ -1058,8 +1058,6 @@ class TestGetPuzzleDetail:
             "swing",
             "fen",
             "side_to_move",
-            "best_move_uci",
-            "accept_moves_uci",
             "status",
             "attempts",
             "pass_count",
@@ -1071,6 +1069,8 @@ class TestGetPuzzleDetail:
             "diagnosis_summary",
         }
         assert set(data.keys()) == expected_keys
+        assert "best_move_uci" not in data
+        assert "accept_moves_uci" not in data
         # Step 1 is explicitly a no-op for what the user sees: a nickname wins
         # wherever one exists, and today one always does.
         assert data["display_name"] == data["title"] == "Shape Test"
