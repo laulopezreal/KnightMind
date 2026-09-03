@@ -4,7 +4,7 @@ import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { AccessibleChessboard } from '../components/AccessibleChessboard';
 import { Chess } from 'chess.js';
 import { useChessUsername } from '../context/ChessUsernameContext';
-import { getLibraryPuzzle, getPuzzleDiagnosis, getSimilarPuzzles, reviewPuzzle, type LibraryPuzzle as LibraryPuzzleType, type PuzzleDiagnosis, type SimilarPuzzlesResponse } from '../api/puzzles';
+import { checkPuzzle, getLibraryPuzzle, getPuzzleDiagnosis, getSimilarPuzzles, revealPuzzle, reviewPuzzle, type LibraryPuzzleDetail, type PuzzleDiagnosis, type SimilarPuzzlesResponse } from '../api/puzzles';
 import { MistakeDiagnosisCard } from '../components/MistakeDiagnosisCard';
 import { SimilarWeaknessCard } from '../components/SimilarWeaknessCard';
 import { ApiError } from '../api/core';
@@ -38,6 +38,25 @@ export default function LibraryPuzzle() {
     const [status, setStatus] = useState<SolveStatus>('solving');
     const [userMove, setUserMove] = useState('');
     const [showUciInput, setShowUciInput] = useState(false);
+    const [revealedMove, setRevealedMove] = useState<string | null>(null);
+    const [actionError, setActionError] = useState<string | null>(null);
+    const [isChecking, setIsChecking] = useState(false);
+    const [isRevealing, setIsRevealing] = useState(false);
+    const checkRequestRef = useRef<symbol | null>(null);
+    const revealRequestRef = useRef<symbol | null>(null);
+    const recordRequestRef = useRef(false);
+    const solverPlyIndexRef = useRef(0);
+    const solveGenerationRef = useRef(0);
+    const activePuzzleKey = `${username ?? ''}:${puzzleId ?? ''}`;
+    const activePuzzleKeyRef = useRef(activePuzzleKey);
+    activePuzzleKeyRef.current = activePuzzleKey;
+
+    useEffect(() => () => {
+        solveGenerationRef.current += 1;
+        checkRequestRef.current = null;
+        revealRequestRef.current = null;
+        recordRequestRef.current = false;
+    }, []);
 
     // Solve timer
     const solveStartRef = useRef<number>(0);
@@ -46,7 +65,6 @@ export default function LibraryPuzzle() {
     const [recorded, setRecorded] = useState(false);
     const [nextDueAt, setNextDueAt] = useState<string | null>(null);
     const [feedback, setFeedback] = useState('');
-    const [isRecording, setIsRecording] = useState(false);
     const [solveTimeMs, setSolveTimeMs] = useState<number | null>(null);
     const [recordError, setRecordError] = useState<string | null>(null);
 
@@ -73,6 +91,15 @@ export default function LibraryPuzzle() {
         setStatus('solving');
         setUserMove('');
         setShowUciInput(false);
+        setRevealedMove(null);
+        setActionError(null);
+        setIsChecking(false);
+        setIsRevealing(false);
+        checkRequestRef.current = null;
+        revealRequestRef.current = null;
+        recordRequestRef.current = false;
+        solverPlyIndexRef.current = 0;
+        solveGenerationRef.current += 1;
         setRecorded(false);
         setNextDueAt(null);
         setFeedback('');
@@ -93,7 +120,7 @@ export default function LibraryPuzzle() {
         error,
         busy: isLoading,
         reload: fetchPuzzle,
-    } = useAsyncData<{ puzzle: LibraryPuzzleType }>(
+    } = useAsyncData<{ puzzle: LibraryPuzzleDetail }>(
         async () => {
             try {
                 const found = await getLibraryPuzzle(puzzleId!, username!);
@@ -130,7 +157,7 @@ export default function LibraryPuzzle() {
     // synchronous block, so `puzzle` was never the new puzzle while `status`
     // still described the old one. Moving the fetch into useAsyncData splits
     // those: the hook commits the data, and an effect would reset a render
-    // later. That extra render is not cosmetic -- `resolved` below is true
+    // later. That extra render is not cosmetic -- `postMortemUnlocked` below is true
     // inside it, which fires the sibling's diagnosis (whose evidence names the
     // best move) with no attempt made, and it leaves the previous puzzle's
     // resolved controls on screen for a frame.
@@ -145,7 +172,7 @@ export default function LibraryPuzzle() {
     // change that refetches it -- both of which an id-keyed guard silently
     // skipped, carrying a revealed solution and a stale solve clock into the
     // next load.
-    const [readyFor, setReadyFor] = useState<{ puzzle: LibraryPuzzleType } | null>(null);
+    const [readyFor, setReadyFor] = useState<{ puzzle: LibraryPuzzleDetail } | null>(null);
     if (loaded && loaded !== readyFor) {
         setReadyFor(loaded);
         // Safe in render: the fetcher already parsed this FEN, so it cannot throw.
@@ -160,9 +187,10 @@ export default function LibraryPuzzle() {
     }, [readyFor]);
 
     // The diagnosis is post-mortem content: its evidence names the solution, so
-    // it is not even requested until the puzzle has been solved or revealed.
-    // `reveal` is passed for the same reason getLibraryPuzzle passes it — by
-    // this point the answer is already on screen.
+    // it is not even requested until the server confirms completion or the user
+    // explicitly reveals. An incorrect attempt is feedback, not disclosure
+    // authority. The explicit `reveal` opt-in is safe only after this gate;
+    // initial detail and wrong checks stay answerless.
     // Gated on the loaded puzzle matching the route, not just on `status`.
     //
     // resetPuzzleState() runs *after* the getLibraryPuzzle round-trip, so for
@@ -178,12 +206,12 @@ export default function LibraryPuzzle() {
     // changes no test, while deferring the reset to an effect fails four. A
     // condition that cannot change an outcome is not a safety net, it is noise
     // that makes the real guarantee harder to find.
-    const resolved =
+    const postMortemUnlocked =
         puzzle?.id === puzzleId &&
-        (status === 'correct' || status === 'incorrect' || status === 'revealed');
+        (status === 'correct' || status === 'revealed');
 
     useEffect(() => {
-        if (!resolved || !username || !puzzleId || diagnosis) return;
+        if (!postMortemUnlocked || !username || !puzzleId || diagnosis) return;
         let stale = false;
         setDiagnosisLoading(true);
         getPuzzleDiagnosis(puzzleId, username, true)
@@ -199,10 +227,10 @@ export default function LibraryPuzzle() {
         return () => {
             stale = true;
         };
-    }, [resolved, username, puzzleId, diagnosis]);
+    }, [postMortemUnlocked, username, puzzleId, diagnosis]);
 
     useEffect(() => {
-        if (!resolved || !username || !puzzleId || similar) return;
+        if (!postMortemUnlocked || !username || !puzzleId || similar) return;
         let stale = false;
         getSimilarPuzzles(puzzleId, username)
             .then((result) => {
@@ -214,42 +242,132 @@ export default function LibraryPuzzle() {
         return () => {
             stale = true;
         };
-    }, [resolved, username, puzzleId, similar]);
+    }, [postMortemUnlocked, username, puzzleId, similar]);
 
     const handleRecordResult = async (result: 'pass' | 'fail') => {
-        if (!puzzle || !username || isRecording) return;
-        setIsRecording(true);
+        if (!puzzle || !username || recordRequestRef.current) return;
+        const requestKey = activePuzzleKey;
+        const generation = solveGenerationRef.current;
+        recordRequestRef.current = true;
         setRecordError(null);
         const elapsed = solveStartRef.current > 0 ? Date.now() - solveStartRef.current : undefined;
         if (elapsed) setSolveTimeMs(elapsed);
         try {
             const res = await reviewPuzzle(puzzle.id, username, result, elapsed);
+            if (
+                activePuzzleKeyRef.current !== requestKey ||
+                solveGenerationRef.current !== generation
+            ) return;
             setRecorded(true);
             setNextDueAt(res.next_due_at);
             setFeedback(res.feedback);
         } catch (err) {
+            if (
+                activePuzzleKeyRef.current !== requestKey ||
+                solveGenerationRef.current !== generation
+            ) return;
             console.error('Failed to record result:', err);
             setRecordError(err instanceof Error ? err.message : 'Failed to save your result. Please try again.');
         } finally {
-            setIsRecording(false);
+            if (
+                activePuzzleKeyRef.current === requestKey &&
+                solveGenerationRef.current === generation
+            ) {
+                recordRequestRef.current = false;
+            }
+        }
+    };
+
+    const checkMove = async (attemptedMove: string, rollbackFen?: string) => {
+        if (!puzzle || !username || checkRequestRef.current || revealRequestRef.current) return;
+        const requestKey = activePuzzleKey;
+        const requestToken = Symbol('library-puzzle-check');
+        const generation = solveGenerationRef.current;
+        const plyIndex = solverPlyIndexRef.current;
+        checkRequestRef.current = requestToken;
+        setIsChecking(true);
+        setActionError(null);
+        try {
+            const result = await checkPuzzle(puzzle.id, username, attemptedMove, plyIndex);
+            if (
+                checkRequestRef.current !== requestToken ||
+                activePuzzleKeyRef.current !== requestKey ||
+                solveGenerationRef.current !== generation
+            ) return;
+            if (!result.correct) {
+                if (rollbackFen) setGame(new Chess(rollbackFen));
+                setStatus('incorrect');
+                return;
+            }
+
+            if (result.complete === false) {
+                const nextPlyIndex = result.next_ply_index;
+                const reply = result.reply?.toLowerCase();
+                if (
+                    !reply ||
+                    typeof nextPlyIndex !== 'number' ||
+                    !Number.isInteger(nextPlyIndex) ||
+                    nextPlyIndex <= plyIndex
+                ) {
+                    throw new Error('Incomplete check response did not include a valid continuation');
+                }
+
+                const continuation = new Chess(rollbackFen ?? game.fen());
+                const solverMove = continuation.move({
+                    from: attemptedMove.slice(0, 2),
+                    to: attemptedMove.slice(2, 4),
+                    promotion: attemptedMove.slice(4, 5) || undefined,
+                });
+                const forcedReply = continuation.move({
+                    from: reply.slice(0, 2),
+                    to: reply.slice(2, 4),
+                    promotion: reply.slice(4, 5) || undefined,
+                });
+                if (!solverMove || !forcedReply) {
+                    throw new Error('Incomplete check response contained an invalid continuation');
+                }
+
+                solverPlyIndexRef.current = nextPlyIndex;
+                setGame(new Chess(continuation.fen()));
+                setUserMove('');
+                setStatus('solving');
+                return;
+            }
+
+            if (result.complete !== true) {
+                throw new Error('Correct check response did not confirm line completion');
+            }
+
+            setStatus('correct');
+            void handleRecordResult('pass');
+        } catch (err) {
+            if (
+                checkRequestRef.current !== requestToken ||
+                activePuzzleKeyRef.current !== requestKey ||
+                solveGenerationRef.current !== generation
+            ) return;
+            console.error('Failed to check move:', err);
+            if (rollbackFen) setGame(new Chess(rollbackFen));
+            setStatus('solving');
+            setActionError("We couldn't check that move — your attempt wasn't recorded. Check your connection and try again.");
+        } finally {
+            if (checkRequestRef.current === requestToken) {
+                checkRequestRef.current = null;
+                setIsChecking(false);
+            }
         }
     };
 
     const onPieceDrop = (sourceSquare: string, targetSquare: string, promotion: string = 'q') => {
-        if (!puzzle || status === 'correct' || status === 'revealed') return false;
+        if (!puzzle || status === 'correct' || status === 'revealed' || isChecking || isRevealing) return false;
         try {
+            const rollbackFen = game.fen();
             const move = game.move({ from: sourceSquare, to: targetSquare, promotion: promotion || 'q' });
             if (move === null) return false;
             setGame(new Chess(game.fen()));
             const uciMove = `${move.from}${move.to}${move.promotion || ''}`;
             setUserMove(uciMove);
-            const normalizedBestMove = puzzle.best_move_uci.toLowerCase();
-            if (uciMove === normalizedBestMove) {
-                setStatus('correct');
-                handleRecordResult('pass');
-            } else {
-                setStatus('incorrect');
-            }
+            void checkMove(uciMove.toLowerCase(), rollbackFen);
             return true;
         } catch (e) {
             console.error('Failed to make move on board:', e);
@@ -258,29 +376,54 @@ export default function LibraryPuzzle() {
     };
 
     const handleCheckAnswer = () => {
-        if (!puzzle) return;
+        if (!puzzle || isChecking || isRevealing) return;
         const normalizedUserMove = userMove.trim().toLowerCase();
-        const normalizedBestMove = puzzle.best_move_uci.toLowerCase();
-        if (normalizedUserMove === normalizedBestMove) {
-            setStatus('correct');
-            handleRecordResult('pass');
-        } else {
-            setStatus('incorrect');
-        }
+        if (!normalizedUserMove) return;
+        void checkMove(normalizedUserMove);
     };
 
-    const handleRevealSolution = () => {
-        if (!puzzle) return;
-        setStatus('revealed');
-        const bestMove = puzzle.best_move_uci.toLowerCase();
-        setUserMove(bestMove);
-        const solutionGame = new Chess(puzzle.fen);
-        const from = bestMove.slice(0, 2);
-        const to = bestMove.slice(2, 4);
-        const promotion = bestMove.slice(4, 5);
-        solutionGame.move({ from, to, promotion: promotion || undefined });
-        setGame(solutionGame);
-        handleRecordResult('fail');
+    const handleRevealSolution = async () => {
+        if (!puzzle || !username || revealRequestRef.current || checkRequestRef.current) return;
+        const requestKey = activePuzzleKey;
+        const requestToken = Symbol('library-puzzle-reveal');
+        const generation = solveGenerationRef.current;
+        revealRequestRef.current = requestToken;
+        setIsRevealing(true);
+        setActionError(null);
+        try {
+            const result = await revealPuzzle(puzzle.id, username);
+            if (
+                revealRequestRef.current !== requestToken ||
+                activePuzzleKeyRef.current !== requestKey ||
+                solveGenerationRef.current !== generation
+            ) return;
+            const bestMove = result.best_move_uci?.toLowerCase();
+            if (!bestMove) throw new Error('Reveal response did not include a move');
+
+            const solutionGame = new Chess(puzzle.fen);
+            const from = bestMove.slice(0, 2);
+            const to = bestMove.slice(2, 4);
+            const promotion = bestMove.slice(4, 5);
+            solutionGame.move({ from, to, promotion: promotion || undefined });
+            setRevealedMove(bestMove);
+            setUserMove(bestMove);
+            setGame(solutionGame);
+            setStatus('revealed');
+            void handleRecordResult('fail');
+        } catch (err) {
+            if (
+                revealRequestRef.current !== requestToken ||
+                activePuzzleKeyRef.current !== requestKey ||
+                solveGenerationRef.current !== generation
+            ) return;
+            console.error('Failed to reveal solution:', err);
+            setActionError("We couldn't load the solution — you're still on this puzzle. Check your connection and try again.");
+        } finally {
+            if (revealRequestRef.current === requestToken) {
+                revealRequestRef.current = null;
+                setIsRevealing(false);
+            }
+        }
     };
 
     const handleMarkFailedRetry = () => {
@@ -289,6 +432,8 @@ export default function LibraryPuzzle() {
         // solution.  Recording on retry would double-count attempts.
         setStatus('solving');
         setUserMove('');
+        setActionError(null);
+        solverPlyIndexRef.current = 0;
         setGame(new Chess(puzzle.fen));
         solveStartRef.current = Date.now();
     };
@@ -373,16 +518,16 @@ export default function LibraryPuzzle() {
         : null;
 
     return (
-        <div className="space-y-12 animate-teedin">
+        <div className="flex flex-col gap-8 md:gap-12 animate-teedin">
             {/* Back link + Header */}
-            <section>
-                <Link to={fromSession ? '/puzzles' : '/library'} className="text-primary/70 hover:text-primary mb-4 inline-block font-sans text-sm tracking-widest uppercase transition-colors">
+            <section className="order-1">
+                <Link to={fromSession ? '/puzzles' : '/library'} className="text-primary/70 hover:text-primary mb-2 md:mb-4 inline-block font-sans text-sm tracking-widest uppercase transition-colors">
                     {fromSession ? '← Back to Session Summary' : '← Back to Library'}
                 </Link>
-                <h1 className="text-3xl md:text-4xl font-serif text-primary">
+                <h1 className="text-2xl md:text-4xl font-serif text-primary">
                     {puzzle.display_name}
                 </h1>
-                <p className="mt-2 text-sm font-sans text-primary/70">
+                <p className="mt-2 text-xs md:text-sm font-sans text-primary/70">
                     Exploration mode — the solution is shown on request and results here
                     are not counted as verified training. For a scored session, use{' '}
                     <Link to="/puzzles" className="km-inline-link km-focus-visible text-primary">
@@ -391,42 +536,10 @@ export default function LibraryPuzzle() {
                 </p>
             </section>
 
-            {/* Metadata strip */}
-            <section className="flex flex-wrap gap-4 text-sm font-sans text-primary/70">
-                <span className="px-3 py-1 bg-primary/5 rounded-sm border border-primary/10">
-                    {puzzle.difficulty.charAt(0).toUpperCase() + puzzle.difficulty.slice(1)}
-                </span>
-                {puzzle.primary_motif && (
-                    <span className="px-3 py-1 bg-primary/5 rounded-sm border border-primary/10">
-                        {puzzle.primary_motif}
-                    </span>
-                )}
-                {puzzle.attempts > 0 && (
-                    <span className="px-3 py-1 bg-primary/5 rounded-sm border border-primary/10">
-                        {puzzle.pass_count}/{puzzle.attempts} solved{successRate !== null ? ` (${successRate}%)` : ''}
-                    </span>
-                )}
-                {puzzle.fail_count > 0 && (
-                    <span className="px-3 py-1 bg-red-500/10 rounded-sm border border-red-500/20 text-negative">
-                        {puzzle.fail_count} failed
-                    </span>
-                )}
-                {puzzle.last_reviewed_at && (
-                    <span className="px-3 py-1 bg-primary/5 rounded-sm border border-primary/10">
-                        Last: {new Date(puzzle.last_reviewed_at).toLocaleDateString(LOCALE)}
-                    </span>
-                )}
-                {puzzle.next_due_at && !recorded && (
-                    <span className="px-3 py-1 bg-primary/5 rounded-sm border border-primary/10">
-                        Due: {new Date(puzzle.next_due_at).toLocaleDateString(LOCALE)}
-                    </span>
-                )}
-            </section>
-
             {/* Board + Controls */}
-            <section className="grid lg:grid-cols-2 gap-12 lg:gap-24">
+            <section className="order-2 grid gap-4 lg:order-3 lg:grid-cols-2 lg:gap-24">
                 {/* Chessboard */}
-                <div className="order-2 lg:order-1">
+                <div className="order-2 lg:order-1" data-testid="solve-board">
                     <div className="aspect-square w-full max-w-[600px] mx-auto shadow-2xl shadow-primary/5 rounded-sm overflow-hidden border border-primary/10">
                         <AccessibleChessboard
                             onKeyboardMove={({ sourceSquare, targetSquare, promotion }) =>
@@ -445,18 +558,21 @@ export default function LibraryPuzzle() {
                 </div>
 
                 {/* Sidebar Controls */}
-                <div className="order-1 lg:order-2 space-y-8 flex flex-col justify-center">
+                <div className="contents lg:order-2 lg:flex lg:flex-col lg:justify-center lg:space-y-8">
                     {/* Side to move */}
-                    <div className="bg-primary/5 p-4 rounded-sm border-l-2 border-primary">
+                    <div className="order-1 bg-primary/5 p-3 md:p-4 rounded-sm border-l-2 border-primary lg:order-none">
                         <span className="font-sans text-sm tracking-wide uppercase text-primary/70">
                             {puzzle.side_to_move === 'white' ? 'White to Move' : 'Black to Move'}
                         </span>
                     </div>
 
                     {/* Status feedback */}
-                    <div className="min-h-[80px] flex items-center justify-center text-center p-6 border border-primary/10 rounded-sm" role="status" aria-live="polite">
+                    <div className="order-1 min-h-[64px] flex items-center justify-center text-center p-3 md:min-h-[80px] md:p-6 border border-primary/10 rounded-sm lg:order-none" role="status" aria-live="polite" data-testid="solve-guidance">
                         {status === 'solving' && (
-                            <p className="text-primary/70 font-serif text-lg italic">Find the best move...</p>
+                            <div>
+                                <p className="text-primary font-serif text-lg italic">Find the best move.</p>
+                                <p className="mt-1 text-sm font-sans text-primary/70">Tap a piece, then tap its destination square.</p>
+                            </div>
                         )}
                         {status === 'correct' && (
                             <div className="text-center">
@@ -470,14 +586,20 @@ export default function LibraryPuzzle() {
                         {status === 'revealed' && (
                             <div>
                                 <p className="text-primary/70 font-sans text-xs uppercase tracking-widest mb-1">Solution</p>
-                                <p className="text-primary font-mono text-xl">{puzzle.best_move_uci}</p>
+                                <p className="text-primary font-mono text-xl">{revealedMove}</p>
                             </div>
                         )}
                     </div>
 
+                    {actionError && (
+                        <div className="order-3 bg-red-500/10 border border-red-500/20 rounded-sm p-4 text-center animate-teedin lg:order-none" role="alert">
+                            <p className="text-negative font-sans text-sm">{actionError}</p>
+                        </div>
+                    )}
+
                     {/* Recorded confirmation */}
                     {recorded && (
-                        <div className="bg-green-500/10 border border-green-500/20 rounded-sm p-4 text-center animate-teedin">
+                        <div className="order-3 bg-green-500/10 border border-green-500/20 rounded-sm p-4 text-center animate-teedin lg:order-none">
                             <p className="text-positive font-serif font-medium">Recorded</p>
                             <div className="flex items-center justify-center gap-4 mt-2 text-sm font-sans text-positive">
                                 {solveTimeMs && (
@@ -502,13 +624,13 @@ export default function LibraryPuzzle() {
 
                     {/* Record error */}
                     {recordError && (
-                        <div className="bg-red-500/10 border border-red-500/20 rounded-sm p-4 text-center animate-teedin">
+                        <div className="order-3 bg-red-500/10 border border-red-500/20 rounded-sm p-4 text-center animate-teedin lg:order-none">
                             <p className="text-negative font-sans text-sm">{recordError}</p>
                         </div>
                     )}
 
                     {/* Actions */}
-                    <div className="space-y-4">
+                    <div className="order-3 space-y-4 lg:order-none" data-testid="solve-actions">
                         {/* Manual UCI input toggle */}
                         <div className="flex justify-between items-center px-2">
                             <span className="text-xs text-primary/70 uppercase tracking-widest font-sans">Input Method</span>
@@ -540,17 +662,18 @@ export default function LibraryPuzzle() {
                                 <button
                                     type="button"
                                     onClick={handleCheckAnswer}
-                                    disabled={!userMove}
-                                    className={`px-6 py-4 bg-primary text-bg-primary rounded-sm font-serif text-lg transition-all shadow-lg shadow-primary/5 km-focus-visible ${!userMove ? 'km-interactive-disabled' : 'km-interactive'}`}
+                                    disabled={!userMove || isChecking || isRevealing}
+                                    className={`px-6 py-4 bg-primary text-bg-primary rounded-sm font-serif text-lg transition-all shadow-lg shadow-primary/5 km-focus-visible ${!userMove || isChecking || isRevealing ? 'km-interactive-disabled' : 'km-interactive'}`}
                                 >
-                                    Check Move
+                                    {isChecking ? 'Checking...' : 'Check Move'}
                                 </button>
                                 <button
                                     type="button"
                                     onClick={handleRevealSolution}
-                                    className="px-6 py-4 border border-primary/20 text-primary rounded-sm font-serif text-lg transition-all km-interactive km-focus-visible"
+                                    disabled={isChecking || isRevealing}
+                                    className={`px-6 py-4 border border-primary/20 text-primary rounded-sm font-serif text-lg transition-all km-focus-visible ${isChecking || isRevealing ? 'km-interactive-disabled' : 'km-interactive'}`}
                                 >
-                                    Reveal
+                                    {isRevealing ? 'Revealing...' : 'Reveal'}
                                 </button>
                             </div>
                         )}
@@ -567,9 +690,10 @@ export default function LibraryPuzzle() {
                                 <button
                                     type="button"
                                     onClick={handleRevealSolution}
-                                    className="px-6 py-4 bg-primary text-bg-primary rounded-sm font-serif text-lg transition-all km-interactive km-focus-visible"
+                                    disabled={isChecking || isRevealing}
+                                    className={`px-6 py-4 bg-primary text-bg-primary rounded-sm font-serif text-lg transition-all km-focus-visible ${isChecking || isRevealing ? 'km-interactive-disabled' : 'km-interactive'}`}
                                 >
-                                    Show Solution
+                                    {isRevealing ? 'Loading Solution...' : 'Show Solution'}
                                 </button>
                             </div>
                         )}
@@ -584,18 +708,56 @@ export default function LibraryPuzzle() {
                         )}
                     </div>
 
-                    <MistakeDiagnosisCard
-                        diagnosis={diagnosis}
-                        revealed={resolved}
-                        loading={diagnosisLoading}
-                    />
+                    {postMortemUnlocked && (
+                        <div className="order-3 lg:order-none">
+                            <MistakeDiagnosisCard
+                                diagnosis={diagnosis}
+                                revealed={postMortemUnlocked}
+                                loading={diagnosisLoading}
+                            />
+                        </div>
+                    )}
 
                     {/* Sits below the diagnosis on purpose: it only means
                         something once the user knows what went wrong here. */}
-                    {resolved && (
-                        <SimilarWeaknessCard data={similar} currentPuzzleId={puzzle.id} />
+                    {postMortemUnlocked && (
+                        <div className="order-3 lg:order-none">
+                            <SimilarWeaknessCard data={similar} currentPuzzleId={puzzle.id} />
+                        </div>
                     )}
                 </div>
+            </section>
+
+            {/* Review history follows the solving surface on small screens. */}
+            <section className="order-3 flex flex-wrap gap-4 text-sm font-sans text-primary/70 lg:order-2">
+                <span className="px-3 py-1 bg-primary/5 rounded-sm border border-primary/10">
+                    {puzzle.difficulty.charAt(0).toUpperCase() + puzzle.difficulty.slice(1)}
+                </span>
+                {puzzle.primary_motif && (
+                    <span className="px-3 py-1 bg-primary/5 rounded-sm border border-primary/10">
+                        {puzzle.primary_motif}
+                    </span>
+                )}
+                {puzzle.attempts > 0 && (
+                    <span className="px-3 py-1 bg-primary/5 rounded-sm border border-primary/10">
+                        {puzzle.pass_count}/{puzzle.attempts} solved{successRate !== null ? ` (${successRate}%)` : ''}
+                    </span>
+                )}
+                {puzzle.fail_count > 0 && (
+                    <span className="px-3 py-1 bg-red-500/10 rounded-sm border border-red-500/20 text-negative">
+                        {puzzle.fail_count} failed
+                    </span>
+                )}
+                {puzzle.last_reviewed_at && (
+                    <span className="px-3 py-1 bg-primary/5 rounded-sm border border-primary/10">
+                        Last: {new Date(puzzle.last_reviewed_at).toLocaleDateString(LOCALE)}
+                    </span>
+                )}
+                {puzzle.next_due_at && !recorded && (
+                    <span className="px-3 py-1 bg-primary/5 rounded-sm border border-primary/10">
+                        Due: {new Date(puzzle.next_due_at).toLocaleDateString(LOCALE)}
+                    </span>
+                )}
             </section>
         </div>
     );

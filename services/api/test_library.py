@@ -274,7 +274,6 @@ class TestListPuzzlesBasic:
             "swing",
             "fen",
             "side_to_move",
-            "best_move_uci",
             "status",
             "attempts",
             "pass_count",
@@ -287,6 +286,9 @@ class TestListPuzzlesBasic:
         ]
         for field in required_fields:
             assert field in puzzle, f"Missing field: {field}"
+        assert "best_move_uci" not in puzzle
+        assert "accept_moves_uci" not in puzzle
+        assert "solution_pv" not in puzzle
 
     def test_includes_safe_diagnosis_summary_without_solution_evidence(
         self, client, db_session, monkeypatch
@@ -301,8 +303,9 @@ class TestListPuzzlesBasic:
         assert response.status_code == 200
         puzzle = response.json()["puzzles"][0]
 
-        assert puzzle["best_move_uci"] is None
-        assert puzzle["accept_moves_uci"] == []
+        assert "best_move_uci" not in puzzle
+        assert "accept_moves_uci" not in puzzle
+        assert "solution_pv" not in puzzle
         assert puzzle["diagnosis_summary"] == {
             "state": "ready",
             "primary_cause": "loose_piece_awareness",
@@ -1058,8 +1061,6 @@ class TestGetPuzzleDetail:
             "swing",
             "fen",
             "side_to_move",
-            "best_move_uci",
-            "accept_moves_uci",
             "status",
             "attempts",
             "pass_count",
@@ -1071,6 +1072,8 @@ class TestGetPuzzleDetail:
             "diagnosis_summary",
         }
         assert set(data.keys()) == expected_keys
+        assert "best_move_uci" not in data
+        assert "accept_moves_uci" not in data
         # Step 1 is explicitly a no-op for what the user sees: a nickname wins
         # wherever one exists, and today one always does.
         assert data["display_name"] == data["title"] == "Shape Test"
