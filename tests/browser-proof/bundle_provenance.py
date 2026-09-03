@@ -188,14 +188,10 @@ def _bundle_inventory(dist):
             else:
                 raise ValueError("bundle entry is not regular")
         final_entries, final_directory_identity = _snapshot_directory(directory)
-        if (
-            directory_identity != final_directory_identity
-            or initial_entries
-            != [
-                (name, _stat_identity(entry_stat))
-                for name, _entry_path, entry_stat in final_entries
-            ]
-        ):
+        if directory_identity != final_directory_identity or initial_entries != [
+            (name, _stat_identity(entry_stat))
+            for name, _entry_path, entry_stat in final_entries
+        ]:
             raise ValueError("bundle directory changed during inventory")
 
     visit(dist)
@@ -270,8 +266,7 @@ def _is_build_input(path):
     pure_path = pathlib.PurePosixPath(path)
     return (
         len(pure_path.parts) >= 4
-        and pure_path.parts[:3]
-        in (("apps", "web", "src"), ("apps", "web", "public"))
+        and pure_path.parts[:3] in (("apps", "web", "src"), ("apps", "web", "public"))
     ) or (
         len(pure_path.parts) == 3
         and pure_path.parts[:2] == ("apps", "web")
@@ -338,8 +333,7 @@ def assert_build_inputs_clean(repo_root):
     ]
     if untracked:
         raise RuntimeError(
-            "untracked build input is not commit-bound: "
-            + ", ".join(sorted(untracked))
+            "untracked build input is not commit-bound: " + ", ".join(sorted(untracked))
         )
 
 
