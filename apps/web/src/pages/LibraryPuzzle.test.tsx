@@ -22,7 +22,15 @@ vi.mock('../context/ChessUsernameContext', () => ({
     useChessUsername: () => ({ username: mockUsername }),
 }));
 
-const { MockApiError, mockGetLibraryPuzzle, mockReviewPuzzle, mockGetPuzzleDiagnosis, mockGetSimilarPuzzles } = vi.hoisted(() => {
+const {
+    MockApiError,
+    mockGetLibraryPuzzle,
+    mockCheckPuzzle,
+    mockRevealPuzzle,
+    mockReviewPuzzle,
+    mockGetPuzzleDiagnosis,
+    mockGetSimilarPuzzles,
+} = vi.hoisted(() => {
     class MockApiError extends Error {
         statusCode: number;
         detail?: string;
@@ -36,6 +44,8 @@ const { MockApiError, mockGetLibraryPuzzle, mockReviewPuzzle, mockGetPuzzleDiagn
     return {
         MockApiError,
         mockGetLibraryPuzzle: vi.fn(),
+        mockCheckPuzzle: vi.fn(),
+        mockRevealPuzzle: vi.fn(),
         mockReviewPuzzle: vi.fn(),
         mockGetPuzzleDiagnosis: vi.fn(),
         mockGetSimilarPuzzles: vi.fn(),
@@ -48,6 +58,8 @@ vi.mock('../api/core', () => ({
 
 vi.mock('../api/puzzles', () => ({
     getLibraryPuzzle: (...args: unknown[]) => mockGetLibraryPuzzle(...args),
+    checkPuzzle: (...args: unknown[]) => mockCheckPuzzle(...args),
+    revealPuzzle: (...args: unknown[]) => mockRevealPuzzle(...args),
     reviewPuzzle: (...args: unknown[]) => mockReviewPuzzle(...args),
     getPuzzleDiagnosis: (...args: unknown[]) => mockGetPuzzleDiagnosis(...args),
     getSimilarPuzzles: (...args: unknown[]) => mockGetSimilarPuzzles(...args),
@@ -60,7 +72,11 @@ vi.mock('react-chessboard', () => ({
 vi.mock('chess.js', () => {
     class MockChess {
         load = vi.fn();
-        move = vi.fn();
+        move = vi.fn(({ from, to, promotion }: { from: string; to: string; promotion?: string }) => ({
+            from,
+            to,
+            promotion: to.endsWith('1') || to.endsWith('8') ? promotion : undefined,
+        }));
         fen = vi.fn().mockReturnValue('rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1');
     }
     return { Chess: MockChess };
@@ -74,7 +90,6 @@ const MOCK_PUZZLE = {
     swing: 3.0,
     fen: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1',
     side_to_move: 'white',
-    best_move_uci: 'e2e4',
     status: 'due' as const,
     attempts: 5,
     pass_count: 3,
@@ -123,6 +138,12 @@ describe('LibraryPuzzle', () => {
         // Default to no siblings: these tests are about the diagnosis surface,
         // and an unstubbed promise would fail them for the wrong reason.
         mockGetSimilarPuzzles.mockResolvedValue({ puzzles: [] });
+        mockCheckPuzzle.mockResolvedValue({ correct: true, result: 'pass' });
+        mockRevealPuzzle.mockResolvedValue({
+            best_move_uci: 'e2e4',
+            accept_moves_uci: ['e2e4'],
+            solution_pv: ['e2e4'],
+        });
         mockReviewPuzzle.mockResolvedValue({
             next_due_at: '2026-02-10T12:00:00Z',
             interval_days: 7,
@@ -251,7 +272,9 @@ describe('LibraryPuzzle', () => {
         expect(actions).toContainElement(checkMove);
         expect(checkMove.compareDocumentPosition(history) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
         expect(screen.queryByText('e2e4')).not.toBeInTheDocument();
+        expect(mockRevealPuzzle).not.toHaveBeenCalled();
         expect(mockGetPuzzleDiagnosis).not.toHaveBeenCalled();
+        expect(mockGetSimilarPuzzles).not.toHaveBeenCalled();
     });
 
     it('should show Check Move and Reveal buttons', async () => {
@@ -301,6 +324,122 @@ describe('LibraryPuzzle', () => {
         expect(typeof timeSpentMs).toBe('number');
         expect(Number.isFinite(timeSpentMs)).toBe(true);
         expect(timeSpentMs).toBeGreaterThanOrEqual(0);
+        expect(mockRevealPuzzle).toHaveBeenCalledTimes(1);
+        expect(mockRevealPuzzle).toHaveBeenCalledWith('puzzle-abc', 'testplayer');
+    });
+
+    it('does not resolve or record when the reveal request fails', async () => {
+        mockRevealPuzzle.mockRejectedValue(new Error('Reveal unavailable'));
+        render(<LibraryPuzzle />);
+        await screen.findByText('Reveal');
+
+        fireEvent.click(screen.getByText('Reveal'));
+
+        expect(await screen.findByText(/couldn't load the solution/i)).toBeInTheDocument();
+        expect(screen.getByText(/find the best move/i)).toBeInTheDocument();
+        expect(screen.queryByText('e2e4')).not.toBeInTheDocument();
+        expect(mockReviewPuzzle).not.toHaveBeenCalled();
+        expect(mockGetPuzzleDiagnosis).not.toHaveBeenCalled();
+        expect(mockGetSimilarPuzzles).not.toHaveBeenCalled();
+    });
+
+    it('deduplicates an in-flight reveal and records one failure', async () => {
+        let release: (value: { best_move_uci: string; accept_moves_uci: string[] }) => void = () => {};
+        mockRevealPuzzle.mockReturnValue(new Promise((resolve) => { release = resolve; }));
+        render(<LibraryPuzzle />);
+        const reveal = await screen.findByRole('button', { name: 'Reveal' });
+
+        fireEvent.click(reveal);
+        fireEvent.click(reveal);
+        expect(mockRevealPuzzle).toHaveBeenCalledTimes(1);
+
+        release({ best_move_uci: 'e2e4', accept_moves_uci: ['e2e4'] });
+        await screen.findByText('e2e4');
+        await waitFor(() => expect(mockReviewPuzzle).toHaveBeenCalledTimes(1));
+        expect(mockReviewPuzzle).toHaveBeenCalledWith(
+            'puzzle-abc',
+            'testplayer',
+            'fail',
+            expect.any(Number),
+        );
+    });
+
+    it('ignores a reveal response that belongs to the previous puzzle', async () => {
+        let release: (value: { best_move_uci: string; accept_moves_uci: string[] }) => void = () => {};
+        mockRevealPuzzle.mockReturnValueOnce(new Promise((resolve) => { release = resolve; }));
+        const { rerender } = render(<LibraryPuzzle />);
+        fireEvent.click(await screen.findByRole('button', { name: 'Reveal' }));
+
+        mockPuzzleId = 'sibling-1';
+        rerender(<LibraryPuzzle />);
+        await waitFor(() => expect(mockGetLibraryPuzzle).toHaveBeenCalledWith('sibling-1', 'testplayer'));
+        release({ best_move_uci: 'e2e4', accept_moves_uci: ['e2e4'] });
+
+        await waitFor(() => expect(screen.getByRole('button', { name: 'Reveal' })).toBeInTheDocument());
+        expect(screen.queryByText('e2e4')).not.toBeInTheDocument();
+        expect(mockReviewPuzzle).not.toHaveBeenCalled();
+        expect(mockGetPuzzleDiagnosis).not.toHaveBeenCalled();
+    });
+
+    // --- Server-authoritative move checking ---
+
+    it('checks a manual move on the server and records a correct result', async () => {
+        render(<LibraryPuzzle />);
+        await screen.findByText(/Type Move Manually/i);
+        fireEvent.click(screen.getByText(/Type Move Manually/i));
+        fireEvent.change(screen.getByPlaceholderText('e.g. e2e4'), { target: { value: 'E2E4' } });
+        fireEvent.click(screen.getByRole('button', { name: /check move/i }));
+
+        await screen.findByText('Correct!');
+        expect(mockCheckPuzzle).toHaveBeenCalledWith('puzzle-abc', 'testplayer', 'e2e4');
+        expect(mockReviewPuzzle).toHaveBeenCalledWith(
+            'puzzle-abc',
+            'testplayer',
+            'pass',
+            expect.any(Number),
+        );
+        expect(mockRevealPuzzle).not.toHaveBeenCalled();
+    });
+
+    it('checks a board move on the server without requesting the answer', async () => {
+        render(<LibraryPuzzle />);
+        await screen.findByTestId('chessboard');
+
+        fireEvent.keyDown(screen.getByRole('gridcell', { name: /e2, white pawn/i }), { key: 'Enter' });
+        fireEvent.keyDown(screen.getByRole('gridcell', { name: /e4, empty/i }), { key: 'Enter' });
+
+        await screen.findByText('Correct!');
+        expect(mockCheckPuzzle).toHaveBeenCalledWith('puzzle-abc', 'testplayer', 'e2e4');
+        expect(mockRevealPuzzle).not.toHaveBeenCalled();
+    });
+
+    it('keeps a wrong response answerless and does not record a pass', async () => {
+        mockCheckPuzzle.mockResolvedValue({ correct: false, result: 'fail' });
+        render(<LibraryPuzzle />);
+        await screen.findByText(/Type Move Manually/i);
+        fireEvent.click(screen.getByText(/Type Move Manually/i));
+        fireEvent.change(screen.getByPlaceholderText('e.g. e2e4'), { target: { value: 'd2d3' } });
+        fireEvent.click(screen.getByRole('button', { name: /check move/i }));
+
+        await screen.findByText('Incorrect.');
+        expect(mockCheckPuzzle).toHaveBeenCalledWith('puzzle-abc', 'testplayer', 'd2d3');
+        expect(mockRevealPuzzle).not.toHaveBeenCalled();
+        expect(mockReviewPuzzle).not.toHaveBeenCalled();
+        expect(screen.queryByText('e2e4')).not.toBeInTheDocument();
+    });
+
+    it('keeps the puzzle unsolved when a move check fails', async () => {
+        mockCheckPuzzle.mockRejectedValue(new Error('Check unavailable'));
+        render(<LibraryPuzzle />);
+        await screen.findByText(/Type Move Manually/i);
+        fireEvent.click(screen.getByText(/Type Move Manually/i));
+        fireEvent.change(screen.getByPlaceholderText('e.g. e2e4'), { target: { value: 'e2e4' } });
+        fireEvent.click(screen.getByRole('button', { name: /check move/i }));
+
+        expect(await screen.findByText(/couldn't check that move/i)).toBeInTheDocument();
+        expect(screen.getByText(/find the best move/i)).toBeInTheDocument();
+        expect(mockReviewPuzzle).not.toHaveBeenCalled();
+        expect(mockGetPuzzleDiagnosis).not.toHaveBeenCalled();
     });
 
     // --- Recorded confirmation ---
@@ -708,8 +847,10 @@ describe('LibraryPuzzle', () => {
 
             // After completion both the header back-link AND the green CTA show.
             // The green CTA is the second match; both must point to /puzzles.
-            const links = await screen.findAllByRole('link', { name: /back to session summary/i });
-            expect(links.length).toBeGreaterThanOrEqual(2);
+            await waitFor(() =>
+                expect(screen.getAllByRole('link', { name: /back to session summary/i }).length).toBeGreaterThanOrEqual(2),
+            );
+            const links = screen.getAllByRole('link', { name: /back to session summary/i });
             links.forEach(link => expect(link).toHaveAttribute('href', '/puzzles'));
         });
 
@@ -720,8 +861,10 @@ describe('LibraryPuzzle', () => {
             fireEvent.click(screen.getByText('Reveal'));
 
             // After completion both the header back-link AND the green CTA show.
-            const links = await screen.findAllByRole('link', { name: /back to library/i });
-            expect(links.length).toBeGreaterThanOrEqual(2);
+            await waitFor(() =>
+                expect(screen.getAllByRole('link', { name: /back to library/i }).length).toBeGreaterThanOrEqual(2),
+            );
+            const links = screen.getAllByRole('link', { name: /back to library/i });
             links.forEach(link => expect(link).toHaveAttribute('href', '/library'));
         });
     });

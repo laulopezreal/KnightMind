@@ -212,7 +212,9 @@ export interface LibraryPuzzle {
     swing: number;
     fen: string;
     side_to_move: string;
-    best_move_uci: string;
+    // Deliberately absent from the initial detail payload. Fetch it only through
+    // revealPuzzle() after an explicit user action.
+    best_move_uci?: string;
     status: PuzzleStatus;
     attempts: number;
     pass_count: number;
@@ -267,9 +269,9 @@ export async function getLibraryPuzzle(
     puzzleId: string,
     username: string
 ): Promise<LibraryPuzzle> {
-    // The detail page checks/reveals the move client-side, so it opts in to the
-    // solution with reveal=true. The list surface never asks for it (dim 13).
-    const params = new URLSearchParams({ username, reveal: 'true' });
+    // Initial detail is answerless. Move checks and explicit reveal use their
+    // dedicated server-authoritative endpoints below.
+    const params = new URLSearchParams({ username });
     return await request<LibraryPuzzle>(`/puzzles/${encodeURIComponent(puzzleId)}?${params}`);
 }
 

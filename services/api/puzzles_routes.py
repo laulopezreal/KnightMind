@@ -24,6 +24,7 @@ from typing import Annotated, Literal
 
 import chess
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, model_serializer
 from sqlalchemy import and_, case, func, literal, or_, select
 from sqlalchemy.exc import IntegrityError
@@ -1605,7 +1606,10 @@ def list_puzzles(
     )
 
 
-@router.get("/puzzles/{puzzle_id}", response_model=PuzzleListItem)
+@router.get(
+    "/puzzles/{puzzle_id}",
+    response_model=PuzzleListItem,
+)
 def get_puzzle_detail(
     puzzle_id: str,
     username: Annotated[Username, Query(description="Username to look up puzzle for")],
@@ -1622,10 +1626,10 @@ def get_puzzle_detail(
 
     assert_owns_username(account, username, db)
 
-    # When the strip flag is OFF (default) the solution is always included so the
-    # old client-grading frontend keeps working; ?reveal only matters when the
-    # strict gate is ON.
-    reveal_solution = reveal or not _strip_puzzle_solutions_enabled()
+    # Detail is an answerless solving surface unless the caller explicitly opts
+    # in. Unlike the legacy list/training rollout, this contract must not depend
+    # on KNIGHTMIND_STRIP_PUZZLE_SOLUTIONS being enabled.
+    reveal_solution = reveal
     # ``username`` is already canonical (folded at the request boundary).
     username_lower = username
     # naive-UTC bound for SQL comparison against naive next_due_at (see
@@ -1674,7 +1678,7 @@ def get_puzzle_detail(
         else None
     )
     resolved = is_resolved(stats)
-    return PuzzleListItem(
+    item = PuzzleListItem(
         id=puzzle.id,
         title=(stats.title if (stats and resolved) else None),
         display_name=resolve_display_name(
@@ -1690,9 +1694,7 @@ def get_puzzle_detail(
         swing=puzzle.swing,
         fen=puzzle.fen,
         side_to_move=puzzle.side_to_move,
-        # Gated on ?reveal=true (dim 13) only when the strip flag is ON. When OFF
-        # (default) the solution is always included so the old client-grading
-        # frontend keeps working.
+        # Gated on ?reveal=true regardless of the legacy rollout flag.
         best_move_uci=puzzle.best_move_uci if reveal_solution else None,
         accept_moves_uci=_accept_moves(puzzle) if reveal_solution else [],
         status=computed_status,
@@ -1706,6 +1708,17 @@ def get_puzzle_detail(
         # diagnosis_summary is intentionally omitted here: the detail page uses
         # GET /puzzles/{id}/diagnosis for full diagnosis data, not this field.
     )
+    if reveal_solution:
+        return item
+
+    # FastAPI fills response-model defaults, which would turn withheld solution
+    # fields into `null` / `[]` keys in the wire payload. Validate with the shared
+    # model first, then remove those keys explicitly so the answer contract is an
+    # absence contract without changing unrelated nullable detail fields.
+    payload = item.model_dump(mode="json")
+    payload.pop("best_move_uci", None)
+    payload.pop("accept_moves_uci", None)
+    return JSONResponse(content=payload)
 
 
 class DiagnosisEvidenceItem(BaseModel):

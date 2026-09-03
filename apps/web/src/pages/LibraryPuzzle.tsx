@@ -4,7 +4,7 @@ import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { AccessibleChessboard } from '../components/AccessibleChessboard';
 import { Chess } from 'chess.js';
 import { useChessUsername } from '../context/ChessUsernameContext';
-import { getLibraryPuzzle, getPuzzleDiagnosis, getSimilarPuzzles, reviewPuzzle, type LibraryPuzzle as LibraryPuzzleType, type PuzzleDiagnosis, type SimilarPuzzlesResponse } from '../api/puzzles';
+import { checkPuzzle, getLibraryPuzzle, getPuzzleDiagnosis, getSimilarPuzzles, revealPuzzle, reviewPuzzle, type LibraryPuzzle as LibraryPuzzleType, type PuzzleDiagnosis, type SimilarPuzzlesResponse } from '../api/puzzles';
 import { MistakeDiagnosisCard } from '../components/MistakeDiagnosisCard';
 import { SimilarWeaknessCard } from '../components/SimilarWeaknessCard';
 import { ApiError } from '../api/core';
@@ -38,6 +38,15 @@ export default function LibraryPuzzle() {
     const [status, setStatus] = useState<SolveStatus>('solving');
     const [userMove, setUserMove] = useState('');
     const [showUciInput, setShowUciInput] = useState(false);
+    const [revealedMove, setRevealedMove] = useState<string | null>(null);
+    const [actionError, setActionError] = useState<string | null>(null);
+    const [isChecking, setIsChecking] = useState(false);
+    const [isRevealing, setIsRevealing] = useState(false);
+    const checkRequestRef = useRef<symbol | null>(null);
+    const revealRequestRef = useRef<symbol | null>(null);
+    const activePuzzleKey = `${username ?? ''}:${puzzleId ?? ''}`;
+    const activePuzzleKeyRef = useRef(activePuzzleKey);
+    activePuzzleKeyRef.current = activePuzzleKey;
 
     // Solve timer
     const solveStartRef = useRef<number>(0);
@@ -73,6 +82,12 @@ export default function LibraryPuzzle() {
         setStatus('solving');
         setUserMove('');
         setShowUciInput(false);
+        setRevealedMove(null);
+        setActionError(null);
+        setIsChecking(false);
+        setIsRevealing(false);
+        checkRequestRef.current = null;
+        revealRequestRef.current = null;
         setRecorded(false);
         setNextDueAt(null);
         setFeedback('');
@@ -160,9 +175,8 @@ export default function LibraryPuzzle() {
     }, [readyFor]);
 
     // The diagnosis is post-mortem content: its evidence names the solution, so
-    // it is not even requested until the puzzle has been solved or revealed.
-    // `reveal` is passed for the same reason getLibraryPuzzle passes it — by
-    // this point the answer is already on screen.
+    // it is not even requested until the puzzle has been resolved. Its explicit
+    // `reveal` opt-in is safe only at that point; initial detail stays answerless.
     // Gated on the loaded puzzle matching the route, not just on `status`.
     //
     // resetPuzzleState() runs *after* the getLibraryPuzzle round-trip, so for
@@ -235,21 +249,46 @@ export default function LibraryPuzzle() {
         }
     };
 
-    const onPieceDrop = (sourceSquare: string, targetSquare: string, promotion: string = 'q') => {
-        if (!puzzle || status === 'correct' || status === 'revealed') return false;
+    const checkMove = async (attemptedMove: string, rollbackFen?: string) => {
+        if (!puzzle || !username || checkRequestRef.current || revealRequestRef.current) return;
+        const requestKey = activePuzzleKey;
+        const requestToken = Symbol('library-puzzle-check');
+        checkRequestRef.current = requestToken;
+        setIsChecking(true);
+        setActionError(null);
         try {
+            const result = await checkPuzzle(puzzle.id, username, attemptedMove);
+            if (activePuzzleKeyRef.current !== requestKey) return;
+            if (result.correct) {
+                setStatus('correct');
+                void handleRecordResult('pass');
+            } else {
+                setStatus('incorrect');
+            }
+        } catch (err) {
+            if (activePuzzleKeyRef.current !== requestKey) return;
+            console.error('Failed to check move:', err);
+            if (rollbackFen) setGame(new Chess(rollbackFen));
+            setStatus('solving');
+            setActionError("We couldn't check that move — your attempt wasn't recorded. Check your connection and try again.");
+        } finally {
+            if (checkRequestRef.current === requestToken) {
+                checkRequestRef.current = null;
+                setIsChecking(false);
+            }
+        }
+    };
+
+    const onPieceDrop = (sourceSquare: string, targetSquare: string, promotion: string = 'q') => {
+        if (!puzzle || status === 'correct' || status === 'revealed' || isChecking || isRevealing) return false;
+        try {
+            const rollbackFen = game.fen();
             const move = game.move({ from: sourceSquare, to: targetSquare, promotion: promotion || 'q' });
             if (move === null) return false;
             setGame(new Chess(game.fen()));
             const uciMove = `${move.from}${move.to}${move.promotion || ''}`;
             setUserMove(uciMove);
-            const normalizedBestMove = puzzle.best_move_uci.toLowerCase();
-            if (uciMove === normalizedBestMove) {
-                setStatus('correct');
-                handleRecordResult('pass');
-            } else {
-                setStatus('incorrect');
-            }
+            void checkMove(uciMove.toLowerCase(), rollbackFen);
             return true;
         } catch (e) {
             console.error('Failed to make move on board:', e);
@@ -258,29 +297,45 @@ export default function LibraryPuzzle() {
     };
 
     const handleCheckAnswer = () => {
-        if (!puzzle) return;
+        if (!puzzle || isChecking || isRevealing) return;
         const normalizedUserMove = userMove.trim().toLowerCase();
-        const normalizedBestMove = puzzle.best_move_uci.toLowerCase();
-        if (normalizedUserMove === normalizedBestMove) {
-            setStatus('correct');
-            handleRecordResult('pass');
-        } else {
-            setStatus('incorrect');
-        }
+        if (!normalizedUserMove) return;
+        void checkMove(normalizedUserMove);
     };
 
-    const handleRevealSolution = () => {
-        if (!puzzle) return;
-        setStatus('revealed');
-        const bestMove = puzzle.best_move_uci.toLowerCase();
-        setUserMove(bestMove);
-        const solutionGame = new Chess(puzzle.fen);
-        const from = bestMove.slice(0, 2);
-        const to = bestMove.slice(2, 4);
-        const promotion = bestMove.slice(4, 5);
-        solutionGame.move({ from, to, promotion: promotion || undefined });
-        setGame(solutionGame);
-        handleRecordResult('fail');
+    const handleRevealSolution = async () => {
+        if (!puzzle || !username || revealRequestRef.current || checkRequestRef.current) return;
+        const requestKey = activePuzzleKey;
+        const requestToken = Symbol('library-puzzle-reveal');
+        revealRequestRef.current = requestToken;
+        setIsRevealing(true);
+        setActionError(null);
+        try {
+            const result = await revealPuzzle(puzzle.id, username);
+            if (activePuzzleKeyRef.current !== requestKey) return;
+            const bestMove = result.best_move_uci?.toLowerCase();
+            if (!bestMove) throw new Error('Reveal response did not include a move');
+
+            const solutionGame = new Chess(puzzle.fen);
+            const from = bestMove.slice(0, 2);
+            const to = bestMove.slice(2, 4);
+            const promotion = bestMove.slice(4, 5);
+            solutionGame.move({ from, to, promotion: promotion || undefined });
+            setRevealedMove(bestMove);
+            setUserMove(bestMove);
+            setGame(solutionGame);
+            setStatus('revealed');
+            void handleRecordResult('fail');
+        } catch (err) {
+            if (activePuzzleKeyRef.current !== requestKey) return;
+            console.error('Failed to reveal solution:', err);
+            setActionError("We couldn't load the solution — you're still on this puzzle. Check your connection and try again.");
+        } finally {
+            if (revealRequestRef.current === requestToken) {
+                revealRequestRef.current = null;
+                setIsRevealing(false);
+            }
+        }
     };
 
     const handleMarkFailedRetry = () => {
@@ -289,6 +344,7 @@ export default function LibraryPuzzle() {
         // solution.  Recording on retry would double-count attempts.
         setStatus('solving');
         setUserMove('');
+        setActionError(null);
         setGame(new Chess(puzzle.fen));
         solveStartRef.current = Date.now();
     };
@@ -441,10 +497,16 @@ export default function LibraryPuzzle() {
                         {status === 'revealed' && (
                             <div>
                                 <p className="text-primary/70 font-sans text-xs uppercase tracking-widest mb-1">Solution</p>
-                                <p className="text-primary font-mono text-xl">{puzzle.best_move_uci}</p>
+                                <p className="text-primary font-mono text-xl">{revealedMove}</p>
                             </div>
                         )}
                     </div>
+
+                    {actionError && (
+                        <div className="order-3 bg-red-500/10 border border-red-500/20 rounded-sm p-4 text-center animate-teedin lg:order-none" role="alert">
+                            <p className="text-negative font-sans text-sm">{actionError}</p>
+                        </div>
+                    )}
 
                     {/* Recorded confirmation */}
                     {recorded && (
@@ -511,17 +573,18 @@ export default function LibraryPuzzle() {
                                 <button
                                     type="button"
                                     onClick={handleCheckAnswer}
-                                    disabled={!userMove}
-                                    className={`px-6 py-4 bg-primary text-bg-primary rounded-sm font-serif text-lg transition-all shadow-lg shadow-primary/5 km-focus-visible ${!userMove ? 'km-interactive-disabled' : 'km-interactive'}`}
+                                    disabled={!userMove || isChecking || isRevealing}
+                                    className={`px-6 py-4 bg-primary text-bg-primary rounded-sm font-serif text-lg transition-all shadow-lg shadow-primary/5 km-focus-visible ${!userMove || isChecking || isRevealing ? 'km-interactive-disabled' : 'km-interactive'}`}
                                 >
-                                    Check Move
+                                    {isChecking ? 'Checking...' : 'Check Move'}
                                 </button>
                                 <button
                                     type="button"
                                     onClick={handleRevealSolution}
-                                    className="px-6 py-4 border border-primary/20 text-primary rounded-sm font-serif text-lg transition-all km-interactive km-focus-visible"
+                                    disabled={isChecking || isRevealing}
+                                    className={`px-6 py-4 border border-primary/20 text-primary rounded-sm font-serif text-lg transition-all km-focus-visible ${isChecking || isRevealing ? 'km-interactive-disabled' : 'km-interactive'}`}
                                 >
-                                    Reveal
+                                    {isRevealing ? 'Revealing...' : 'Reveal'}
                                 </button>
                             </div>
                         )}
@@ -538,9 +601,10 @@ export default function LibraryPuzzle() {
                                 <button
                                     type="button"
                                     onClick={handleRevealSolution}
-                                    className="px-6 py-4 bg-primary text-bg-primary rounded-sm font-serif text-lg transition-all km-interactive km-focus-visible"
+                                    disabled={isChecking || isRevealing}
+                                    className={`px-6 py-4 bg-primary text-bg-primary rounded-sm font-serif text-lg transition-all km-focus-visible ${isChecking || isRevealing ? 'km-interactive-disabled' : 'km-interactive'}`}
                                 >
-                                    Show Solution
+                                    {isRevealing ? 'Loading Solution...' : 'Show Solution'}
                                 </button>
                             </div>
                         )}

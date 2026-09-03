@@ -1235,6 +1235,9 @@ def test_check_endpoint_wrong_move(client_with_db, db_session):
     assert body["result"] == "fail"
     assert body["complete"] is False
     assert body["reply"] is None
+    assert "best_move_uci" not in body
+    assert "accept_moves_uci" not in body
+    assert "d2d4" not in str(body)
 
 
 def test_check_endpoint_illegal_move_is_incorrect(client_with_db, db_session):
@@ -1339,8 +1342,8 @@ def test_puzzle_detail_omits_solution_when_strip_enabled(
     response = client_with_db.get("/puzzles/p-detail-hide?username=testuser")
     assert response.status_code == 200
     body = response.json()
-    assert body["best_move_uci"] is None
-    assert body["accept_moves_uci"] == []
+    assert "best_move_uci" not in body
+    assert "accept_moves_uci" not in body
 
 
 def test_puzzle_detail_reveals_solution_on_demand(client_with_db, db_session):
@@ -1372,15 +1375,15 @@ def test_puzzles_list_includes_solution_by_default(client_with_db, db_session):
     assert "d2d4" in p["accept_moves_uci"]
 
 
-def test_puzzle_detail_includes_solution_by_default(client_with_db, db_session):
-    """Default (strip flag OFF): /puzzles/{id} ships the solution (old-frontend compat)."""
+def test_puzzle_detail_omits_solution_by_default(client_with_db, db_session):
+    """The no-reveal detail contract is deterministic even with the rollout flag off."""
     _create_puzzle(db_session, "p-detail-default", "testuser")
     db_session.commit()
     response = client_with_db.get("/puzzles/p-detail-default?username=testuser")
     assert response.status_code == 200
     body = response.json()
-    assert body["best_move_uci"] == "d2d4"
-    assert "d2d4" in body["accept_moves_uci"]
+    assert "best_move_uci" not in body
+    assert "accept_moves_uci" not in body
 
 
 def test_due_puzzles_include_solution_by_default(client_with_db, db_session):
