@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
 import Library from './Library';
 
 let mockUsername = 'testplayer';
@@ -135,19 +135,38 @@ describe('Library', () => {
         expect(screen.getByPlaceholderText(/Search by name, opening, or ID/i)).toBeInTheDocument();
     });
 
-    it('should render filter dropdowns', async () => {
+    it('shows visible labels for the status and difficulty filters', async () => {
         render(<Library />);
-        await waitFor(() => {
-            const allSelects = screen.getAllByDisplayValue('All');
-            expect(allSelects.length).toBeGreaterThanOrEqual(2);
-        });
+
+        expect(screen.getByText('Status', { selector: 'span' })).toBeVisible();
+        expect(screen.getByText('Difficulty', { selector: 'span' })).toBeVisible();
+        expect(screen.getByLabelText('Status')).toHaveValue('');
+        expect(screen.getByLabelText('Difficulty')).toHaveValue('');
+        expect(screen.getByLabelText('Status')).toHaveClass('min-h-11');
+        expect(screen.getByLabelText('Difficulty')).toHaveClass('min-h-11');
     });
 
-    it('should render link to training page', async () => {
+    it('puts the existing training action beside the due-review summary', async () => {
         render(<Library />);
-        await waitFor(() => {
-            expect(screen.getByText(/Start Training/i)).toBeInTheDocument();
+
+        const reviewSummary = await screen.findByLabelText('Library review summary');
+        expect(within(reviewSummary).getByText(/1 puzzle due for review/i)).toBeVisible();
+        expect(within(reviewSummary).getByRole('link', { name: 'Start Training' }))
+            .toHaveAttribute('href', '/puzzles');
+    });
+
+    it('does not claim a review is due when the due count is zero', async () => {
+        mockGetLibraryPuzzles.mockResolvedValue({
+            ...EMPTY_RESPONSE,
+            puzzles: [MOCK_PUZZLES[1]],
+            total: 1,
+            stats: { total: 1, due: 0, new: 1, learning: 0, mastered: 0 },
         });
+        render(<Library />);
+
+        await screen.findByText('Knight Outpost');
+        expect(screen.queryByLabelText('Library review summary')).not.toBeInTheDocument();
+        expect(screen.queryByRole('link', { name: 'Start Training' })).not.toBeInTheDocument();
     });
 
     it('genuinely-empty library offers a Generate Puzzles button (no dead end)', async () => {
@@ -223,6 +242,15 @@ describe('Library', () => {
             expect(screen.getByText('Poison Pawn Trap')).toBeInTheDocument();
             expect(screen.getByText('Knight Outpost')).toBeInTheDocument();
         });
+    });
+
+    it('spells out the side to move instead of showing an unexplained initial', async () => {
+        render(<Library />);
+
+        expect(await screen.findByText('White to move')).toBeVisible();
+        expect(screen.getByText('Black to move')).toBeVisible();
+        expect(screen.queryByText('W')).not.toBeInTheDocument();
+        expect(screen.queryByText('B')).not.toBeInTheDocument();
     });
 
     it('should display status badges', async () => {
