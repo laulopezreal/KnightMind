@@ -633,6 +633,40 @@ describe('LibraryPuzzle', () => {
         expect(screen.queryByText('e2e4')).not.toBeInTheDocument();
     });
 
+    it('keeps post-mortem content locked after a wrong check and allows a clean retry', async () => {
+        mockCheckPuzzle
+            .mockResolvedValueOnce({ correct: false, result: 'fail', complete: false })
+            .mockResolvedValueOnce({ correct: true, result: 'pass', complete: true });
+        render(<LibraryPuzzle />);
+        fireEvent.click(await screen.findByText(/Type Move Manually/i));
+        const input = screen.getByPlaceholderText('e.g. e2e4');
+
+        fireEvent.change(input, { target: { value: 'd2d3' } });
+        fireEvent.click(screen.getByRole('button', { name: /check move/i }));
+
+        await screen.findByText('Incorrect.');
+        expect(mockCheckPuzzle).toHaveBeenLastCalledWith(
+            'puzzle-abc', 'testplayer', 'd2d3', 0,
+        );
+        expect(mockGetPuzzleDiagnosis).not.toHaveBeenCalled();
+        expect(mockGetSimilarPuzzles).not.toHaveBeenCalled();
+        expect(mockRevealPuzzle).not.toHaveBeenCalled();
+        expect(mockReviewPuzzle).not.toHaveBeenCalled();
+        expect(screen.queryByRole('region', { name: /mistake diagnosis/i })).not.toBeInTheDocument();
+        expect(screen.queryByText('Loose piece awareness')).not.toBeInTheDocument();
+        expect(screen.queryByText('e4 (forcing)')).not.toBeInTheDocument();
+        expect(screen.queryByText('e2e4')).not.toBeInTheDocument();
+
+        fireEvent.click(screen.getByRole('button', { name: 'Try Again' }));
+        fireEvent.change(input, { target: { value: 'e2e4' } });
+        fireEvent.click(screen.getByRole('button', { name: /check move/i }));
+
+        await screen.findByText('Correct!');
+        expect(mockCheckPuzzle).toHaveBeenLastCalledWith(
+            'puzzle-abc', 'testplayer', 'e2e4', 0,
+        );
+    });
+
     it('keeps the puzzle unsolved when a move check fails', async () => {
         mockCheckPuzzle.mockRejectedValue(new Error('Check unavailable'));
         render(<LibraryPuzzle />);

@@ -157,7 +157,7 @@ export default function LibraryPuzzle() {
     // synchronous block, so `puzzle` was never the new puzzle while `status`
     // still described the old one. Moving the fetch into useAsyncData splits
     // those: the hook commits the data, and an effect would reset a render
-    // later. That extra render is not cosmetic -- `resolved` below is true
+    // later. That extra render is not cosmetic -- `postMortemUnlocked` below is true
     // inside it, which fires the sibling's diagnosis (whose evidence names the
     // best move) with no attempt made, and it leaves the previous puzzle's
     // resolved controls on screen for a frame.
@@ -187,8 +187,10 @@ export default function LibraryPuzzle() {
     }, [readyFor]);
 
     // The diagnosis is post-mortem content: its evidence names the solution, so
-    // it is not even requested until the puzzle has been resolved. Its explicit
-    // `reveal` opt-in is safe only at that point; initial detail stays answerless.
+    // it is not even requested until the server confirms completion or the user
+    // explicitly reveals. An incorrect attempt is feedback, not disclosure
+    // authority. The explicit `reveal` opt-in is safe only after this gate;
+    // initial detail and wrong checks stay answerless.
     // Gated on the loaded puzzle matching the route, not just on `status`.
     //
     // resetPuzzleState() runs *after* the getLibraryPuzzle round-trip, so for
@@ -204,12 +206,12 @@ export default function LibraryPuzzle() {
     // changes no test, while deferring the reset to an effect fails four. A
     // condition that cannot change an outcome is not a safety net, it is noise
     // that makes the real guarantee harder to find.
-    const resolved =
+    const postMortemUnlocked =
         puzzle?.id === puzzleId &&
-        (status === 'correct' || status === 'incorrect' || status === 'revealed');
+        (status === 'correct' || status === 'revealed');
 
     useEffect(() => {
-        if (!resolved || !username || !puzzleId || diagnosis) return;
+        if (!postMortemUnlocked || !username || !puzzleId || diagnosis) return;
         let stale = false;
         setDiagnosisLoading(true);
         getPuzzleDiagnosis(puzzleId, username, true)
@@ -225,10 +227,10 @@ export default function LibraryPuzzle() {
         return () => {
             stale = true;
         };
-    }, [resolved, username, puzzleId, diagnosis]);
+    }, [postMortemUnlocked, username, puzzleId, diagnosis]);
 
     useEffect(() => {
-        if (!resolved || !username || !puzzleId || similar) return;
+        if (!postMortemUnlocked || !username || !puzzleId || similar) return;
         let stale = false;
         getSimilarPuzzles(puzzleId, username)
             .then((result) => {
@@ -240,7 +242,7 @@ export default function LibraryPuzzle() {
         return () => {
             stale = true;
         };
-    }, [resolved, username, puzzleId, similar]);
+    }, [postMortemUnlocked, username, puzzleId, similar]);
 
     const handleRecordResult = async (result: 'pass' | 'fail') => {
         if (!puzzle || !username || recordRequestRef.current) return;
@@ -706,11 +708,11 @@ export default function LibraryPuzzle() {
                         )}
                     </div>
 
-                    {resolved && (
+                    {postMortemUnlocked && (
                         <div className="order-3 lg:order-none">
                             <MistakeDiagnosisCard
                                 diagnosis={diagnosis}
-                                revealed={resolved}
+                                revealed={postMortemUnlocked}
                                 loading={diagnosisLoading}
                             />
                         </div>
@@ -718,7 +720,7 @@ export default function LibraryPuzzle() {
 
                     {/* Sits below the diagnosis on purpose: it only means
                         something once the user knows what went wrong here. */}
-                    {resolved && (
+                    {postMortemUnlocked && (
                         <div className="order-3 lg:order-none">
                             <SimilarWeaknessCard data={similar} currentPuzzleId={puzzle.id} />
                         </div>
