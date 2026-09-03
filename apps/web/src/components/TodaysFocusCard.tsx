@@ -65,14 +65,14 @@ export function TodaysFocusCard({ data }: TodaysFocusCardProps) {
             {focus.trainable_now && focus.trainable_now > 0 ? (
                 <Link
                     to={`/puzzles?focus_cause=${encodeURIComponent(focus.cause)}`}
-                    className="km-interactive km-focus-visible inline-block mt-4 border border-primary/40 rounded-sm px-4 py-2 font-sans text-sm text-primary hover:bg-primary/10 transition-colors"
+                    className="km-interactive km-focus-visible inline-flex items-center mt-4 min-h-11 border border-primary/40 rounded-sm px-4 py-2 font-sans text-sm text-primary hover:bg-primary/10 transition-colors"
                 >
                     Train this pattern · {focus.trainable_now} ready
                 </Link>
             ) : focus.practice_available && (focus.practice_candidate_count ?? 0) >= 2 ? (
                 <Link
                     to={`/puzzles?mode=focus_practice&focus_cause=${encodeURIComponent(focus.cause)}`}
-                    className="km-interactive km-focus-visible inline-block mt-4 min-h-11 border border-primary/40 rounded-sm px-4 py-2 font-sans text-sm text-primary hover:bg-primary/10 transition-colors"
+                    className="km-interactive km-focus-visible inline-flex items-center mt-4 min-h-11 border border-primary/40 rounded-sm px-4 py-2 font-sans text-sm text-primary hover:bg-primary/10 transition-colors"
                 >
                     Practice this focus · {focus.practice_candidate_count} positions
                 </Link>

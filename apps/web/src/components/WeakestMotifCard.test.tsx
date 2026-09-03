@@ -1,10 +1,13 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import type { AnchorHTMLAttributes } from 'react';
 import { WeakestMotifCard } from './WeakestMotifCard';
 import type { MotifPerformance } from '../api/users';
 
 vi.mock('react-router-dom', () => ({
-  Link: ({ children, to }: { children: React.ReactNode; to: string }) => <a href={to}>{children}</a>,
+  Link: ({ children, to, ...props }: AnchorHTMLAttributes<HTMLAnchorElement> & { to: string }) => (
+    <a href={to} {...props}>{children}</a>
+  ),
 }));
 
 const motif = (over: Partial<MotifPerformance>): MotifPerformance => ({
@@ -95,6 +98,19 @@ describe('WeakestMotifCard', () => {
   it('deep-links "Train this" to the raw motif key', () => {
     render(<WeakestMotifCard motifs={[motif({ name: 'back_rank', accuracy: 0.39 })]} />);
     expect(screen.getByRole('link', { name: 'Train this' })).toHaveAttribute('href', '/puzzles?motif=back_rank');
+  });
+
+  it('keeps the secondary motifs link at least 44px tall', () => {
+    render(<WeakestMotifCard motifs={[motif({ name: 'back_rank', accuracy: 0.39 })]} />);
+    expect(screen.getByRole('link', { name: 'See all motifs' })).toHaveClass('min-h-11');
+  });
+
+  it('keeps the diagnosis but removes its competing training action when a daily focus exists', () => {
+    render(<WeakestMotifCard motifs={[motif({ name: 'back_rank', accuracy: 0.39 })]} trainingEnabled={false} />);
+
+    expect(screen.getByText('Back Rank')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Train this' })).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'See all motifs' })).toBeInTheDocument();
   });
 
   it('shows a "not enough data" state when no motif is reliable', () => {

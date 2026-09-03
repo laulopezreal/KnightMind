@@ -78,6 +78,14 @@ describe('ThemeToggle', () => {
     expect(toggle).toHaveAttribute('tabindex', '0');
   });
 
+  it('keeps a 44px minimum hit area without transform scaling', () => {
+    render(<ThemeToggle />);
+
+    const toggle = screen.getByRole('switch');
+    expect(toggle).toHaveClass('h-11');
+    expect(toggle).not.toHaveClass('scale-85');
+  });
+
   it('should position knob based on theme', () => {
     const { container } = render(<ThemeToggle />);
 

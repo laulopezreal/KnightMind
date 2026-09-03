@@ -34,9 +34,10 @@ export function MomentumCard({ recentForm }: MomentumCardProps) {
             screen readers announce one summary instead of 20 separate squares
             (aria-label on a role-less div is also invalid ARIA). */}
         <div>
-          <p className="text-xs text-primary/70 font-sans mb-2">
-            {last_20_results.length > 0 ? `Last ${last_20_results.length} puzzles` : 'Recent puzzles'}
-          </p>
+          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-xs text-primary/70 font-sans mb-2">
+            <span>{last_20_results.length > 0 ? `Last ${last_20_results.length} puzzles` : 'Recent puzzles'}</span>
+            <span aria-hidden="true">✓ Correct · × Incorrect</span>
+          </div>
           <div
             className="flex gap-1 flex-wrap"
             role="img"
@@ -50,16 +51,15 @@ export function MomentumCard({ recentForm }: MomentumCardProps) {
               <div
                 key={i}
                 aria-hidden="true"
-                className={`w-6 h-6 rounded-sm transition-colors ${
+                className={`w-6 h-6 rounded-sm transition-colors flex items-center justify-center text-sm font-bold leading-none text-primary ${
                   result === 'pass'
                     ? 'bg-positive-fill'
-                    // Fail cells also carry a faint inset border, so pass vs fail
-                    // reads as solid-vs-outlined — a shape cue that survives even
-                    // if the green/red hue is imperceptible (colour-blindness).
                     : 'bg-negative-fill border border-primary/20'
                 }`}
                 title={result === 'pass' ? 'Correct' : 'Incorrect'}
-              />
+              >
+                {result === 'pass' ? '✓' : '×'}
+              </div>
             ))}
           </div>
         </div>

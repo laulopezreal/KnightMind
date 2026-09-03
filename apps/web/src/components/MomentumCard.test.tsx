@@ -49,6 +49,9 @@ describe('MomentumCard', () => {
 
     expect(correct).toHaveLength(10);
     expect(incorrect).toHaveLength(10);
+    expect(correct.every((cell) => cell.textContent === '✓')).toBe(true);
+    expect(incorrect.every((cell) => cell.textContent === '×')).toBe(true);
+    expect(screen.getByText('✓ Correct · × Incorrect')).toBeVisible();
   });
 
   it('fills result squares with theme-aware semantic tokens (adapts to night mode)', () => {

@@ -82,7 +82,7 @@ describe('RecentSessionsCard', () => {
   it('should show collapse/expand button when collapsible', () => {
     render(<RecentSessionsCard sessions={mockSessions} collapsible={true} />);
 
-    expect(screen.getByText('Collapse')).toBeInTheDocument();
+    expect(screen.getByText('Collapse')).toHaveClass('min-h-11', 'min-w-11');
   });
 
   it('should toggle collapse on button click', async () => {

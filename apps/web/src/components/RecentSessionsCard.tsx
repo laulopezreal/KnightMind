@@ -34,7 +34,7 @@ export function RecentSessionsCard({
                     <button
                         type="button"
                         onClick={() => setIsExpanded(!isExpanded)}
-                        className="text-primary/70 hover:text-primary transition-colors km-interactive km-focus-visible text-sm"
+                        className="inline-flex min-h-11 min-w-11 items-center justify-center text-primary/70 hover:text-primary transition-colors km-interactive km-focus-visible text-sm"
                         aria-expanded={isExpanded}
                         aria-controls="sessions-list"
                     >
