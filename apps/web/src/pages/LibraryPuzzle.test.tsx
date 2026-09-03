@@ -232,6 +232,28 @@ describe('LibraryPuzzle', () => {
         });
     });
 
+    it('prioritizes a guided board flow before controls and history without exposing the answer', async () => {
+        render(<LibraryPuzzle />);
+        await waitFor(() => expect(screen.getByText('Deadly Fork')).toBeInTheDocument());
+
+        const instruction = screen.getByText(/tap a piece, then tap its destination square/i);
+        const guidance = screen.getByTestId('solve-guidance');
+        const board = screen.getByTestId('solve-board');
+        const actions = screen.getByTestId('solve-actions');
+        const checkMove = screen.getByRole('button', { name: /check move/i });
+        const history = screen.getByText(/3\/5 solved/);
+
+        expect(instruction).toBeInTheDocument();
+        expect(guidance).toHaveClass('order-1');
+        expect(board).toHaveClass('order-2');
+        expect(actions).toHaveClass('order-3');
+        expect(board.compareDocumentPosition(actions) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+        expect(actions).toContainElement(checkMove);
+        expect(checkMove.compareDocumentPosition(history) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+        expect(screen.queryByText('e2e4')).not.toBeInTheDocument();
+        expect(mockGetPuzzleDiagnosis).not.toHaveBeenCalled();
+    });
+
     it('should show Check Move and Reveal buttons', async () => {
         render(<LibraryPuzzle />);
         await waitFor(() => {

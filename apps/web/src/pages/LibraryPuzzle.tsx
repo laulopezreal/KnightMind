@@ -373,16 +373,16 @@ export default function LibraryPuzzle() {
         : null;
 
     return (
-        <div className="space-y-12 animate-teedin">
+        <div className="flex flex-col gap-8 md:gap-12 animate-teedin">
             {/* Back link + Header */}
-            <section>
-                <Link to={fromSession ? '/puzzles' : '/library'} className="text-primary/70 hover:text-primary mb-4 inline-block font-sans text-sm tracking-widest uppercase transition-colors">
+            <section className="order-1">
+                <Link to={fromSession ? '/puzzles' : '/library'} className="text-primary/70 hover:text-primary mb-2 md:mb-4 inline-block font-sans text-sm tracking-widest uppercase transition-colors">
                     {fromSession ? '← Back to Session Summary' : '← Back to Library'}
                 </Link>
-                <h1 className="text-3xl md:text-4xl font-serif text-primary">
+                <h1 className="text-2xl md:text-4xl font-serif text-primary">
                     {puzzle.display_name}
                 </h1>
-                <p className="mt-2 text-sm font-sans text-primary/70">
+                <p className="mt-2 text-xs md:text-sm font-sans text-primary/70">
                     Exploration mode — the solution is shown on request and results here
                     are not counted as verified training. For a scored session, use{' '}
                     <Link to="/puzzles" className="km-inline-link km-focus-visible text-primary">
@@ -391,42 +391,10 @@ export default function LibraryPuzzle() {
                 </p>
             </section>
 
-            {/* Metadata strip */}
-            <section className="flex flex-wrap gap-4 text-sm font-sans text-primary/70">
-                <span className="px-3 py-1 bg-primary/5 rounded-sm border border-primary/10">
-                    {puzzle.difficulty.charAt(0).toUpperCase() + puzzle.difficulty.slice(1)}
-                </span>
-                {puzzle.primary_motif && (
-                    <span className="px-3 py-1 bg-primary/5 rounded-sm border border-primary/10">
-                        {puzzle.primary_motif}
-                    </span>
-                )}
-                {puzzle.attempts > 0 && (
-                    <span className="px-3 py-1 bg-primary/5 rounded-sm border border-primary/10">
-                        {puzzle.pass_count}/{puzzle.attempts} solved{successRate !== null ? ` (${successRate}%)` : ''}
-                    </span>
-                )}
-                {puzzle.fail_count > 0 && (
-                    <span className="px-3 py-1 bg-red-500/10 rounded-sm border border-red-500/20 text-negative">
-                        {puzzle.fail_count} failed
-                    </span>
-                )}
-                {puzzle.last_reviewed_at && (
-                    <span className="px-3 py-1 bg-primary/5 rounded-sm border border-primary/10">
-                        Last: {new Date(puzzle.last_reviewed_at).toLocaleDateString(LOCALE)}
-                    </span>
-                )}
-                {puzzle.next_due_at && !recorded && (
-                    <span className="px-3 py-1 bg-primary/5 rounded-sm border border-primary/10">
-                        Due: {new Date(puzzle.next_due_at).toLocaleDateString(LOCALE)}
-                    </span>
-                )}
-            </section>
-
             {/* Board + Controls */}
-            <section className="grid lg:grid-cols-2 gap-12 lg:gap-24">
+            <section className="order-2 grid gap-4 lg:order-3 lg:grid-cols-2 lg:gap-24">
                 {/* Chessboard */}
-                <div className="order-2 lg:order-1">
+                <div className="order-2 lg:order-1" data-testid="solve-board">
                     <div className="aspect-square w-full max-w-[600px] mx-auto shadow-2xl shadow-primary/5 rounded-sm overflow-hidden border border-primary/10">
                         <AccessibleChessboard
                             onKeyboardMove={({ sourceSquare, targetSquare, promotion }) =>
@@ -445,18 +413,21 @@ export default function LibraryPuzzle() {
                 </div>
 
                 {/* Sidebar Controls */}
-                <div className="order-1 lg:order-2 space-y-8 flex flex-col justify-center">
+                <div className="contents lg:order-2 lg:flex lg:flex-col lg:justify-center lg:space-y-8">
                     {/* Side to move */}
-                    <div className="bg-primary/5 p-4 rounded-sm border-l-2 border-primary">
+                    <div className="order-1 bg-primary/5 p-3 md:p-4 rounded-sm border-l-2 border-primary lg:order-none">
                         <span className="font-sans text-sm tracking-wide uppercase text-primary/70">
                             {puzzle.side_to_move === 'white' ? 'White to Move' : 'Black to Move'}
                         </span>
                     </div>
 
                     {/* Status feedback */}
-                    <div className="min-h-[80px] flex items-center justify-center text-center p-6 border border-primary/10 rounded-sm" role="status" aria-live="polite">
+                    <div className="order-1 min-h-[64px] flex items-center justify-center text-center p-3 md:min-h-[80px] md:p-6 border border-primary/10 rounded-sm lg:order-none" role="status" aria-live="polite" data-testid="solve-guidance">
                         {status === 'solving' && (
-                            <p className="text-primary/70 font-serif text-lg italic">Find the best move...</p>
+                            <div>
+                                <p className="text-primary font-serif text-lg italic">Find the best move.</p>
+                                <p className="mt-1 text-sm font-sans text-primary/70">Tap a piece, then tap its destination square.</p>
+                            </div>
                         )}
                         {status === 'correct' && (
                             <div className="text-center">
@@ -477,7 +448,7 @@ export default function LibraryPuzzle() {
 
                     {/* Recorded confirmation */}
                     {recorded && (
-                        <div className="bg-green-500/10 border border-green-500/20 rounded-sm p-4 text-center animate-teedin">
+                        <div className="order-3 bg-green-500/10 border border-green-500/20 rounded-sm p-4 text-center animate-teedin lg:order-none">
                             <p className="text-positive font-serif font-medium">Recorded</p>
                             <div className="flex items-center justify-center gap-4 mt-2 text-sm font-sans text-positive">
                                 {solveTimeMs && (
@@ -502,13 +473,13 @@ export default function LibraryPuzzle() {
 
                     {/* Record error */}
                     {recordError && (
-                        <div className="bg-red-500/10 border border-red-500/20 rounded-sm p-4 text-center animate-teedin">
+                        <div className="order-3 bg-red-500/10 border border-red-500/20 rounded-sm p-4 text-center animate-teedin lg:order-none">
                             <p className="text-negative font-sans text-sm">{recordError}</p>
                         </div>
                     )}
 
                     {/* Actions */}
-                    <div className="space-y-4">
+                    <div className="order-3 space-y-4 lg:order-none" data-testid="solve-actions">
                         {/* Manual UCI input toggle */}
                         <div className="flex justify-between items-center px-2">
                             <span className="text-xs text-primary/70 uppercase tracking-widest font-sans">Input Method</span>
@@ -584,18 +555,56 @@ export default function LibraryPuzzle() {
                         )}
                     </div>
 
-                    <MistakeDiagnosisCard
-                        diagnosis={diagnosis}
-                        revealed={resolved}
-                        loading={diagnosisLoading}
-                    />
+                    {resolved && (
+                        <div className="order-3 lg:order-none">
+                            <MistakeDiagnosisCard
+                                diagnosis={diagnosis}
+                                revealed={resolved}
+                                loading={diagnosisLoading}
+                            />
+                        </div>
+                    )}
 
                     {/* Sits below the diagnosis on purpose: it only means
                         something once the user knows what went wrong here. */}
                     {resolved && (
-                        <SimilarWeaknessCard data={similar} currentPuzzleId={puzzle.id} />
+                        <div className="order-3 lg:order-none">
+                            <SimilarWeaknessCard data={similar} currentPuzzleId={puzzle.id} />
+                        </div>
                     )}
                 </div>
+            </section>
+
+            {/* Review history follows the solving surface on small screens. */}
+            <section className="order-3 flex flex-wrap gap-4 text-sm font-sans text-primary/70 lg:order-2">
+                <span className="px-3 py-1 bg-primary/5 rounded-sm border border-primary/10">
+                    {puzzle.difficulty.charAt(0).toUpperCase() + puzzle.difficulty.slice(1)}
+                </span>
+                {puzzle.primary_motif && (
+                    <span className="px-3 py-1 bg-primary/5 rounded-sm border border-primary/10">
+                        {puzzle.primary_motif}
+                    </span>
+                )}
+                {puzzle.attempts > 0 && (
+                    <span className="px-3 py-1 bg-primary/5 rounded-sm border border-primary/10">
+                        {puzzle.pass_count}/{puzzle.attempts} solved{successRate !== null ? ` (${successRate}%)` : ''}
+                    </span>
+                )}
+                {puzzle.fail_count > 0 && (
+                    <span className="px-3 py-1 bg-red-500/10 rounded-sm border border-red-500/20 text-negative">
+                        {puzzle.fail_count} failed
+                    </span>
+                )}
+                {puzzle.last_reviewed_at && (
+                    <span className="px-3 py-1 bg-primary/5 rounded-sm border border-primary/10">
+                        Last: {new Date(puzzle.last_reviewed_at).toLocaleDateString(LOCALE)}
+                    </span>
+                )}
+                {puzzle.next_due_at && !recorded && (
+                    <span className="px-3 py-1 bg-primary/5 rounded-sm border border-primary/10">
+                        Due: {new Date(puzzle.next_due_at).toLocaleDateString(LOCALE)}
+                    </span>
+                )}
             </section>
         </div>
     );
