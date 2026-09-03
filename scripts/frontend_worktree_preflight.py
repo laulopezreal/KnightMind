@@ -7,20 +7,37 @@ import hashlib
 import json
 import os
 import pathlib
+import pwd
+import secrets
 import stat
 import subprocess
 import sys
 import tempfile
 
-MARKER_VERSION = 1
+MARKER_VERSION = 2
+MAX_JSON_BYTES = 1024 * 1024
 REQUIRED_DEPENDENCIES = ("vitest", "@vitejs/plugin-react", "eslint")
+MARKER_FIELDS = {
+    "version",
+    "status",
+    "worktree",
+    "head",
+    "requested_ref",
+    "frontend_lockfile",
+    "frontend_lockfile_sha256",
+    "installed_lockfile_sha256",
+    "test_target",
+    "test_target_sha256",
+    "dependencies",
+    "created_at",
+}
 
 
 class PreflightError(RuntimeError):
     pass
 
 
-def _run(command, *, cwd, timeout=None):
+def _run(command, *, cwd, classification, timeout=None):
     try:
         return subprocess.run(
             command,
@@ -31,15 +48,17 @@ def _run(command, *, cwd, timeout=None):
             timeout=timeout,
         )
     except subprocess.TimeoutExpired as error:
-        raise PreflightError(f"focused test readiness probe timed out after {timeout}s") from error
+        raise PreflightError(f"{classification} timed out") from error
     except subprocess.CalledProcessError as error:
-        detail = (error.stderr or error.stdout or "").strip()
-        suffix = f": {detail}" if detail else ""
-        raise PreflightError(f"command failed ({' '.join(command)}){suffix}") from error
+        raise PreflightError(f"{classification} failed") from error
+    except OSError as error:
+        raise PreflightError(f"{classification} could not start") from error
 
 
 def _git(worktree, *args):
-    return _run(["git", *args], cwd=worktree).stdout.strip()
+    return _run(
+        ["git", *args], cwd=worktree, classification="Git worktree inspection"
+    ).stdout.strip()
 
 
 def _is_within(path, parent):
@@ -52,48 +71,82 @@ def _is_within(path, parent):
 
 def _sha256(path):
     digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
+    try:
+        with path.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError as error:
+        raise PreflightError("required file could not be read") from error
     return digest.hexdigest()
 
 
+def _no_duplicates(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON key")
+        result[key] = value
+    return result
+
+
+def _read_json(path, classification, *, descriptor=None):
+    try:
+        if descriptor is None:
+            data = path.read_bytes()
+        else:
+            chunks = []
+            remaining = MAX_JSON_BYTES + 1
+            while remaining:
+                chunk = os.read(descriptor, min(65536, remaining))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            data = b"".join(chunks)
+        if not data or len(data) > MAX_JSON_BYTES:
+            raise ValueError("invalid JSON size")
+        return json.loads(data.decode("utf-8"), object_pairs_hook=_no_duplicates)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
+        raise PreflightError(f"{classification} is malformed") from error
+
+
 def _worktree_state(raw_worktree, requested_ref, *, require_clean=True):
-    worktree = pathlib.Path(raw_worktree).expanduser().resolve(strict=True)
+    try:
+        worktree = pathlib.Path(raw_worktree).expanduser().resolve(strict=True)
+    except OSError as error:
+        raise PreflightError("worktree path is unavailable") from error
     if not worktree.is_dir():
         raise PreflightError("worktree path is not a directory")
 
-    top_level = pathlib.Path(_git(worktree, "rev-parse", "--show-toplevel")).resolve(strict=True)
+    try:
+        top_level = pathlib.Path(_git(worktree, "rev-parse", "--show-toplevel")).resolve(
+            strict=True
+        )
+        common_git_raw = pathlib.Path(_git(worktree, "rev-parse", "--git-common-dir"))
+        if not common_git_raw.is_absolute():
+            common_git_raw = worktree / common_git_raw
+        canonical_checkout = common_git_raw.resolve(strict=True).parent
+    except OSError as error:
+        raise PreflightError("Git worktree metadata is unsafe") from error
     if top_level != worktree:
         raise PreflightError("path must name the exact Git worktree root")
-
-    common_git_raw = pathlib.Path(_git(worktree, "rev-parse", "--git-common-dir"))
-    if not common_git_raw.is_absolute():
-        common_git_raw = worktree / common_git_raw
-    canonical_checkout = common_git_raw.resolve(strict=True).parent
     if worktree == canonical_checkout:
         raise PreflightError("canonical checkout is out of scope")
-
-    git_entry = worktree / ".git"
-    if not git_entry.is_file():
+    if not (worktree / ".git").is_file():
         raise PreflightError("candidate must be an isolated linked Git worktree")
 
     status = _git(worktree, "status", "--porcelain=v1", "--untracked-files=all")
     if require_clean and status:
         raise PreflightError("candidate Git worktree is not clean")
-
     head = _git(worktree, "rev-parse", "HEAD")
     requested = _git(worktree, "rev-parse", f"{requested_ref}^{{commit}}")
     if requested != head:
-        raise PreflightError(
-            f"requested ref does not match HEAD (requested {requested}, HEAD {head})"
-        )
+        raise PreflightError("requested ref does not match HEAD")
 
     frontend = worktree / "apps" / "web"
     lockfile = frontend / "package-lock.json"
     if not lockfile.is_file() or lockfile.is_symlink():
         raise PreflightError("frontend package-lock.json is missing or unsafe")
-
     return {
         "worktree": worktree,
         "canonical_checkout": canonical_checkout,
@@ -106,70 +159,233 @@ def _worktree_state(raw_worktree, requested_ref, *, require_clean=True):
     }
 
 
+def _regular_local_file(path, parent, classification):
+    try:
+        metadata = path.lstat()
+        canonical = path.resolve(strict=True)
+        parent_canonical = parent.resolve(strict=True)
+    except OSError as error:
+        raise PreflightError(f"{classification} is missing or unsafe") from error
+    if (
+        stat.S_ISLNK(metadata.st_mode)
+        or not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_nlink != 1
+        or not _is_within(canonical, parent_canonical)
+    ):
+        raise PreflightError(f"{classification} is missing or unsafe")
+    return canonical
+
+
 def _check_dependencies(state):
     frontend = state["frontend"]
     modules = frontend / "node_modules"
     try:
         modules_stat = modules.lstat()
-    except FileNotFoundError as error:
+    except OSError as error:
         raise PreflightError("frontend dependency directory is missing") from error
     if stat.S_ISLNK(modules_stat.st_mode) or not stat.S_ISDIR(modules_stat.st_mode):
         raise PreflightError("frontend dependency directory must be a local, real directory")
 
-    node_program = r"""
-const fs = require('fs');
-const path = require('path');
-const { createRequire } = require('module');
-const frontend = fs.realpathSync(process.argv[1]);
-const localModules = fs.realpathSync(path.join(frontend, 'node_modules'));
-const requireFromFrontend = createRequire(path.join(frontend, 'package.json'));
-const result = {};
-for (const dependency of process.argv.slice(2)) {
-  const resolved = fs.realpathSync(requireFromFrontend.resolve(dependency));
-  if (resolved !== localModules && !resolved.startsWith(localModules + path.sep)) {
-    throw new Error(`${dependency} resolved outside candidate node_modules: ${resolved}`);
-  }
-  result[dependency] = resolved;
-}
-process.stdout.write(JSON.stringify(result));
-"""
-    try:
-        resolved = _run(
-            ["node", "-e", node_program, str(frontend), *REQUIRED_DEPENDENCIES],
-            cwd=frontend,
+    project_lock = _read_json(state["lockfile"], "frontend lockfile")
+    installed_lock_path = modules / ".package-lock.json"
+    installed_lock = _read_json(installed_lock_path, "installed dependency lockfile")
+    project_packages = project_lock.get("packages") if isinstance(project_lock, dict) else None
+    installed_packages = installed_lock.get("packages") if isinstance(installed_lock, dict) else None
+    if not isinstance(project_packages, dict) or not isinstance(installed_packages, dict):
+        raise PreflightError("dependency lockfile package map is malformed")
+
+    evidence = {}
+    for dependency in REQUIRED_DEPENDENCIES:
+        package_key = f"node_modules/{dependency}"
+        project_entry = project_packages.get(package_key)
+        installed_entry = installed_packages.get(package_key)
+        if not isinstance(project_entry, dict) or not isinstance(installed_entry, dict):
+            raise PreflightError("required dependency is absent from lockfile evidence")
+        for field in ("version", "resolved", "integrity"):
+            if installed_entry.get(field) != project_entry.get(field):
+                raise PreflightError("installed dependency evidence does not match project lockfile")
+        version = project_entry.get("version")
+        if not isinstance(version, str) or not version:
+            raise PreflightError("required dependency version evidence is malformed")
+
+        package_dir = modules.joinpath(*dependency.split("/"))
+        manifest_path = _regular_local_file(
+            package_dir / "package.json", modules, "dependency package manifest"
         )
-    except PreflightError as error:
-        raise PreflightError(f"frontend dependency resolution failed: {error}") from error
+        manifest = _read_json(manifest_path, "dependency package manifest")
+        if not isinstance(manifest, dict) or manifest.get("name") != dependency:
+            raise PreflightError("dependency package identity is malformed")
+        if manifest.get("version") != version:
+            raise PreflightError("installed dependency version does not match lockfile")
+        evidence[dependency] = {
+            "version": version,
+            "lock_entry_sha256": hashlib.sha256(
+                json.dumps(project_entry, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            ).hexdigest(),
+            "package_json_sha256": _sha256(manifest_path),
+        }
 
-    vitest_bin = modules / ".bin" / "vitest"
+    vitest_manifest = _read_json(
+        modules / "vitest" / "package.json", "Vitest package manifest"
+    )
+    bin_value = vitest_manifest.get("bin") if isinstance(vitest_manifest, dict) else None
+    if isinstance(bin_value, dict):
+        bin_value = bin_value.get("vitest")
+    if isinstance(bin_value, str) and bin_value.startswith("./"):
+        bin_value = bin_value[2:]
+    if (
+        not isinstance(bin_value, str)
+        or not bin_value
+        or pathlib.PurePosixPath(bin_value).is_absolute()
+    ):
+        raise PreflightError("Vitest package executable declaration is malformed")
+    if any(part in ("", ".", "..") for part in pathlib.PurePosixPath(bin_value).parts):
+        raise PreflightError("Vitest package executable declaration is malformed")
+    vitest_cli = _regular_local_file(
+        modules / "vitest" / pathlib.Path(*pathlib.PurePosixPath(bin_value).parts),
+        modules / "vitest",
+        "Vitest package executable",
+    )
+    vitest_launcher = modules / ".bin" / "vitest"
     try:
-        resolved_vitest_bin = vitest_bin.resolve(strict=True)
-    except FileNotFoundError as error:
-        raise PreflightError("frontend dependency executable is missing: vitest") from error
-    if not _is_within(resolved_vitest_bin, modules.resolve(strict=True)):
-        raise PreflightError("vitest executable resolves outside candidate node_modules")
-    if not os.access(vitest_bin, os.X_OK):
-        raise PreflightError("frontend vitest executable is not executable")
-
-    return json.loads(resolved.stdout)
+        launcher_stat = vitest_launcher.lstat()
+        launcher_target = os.readlink(vitest_launcher)
+        resolved_launcher = vitest_launcher.resolve(strict=True)
+    except OSError as error:
+        raise PreflightError("Vitest dependency launcher is missing or unsafe") from error
+    expected_launcher_target = os.path.relpath(vitest_cli, vitest_launcher.parent)
+    if (
+        not stat.S_ISLNK(launcher_stat.st_mode)
+        or launcher_stat.st_uid != os.geteuid()
+        or launcher_target != expected_launcher_target
+        or resolved_launcher != vitest_cli
+    ):
+        raise PreflightError("Vitest dependency launcher is not bound to its package entrypoint")
+    evidence["vitest"]["entrypoint"] = str(vitest_cli.relative_to(modules))
+    evidence["vitest"]["entrypoint_sha256"] = _sha256(vitest_cli)
+    evidence["vitest"]["launcher_target"] = launcher_target
+    return {
+        "evidence": evidence,
+        "installed_lockfile_sha256": _sha256(installed_lock_path),
+        "vitest_cli": vitest_cli,
+    }
 
 
 def _test_target(state, raw_target):
     target = pathlib.PurePosixPath(raw_target)
-    if target.is_absolute() or not target.parts or any(part in ("", ".", "..") for part in target.parts):
-        raise PreflightError("test target must be a safe path relative to apps/web")
+    if (
+        target.is_absolute()
+        or not target.parts
+        or any(part in ("", ".", "..") for part in target.parts)
+        or "\\" in raw_target
+    ):
+        raise PreflightError("test target must be a canonical path relative to apps/web")
     unresolved = state["frontend"] / pathlib.Path(*target.parts)
-    if unresolved.is_symlink():
-        raise PreflightError("test target must not be a symlink")
-    candidate = unresolved.resolve(strict=True)
-    if not _is_within(candidate, state["frontend"].resolve(strict=True)):
-        raise PreflightError("test target escapes apps/web")
-    if not candidate.is_file() or candidate.is_symlink():
-        raise PreflightError("test target must be a regular file")
-    return target.as_posix()
+    candidate = _regular_local_file(unresolved, state["frontend"], "test target")
+    return {
+        "path": target.as_posix(),
+        "sha256": _sha256(candidate),
+        "canonical": candidate,
+    }
 
 
-def _marker_payload(state, dependencies, test_target):
+def _probe_vitest(state, dependencies, target, timeout):
+    descriptor, report_name = tempfile.mkstemp(prefix="knightmind-vitest-", suffix=".json")
+    os.close(descriptor)
+    report = pathlib.Path(report_name)
+    try:
+        _run(
+            [
+                "node",
+                str(dependencies["vitest_cli"]),
+                "run",
+                target["path"],
+                "--reporter=json",
+                "--outputFile",
+                str(report),
+            ],
+            cwd=state["frontend"],
+            classification="focused Vitest readiness probe",
+            timeout=timeout,
+        )
+        proof = _read_json(report, "focused Vitest readiness proof")
+    finally:
+        try:
+            report.unlink()
+        except OSError:
+            pass
+    results = proof.get("testResults") if isinstance(proof, dict) else None
+    matching = []
+    if isinstance(results, list):
+        for result in results:
+            if not isinstance(result, dict) or not isinstance(result.get("name"), str):
+                continue
+            try:
+                result_path = pathlib.Path(result["name"]).resolve(strict=True)
+            except OSError:
+                continue
+            if result_path == target["canonical"]:
+                matching.append(result)
+    if (
+        type(proof.get("numPassedTests")) is not int
+        or proof["numPassedTests"] < 1
+        or proof.get("numFailedTests") != 0
+        or len(matching) != 1
+        or matching[0].get("status") != "passed"
+        or not isinstance(matching[0].get("assertionResults"), list)
+        or not matching[0]["assertionResults"]
+        or any(item.get("status") != "passed" for item in matching[0]["assertionResults"] if isinstance(item, dict))
+    ):
+        raise PreflightError("focused Vitest readiness proof is invalid")
+
+
+def _canonical_marker_root():
+    authority_home = pathlib.Path(pwd.getpwuid(os.geteuid()).pw_dir)
+    return authority_home / ".local" / "state" / "knightmind" / "frontend-worktree-preflight"
+
+
+def _safe_marker_dir(raw_marker_dir, state, *, create):
+    expected = _canonical_marker_root()
+    _validate_marker_root_arg(raw_marker_dir, state)
+    flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(expected.anchor, flags)
+    try:
+        for part in expected.parts[1:]:
+            try:
+                child = os.open(part, flags, dir_fd=descriptor)
+            except FileNotFoundError:
+                if not create:
+                    raise
+                os.mkdir(part, mode=0o700, dir_fd=descriptor)
+                child = os.open(part, flags, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child
+        root_stat = os.fstat(descriptor)
+    except OSError as error:
+        os.close(descriptor)
+        raise PreflightError("marker root is missing or unsafe") from error
+    if root_stat.st_uid != os.geteuid() or stat.S_IMODE(root_stat.st_mode) != 0o700:
+        os.close(descriptor)
+        raise PreflightError("marker root ownership or mode is unsafe")
+    return expected, descriptor
+
+
+def _validate_marker_root_arg(raw_marker_dir, state):
+    expected = _canonical_marker_root()
+    supplied = pathlib.Path(raw_marker_dir).expanduser()
+    if not supplied.is_absolute() or supplied.parts != expected.parts:
+        raise PreflightError("marker root is not the canonical authority-owned root")
+    if _is_within(expected, state["worktree"]) or _is_within(
+        expected, state["canonical_checkout"]
+    ):
+        raise PreflightError("marker root must be outside every repository checkout")
+
+
+def _marker_key(state):
+    return hashlib.sha256(str(state["worktree"]).encode("utf-8")).hexdigest()[:24]
+
+
+def _marker_payload(state, dependencies, target):
     return {
         "version": MARKER_VERSION,
         "status": "ready",
@@ -178,64 +394,127 @@ def _marker_payload(state, dependencies, test_target):
         "requested_ref": state["requested_ref"],
         "frontend_lockfile": str(state["lockfile"].relative_to(state["worktree"])),
         "frontend_lockfile_sha256": state["lockfile_sha256"],
-        "test_target": test_target,
-        "dependencies": dependencies,
+        "installed_lockfile_sha256": dependencies["installed_lockfile_sha256"],
+        "test_target": target["path"],
+        "test_target_sha256": target["sha256"],
+        "dependencies": dependencies["evidence"],
         "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
     }
 
 
-def _safe_marker_dir(raw_marker_dir, state):
-    marker_dir = pathlib.Path(raw_marker_dir).expanduser().resolve()
-    if _is_within(marker_dir, state["worktree"]) or _is_within(
-        marker_dir, state["canonical_checkout"]
-    ):
-        raise PreflightError("marker directory must be outside every repository checkout")
-    marker_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-    return marker_dir.resolve(strict=True)
-
-
-def _write_marker(marker_dir, payload):
-    key = hashlib.sha256(payload["worktree"].encode("utf-8")).hexdigest()[:24]
+def _write_marker(marker_dir, marker_dir_fd, payload, state):
+    key = _marker_key(state)
     destination = marker_dir / f"{key}.json"
-    descriptor, temporary = tempfile.mkstemp(prefix=f".{key}.", dir=marker_dir)
+    temporary = f".{key}.{secrets.token_hex(16)}"
+    descriptor = os.open(
+        temporary,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+        0o600,
+        dir_fd=marker_dir_fd,
+    )
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
             json.dump(payload, stream, sort_keys=True, separators=(",", ":"))
             stream.write("\n")
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(temporary, destination)
+        os.replace(
+            temporary,
+            destination.name,
+            src_dir_fd=marker_dir_fd,
+            dst_dir_fd=marker_dir_fd,
+        )
+        os.fsync(marker_dir_fd)
     except BaseException:
         try:
-            os.unlink(temporary)
-        except FileNotFoundError:
+            os.unlink(temporary, dir_fd=marker_dir_fd)
+        except OSError:
             pass
         raise
     return destination
 
 
-def _load_and_verify_marker(raw_marker, state):
-    marker = pathlib.Path(raw_marker).expanduser().resolve(strict=True)
-    if _is_within(marker, state["worktree"]) or _is_within(
-        marker, state["canonical_checkout"]
-    ):
-        raise PreflightError("marker must be outside every repository checkout")
-    try:
-        payload = json.loads(marker.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
-        raise PreflightError("marker is missing or malformed") from error
-
-    expected = {
-        "version": MARKER_VERSION,
-        "status": "ready",
-        "worktree": str(state["worktree"]),
-        "head": state["head"],
-        "frontend_lockfile": str(state["lockfile"].relative_to(state["worktree"])),
-        "frontend_lockfile_sha256": state["lockfile_sha256"],
+def _validate_marker_shape(payload):
+    if not isinstance(payload, dict) or set(payload) != MARKER_FIELDS:
+        raise PreflightError("marker schema is invalid")
+    scalar_types = {
+        "version": int,
+        "status": str,
+        "worktree": str,
+        "head": str,
+        "requested_ref": str,
+        "frontend_lockfile": str,
+        "frontend_lockfile_sha256": str,
+        "installed_lockfile_sha256": str,
+        "test_target": str,
+        "test_target_sha256": str,
+        "created_at": str,
     }
-    if any(payload.get(key) != value for key, value in expected.items()):
-        raise PreflightError("stale marker: worktree HEAD or frontend lockfile changed")
-    return marker, payload
+    if any(type(payload[key]) is not expected for key, expected in scalar_types.items()):
+        raise PreflightError("marker schema is invalid")
+    if payload["version"] != MARKER_VERSION or payload["status"] != "ready":
+        raise PreflightError("marker schema is invalid")
+    if not isinstance(payload["dependencies"], dict) or set(payload["dependencies"]) != set(
+        REQUIRED_DEPENDENCIES
+    ):
+        raise PreflightError("marker schema is invalid")
+    for dependency, evidence in payload["dependencies"].items():
+        fields = {"version", "lock_entry_sha256", "package_json_sha256"}
+        if dependency == "vitest":
+            fields |= {"entrypoint", "entrypoint_sha256", "launcher_target"}
+        if (
+            not isinstance(evidence, dict)
+            or set(evidence) != fields
+            or any(type(value) is not str or not value for value in evidence.values())
+        ):
+            raise PreflightError("marker schema is invalid")
+    try:
+        created = datetime.datetime.fromisoformat(payload["created_at"])
+    except ValueError as error:
+        raise PreflightError("marker schema is invalid") from error
+    if created.tzinfo is None:
+        raise PreflightError("marker schema is invalid")
+
+
+def _load_marker(marker, marker_dir, marker_dir_fd):
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = None
+    try:
+        descriptor = os.open(marker.name, flags, dir_fd=marker_dir_fd)
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or metadata.st_nlink != 1
+            or stat.S_IMODE(metadata.st_mode) != 0o600
+        ):
+            raise PreflightError("marker file ownership or mode is unsafe")
+        payload = _read_json(marker, "marker", descriptor=descriptor)
+    except OSError as error:
+        raise PreflightError("marker is missing or unsafe") from error
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+    if marker.parent != marker_dir:
+        raise PreflightError("marker path is outside the canonical marker root")
+    return payload
+
+
+def _load_and_verify_marker(
+    raw_marker, marker_dir, marker_dir_fd, state, dependencies
+):
+    supplied = pathlib.Path(raw_marker).expanduser()
+    expected = marker_dir / f"{_marker_key(state)}.json"
+    if not supplied.is_absolute() or supplied.parts != expected.parts:
+        raise PreflightError("marker path is not canonical for this worktree")
+    payload = _load_marker(supplied, marker_dir, marker_dir_fd)
+    _validate_marker_shape(payload)
+    target = _test_target(state, payload["test_target"])
+    expected_payload = _marker_payload(state, dependencies, target)
+    expected_payload["created_at"] = payload["created_at"]
+    if payload != expected_payload:
+        raise PreflightError("stale marker: certified worktree evidence changed")
+    return supplied, payload
 
 
 def parse_args(argv=None):
@@ -258,41 +537,68 @@ def parse_args(argv=None):
 def main(argv=None):
     args = parse_args(argv)
     try:
-        state = _worktree_state(
-            args.worktree, args.ref, require_clean=not bool(args.verify_marker)
-        )
-        dependencies = _check_dependencies(state)
+        state = _worktree_state(args.worktree, args.ref, require_clean=False)
+        _validate_marker_root_arg(args.marker_dir, state)
         if args.verify_marker:
-            marker, payload = _load_and_verify_marker(args.verify_marker, state)
+            marker_dir, marker_dir_fd = _safe_marker_dir(
+                args.marker_dir, state, create=False
+            )
+            try:
+                try:
+                    dependencies = _check_dependencies(state)
+                except PreflightError as error:
+                    raise PreflightError(
+                        "stale marker: certified dependency evidence changed"
+                    ) from error
+                marker, payload = _load_and_verify_marker(
+                    args.verify_marker,
+                    marker_dir,
+                    marker_dir_fd,
+                    state,
+                    dependencies,
+                )
+                if state["status"]:
+                    raise PreflightError("candidate Git worktree is not clean")
+                result = {
+                    "status": "verified",
+                    "marker": str(marker),
+                    "worktree": payload["worktree"],
+                    "head": payload["head"],
+                    "frontend_lockfile_sha256": payload["frontend_lockfile_sha256"],
+                }
+            finally:
+                os.close(marker_dir_fd)
+        else:
             if state["status"]:
                 raise PreflightError("candidate Git worktree is not clean")
-            result = {
-                "status": "verified",
-                "marker": str(marker),
-                "worktree": payload["worktree"],
-                "head": payload["head"],
-                "frontend_lockfile_sha256": payload["frontend_lockfile_sha256"],
-            }
-        else:
-            target = _test_target(state, args.test_target)
-            before = (state["head"], state["lockfile_sha256"])
-            vitest_bin = state["frontend"] / "node_modules" / ".bin" / "vitest"
-            _run(
-                [str(vitest_bin), "run", target],
-                cwd=state["frontend"],
-                timeout=args.timeout_seconds,
+            dependencies = _check_dependencies(state)
+            marker_dir, marker_dir_fd = _safe_marker_dir(
+                args.marker_dir, state, create=True
             )
-            after = _worktree_state(args.worktree, args.ref)
-            if before != (after["head"], after["lockfile_sha256"]):
-                raise PreflightError("worktree HEAD or lockfile changed during readiness probe")
-            payload = _marker_payload(after, dependencies, target)
-            marker_dir = _safe_marker_dir(args.marker_dir, after)
-            marker = _write_marker(marker_dir, payload)
-            result = {**payload, "marker": str(marker)}
+            target = _test_target(state, args.test_target)
+            try:
+                before = _marker_payload(state, dependencies, target)
+                _probe_vitest(state, dependencies, target, args.timeout_seconds)
+                after_state = _worktree_state(args.worktree, args.ref)
+                after_dependencies = _check_dependencies(after_state)
+                after_target = _test_target(after_state, args.test_target)
+                after = _marker_payload(after_state, after_dependencies, after_target)
+                before["created_at"] = after["created_at"]
+                if before != after:
+                    raise PreflightError("worktree evidence changed during readiness probe")
+                marker = _write_marker(
+                    marker_dir, marker_dir_fd, after, after_state
+                )
+                result = {**after, "marker": str(marker)}
+            finally:
+                os.close(marker_dir_fd)
         print(json.dumps(result, sort_keys=True, separators=(",", ":")))
         return 0
-    except (OSError, PreflightError) as error:
+    except PreflightError as error:
         print(f"frontend worktree preflight failed: {error}", file=sys.stderr)
+        return 1
+    except (OSError, ValueError, TypeError):
+        print("frontend worktree preflight failed: filesystem validation failed", file=sys.stderr)
         return 1
 
 
