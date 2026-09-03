@@ -26,14 +26,13 @@ Usage:
     /tmp/knightmind-bproof-artifacts/prefixed_fails.txt   (RED build result)
 """
 
+import http.server
 import json
 import os
 import pathlib
 import subprocess
 import sys
 import threading
-import http.server
-import time
 import urllib.request
 
 from bundle_provenance import load_certified_bundle
@@ -51,6 +50,7 @@ def current_commit():
         text=True,
     ).strip()
 
+
 DIST = pathlib.Path(os.environ.get("BPROOF_DIST", "/tmp/knightmind-bproof-dist"))
 if not (DIST / "index.html").exists():
     sys.exit(f"FAIL: Built dist not found at {DIST}. Run the Vite build first.")
@@ -59,14 +59,16 @@ try:
 except RuntimeError as exc:
     sys.exit(f"FAIL: {exc}")
 
-from playwright.sync_api import sync_playwright, Route, Request
+from playwright.sync_api import Request, Route, sync_playwright  # noqa: E402
 
 # ──────────────────────────────────────────────────────────────────
 # Minimal static file server for the built bundle
 # ──────────────────────────────────────────────────────────────────
 
+
 class SPAHandler(http.server.BaseHTTPRequestHandler):
     """Serve only the immutable in-memory artifact loaded after certification."""
+
     def log_message(self, *args):
         pass
 
@@ -229,7 +231,11 @@ DIAGNOSIS_READY = {
     ],
 }
 
-SESSION_START = {"session_id": "sess-bproof-1", "requested_n": 5, "session_type": "standard"}
+SESSION_START = {
+    "session_id": "sess-bproof-1",
+    "requested_n": 5,
+    "session_type": "standard",
+}
 
 USER_STATUS = {
     "games_count": 10,
@@ -273,7 +279,9 @@ def setup_routes(page, static_origin):
         if "/sessions/recent" in url:
             return json_response(route, [])
         if "/sessions/sess-bproof-1/complete" in url:
-            return json_response(route, {**SESSION_START, "completed_at": "2026-01-01T00:10:00Z"})
+            return json_response(
+                route, {**SESSION_START, "completed_at": "2026-01-01T00:10:00Z"}
+            )
 
         # Puzzles due
         if "/puzzles/due" in url:
@@ -289,7 +297,16 @@ def setup_routes(page, static_origin):
         if f"/puzzles/{PUZZLE_1_ID}/review" in url and method == "POST":
             return json_response(route, REVIEW_RESPONSE)
         if f"/puzzles/{PUZZLE_2_ID}/review" in url and method == "POST":
-            return json_response(route, {**REVIEW_RESPONSE, "puzzle_info": {**REVIEW_RESPONSE["puzzle_info"], "best_move": "d2d4"}})
+            return json_response(
+                route,
+                {
+                    **REVIEW_RESPONSE,
+                    "puzzle_info": {
+                        **REVIEW_RESPONSE["puzzle_info"],
+                        "best_move": "d2d4",
+                    },
+                },
+            )
 
         # Diagnosis (only served after reveal=true is passed)
         if f"/puzzles/{PUZZLE_1_ID}/diagnosis" in url and "reveal=true" in url:
@@ -299,19 +316,22 @@ def setup_routes(page, static_origin):
 
         # Puzzle 2 diagnosis: pending (no cause yet)
         if f"/puzzles/{PUZZLE_2_ID}/diagnosis" in url:
-            return json_response(route, {
-                "state": "pending",
-                "puzzle_id": PUZZLE_2_ID,
-                "primary_cause": None,
-                "primary_cause_label": None,
-                "secondary_causes": [],
-                "secondary_cause_labels": [],
-                "evidence": [],
-                "evidence_withheld": False,
-                "explanation": None,
-                "training_recommendation": None,
-                "user_confirmed_cause": None,
-            })
+            return json_response(
+                route,
+                {
+                    "state": "pending",
+                    "puzzle_id": PUZZLE_2_ID,
+                    "primary_cause": None,
+                    "primary_cause_label": None,
+                    "secondary_causes": [],
+                    "secondary_cause_labels": [],
+                    "evidence": [],
+                    "evidence_withheld": False,
+                    "explanation": None,
+                    "training_recommendation": None,
+                    "user_confirmed_cause": None,
+                },
+            )
 
         # Reveal
         if f"/puzzles/{PUZZLE_1_ID}/reveal" in url:
@@ -353,7 +373,10 @@ def run_test(viewport_name, width, height, page, static_origin, username="testpl
 
     # Register before navigation so route-load errors are included in the proof.
     console_errors = []
-    page.on("console", lambda msg: console_errors.append(msg.text()) if msg.type == "error" else None)
+    page.on(
+        "console",
+        lambda msg: console_errors.append(msg.text()) if msg.type == "error" else None,
+    )
     page.on("pageerror", lambda exc: console_errors.append(str(exc)))
 
     # Navigate to /puzzles
@@ -387,14 +410,19 @@ def run_test(viewport_name, width, height, page, static_origin, username="testpl
     # → stats-fold via setPuzzles → Puzzles.tsx requestDiagnosisForResolvedOutcome
     # → getPuzzleDiagnosis → MistakeDiagnosisCard rendered.
     try:
-        page.wait_for_selector('[data-testid="post-resolution-diagnosis"]', timeout=8000)
+        page.wait_for_selector(
+            '[data-testid="post-resolution-diagnosis"]', timeout=8000
+        )
         diagnosis_visible = True
     except Exception:
         diagnosis_visible = False
 
     if not diagnosis_visible:
         # Take a screenshot to show the failure state
-        page.screenshot(path=str(ARTIFACTS / f"{viewport_name}_diagnosis_missing.png"), full_page=True)
+        page.screenshot(
+            path=str(ARTIFACTS / f"{viewport_name}_diagnosis_missing.png"),
+            full_page=True,
+        )
         raise AssertionError(
             f"{viewport_name}: Diagnosis card did not appear after correct answer + review. "
             f"Screenshot: {ARTIFACTS}/{viewport_name}_diagnosis_missing.png"
@@ -407,29 +435,42 @@ def run_test(viewport_name, width, height, page, static_origin, username="testpl
     heading = diag.locator('h2, [id="mistake-diagnosis-heading"]')
     assert heading.count() > 0, f"{viewport_name}: Diagnosis heading not found"
     heading_text = heading.first.text_content() or ""
-    assert "diagnosis" in heading_text.lower(), f"{viewport_name}: Heading text unexpected: {heading_text!r}"
+    assert (
+        "diagnosis" in heading_text.lower()
+    ), f"{viewport_name}: Heading text unexpected: {heading_text!r}"
 
     # Cause ("Loose piece awareness")
-    assert diag.locator('text=Loose piece awareness').count() > 0, \
-        f"{viewport_name}: Cause label not visible"
+    assert (
+        diag.locator("text=Loose piece awareness").count() > 0
+    ), f"{viewport_name}: Cause label not visible"
 
     # Explanation
-    assert diag.locator('text=pawn passively').count() > 0 or \
-           diag.locator('text=central control').count() > 0, \
-        f"{viewport_name}: Explanation text not visible"
+    assert (
+        diag.locator("text=pawn passively").count() > 0
+        or diag.locator("text=central control").count() > 0
+    ), f"{viewport_name}: Explanation text not visible"
 
     # Evidence
-    assert diag.locator('text=e2e4').count() > 0, \
-        f"{viewport_name}: Evidence (best move) not visible"
+    assert (
+        diag.locator("text=e2e4").count() > 0
+    ), f"{viewport_name}: Evidence (best move) not visible"
 
     # Next-time guidance
-    assert diag.locator('text=Next time').count() > 0, \
-        f"{viewport_name}: 'Next time' recommendation heading not visible"
+    assert (
+        diag.locator("text=Next time").count() > 0
+    ), f"{viewport_name}: 'Next time' recommendation heading not visible"
 
-    print(f"  [OK] Diagnosis heading, cause, explanation, evidence, next-time — all visible", flush=True)
+    print(
+        "  [OK] Diagnosis heading, cause, explanation, evidence, next-time — all visible",
+        flush=True,
+    )
 
-    page.screenshot(path=str(ARTIFACTS / f"{viewport_name}_diagnosis_visible.png"), full_page=True)
-    print(f"  Screenshot: {ARTIFACTS}/{viewport_name}_diagnosis_visible.png", flush=True)
+    page.screenshot(
+        path=str(ARTIFACTS / f"{viewport_name}_diagnosis_visible.png"), full_page=True
+    )
+    print(
+        f"  Screenshot: {ARTIFACTS}/{viewport_name}_diagnosis_visible.png", flush=True
+    )
 
     # ── 5. Mobile: no horizontal overflow ─────────────────────────
     if width == 390:
@@ -437,11 +478,16 @@ def run_test(viewport_name, width, height, page, static_origin, username="testpl
         inner_width = page.evaluate("window.innerWidth")
         print(f"  scrollWidth={scroll_width} innerWidth={inner_width}", flush=True)
         if scroll_width > inner_width + 2:  # 2px tolerance
-            page.screenshot(path=str(ARTIFACTS / f"{viewport_name}_overflow.png"), full_page=True)
-        assert scroll_width <= inner_width + 2, \
-            f"{viewport_name}: Horizontal overflow — scrollWidth ({scroll_width}) > innerWidth ({inner_width})"
-        print(f"  [OK] No horizontal overflow on mobile", flush=True)
-        page.screenshot(path=str(ARTIFACTS / f"{viewport_name}_no_overflow.png"), full_page=True)
+            page.screenshot(
+                path=str(ARTIFACTS / f"{viewport_name}_overflow.png"), full_page=True
+            )
+        assert (
+            scroll_width <= inner_width + 2
+        ), f"{viewport_name}: Horizontal overflow — scrollWidth ({scroll_width}) > innerWidth ({inner_width})"
+        print("  [OK] No horizontal overflow on mobile", flush=True)
+        page.screenshot(
+            path=str(ARTIFACTS / f"{viewport_name}_no_overflow.png"), full_page=True
+        )
         print(f"  Screenshot: {ARTIFACTS}/{viewport_name}_no_overflow.png", flush=True)
 
     # ── 6. Console errors ─────────────────────────────────────────
@@ -454,19 +500,24 @@ def run_test(viewport_name, width, height, page, static_origin, username="testpl
     ]
     real_errors = [e for e in console_errors if not any(ig in e for ig in ignorable)]
     if real_errors:
-        page.screenshot(path=str(ARTIFACTS / f"{viewport_name}_console_errors.png"), full_page=True)
+        page.screenshot(
+            path=str(ARTIFACTS / f"{viewport_name}_console_errors.png"), full_page=True
+        )
         raise AssertionError(
             f"{viewport_name}: {len(real_errors)} non-allowlisted browser console error(s): {real_errors}"
         )
-    print(f"  [OK] Console errors: 0 real errors", flush=True)
+    print("  [OK] Console errors: 0 real errors", flush=True)
 
     # ── 7. Move to puzzle 2 → diagnosis clears ────────────────────
-    next_btn = page.locator('button:has-text("Next Puzzle"), button:has-text("Next puzzle"), button:has-text("Move on")')
+    next_btn = page.locator(
+        'button:has-text("Next Puzzle"), button:has-text("Next puzzle"), button:has-text("Move on")'
+    )
     if next_btn.count() == 0:
         # Try pressing the next-puzzle button via aria-label
         next_btn = page.locator('[aria-label*="next" i], [aria-label*="Next" i]')
-    assert next_btn.count() > 0, \
-        f"{viewport_name}: Required next-puzzle control not found; cannot prove diagnosis clearing"
+    assert (
+        next_btn.count() > 0
+    ), f"{viewport_name}: Required next-puzzle control not found; cannot prove diagnosis clearing"
     next_btn.first.click()
     # Below `lg`, the puzzle title is intentionally hidden. Require its exact
     # identity in the mounted DOM, then prove the responsive surface rendered the
@@ -484,13 +535,20 @@ def run_test(viewport_name, width, height, page, static_origin, username="testpl
         timeout=3000,
     )
     # After moving on, the prior diagnosis card must be gone or replaced.
-    p1_cause = page.locator('text=Loose piece awareness')
+    p1_cause = page.locator("text=Loose piece awareness")
     p1_cause_count = p1_cause.count()
-    page.screenshot(path=str(ARTIFACTS / f"{viewport_name}_puzzle2_diagnosis_cleared.png"), full_page=True)
-    assert p1_cause_count == 0, \
-        f"{viewport_name}: Prior puzzle diagnosis ('Loose piece awareness') still visible after moving to puzzle 2"
-    print(f"  [OK] Moving to puzzle 2 clears the prior diagnosis", flush=True)
-    print(f"  Screenshot: {ARTIFACTS}/{viewport_name}_puzzle2_diagnosis_cleared.png", flush=True)
+    page.screenshot(
+        path=str(ARTIFACTS / f"{viewport_name}_puzzle2_diagnosis_cleared.png"),
+        full_page=True,
+    )
+    assert (
+        p1_cause_count == 0
+    ), f"{viewport_name}: Prior puzzle diagnosis ('Loose piece awareness') still visible after moving to puzzle 2"
+    print("  [OK] Moving to puzzle 2 clears the prior diagnosis", flush=True)
+    print(
+        f"  Screenshot: {ARTIFACTS}/{viewport_name}_puzzle2_diagnosis_cleared.png",
+        flush=True,
+    )
 
     return True
 
@@ -498,8 +556,9 @@ def run_test(viewport_name, width, height, page, static_origin, username="testpl
 def main():
     print("KnightMind browser proof: resolved-outcome diagnosis", flush=True)
     commit = current_commit()
-    assert len(commit) == 40 and all(char in "0123456789abcdef" for char in commit), \
-        f"Unexpected candidate commit SHA: {commit!r}"
+    assert len(commit) == 40 and all(
+        char in "0123456789abcdef" for char in commit
+    ), f"Unexpected candidate commit SHA: {commit!r}"
     print(f"Candidate commit (runtime checkout): {commit}", flush=True)
     print(f"Dist: {DIST}", flush=True)
     print(f"Artifacts: {ARTIFACTS}\n", flush=True)
@@ -512,8 +571,9 @@ def main():
     print(f"Static server at {origin}", flush=True)
     with urllib.request.urlopen(origin, timeout=3) as response:
         served_index = response.read()
-    assert served_index == BUNDLE["index.html"], \
-        "static server read the post-validation replacement from disk"
+    assert (
+        served_index == BUNDLE["index.html"]
+    ), "static server read the post-validation replacement from disk"
     print("  [OK] Post-validation replacement cannot alter served bytes", flush=True)
 
     failures = []
@@ -521,7 +581,10 @@ def main():
     with sync_playwright() as pw:
         browser = pw.chromium.launch(headless=True)
 
-        for viewport_name, width, height in [("desktop", 1280, 800), ("mobile_390x844", 390, 844)]:
+        for viewport_name, width, height in [
+            ("desktop", 1280, 800),
+            ("mobile_390x844", 390, 844),
+        ]:
             context = browser.new_context(
                 viewport={"width": width, "height": height},
                 device_scale_factor=2 if width == 390 else 1,
@@ -538,6 +601,7 @@ def main():
                 failures.append(f"{viewport_name}: unexpected exception: {e}")
                 print(f"  [ERROR] {e}", flush=True)
                 import traceback
+
                 traceback.print_exc()
             finally:
                 context.close()
@@ -546,7 +610,7 @@ def main():
 
     server.shutdown()
 
-    print("\n" + "="*60, flush=True)
+    print("\n" + "=" * 60, flush=True)
     if failures:
         print("RESULT: FAIL", flush=True)
         for f in failures:
