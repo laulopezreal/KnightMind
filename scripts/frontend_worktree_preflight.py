@@ -119,9 +119,9 @@ def _worktree_state(raw_worktree, requested_ref, *, require_clean=True):
         raise PreflightError("worktree path is not a directory")
 
     try:
-        top_level = pathlib.Path(_git(worktree, "rev-parse", "--show-toplevel")).resolve(
-            strict=True
-        )
+        top_level = pathlib.Path(
+            _git(worktree, "rev-parse", "--show-toplevel")
+        ).resolve(strict=True)
         common_git_raw = pathlib.Path(_git(worktree, "rev-parse", "--git-common-dir"))
         if not common_git_raw.is_absolute():
             common_git_raw = worktree / common_git_raw
@@ -184,14 +184,22 @@ def _check_dependencies(state):
     except OSError as error:
         raise PreflightError("frontend dependency directory is missing") from error
     if stat.S_ISLNK(modules_stat.st_mode) or not stat.S_ISDIR(modules_stat.st_mode):
-        raise PreflightError("frontend dependency directory must be a local, real directory")
+        raise PreflightError(
+            "frontend dependency directory must be a local, real directory"
+        )
 
     project_lock = _read_json(state["lockfile"], "frontend lockfile")
     installed_lock_path = modules / ".package-lock.json"
     installed_lock = _read_json(installed_lock_path, "installed dependency lockfile")
-    project_packages = project_lock.get("packages") if isinstance(project_lock, dict) else None
-    installed_packages = installed_lock.get("packages") if isinstance(installed_lock, dict) else None
-    if not isinstance(project_packages, dict) or not isinstance(installed_packages, dict):
+    project_packages = (
+        project_lock.get("packages") if isinstance(project_lock, dict) else None
+    )
+    installed_packages = (
+        installed_lock.get("packages") if isinstance(installed_lock, dict) else None
+    )
+    if not isinstance(project_packages, dict) or not isinstance(
+        installed_packages, dict
+    ):
         raise PreflightError("dependency lockfile package map is malformed")
 
     evidence = {}
@@ -203,7 +211,9 @@ def _check_dependencies(state):
             raise PreflightError("required dependency is absent from lockfile evidence")
         for field in ("version", "resolved", "integrity"):
             if installed_entry.get(field) != project_entry.get(field):
-                raise PreflightError("installed dependency evidence does not match project lockfile")
+                raise PreflightError(
+                    "installed dependency evidence does not match project lockfile"
+                )
         version = project_entry.get("version")
         if not isinstance(version, str) or not version:
             raise PreflightError("required dependency version evidence is malformed")
@@ -220,7 +230,9 @@ def _check_dependencies(state):
         evidence[dependency] = {
             "version": version,
             "lock_entry_sha256": hashlib.sha256(
-                json.dumps(project_entry, sort_keys=True, separators=(",", ":")).encode("utf-8")
+                json.dumps(project_entry, sort_keys=True, separators=(",", ":")).encode(
+                    "utf-8"
+                )
             ).hexdigest(),
             "package_json_sha256": _sha256(manifest_path),
         }
@@ -228,7 +240,9 @@ def _check_dependencies(state):
     vitest_manifest = _read_json(
         modules / "vitest" / "package.json", "Vitest package manifest"
     )
-    bin_value = vitest_manifest.get("bin") if isinstance(vitest_manifest, dict) else None
+    bin_value = (
+        vitest_manifest.get("bin") if isinstance(vitest_manifest, dict) else None
+    )
     if isinstance(bin_value, dict):
         bin_value = bin_value.get("vitest")
     if isinstance(bin_value, str) and bin_value.startswith("./"):
@@ -252,7 +266,9 @@ def _check_dependencies(state):
         launcher_target = os.readlink(vitest_launcher)
         resolved_launcher = vitest_launcher.resolve(strict=True)
     except OSError as error:
-        raise PreflightError("Vitest dependency launcher is missing or unsafe") from error
+        raise PreflightError(
+            "Vitest dependency launcher is missing or unsafe"
+        ) from error
     expected_launcher_target = os.path.relpath(vitest_cli, vitest_launcher.parent)
     if (
         not stat.S_ISLNK(launcher_stat.st_mode)
@@ -260,7 +276,9 @@ def _check_dependencies(state):
         or launcher_target != expected_launcher_target
         or resolved_launcher != vitest_cli
     ):
-        raise PreflightError("Vitest dependency launcher is not bound to its package entrypoint")
+        raise PreflightError(
+            "Vitest dependency launcher is not bound to its package entrypoint"
+        )
     evidence["vitest"]["entrypoint"] = str(vitest_cli.relative_to(modules))
     evidence["vitest"]["entrypoint_sha256"] = _sha256(vitest_cli)
     evidence["vitest"]["launcher_target"] = launcher_target
@@ -288,7 +306,9 @@ def _test_target(state, raw_target):
         or any(part in ("", ".", "..") for part in target.parts)
         or "\\" in raw_target
     ):
-        raise PreflightError("test target must be a canonical path relative to apps/web")
+        raise PreflightError(
+            "test target must be a canonical path relative to apps/web"
+        )
     unresolved = state["frontend"] / pathlib.Path(*target.parts)
     candidate = _regular_local_file(unresolved, state["frontend"], "test target")
     return {
@@ -299,7 +319,9 @@ def _test_target(state, raw_target):
 
 
 def _probe_vitest(state, dependencies, target, timeout):
-    descriptor, report_name = tempfile.mkstemp(prefix="knightmind-vitest-", suffix=".json")
+    descriptor, report_name = tempfile.mkstemp(
+        prefix="knightmind-vitest-", suffix=".json"
+    )
     os.close(descriptor)
     report = pathlib.Path(report_name)
     try:
@@ -343,14 +365,24 @@ def _probe_vitest(state, dependencies, target, timeout):
         or matching[0].get("status") != "passed"
         or not isinstance(matching[0].get("assertionResults"), list)
         or not matching[0]["assertionResults"]
-        or any(item.get("status") != "passed" for item in matching[0]["assertionResults"] if isinstance(item, dict))
+        or any(
+            item.get("status") != "passed"
+            for item in matching[0]["assertionResults"]
+            if isinstance(item, dict)
+        )
     ):
         raise PreflightError("focused Vitest readiness proof is invalid")
 
 
 def _canonical_marker_root():
     authority_home = pathlib.Path(pwd.getpwuid(os.geteuid()).pw_dir)
-    return authority_home / ".local" / "state" / "knightmind" / "frontend-worktree-preflight"
+    return (
+        authority_home
+        / ".local"
+        / "state"
+        / "knightmind"
+        / "frontend-worktree-preflight"
+    )
 
 
 def _safe_marker_dir(raw_marker_dir, state, *, create):
@@ -459,13 +491,15 @@ def _validate_marker_shape(payload):
         "test_target_sha256": str,
         "created_at": str,
     }
-    if any(type(payload[key]) is not expected for key, expected in scalar_types.items()):
+    if any(
+        type(payload[key]) is not expected for key, expected in scalar_types.items()
+    ):
         raise PreflightError("marker schema is invalid")
     if payload["version"] != MARKER_VERSION or payload["status"] != "ready":
         raise PreflightError("marker schema is invalid")
-    if not isinstance(payload["dependencies"], dict) or set(payload["dependencies"]) != set(
-        REQUIRED_DEPENDENCIES
-    ):
+    if not isinstance(payload["dependencies"], dict) or set(
+        payload["dependencies"]
+    ) != set(REQUIRED_DEPENDENCIES):
         raise PreflightError("marker schema is invalid")
     for dependency, evidence in payload["dependencies"].items():
         fields = {"version", "lock_entry_sha256", "package_json_sha256"}
@@ -509,9 +543,7 @@ def _load_marker(marker, marker_dir, marker_dir_fd):
     return payload
 
 
-def _load_and_verify_marker(
-    raw_marker, marker_dir, marker_dir_fd, state, dependencies
-):
+def _load_and_verify_marker(raw_marker, marker_dir, marker_dir_fd, state, dependencies):
     supplied = pathlib.Path(raw_marker).expanduser()
     expected = marker_dir / f"{_marker_key(state)}.json"
     if not supplied.is_absolute() or supplied.parts != expected.parts:
@@ -542,8 +574,12 @@ def parse_args(argv=None):
             "against a same-UID actor able to change the candidate or marker."
         ),
     )
-    parser.add_argument("--worktree", required=True, help="exact isolated linked worktree root")
-    parser.add_argument("--ref", required=True, help="commit/ref that must equal candidate HEAD")
+    parser.add_argument(
+        "--worktree", required=True, help="exact isolated linked worktree root"
+    )
+    parser.add_argument(
+        "--ref", required=True, help="commit/ref that must equal candidate HEAD"
+    )
     parser.add_argument(
         "--marker-dir",
         default=str(_canonical_marker_root()),
@@ -556,9 +592,7 @@ def parse_args(argv=None):
         help="run worktree-local npm ci --ignore-scripts before the readiness probe",
     )
     action = parser.add_mutually_exclusive_group(required=True)
-    action.add_argument(
-        "--test-target", help="focused test path relative to apps/web"
-    )
+    action.add_argument("--test-target", help="focused test path relative to apps/web")
     action.add_argument(
         "--verify-marker",
         nargs="?",
@@ -629,10 +663,10 @@ def main(argv=None):
                 after = _marker_payload(after_state, after_dependencies, after_target)
                 before["created_at"] = after["created_at"]
                 if before != after:
-                    raise PreflightError("worktree evidence changed during readiness probe")
-                marker = _write_marker(
-                    marker_dir, marker_dir_fd, after, after_state
-                )
+                    raise PreflightError(
+                        "worktree evidence changed during readiness probe"
+                    )
+                marker = _write_marker(marker_dir, marker_dir_fd, after, after_state)
                 result = {**after, "marker": str(marker)}
             finally:
                 os.close(marker_dir_fd)
@@ -642,7 +676,10 @@ def main(argv=None):
         print(f"frontend worktree preflight failed: {error}", file=sys.stderr)
         return 1
     except (OSError, ValueError, TypeError):
-        print("frontend worktree preflight failed: filesystem validation failed", file=sys.stderr)
+        print(
+            "frontend worktree preflight failed: filesystem validation failed",
+            file=sys.stderr,
+        )
         return 1
 
 

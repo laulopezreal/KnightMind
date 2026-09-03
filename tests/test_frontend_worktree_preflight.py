@@ -24,7 +24,9 @@ class FrontendWorktreePreflightTests(unittest.TestCase):
             / "knightmind"
             / "frontend-worktree-preflight"
         )
-        self.marker_before = set(self.marker_dir.iterdir()) if self.marker_dir.exists() else set()
+        self.marker_before = (
+            set(self.marker_dir.iterdir()) if self.marker_dir.exists() else set()
+        )
         self.canonical = self.root / "canonical"
         self.candidate = self.root / "candidate"
         self._git("init", "-b", "main", str(self.canonical), cwd=self.root)
@@ -104,7 +106,11 @@ class FrontendWorktreePreflightTests(unittest.TestCase):
         web = self.candidate / "apps" / "web"
         modules = web / "node_modules"
         packages = {
-            "vitest": {"name": "vitest", "version": "1.0.0", "bin": {"vitest": "vitest.mjs"}},
+            "vitest": {
+                "name": "vitest",
+                "version": "1.0.0",
+                "bin": {"vitest": "vitest.mjs"},
+            },
             "eslint": {"name": "eslint", "version": "1.0.0", "main": "index.js"},
             "@vitejs/plugin-react": {
                 "name": "@vitejs/plugin-react",
@@ -115,9 +121,13 @@ class FrontendWorktreePreflightTests(unittest.TestCase):
         for package, manifest in packages.items():
             package_dir = modules.joinpath(*package.split("/"))
             package_dir.mkdir(parents=True)
-            (package_dir / "package.json").write_text(json.dumps(manifest), encoding="utf-8")
+            (package_dir / "package.json").write_text(
+                json.dumps(manifest), encoding="utf-8"
+            )
             if package != "vitest":
-                (package_dir / "index.js").write_text("module.exports = {};\n", encoding="utf-8")
+                (package_dir / "index.js").write_text(
+                    "module.exports = {};\n", encoding="utf-8"
+                )
         (modules / "vitest" / "vitest.mjs").write_text(
             """import fs from 'node:fs'; import path from 'node:path';
 const args = process.argv.slice(2); const output = args[args.indexOf('--outputFile') + 1];
@@ -137,7 +147,9 @@ testResults:[{name:path.resolve(target),status:'passed',assertionResults:[{statu
             vitest_bin.symlink_to("../vitest/vitest.mjs")
         lock = json.loads((web / "package-lock.json").read_text(encoding="utf-8"))
         hidden = {"name": "web", "lockfileVersion": 3, "packages": lock["packages"]}
-        (modules / ".package-lock.json").write_text(json.dumps(hidden), encoding="utf-8")
+        (modules / ".package-lock.json").write_text(
+            json.dumps(hidden), encoding="utf-8"
+        )
 
     def _run(
         self,
@@ -170,7 +182,9 @@ testResults:[{name:path.resolve(target),status:'passed',assertionResults:[{statu
     def _expected_marker(self):
         import hashlib
 
-        key = hashlib.sha256(str(self.candidate.resolve()).encode("utf-8")).hexdigest()[:24]
+        key = hashlib.sha256(str(self.candidate.resolve()).encode("utf-8")).hexdigest()[
+            :24
+        ]
         return self.marker_dir / f"{key}.json"
 
     def _certify(self):
@@ -305,14 +319,18 @@ testResults:[{name:path.resolve(target),status:'passed',assertionResults:[{statu
 
     def test_marker_is_rejected_after_head_drift(self):
         marker = self._certify()
-        self._git("commit", "--allow-empty", "-m", "advance candidate", cwd=self.candidate)
+        self._git(
+            "commit", "--allow-empty", "-m", "advance candidate", cwd=self.candidate
+        )
         result = self._run(ref="HEAD", verify_marker=marker)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("stale marker", result.stderr.lower())
 
     def test_requested_ref_must_match_head(self):
         self._prepare_dependencies()
-        self._git("commit", "--allow-empty", "-m", "advance candidate", cwd=self.candidate)
+        self._git(
+            "commit", "--allow-empty", "-m", "advance candidate", cwd=self.candidate
+        )
         result = self._run(ref="HEAD~1")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("requested ref does not match HEAD", result.stderr)
