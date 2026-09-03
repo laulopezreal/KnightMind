@@ -274,7 +274,6 @@ class TestListPuzzlesBasic:
             "swing",
             "fen",
             "side_to_move",
-            "best_move_uci",
             "status",
             "attempts",
             "pass_count",
@@ -287,6 +286,9 @@ class TestListPuzzlesBasic:
         ]
         for field in required_fields:
             assert field in puzzle, f"Missing field: {field}"
+        assert "best_move_uci" not in puzzle
+        assert "accept_moves_uci" not in puzzle
+        assert "solution_pv" not in puzzle
 
     def test_includes_safe_diagnosis_summary_without_solution_evidence(
         self, client, db_session, monkeypatch
@@ -301,8 +303,9 @@ class TestListPuzzlesBasic:
         assert response.status_code == 200
         puzzle = response.json()["puzzles"][0]
 
-        assert puzzle["best_move_uci"] is None
-        assert puzzle["accept_moves_uci"] == []
+        assert "best_move_uci" not in puzzle
+        assert "accept_moves_uci" not in puzzle
+        assert "solution_pv" not in puzzle
         assert puzzle["diagnosis_summary"] == {
             "state": "ready",
             "primary_cause": "loose_piece_awareness",
