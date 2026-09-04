@@ -387,32 +387,46 @@ export default function Library() {
                     >
                         {/* Motif */}
                         {availableMotifs.length > 0 && (
-                            <select
-                                value={motifFilter}
-                                onChange={(e) => setMotifFilter(e.target.value)}
-                                aria-label="Filter by motif"
-                                className="min-h-11 w-full min-w-0 bg-bg-primary border border-primary/20 rounded-sm px-3 text-primary focus:outline-none focus:border-primary/60 sm:w-auto sm:min-w-36"
-                            >
-                                <option value="">All motifs</option>
-                                {availableMotifs.map(m => (
-                                    <option key={m} value={m}>{m}</option>
-                                ))}
-                            </select>
+                            <div className="min-w-0 space-y-1 sm:w-auto sm:max-w-72">
+                                <select
+                                    value={motifFilter}
+                                    onChange={(e) => setMotifFilter(e.target.value)}
+                                    aria-label="Filter by motif"
+                                    className="min-h-11 w-full min-w-0 bg-bg-primary border border-primary/20 rounded-sm px-3 text-primary focus:outline-none focus:border-primary/60 sm:min-w-36"
+                                >
+                                    <option value="">All motifs</option>
+                                    {availableMotifs.map(m => (
+                                        <option key={m} value={m}>{m}</option>
+                                    ))}
+                                </select>
+                                {motifFilter && (
+                                    <p aria-label="Selected motif" className="break-words px-1 text-xs leading-relaxed text-primary/70">
+                                        Selected: {motifFilter}
+                                    </p>
+                                )}
+                            </div>
                         )}
 
                         {/* Mistake cause — the target of the Insights "practise this" links */}
                         {availableCauses.length > 0 && (
-                            <select
-                                value={causeFilter}
-                                onChange={(e) => setCauseFilter(e.target.value)}
-                                aria-label="Filter by mistake cause"
-                                className="min-h-11 w-full min-w-0 bg-bg-primary border border-primary/20 rounded-sm px-3 text-primary focus:outline-none focus:border-primary/60 sm:w-auto sm:min-w-36"
-                            >
-                                <option value="">All causes</option>
-                                {availableCauses.map(c => (
-                                    <option key={c.value} value={c.value}>{c.label}</option>
-                                ))}
-                            </select>
+                            <div className="min-w-0 space-y-1 sm:w-auto sm:max-w-72">
+                                <select
+                                    value={causeFilter}
+                                    onChange={(e) => setCauseFilter(e.target.value)}
+                                    aria-label="Filter by mistake cause"
+                                    className="min-h-11 w-full min-w-0 bg-bg-primary border border-primary/20 rounded-sm px-3 text-primary focus:outline-none focus:border-primary/60 sm:min-w-36"
+                                >
+                                    <option value="">All causes</option>
+                                    {availableCauses.map(c => (
+                                        <option key={c.value} value={c.value}>{c.label}</option>
+                                    ))}
+                                </select>
+                                {causeFilter && (
+                                    <p aria-label="Selected mistake cause" className="break-words px-1 text-xs leading-relaxed text-primary/70">
+                                        Selected: {availableCauses.find(c => c.value === causeFilter)?.label ?? causeFilter}
+                                    </p>
+                                )}
+                            </div>
                         )}
 
                         {/* An arriving line filter has no select of its own — a
@@ -421,7 +435,7 @@ export default function Library() {
                             narrowed with no visible reason and no way out. */}
                         {openingLineFilter && (
                             <span className="inline-flex min-h-11 w-full min-w-0 items-center gap-2 bg-primary/10 border border-primary/20 rounded-sm pl-3 text-primary font-sans text-sm sm:w-auto sm:max-w-72">
-                                <span className="truncate">{openingLineFilter}</span>
+                                <span className="min-w-0 break-words py-2">{openingLineFilter}</span>
                                 <button
                                     type="button"
                                     onClick={() => setOpeningLineFilter('')}
@@ -448,17 +462,24 @@ export default function Library() {
 
                         {/* Opening family — only offered once games have been classified */}
                         {availableOpenings.length > 0 && (
-                            <select
-                                value={openingFilter}
-                                onChange={(e) => setOpeningFilter(e.target.value)}
-                                aria-label="Filter by opening"
-                                className="min-h-11 w-full min-w-0 bg-bg-primary border border-primary/20 rounded-sm px-3 text-primary focus:outline-none focus:border-primary/60 sm:w-auto sm:min-w-40"
-                            >
-                                <option value="">All openings</option>
-                                {availableOpenings.map(o => (
-                                    <option key={o} value={o}>{o}</option>
-                                ))}
-                            </select>
+                            <div className="min-w-0 space-y-1 sm:w-auto sm:max-w-72">
+                                <select
+                                    value={openingFilter}
+                                    onChange={(e) => setOpeningFilter(e.target.value)}
+                                    aria-label="Filter by opening"
+                                    className="min-h-11 w-full min-w-0 bg-bg-primary border border-primary/20 rounded-sm px-3 text-primary focus:outline-none focus:border-primary/60 sm:min-w-40"
+                                >
+                                    <option value="">All openings</option>
+                                    {availableOpenings.map(o => (
+                                        <option key={o} value={o}>{o}</option>
+                                    ))}
+                                </select>
+                                {openingFilter && (
+                                    <p aria-label="Selected opening" className="break-words px-1 text-xs leading-relaxed text-primary/70">
+                                        Selected: {openingFilter}
+                                    </p>
+                                )}
+                            </div>
                         )}
 
                         {/* Sort */}

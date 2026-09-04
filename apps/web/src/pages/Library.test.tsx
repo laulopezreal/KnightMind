@@ -197,10 +197,15 @@ describe('Library', () => {
             target: { value: 'newest' },
         });
 
-        expect(within(supplementalFilters).getByLabelText('Filter by mistake cause'))
-            .toHaveDisplayValue(longCauseLabel);
-        expect(within(supplementalFilters).getByLabelText('Filter by opening'))
-            .toHaveDisplayValue(longOpeningLabel);
+        const selectedCause = within(supplementalFilters).getByLabelText('Selected mistake cause');
+        expect(selectedCause).toBeVisible();
+        expect(selectedCause).toHaveTextContent(`Selected: ${longCauseLabel}`);
+        expect(selectedCause).toHaveClass('break-words');
+
+        const selectedOpening = within(supplementalFilters).getByLabelText('Selected opening');
+        expect(selectedOpening).toBeVisible();
+        expect(selectedOpening).toHaveTextContent(`Selected: ${longOpeningLabel}`);
+        expect(selectedOpening).toHaveClass('break-words');
 
         await waitFor(() => {
             expect(mockGetLibraryPuzzles).toHaveBeenLastCalledWith(expect.objectContaining({
