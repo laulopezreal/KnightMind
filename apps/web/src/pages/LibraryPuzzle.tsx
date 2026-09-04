@@ -537,10 +537,10 @@ export default function LibraryPuzzle() {
             </section>
 
             {/* Board + Controls */}
-            <section className="order-2 grid gap-3 md:gap-4 lg:order-3 lg:grid-cols-2 lg:gap-24">
+            <section className="order-2 grid min-w-0 grid-cols-1 gap-3 md:gap-4 lg:order-3 lg:grid-cols-2 lg:gap-24">
                 {/* Chessboard */}
-                <div className="order-2 lg:order-1" data-testid="solve-board">
-                    <div className="aspect-square w-full max-w-[600px] mx-auto shadow-2xl shadow-primary/5 rounded-sm overflow-hidden border border-primary/10">
+                <div className="order-2 w-full min-w-0 justify-self-center lg:order-1" data-testid="solve-board">
+                    <div className="aspect-square w-full max-w-[350px] lg:max-w-[600px] mx-auto rounded-sm overflow-hidden border border-primary/10" data-testid="solve-board-frame">
                         <AccessibleChessboard
                             onKeyboardMove={({ sourceSquare, targetSquare, promotion }) =>
                                 onPieceDrop(sourceSquare, targetSquare, promotion ?? 'q')

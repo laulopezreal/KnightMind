@@ -264,13 +264,14 @@ describe('LibraryPuzzle', () => {
         });
     });
 
-    it('keeps orientation and move guidance together before the board without exposing the answer', async () => {
+    it('keeps the guided board within its mobile track before actions without exposing the answer', async () => {
         render(<LibraryPuzzle />);
         await waitFor(() => expect(screen.getByText('Deadly Fork')).toBeInTheDocument());
 
         const instruction = screen.getByText(/drag a piece to its destination.*press enter to pick up.*enter to place/i);
         const guidance = screen.getByTestId('solve-guidance');
         const board = screen.getByTestId('solve-board');
+        const boardFrame = screen.getByTestId('solve-board-frame');
         const actions = screen.getByTestId('solve-actions');
         const checkMove = screen.getByRole('button', { name: /check move/i });
         const history = screen.getByText(/3\/5 solved/);
@@ -278,6 +279,10 @@ describe('LibraryPuzzle', () => {
         expect(instruction).toBeInTheDocument();
         expect(guidance).toContainElement(screen.getByText('White to Move'));
         expect(guidance).toContainElement(screen.getByText(/find the best move/i));
+        expect(guidance.compareDocumentPosition(board) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy();
+        expect(board).toContainElement(boardFrame);
+        expect(boardFrame).toContainElement(screen.getByTestId('chessboard'));
+        expect(boardFrame).toHaveClass('w-full', 'max-w-[350px]', 'lg:max-w-[600px]', 'mx-auto');
         expect(board.compareDocumentPosition(actions) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
         expect(actions).toContainElement(checkMove);
         expect(checkMove.compareDocumentPosition(history) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
