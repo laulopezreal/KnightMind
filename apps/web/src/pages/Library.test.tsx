@@ -146,6 +146,71 @@ describe('Library', () => {
         expect(screen.getByLabelText('Difficulty')).toHaveClass('min-h-11');
     });
 
+    it('keeps supplemental filters legible and functional in the contained mobile strip', async () => {
+        mockGetLibraryPuzzles.mockResolvedValue({
+            ...EMPTY_RESPONSE,
+            puzzles: MOCK_PUZZLES,
+            total: 2,
+            available_motifs: ['Fork'],
+            available_causes: [
+                { value: 'loose_piece_awareness', label: 'Loose piece awareness' },
+            ],
+            available_openings: ['Sicilian Defense'],
+            stats: MOCK_STATS,
+        });
+        render(<Library />);
+
+        const supplementalFilters = await screen.findByLabelText('Supplemental library filters');
+        expect(supplementalFilters).toHaveClass('overflow-x-auto', 'sm:flex-wrap');
+
+        for (const name of [
+            'Filter by motif',
+            'Filter by mistake cause',
+            'Filter by game phase',
+            'Filter by opening',
+            'Sort puzzles',
+        ]) {
+            expect(within(supplementalFilters).getByLabelText(name)).toHaveClass(
+                'min-h-11',
+                'shrink-0',
+            );
+        }
+
+        fireEvent.change(within(supplementalFilters).getByLabelText('Filter by motif'), {
+            target: { value: 'Fork' },
+        });
+        fireEvent.change(within(supplementalFilters).getByLabelText('Filter by mistake cause'), {
+            target: { value: 'loose_piece_awareness' },
+        });
+        fireEvent.change(within(supplementalFilters).getByLabelText('Filter by game phase'), {
+            target: { value: 'middlegame' },
+        });
+        fireEvent.change(within(supplementalFilters).getByLabelText('Filter by opening'), {
+            target: { value: 'Sicilian Defense' },
+        });
+        fireEvent.change(within(supplementalFilters).getByLabelText('Sort puzzles'), {
+            target: { value: 'newest' },
+        });
+
+        await waitFor(() => {
+            expect(mockGetLibraryPuzzles).toHaveBeenLastCalledWith(expect.objectContaining({
+                motif: 'Fork',
+                cause: 'loose_piece_awareness',
+                phase: 'middlegame',
+                opening: 'Sicilian Defense',
+                sort: 'newest',
+            }));
+        });
+    });
+
+    it('keeps puzzle results immediately after the compact filter region', async () => {
+        render(<Library />);
+
+        const filters = await screen.findByLabelText('Library filters');
+        const results = screen.getByLabelText('Library puzzle results');
+        expect(filters.nextElementSibling).toBe(results);
+    });
+
     it('puts the existing training action beside the due-review summary', async () => {
         render(<Library />);
 

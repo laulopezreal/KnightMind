@@ -271,7 +271,7 @@ export default function Library() {
     }
 
     return (
-        <div className="space-y-6 sm:space-y-8 animate-teedin">
+        <div className="space-y-4 sm:space-y-8 animate-teedin">
             {/* Header */}
             <PageHeader
                 title="Library"
@@ -293,7 +293,7 @@ export default function Library() {
                         { label: 'Learning', value: corpusStats.learning, containerClasses: 'bg-yellow-500/5 border-yellow-500/15', valueClasses: 'text-status-learning', labelClasses: 'text-primary/70' },
                         { label: 'Mastered', value: corpusStats.mastered, containerClasses: 'bg-green-500/5 border-green-500/15', valueClasses: 'text-status-mastered', labelClasses: 'text-primary/70' },
                     ].map(stat => (
-                        <div key={stat.label} className={`${stat.containerClasses} min-w-0 border rounded-sm px-1 py-2 sm:p-3 text-center`}>
+                        <div key={stat.label} className={`${stat.containerClasses} min-w-0 border rounded-sm px-1 py-1.5 sm:p-3 text-center`}>
                             <span className={`block text-xl sm:text-2xl font-serif ${stat.valueClasses}`}>{stat.value}</span>
                             <span className={`block truncate text-[10px] sm:text-xs font-sans ${stat.labelClasses} uppercase tracking-normal sm:tracking-wider`}>{stat.label}</span>
                         </div>
@@ -304,7 +304,7 @@ export default function Library() {
             {corpusStats && corpusStats.due > 0 && (
                 <section
                     aria-label="Library review summary"
-                    className="flex items-center justify-between gap-4 bg-orange-500/5 border border-orange-500/15 rounded-sm px-4 py-3"
+                    className="flex items-center justify-between gap-3 bg-orange-500/5 border border-orange-500/15 rounded-sm px-3 py-2 sm:px-4 sm:py-3"
                 >
                     <p className="text-sm font-sans text-primary/70">
                         {corpusStats.due} puzzle{corpusStats.due !== 1 ? 's' : ''} due for review
@@ -319,7 +319,7 @@ export default function Library() {
             )}
 
             {/* Search + Filters */}
-            <section className="bg-primary/5 border border-primary/10 rounded-sm p-3 sm:p-4 space-y-3 sm:space-y-4">
+            <section aria-label="Library filters" className="bg-primary/5 border border-primary/10 rounded-sm p-3 sm:p-4 space-y-2 sm:space-y-4">
                 {/* Search */}
                 <input
                     type="text"
@@ -331,7 +331,7 @@ export default function Library() {
                 />
 
                 {/* Filter row */}
-                <div className="flex flex-wrap gap-3 items-end text-sm font-sans">
+                <div className="flex flex-wrap gap-2 sm:gap-3 items-end text-sm font-sans">
                     <div className="grid w-full grid-cols-2 gap-3 sm:w-auto">
                         <label className="min-w-0 space-y-1 text-xs text-primary/70">
                             <span className="block">Status</span>
@@ -360,14 +360,17 @@ export default function Library() {
                         </label>
                     </div>
 
-                    <div className="grid w-full grid-cols-3 gap-3 sm:flex sm:flex-wrap">
+                    <div
+                        aria-label="Supplemental library filters"
+                        className="flex w-full gap-2 overflow-x-auto pb-1 sm:flex-wrap sm:gap-3 sm:overflow-visible sm:pb-0"
+                    >
                         {/* Motif */}
                         {availableMotifs.length > 0 && (
                             <select
                                 value={motifFilter}
                                 onChange={(e) => setMotifFilter(e.target.value)}
                                 aria-label="Filter by motif"
-                                className="w-full min-w-0 min-h-11 sm:w-auto bg-bg-primary border border-primary/20 rounded-sm px-3 text-primary focus:outline-none focus:border-primary/60"
+                                className="min-h-11 min-w-36 shrink-0 bg-bg-primary border border-primary/20 rounded-sm px-3 text-primary focus:outline-none focus:border-primary/60"
                             >
                                 <option value="">All motifs</option>
                                 {availableMotifs.map(m => (
@@ -382,7 +385,7 @@ export default function Library() {
                                 value={causeFilter}
                                 onChange={(e) => setCauseFilter(e.target.value)}
                                 aria-label="Filter by mistake cause"
-                                className="w-full min-w-0 min-h-11 sm:w-auto bg-bg-primary border border-primary/20 rounded-sm px-3 text-primary focus:outline-none focus:border-primary/60"
+                                className="min-h-11 min-w-36 shrink-0 bg-bg-primary border border-primary/20 rounded-sm px-3 text-primary focus:outline-none focus:border-primary/60"
                             >
                                 <option value="">All causes</option>
                                 {availableCauses.map(c => (
@@ -396,7 +399,7 @@ export default function Library() {
                             so it appears as a removable chip. Without it the list is
                             narrowed with no visible reason and no way out. */}
                         {openingLineFilter && (
-                            <span className="col-span-3 inline-flex min-h-11 max-w-full items-center gap-2 bg-primary/10 border border-primary/20 rounded-sm pl-3 text-primary font-sans text-sm">
+                            <span className="inline-flex min-h-11 max-w-72 shrink-0 items-center gap-2 bg-primary/10 border border-primary/20 rounded-sm pl-3 text-primary font-sans text-sm">
                                 <span className="truncate">{openingLineFilter}</span>
                                 <button
                                     type="button"
@@ -414,7 +417,7 @@ export default function Library() {
                             value={phaseFilter}
                             onChange={(e) => setPhaseFilter(e.target.value)}
                             aria-label="Filter by game phase"
-                            className="w-full min-w-0 min-h-11 sm:w-auto bg-bg-primary border border-primary/20 rounded-sm px-3 text-primary focus:outline-none focus:border-primary/60"
+                            className="min-h-11 min-w-36 shrink-0 bg-bg-primary border border-primary/20 rounded-sm px-3 text-primary focus:outline-none focus:border-primary/60"
                         >
                             <option value="">All phases</option>
                             <option value="opening">Opening</option>
@@ -428,7 +431,7 @@ export default function Library() {
                                 value={openingFilter}
                                 onChange={(e) => setOpeningFilter(e.target.value)}
                                 aria-label="Filter by opening"
-                                className="w-full min-w-0 min-h-11 sm:w-auto bg-bg-primary border border-primary/20 rounded-sm px-3 text-primary focus:outline-none focus:border-primary/60"
+                                className="min-h-11 min-w-40 shrink-0 bg-bg-primary border border-primary/20 rounded-sm px-3 text-primary focus:outline-none focus:border-primary/60"
                             >
                                 <option value="">All openings</option>
                                 {availableOpenings.map(o => (
@@ -442,7 +445,7 @@ export default function Library() {
                             value={sort}
                             onChange={(e) => setSort(e.target.value as PuzzleSort)}
                             aria-label="Sort puzzles"
-                            className="w-full min-w-0 min-h-11 sm:ml-auto sm:w-auto bg-bg-primary border border-primary/20 rounded-sm px-3 text-primary focus:outline-none focus:border-primary/60"
+                            className="min-h-11 min-w-36 shrink-0 bg-bg-primary border border-primary/20 rounded-sm px-3 text-primary focus:outline-none focus:border-primary/60 sm:ml-auto"
                         >
                             {SORT_OPTIONS.map(o => (
                                 <option key={o.value} value={o.value}>{o.label}</option>
@@ -485,7 +488,7 @@ export default function Library() {
             )}
 
             {/* Puzzle list */}
-            <section className="space-y-2">
+            <section aria-label="Library puzzle results" className="space-y-2">
                 {puzzles.map(puzzle => (
                     <PuzzleRow key={puzzle.id} puzzle={puzzle} />
                 ))}
