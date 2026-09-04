@@ -413,7 +413,12 @@ describe('Puzzles', () => {
       expect(await screen.findByRole('heading', { level: 1, name: 'Focus practice' })).toBeInTheDocument();
       expect(screen.getByText(/Focus practice\s+Active/i)).toBeInTheDocument();
       expect(screen.getAllByText(/extra practice for the selected focus/i)).toHaveLength(2);
-      expect(screen.getAllByText(/server decides which positions are safe and available/i)).toHaveLength(2);
+      const focusPracticeMessage = screen
+        .getAllByText(/server decides whether positions are safe and available/i)
+        .find((message) => message.textContent === (
+          'Focus practice gives you extra practice for the selected focus. The server decides whether positions are safe and available.'
+        ));
+      expect(focusPracticeMessage).toBeVisible();
       expect(screen.queryByText('Daily Puzzles')).not.toBeInTheDocument();
       expect(screen.queryByText('STANDARD ACTIVE')).not.toBeInTheDocument();
       expect(screen.queryByText(/Standard mode uses spaced repetition/i)).not.toBeInTheDocument();
