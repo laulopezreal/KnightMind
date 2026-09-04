@@ -1,9 +1,9 @@
 /**
  * Regression tests for issue #154:
- * Final training puzzle can leave the "All Done" button disabled
+ * Final training puzzle can leave the finish button disabled
  * after the session auto-completes (e.g. via "Mark as Failed & Try Again").
  *
- * Fix: when sessionState === 'completed' on the final puzzle, the dead All Done
+ * Fix: when sessionState === 'completed' on the final puzzle, the dead finish
  * CTA is removed entirely. A meaningful alternative is shown instead:
  *   - "see your summary below" message if sessionSummary is set
  *   - "Back to Dashboard" link if no summary is available
@@ -254,20 +254,29 @@ async function renderAndSolveCorrectly(user: ReturnType<typeof userEvent.setup>)
 
 // ── Tests ─────────────────────────────────────────────────────────────
 
-describe('Issue #154: All Done button on final puzzle', () => {
+describe('Issue #154: finish button on final puzzle', () => {
     beforeEach(() => {
         vi.clearAllMocks();
         setupMockLocalStorage();
     });
 
-    it('All Done button is enabled when session is active (regression: was disabled when completed)', async () => {
+    it('presents one clear finish action and folds secondary puzzle detail away', async () => {
         const user = userEvent.setup();
         mockSessionReturn.mockReturnValue(makeSessionReturn({ sessionState: 'active' }));
 
         await renderAndSolveCorrectly(user);
 
-        const allDoneBtn = screen.getByRole('button', { name: 'All Done' });
-        expect(allDoneBtn).not.toBeDisabled();
+        const finishButton = screen.getByRole('button', { name: 'Finish Session' });
+        expect(finishButton).not.toBeDisabled();
+        expect(screen.queryByText('Input Method')).not.toBeInTheDocument();
+
+        const details = screen.getByText('Review this puzzle').closest('details');
+        expect(details).not.toHaveAttribute('open');
+        expect(screen.getByText('Puzzle record')).not.toBeVisible();
+
+        await user.click(screen.getByText('Review this puzzle'));
+        expect(details).toHaveAttribute('open');
+        expect(screen.getByText('Puzzle record')).toBeVisible();
     });
 
     it('button is disabled and shows Recording Session while completing', async () => {
@@ -280,20 +289,20 @@ describe('Issue #154: All Done button on final puzzle', () => {
         expect(recordingBtn).toBeDisabled();
     });
 
-    it('does not render a dead All Done button when completed — shows Back to Dashboard link instead', async () => {
+    it('does not render a dead finish button when completed — shows Back to Dashboard link instead', async () => {
         const user = userEvent.setup();
         // sessionSummary: null → no summary yet → expect "Back to Dashboard" link
         mockSessionReturn.mockReturnValue(makeSessionReturn({ sessionState: 'completed', sessionSummary: null }));
 
         await renderAndSolveCorrectly(user);
 
-        expect(screen.queryByRole('button', { name: 'All Done' })).not.toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Finish Session' })).not.toBeInTheDocument();
         const link = screen.getByRole('link', { name: 'Back to Dashboard' });
         expect(link).toBeInTheDocument();
         expect(link).toHaveAttribute('href', '/dashboard');
     });
 
-    it('double-clicking All Done calls handleReviewPuzzle exactly once', async () => {
+    it('double-clicking Finish Session calls handleReviewPuzzle exactly once', async () => {
         const user = userEvent.setup();
         let resolveReview!: () => void;
         const slowReview = vi.fn().mockImplementation(
@@ -306,7 +315,7 @@ describe('Issue #154: All Done button on final puzzle', () => {
 
         await renderAndSolveCorrectly(user);
 
-        const allDoneBtn = screen.getByRole('button', { name: 'All Done' });
+        const allDoneBtn = screen.getByRole('button', { name: 'Finish Session' });
         // Fire two clicks synchronously before the async handler resolves
         fireEvent.click(allDoneBtn);
         fireEvent.click(allDoneBtn);
@@ -315,14 +324,14 @@ describe('Issue #154: All Done button on final puzzle', () => {
         await waitFor(() => expect(slowReview).toHaveBeenCalledTimes(1));
     });
 
-    it('does not render a dead All Done button when completed — shows summary message when sessionSummary is set', async () => {
+    it('does not render a dead finish button when completed — shows summary message when sessionSummary is set', async () => {
         const user = userEvent.setup();
         // sessionSummary is set → SessionSummaryCard renders below; puzzle area shows completion text
         mockSessionReturn.mockReturnValue(makeSessionReturn({ sessionState: 'completed', sessionSummary: stubSummary as never }));
 
         await renderAndSolveCorrectly(user);
 
-        expect(screen.queryByRole('button', { name: 'All Done' })).not.toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Finish Session' })).not.toBeInTheDocument();
         expect(screen.getByText(/session complete/i)).toBeInTheDocument();
         // SessionSummaryCard is rendered via the existing {sessionSummary && ...} block
         expect(screen.getByTestId('session-summary')).toBeInTheDocument();
