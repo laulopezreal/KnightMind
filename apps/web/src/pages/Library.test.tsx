@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import Library from './Library';
 
 let mockUsername = 'testplayer';
@@ -147,6 +148,7 @@ describe('Library', () => {
     });
 
     it('reveals every supplemental filter through one keyboard-reachable mobile action', async () => {
+        const user = userEvent.setup();
         const longCauseLabel = 'Loose piece awareness caused by an overloaded defender';
         const longOpeningLabel = 'Sicilian Defense: Najdorf Variation';
         mockGetLibraryPuzzles.mockResolvedValue({
@@ -167,7 +169,7 @@ describe('Library', () => {
         expect(disclosure).toHaveAttribute('aria-expanded', 'false');
         disclosure.focus();
         expect(disclosure).toHaveFocus();
-        fireEvent.click(disclosure);
+        await user.keyboard('{Enter}');
         expect(disclosure).toHaveAttribute('aria-expanded', 'true');
 
         const supplementalFilters = await screen.findByLabelText('Supplemental library filters');
@@ -199,13 +201,15 @@ describe('Library', () => {
 
         const selectedCause = within(supplementalFilters).getByLabelText('Selected mistake cause');
         expect(selectedCause).toBeVisible();
-        expect(selectedCause).toHaveTextContent(`Selected: ${longCauseLabel}`);
-        expect(selectedCause).toHaveClass('break-words');
+        expect(within(selectedCause).getByText(`Selected: ${longCauseLabel}`, { exact: true }))
+            .toBeVisible();
+        expect(selectedCause).not.toBe(within(supplementalFilters).getByLabelText('Filter by mistake cause'));
 
         const selectedOpening = within(supplementalFilters).getByLabelText('Selected opening');
         expect(selectedOpening).toBeVisible();
-        expect(selectedOpening).toHaveTextContent(`Selected: ${longOpeningLabel}`);
-        expect(selectedOpening).toHaveClass('break-words');
+        expect(within(selectedOpening).getByText(`Selected: ${longOpeningLabel}`, { exact: true }))
+            .toBeVisible();
+        expect(selectedOpening).not.toBe(within(supplementalFilters).getByLabelText('Filter by opening'));
 
         await waitFor(() => {
             expect(mockGetLibraryPuzzles).toHaveBeenLastCalledWith(expect.objectContaining({
@@ -783,6 +787,25 @@ describe('Library opening-line filter (the Openings → Train destination)', () 
         expect(
             await screen.findByText('Sicilian Defense: Najdorf Variation')
         ).toBeInTheDocument();
+    });
+
+    it('auto-opens filters and shows the complete arriving long opening line', async () => {
+        const longOpeningLine = 'Sicilian Defense: Najdorf Variation, Poisoned Pawn Main Line with an early queen excursion';
+        window.history.replaceState(
+            {}, '', `/library?opening_line=${encodeURIComponent(longOpeningLine)}`
+        );
+        render(<Library />);
+
+        const disclosure = await screen.findByRole('button', { name: /hide more filters/i });
+        expect(disclosure).toHaveAttribute('aria-expanded', 'true');
+
+        const supplementalFilters = screen.getByLabelText('Supplemental library filters');
+        expect(supplementalFilters).toBeVisible();
+        expect(within(supplementalFilters).getByText(longOpeningLine, { exact: true }))
+            .toBeVisible();
+        expect(mockGetLibraryPuzzles).toHaveBeenCalledWith(
+            expect.objectContaining({ opening_line: longOpeningLine })
+        );
     });
 
     it('lets the user clear a line they arrived with', async () => {
