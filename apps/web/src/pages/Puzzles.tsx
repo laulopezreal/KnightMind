@@ -641,6 +641,13 @@ export default function Puzzles() {
     const controlsDisabled = !controlsEnabled || isLoading || isGenerating || normalFocusValidationPending;
     const generateNewDisabled = !controlsEnabled || isLoading || isGenerating || !userStatus?.has_new_games;
     const hasValidFocusPracticeIntent = focusPracticeMode && Boolean(focusCause);
+    const isOrdinaryNoDueState = Boolean(
+        userStatus &&
+        userStatus.puzzles_count > 0 &&
+        userStatus.due_count === 0 &&
+        !focusPracticeMode
+    );
+    const showGenerateAction = !isOrdinaryNoDueState || Boolean(userStatus?.has_new_games) || isGenerating;
     const { selectedModeLabel, screenReaderModeLabel } = getModeLabels(sessionType);
     const modeAvailabilityLabel = sessionType === 'standard' ? 'Active' : 'Beta';
     const presentationModeLabel = hasValidFocusPracticeIntent ? 'Focus practice' : selectedModeLabel;
@@ -689,6 +696,8 @@ export default function Puzzles() {
                     : null;
     const generateButtonLabel = isGenerating
         ? 'Generating...'
+        : isOrdinaryNoDueState && userStatus?.has_new_games
+            ? 'Generate from New Games'
         : userStatus && !userStatus.has_new_games && userStatus.games_count > 0
             ? 'No new games to generate'
             : 'Generate New';
@@ -1318,25 +1327,27 @@ export default function Puzzles() {
                             {username}
                         </div>
                     </div>
-                    <div className="flex gap-4 flex-wrap">
-                        {!activeSessionId && (
+                    <div className="flex w-full md:w-auto gap-4 flex-wrap">
+                        {!activeSessionId && !isOrdinaryNoDueState && (
                             <button
                                 type="button"
                                 onClick={handleStartSession}
                                 disabled={controlsDisabled || !userStatus || userStatus.puzzles_count === 0 || (userStatus.due_count === 0 && !hasValidFocusPracticeIntent) || sessionType !== 'standard'}
                                 title={startSessionDisabledReason ?? 'Start a new training session'}
-                                className={`min-h-11 px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-opacity km-focus-visible ${(controlsDisabled || !userStatus || userStatus.puzzles_count === 0 || (userStatus.due_count === 0 && !hasValidFocusPracticeIntent) || sessionType !== 'standard') ? 'km-interactive-disabled' : 'hover:opacity-90 cursor-pointer'}`}>
+                                className={`min-h-11 w-full md:w-auto px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-opacity km-focus-visible ${(controlsDisabled || !userStatus || userStatus.puzzles_count === 0 || (userStatus.due_count === 0 && !hasValidFocusPracticeIntent) || sessionType !== 'standard') ? 'km-interactive-disabled' : 'hover:opacity-90 cursor-pointer'}`}>
                                 Start Session
                             </button>
                         )}
-                        <button
-                            type="button"
-                            onClick={handleGeneratePuzzles}
-                            disabled={generateNewDisabled}
-                            title={generateDisabledReason ?? 'Generate puzzles from new games'}
-                            className={`px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-colors km-focus-visible ${generateNewDisabled ? 'km-interactive-disabled' : 'km-interactive'}`}>
-                            {generateButtonLabel}
-                        </button>
+                        {showGenerateAction && (
+                            <button
+                                type="button"
+                                onClick={handleGeneratePuzzles}
+                                disabled={generateNewDisabled}
+                                title={generateDisabledReason ?? 'Generate puzzles from new games'}
+                                className={`min-h-11 w-full md:w-auto px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-colors km-focus-visible ${generateNewDisabled ? 'km-interactive-disabled' : 'km-interactive'}`}>
+                                {generateButtonLabel}
+                            </button>
+                        )}
                     </div>
                 </div>
 
@@ -1345,7 +1356,7 @@ export default function Puzzles() {
                     and states with a working link. Two near-identical sentences
                     stacked read as a rendering bug. The reasons still reach the
                     buttons' own title tooltips. */}
-                {username && (startSessionDisabledReason || generateDisabledReason) && (
+                {username && !isOrdinaryNoDueState && (startSessionDisabledReason || generateDisabledReason) && (
                     <p className="text-sm text-primary/70 font-sans" role="status" aria-live="polite">
                         {startSessionDisabledReason ?? generateDisabledReason}
                     </p>
@@ -1489,22 +1500,18 @@ export default function Puzzles() {
                                 </>
                             ) : userStatus.due_count === 0 ? (
                                 <>
-                                    <h3 className="font-serif text-xl text-primary">All caught up</h3>
+                                    <h3 className="font-serif text-xl text-primary">No reviews due</h3>
                                     <p className="text-primary/70 font-sans">
                                         {userStatus.next_due_at
-                                            ? `Next review on ${new Date(userStatus.next_due_at).toLocaleDateString(LOCALE, { weekday: 'long', month: 'short', day: 'numeric' })}.`
-                                            : 'No puzzles are due for review yet.'}
+                                            ? `Your next scheduled review is ${new Date(userStatus.next_due_at).toLocaleDateString(LOCALE, { weekday: 'long', month: 'short', day: 'numeric' })}.`
+                                            : 'No reviews are scheduled yet.'}
                                     </p>
-                                    {userStatus.has_new_games && (
-                                        <button
-                                            type="button"
-                                            onClick={handleGeneratePuzzles}
-                                            disabled={controlsDisabled}
-                                            className={`px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-colors km-focus-visible ${controlsDisabled ? 'km-interactive-disabled' : 'km-interactive'}`}
-                                        >
-                                            Generate from New Games
-                                        </button>
-                                    )}
+                                    <p className="text-primary/70 font-sans">
+                                        You still have {userStatus.puzzles_count} puzzle{userStatus.puzzles_count === 1 ? '' : 's'} in your library.{' '}
+                                        {userStatus.has_new_games
+                                            ? 'Generate from your new games to keep training.'
+                                            : 'Sync newer games from Chess.com to create more puzzles.'}
+                                    </p>
                                 </>
                             ) : (
                                 <>
