@@ -264,11 +264,11 @@ describe('LibraryPuzzle', () => {
         });
     });
 
-    it('prioritizes a guided board flow before controls and history without exposing the answer', async () => {
+    it('keeps orientation and move guidance together before the board without exposing the answer', async () => {
         render(<LibraryPuzzle />);
         await waitFor(() => expect(screen.getByText('Deadly Fork')).toBeInTheDocument());
 
-        const instruction = screen.getByText(/tap a piece, then tap its destination square/i);
+        const instruction = screen.getByText(/drag a piece to its destination.*press enter to pick up.*enter to place/i);
         const guidance = screen.getByTestId('solve-guidance');
         const board = screen.getByTestId('solve-board');
         const actions = screen.getByTestId('solve-actions');
@@ -276,9 +276,8 @@ describe('LibraryPuzzle', () => {
         const history = screen.getByText(/3\/5 solved/);
 
         expect(instruction).toBeInTheDocument();
-        expect(guidance).toHaveClass('order-1');
-        expect(board).toHaveClass('order-2');
-        expect(actions).toHaveClass('order-3');
+        expect(guidance).toContainElement(screen.getByText('White to Move'));
+        expect(guidance).toContainElement(screen.getByText(/find the best move/i));
         expect(board.compareDocumentPosition(actions) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
         expect(actions).toContainElement(checkMove);
         expect(checkMove.compareDocumentPosition(history) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();

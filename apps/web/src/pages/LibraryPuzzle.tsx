@@ -518,7 +518,7 @@ export default function LibraryPuzzle() {
         : null;
 
     return (
-        <div className="flex flex-col gap-8 md:gap-12 animate-teedin">
+        <div className="flex flex-col gap-6 md:gap-12 animate-teedin">
             {/* Back link + Header */}
             <section className="order-1">
                 <Link to={fromSession ? '/puzzles' : '/library'} className="text-primary/70 hover:text-primary mb-2 md:mb-4 inline-block font-sans text-sm tracking-widest uppercase transition-colors">
@@ -537,7 +537,7 @@ export default function LibraryPuzzle() {
             </section>
 
             {/* Board + Controls */}
-            <section className="order-2 grid gap-4 lg:order-3 lg:grid-cols-2 lg:gap-24">
+            <section className="order-2 grid gap-3 md:gap-4 lg:order-3 lg:grid-cols-2 lg:gap-24">
                 {/* Chessboard */}
                 <div className="order-2 lg:order-1" data-testid="solve-board">
                     <div className="aspect-square w-full max-w-[600px] mx-auto shadow-2xl shadow-primary/5 rounded-sm overflow-hidden border border-primary/10">
@@ -559,19 +559,16 @@ export default function LibraryPuzzle() {
 
                 {/* Sidebar Controls */}
                 <div className="contents lg:order-2 lg:flex lg:flex-col lg:justify-center lg:space-y-8">
-                    {/* Side to move */}
-                    <div className="order-1 bg-primary/5 p-3 md:p-4 rounded-sm border-l-2 border-primary lg:order-none">
-                        <span className="font-sans text-sm tracking-wide uppercase text-primary/70">
-                            {puzzle.side_to_move === 'white' ? 'White to Move' : 'Black to Move'}
-                        </span>
-                    </div>
-
-                    {/* Status feedback */}
-                    <div className="order-1 min-h-[64px] flex items-center justify-center text-center p-3 md:min-h-[80px] md:p-6 border border-primary/10 rounded-sm lg:order-none" role="status" aria-live="polite" data-testid="solve-guidance">
+                    {/* Compact orientation + status keeps the position and its
+                        controls together in the first mobile viewport. */}
+                    <div className="order-1 min-h-[80px] flex items-center justify-center text-center p-3 md:min-h-[96px] md:p-5 bg-primary/5 border border-primary/10 rounded-sm lg:order-none" role="status" aria-live="polite" data-testid="solve-guidance">
                         {status === 'solving' && (
                             <div>
+                                <p className="font-sans text-xs tracking-widest uppercase text-primary/70">
+                                    {puzzle.side_to_move === 'white' ? 'White to Move' : 'Black to Move'}
+                                </p>
                                 <p className="text-primary font-serif text-lg italic">Find the best move.</p>
-                                <p className="mt-1 text-sm font-sans text-primary/70">Tap a piece, then tap its destination square.</p>
+                                <p className="mt-1 text-sm font-sans text-primary/70">Drag a piece to its destination. Keyboard: press Enter to pick up, then Enter to place.</p>
                             </div>
                         )}
                         {status === 'correct' && (
@@ -630,7 +627,7 @@ export default function LibraryPuzzle() {
                     )}
 
                     {/* Actions */}
-                    <div className="order-3 space-y-4 lg:order-none" data-testid="solve-actions">
+                    <div className="order-3 space-y-4 pr-12 md:pr-0 lg:order-none" data-testid="solve-actions">
                         {/* Manual UCI input toggle */}
                         <div className="flex justify-between items-center px-2">
                             <span className="text-xs text-primary/70 uppercase tracking-widest font-sans">Input Method</span>
@@ -663,7 +660,7 @@ export default function LibraryPuzzle() {
                                     type="button"
                                     onClick={handleCheckAnswer}
                                     disabled={!userMove || isChecking || isRevealing}
-                                    className={`px-6 py-4 bg-primary text-bg-primary rounded-sm font-serif text-lg transition-all shadow-lg shadow-primary/5 km-focus-visible ${!userMove || isChecking || isRevealing ? 'km-interactive-disabled' : 'km-interactive'}`}
+                                    className={`px-4 md:px-6 py-4 bg-primary text-bg-primary rounded-sm font-serif text-lg transition-all shadow-lg shadow-primary/5 km-focus-visible ${!userMove || isChecking || isRevealing ? 'km-interactive-disabled' : 'km-interactive'}`}
                                 >
                                     {isChecking ? 'Checking...' : 'Check Move'}
                                 </button>
@@ -671,7 +668,7 @@ export default function LibraryPuzzle() {
                                     type="button"
                                     onClick={handleRevealSolution}
                                     disabled={isChecking || isRevealing}
-                                    className={`px-6 py-4 border border-primary/20 text-primary rounded-sm font-serif text-lg transition-all km-focus-visible ${isChecking || isRevealing ? 'km-interactive-disabled' : 'km-interactive'}`}
+                                    className={`px-4 md:px-6 py-4 border border-primary/20 text-primary rounded-sm font-serif text-lg transition-all km-focus-visible ${isChecking || isRevealing ? 'km-interactive-disabled' : 'km-interactive'}`}
                                 >
                                     {isRevealing ? 'Revealing...' : 'Reveal'}
                                 </button>
@@ -683,7 +680,7 @@ export default function LibraryPuzzle() {
                                 <button
                                     type="button"
                                     onClick={handleMarkFailedRetry}
-                                    className="px-6 py-4 border border-primary/20 text-primary rounded-sm font-serif text-lg transition-all km-interactive km-focus-visible"
+                                    className="px-4 md:px-6 py-4 border border-primary/20 text-primary rounded-sm font-serif text-lg transition-all km-interactive km-focus-visible"
                                 >
                                     Try Again
                                 </button>
@@ -691,7 +688,7 @@ export default function LibraryPuzzle() {
                                     type="button"
                                     onClick={handleRevealSolution}
                                     disabled={isChecking || isRevealing}
-                                    className={`px-6 py-4 bg-primary text-bg-primary rounded-sm font-serif text-lg transition-all km-focus-visible ${isChecking || isRevealing ? 'km-interactive-disabled' : 'km-interactive'}`}
+                                    className={`px-4 md:px-6 py-4 bg-primary text-bg-primary rounded-sm font-serif text-lg transition-all km-focus-visible ${isChecking || isRevealing ? 'km-interactive-disabled' : 'km-interactive'}`}
                                 >
                                     {isRevealing ? 'Loading Solution...' : 'Show Solution'}
                                 </button>
