@@ -544,6 +544,7 @@ describe('Puzzles', () => {
     it.each([
       ['missing focus cause', 'mode=focus_practice'],
       ['empty focus cause', 'mode=focus_practice&focus_cause='],
+      ['whitespace-only focus cause', 'mode=focus_practice&focus_cause=%20%20%20'],
     ])('hides dead entry actions for malformed Focus Practice with %s', async (_label, query) => {
       mockSearchParams = new URLSearchParams(query);
       mockGetUserStatus.mockResolvedValue({

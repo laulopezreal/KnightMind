@@ -173,6 +173,7 @@ export default function Puzzles() {
     // in a dead-end empty session and needs no escape hatch.
     const focusCause = searchParams.get('focus_cause');
     const focusPracticeMode = searchParams.get('mode') === 'focus_practice';
+    const focusPracticeCause = focusPracticeMode ? focusCause?.trim() || null : null;
     const focusOpening = searchParams.get('focus_opening');
     const focusOpeningScope = searchParams.get('focus_opening_scope');
     const isWarmupMode = searchParams.get('warmup') === 'true';
@@ -201,7 +202,7 @@ export default function Puzzles() {
         return () => { current = false; };
     }, [focusCause, focusPracticeMode, sessionType, username]);
 
-    const effectiveFocusCause = focusPracticeMode ? focusCause : validatedNormalFocus?.cause ?? null;
+    const effectiveFocusCause = focusPracticeMode ? focusPracticeCause : validatedNormalFocus?.cause ?? null;
 
     // Warmup state
     const [warmupMode, setWarmupMode] = useState(isWarmupMode);
@@ -640,7 +641,7 @@ export default function Puzzles() {
     const isGenerating = isJobPolling || (job?.status === 'queued' || job?.status === 'running');
     const controlsDisabled = !controlsEnabled || isLoading || isGenerating || normalFocusValidationPending;
     const generateNewDisabled = !controlsEnabled || isLoading || isGenerating || !userStatus?.has_new_games;
-    const hasValidFocusPracticeIntent = focusPracticeMode && Boolean(focusCause);
+    const hasValidFocusPracticeIntent = Boolean(focusPracticeCause);
     const isNoDueWithoutValidFocusIntent = Boolean(
         userStatus &&
         userStatus.puzzles_count > 0 &&
@@ -670,7 +671,7 @@ export default function Puzzles() {
                 ? ((insightsError && !isLoadingStatus && !isRefreshingInsights) ? "Couldn't load your training data." : 'Loading your training data...')
                 : userStatus.puzzles_count === 0
                     ? 'Generate puzzles first to unlock sessions.'
-                    : focusPracticeMode && !focusCause
+                    : focusPracticeMode && !hasValidFocusPracticeIntent
                         ? 'This focus is no longer available. Return to Today’s Focus and choose a current practice session.'
                     : userStatus.due_count === 0 && hasValidFocusPracticeIntent
                         ? 'Extra practice is available for this focus. The server decides which positions are safe and available.'

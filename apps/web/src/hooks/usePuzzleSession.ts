@@ -160,6 +160,7 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
         refreshRecentSessions,
         refreshMotifPerformance,
     } = opts;
+    const normalizedFocusCause = focusCause?.trim() || null;
 
     // ── State ──
     const [sessionState, setSessionState] = useState<SessionState>('idle');
@@ -182,9 +183,9 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
     const focusStartEpochRef = useRef(0);
     const focusStartPromiseRef = useRef<Promise<void> | null>(null);
     const focusStartOwnerRef = useRef<{ username: string; focusCause: string | null; focusPracticeMode: boolean; activeSessionId: string | null; committedSessionId: string | null; epoch: number } | null>(null);
-    const focusStartContextRef = useRef({ username, focusCause, focusPracticeMode, activeSessionId });
+    const focusStartContextRef = useRef({ username, focusCause: normalizedFocusCause, focusPracticeMode, activeSessionId });
     const mountedRef = useRef(true);
-    const focusStartContext = { username, focusCause, focusPracticeMode, activeSessionId };
+    const focusStartContext = { username, focusCause: normalizedFocusCause, focusPracticeMode, activeSessionId };
     const previousFocusStartContext = focusStartContextRef.current;
     const focusStartOwner = focusStartOwnerRef.current;
     const isOwnCommittedSessionTransition =
@@ -539,10 +540,10 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
         setLastFeedback('');
 
         if (focusPracticeMode) {
-            if (!focusCause) return fail('This focus is no longer available. Return to Today’s Focus and choose a current practice session.');
+            if (!normalizedFocusCause) return fail('This focus is no longer available. Return to Today’s Focus and choose a current practice session.');
             const owner: NonNullable<typeof focusStartOwnerRef.current> = {
                 username: username.trim(),
-                focusCause,
+                focusCause: normalizedFocusCause,
                 focusPracticeMode,
                 activeSessionId,
                 committedSessionId: null,
@@ -647,7 +648,7 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
                 sessionType,
                 sessionType === 'accuracy_goal' ? targetAccuracy : undefined,
                 motifFilter || undefined,
-                focusCause || undefined,
+                normalizedFocusCause || undefined,
                 focusOpening || undefined,
                 focusOpeningScope || undefined,
             );
@@ -679,7 +680,7 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
                 targetTimeMinutesParam,
                 buildSessionData(
                     warmupMode,
-                    focusCause,
+                    normalizedFocusCause,
                     motifFilter,
                     focusOpening,
                     focusOpeningScope
