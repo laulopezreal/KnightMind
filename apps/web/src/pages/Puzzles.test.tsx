@@ -350,13 +350,12 @@ describe('Puzzles', () => {
       });
       expect(screen.getByRole('heading', { name: '4 puzzles ready to practise' })).toBeInTheDocument();
       expect(screen.queryByText(/4 due puzzles/i)).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Start Session' })).toBeEnabled();
       // Button label should reflect state, not generic "Generate New"
       expect(screen.getByRole('button', { name: /No new games to generate/i })).toBeInTheDocument();
     });
 
-    it('reserves due-for-review language for the scheduled-review state', async () => {
-      // When due_count=0, startSessionDisabledReason takes the <p> slot;
-      // verify the generate reason is still surfaced as the button tooltip
+    it('keeps existing puzzles visible without presenting dead entry actions when no review is due', async () => {
       mockGetUserStatus.mockResolvedValue({
         games_count: 840,
         puzzles_count: 60,
@@ -366,12 +365,36 @@ describe('Puzzles', () => {
 
       render(<Puzzles />);
 
-      await waitFor(() => {
-        const btn = screen.getByRole('button', { name: /No new games to generate/i });
-        expect(btn).toHaveAttribute('title', expect.stringContaining('Sync newer games from Chess.com to generate more puzzles'));
-      });
-      expect(screen.getByText('No puzzles are due for review yet.')).toBeInTheDocument();
+      expect(await screen.findByRole('heading', { name: 'No reviews due' })).toBeInTheDocument();
+      expect(screen.getByText(/Sync newer games from Chess\.com to create more puzzles/i)).toHaveTextContent(
+        'You still have 60 puzzles in your library. Sync newer games from Chess.com to create more puzzles.'
+      );
+      expect(screen.queryByRole('button', { name: 'Start Session' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /generate/i })).not.toBeInTheDocument();
       expect(screen.queryByText(/due puzzles/i)).not.toBeInTheDocument();
+    });
+
+    it('offers one clear existing action when new games can replenish a no-due queue', async () => {
+      mockGetUserStatus.mockResolvedValue({
+        games_count: 840,
+        puzzles_count: 60,
+        due_count: 0,
+        has_new_games: true,
+      });
+      vi.mocked(generatePuzzles).mockResolvedValue({ job_id: 'new-puzzles-job' });
+
+      render(<Puzzles />);
+
+      expect(await screen.findByRole('heading', { name: 'No reviews due' })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Start Session' })).not.toBeInTheDocument();
+      const generate = screen.getByRole('button', { name: 'Generate from New Games' });
+      expect(screen.getAllByRole('button', { name: 'Generate from New Games' })).toHaveLength(1);
+      expect(generate).toBeEnabled();
+
+      await act(async () => {
+        generate.click();
+      });
+      expect(generatePuzzles).toHaveBeenCalledWith('testplayer');
     });
   });
 
@@ -390,7 +413,12 @@ describe('Puzzles', () => {
       expect(await screen.findByRole('heading', { level: 1, name: 'Focus practice' })).toBeInTheDocument();
       expect(screen.getByText(/Focus practice\s+Active/i)).toBeInTheDocument();
       expect(screen.getAllByText(/extra practice for the selected focus/i)).toHaveLength(2);
-      expect(screen.getAllByText(/server decides which positions are safe and available/i)).toHaveLength(2);
+      const focusPracticeMessage = screen
+        .getAllByText(/server decides whether positions are safe and available/i)
+        .find((message) => message.textContent === (
+          'Focus practice gives you extra practice for the selected focus. The server decides whether positions are safe and available.'
+        ));
+      expect(focusPracticeMessage).toBeVisible();
       expect(screen.queryByText('Daily Puzzles')).not.toBeInTheDocument();
       expect(screen.queryByText('STANDARD ACTIVE')).not.toBeInTheDocument();
       expect(screen.queryByText(/Standard mode uses spaced repetition/i)).not.toBeInTheDocument();
@@ -518,7 +546,12 @@ describe('Puzzles', () => {
     });
 
 
-    it('keeps ordinary due-zero sessions and malformed Focus Practice entry disabled', async () => {
+    it.each([
+      ['missing focus cause', 'mode=focus_practice'],
+      ['empty focus cause', 'mode=focus_practice&focus_cause='],
+      ['whitespace-only focus cause', 'mode=focus_practice&focus_cause=%20%20%20'],
+    ])('hides dead entry actions for malformed Focus Practice with %s', async (_label, query) => {
+      mockSearchParams = new URLSearchParams(query);
       mockGetUserStatus.mockResolvedValue({
         games_count: 50,
         puzzles_count: 20,
@@ -526,16 +559,14 @@ describe('Puzzles', () => {
         has_new_games: false,
       });
 
-      const { rerender } = render(<Puzzles />);
-      expect(await screen.findByRole('button', { name: 'Start Session' })).toBeDisabled();
+      render(<Puzzles />);
 
-      mockSearchParams = new URLSearchParams('mode=focus_practice');
-      rerender(<Puzzles />);
-      await waitFor(() => expect(screen.getByRole('button', { name: 'Start Session' })).toBeDisabled());
+      expect(await screen.findByRole('heading', { name: 'No reviews due' })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Start Session' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /generate/i })).not.toBeInTheDocument();
       expect(screen.getByRole('heading', { level: 1, name: 'Daily Puzzles' })).toBeInTheDocument();
       expect(screen.getByText(/Standard\s+Active/i)).toBeInTheDocument();
       expect(screen.getByText('Standard mode')).toBeInTheDocument();
-      expect(screen.getByText('No puzzles are due for review yet.')).toBeInTheDocument();
       expect(mockStartFocusPractice).not.toHaveBeenCalled();
     });
   });
