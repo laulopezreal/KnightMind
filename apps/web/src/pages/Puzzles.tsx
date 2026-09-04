@@ -641,13 +641,13 @@ export default function Puzzles() {
     const controlsDisabled = !controlsEnabled || isLoading || isGenerating || normalFocusValidationPending;
     const generateNewDisabled = !controlsEnabled || isLoading || isGenerating || !userStatus?.has_new_games;
     const hasValidFocusPracticeIntent = focusPracticeMode && Boolean(focusCause);
-    const isOrdinaryNoDueState = Boolean(
+    const isNoDueWithoutValidFocusIntent = Boolean(
         userStatus &&
         userStatus.puzzles_count > 0 &&
         userStatus.due_count === 0 &&
-        !focusPracticeMode
+        !hasValidFocusPracticeIntent
     );
-    const showGenerateAction = !isOrdinaryNoDueState || Boolean(userStatus?.has_new_games) || isGenerating;
+    const showGenerateAction = !isNoDueWithoutValidFocusIntent || Boolean(userStatus?.has_new_games) || isGenerating;
     const { selectedModeLabel, screenReaderModeLabel } = getModeLabels(sessionType);
     const modeAvailabilityLabel = sessionType === 'standard' ? 'Active' : 'Beta';
     const presentationModeLabel = hasValidFocusPracticeIntent ? 'Focus practice' : selectedModeLabel;
@@ -696,7 +696,7 @@ export default function Puzzles() {
                     : null;
     const generateButtonLabel = isGenerating
         ? 'Generating...'
-        : isOrdinaryNoDueState && userStatus?.has_new_games
+        : isNoDueWithoutValidFocusIntent && userStatus?.has_new_games
             ? 'Generate from New Games'
         : userStatus && !userStatus.has_new_games && userStatus.games_count > 0
             ? 'No new games to generate'
@@ -1328,7 +1328,7 @@ export default function Puzzles() {
                         </div>
                     </div>
                     <div className="flex w-full md:w-auto gap-4 flex-wrap">
-                        {!activeSessionId && !isOrdinaryNoDueState && (
+                        {!activeSessionId && !isNoDueWithoutValidFocusIntent && (
                             <button
                                 type="button"
                                 onClick={handleStartSession}
@@ -1356,7 +1356,7 @@ export default function Puzzles() {
                     and states with a working link. Two near-identical sentences
                     stacked read as a rendering bug. The reasons still reach the
                     buttons' own title tooltips. */}
-                {username && !isOrdinaryNoDueState && (startSessionDisabledReason || generateDisabledReason) && (
+                {username && !isNoDueWithoutValidFocusIntent && (startSessionDisabledReason || generateDisabledReason) && (
                     <p className="text-sm text-primary/70 font-sans" role="status" aria-live="polite">
                         {startSessionDisabledReason ?? generateDisabledReason}
                     </p>
