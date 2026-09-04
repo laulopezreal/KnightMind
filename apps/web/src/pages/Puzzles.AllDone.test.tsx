@@ -321,10 +321,16 @@ describe('Issue #154: finish button on final puzzle', () => {
 
         await renderAndSolveIncorrectly(user);
         expect(checkPuzzle).toHaveBeenCalledTimes(1);
+        const incorrectOutcome = screen.getByText('Not this one — take another look.');
 
         fireEvent.click(screen.getByText(controlName));
 
         expect(checkPuzzle).toHaveBeenCalledTimes(1);
+        expect(incorrectOutcome).toBeVisible();
+        expect(screen.queryByText('Input Method')).not.toBeInTheDocument();
+        expect(screen.queryByText('Type Move Manually')).not.toBeInTheDocument();
+        expect(screen.queryByPlaceholderText('e.g. e2e4')).not.toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Check Move' })).not.toBeInTheDocument();
         const finishButton = screen.getByRole('button', { name: 'Finish Session' });
         expect(finishButton).not.toBeDisabled();
         expect(finishButton).toHaveClass('bg-primary');
