@@ -934,7 +934,7 @@ export default function Puzzles() {
     };
 
     const handleCheckAnswer = async () => {
-        if (!currentPuzzle) return;
+        if (!currentPuzzle || status !== 'solving') return;
         const normalizedUserMove = userMove.trim().toLowerCase();
         if (!normalizedUserMove) return;
         // Apply the typed move to a working board so a multi-move line can play
@@ -1143,7 +1143,7 @@ export default function Puzzles() {
     }, [currentPuzzle, clueReset, startPuzzleTimer]);
 
     const onPieceDrop = (sourceSquare: string, targetSquare: string, promotion: string = 'q') => {
-        if (!currentPuzzle || status === 'correct' || status === 'revealed') return false;
+        if (!currentPuzzle || status !== 'solving') return false;
         try {
             // `game.move` mutates in place, so capture the position first —
             // processUserMove needs it to roll back if the check request fails.

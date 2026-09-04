@@ -13,6 +13,7 @@ import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import Puzzles from './Puzzles';
 import { setupMockLocalStorage } from '../test/helpers';
+import { checkPuzzle } from '../api';
 import type { UsePuzzleSessionReturn } from '../hooks/usePuzzleSession';
 
 // ── Module mocks ─────────────────────────────────────────────────────
@@ -164,8 +165,24 @@ vi.mock('../components/WarmupSummary', () => ({
 vi.mock('../components/AchievementsList', () => ({ AchievementsList: () => null }));
 vi.mock('../components/RecentSessionsCard', () => ({ RecentSessionsCard: () => null }));
 
-vi.mock('react-chessboard', () => ({
-    Chessboard: () => <div data-testid="chessboard">Chessboard</div>,
+vi.mock('../components/AccessibleChessboard', () => ({
+    AccessibleChessboard: ({
+        onKeyboardMove,
+        options,
+    }: {
+        onKeyboardMove: (move: { sourceSquare: string; targetSquare: string }) => void;
+        options: { onPieceDrop: (move: { sourceSquare: string; targetSquare: string }) => boolean };
+    }) => (
+        <div data-testid="chessboard">
+            Chessboard
+            <button type="button" onClick={() => onKeyboardMove({ sourceSquare: 'e2', targetSquare: 'e4' })}>
+                Make keyboard board move
+            </button>
+            <button type="button" onClick={() => options.onPieceDrop({ sourceSquare: 'e2', targetSquare: 'e4' })}>
+                Make drag board move
+            </button>
+        </div>
+    ),
 }));
 
 vi.mock('chess.js', () => {
@@ -252,6 +269,22 @@ async function renderAndSolveCorrectly(user: ReturnType<typeof userEvent.setup>)
     await waitFor(() => expect(screen.getByText('Correct! Excellent.')).toBeInTheDocument());
 }
 
+/** Helper: reach the post-incorrect state on the final puzzle. */
+async function renderAndSolveIncorrectly(user: ReturnType<typeof userEvent.setup>) {
+    vi.mocked(checkPuzzle).mockResolvedValueOnce({
+        correct: false,
+        result: 'fail',
+        reply: null,
+        complete: false,
+        next_ply_index: null,
+    });
+    render(<Puzzles />);
+    await user.click(screen.getByText('Type Move Manually'));
+    await user.type(screen.getByPlaceholderText('e.g. e2e4'), 'e2e4');
+    await user.click(screen.getByText('Check Move'));
+    await waitFor(() => expect(screen.getByText('Not this one — take another look.')).toBeInTheDocument());
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────
 
 describe('Issue #154: finish button on final puzzle', () => {
@@ -277,6 +310,25 @@ describe('Issue #154: finish button on final puzzle', () => {
         await user.click(screen.getByText('Review this puzzle'));
         expect(details).toHaveAttribute('open');
         expect(screen.getByText('Puzzle record')).toBeVisible();
+    });
+
+    it.each([
+        ['keyboard', 'Make keyboard board move'],
+        ['drag', 'Make drag board move'],
+    ])('rejects %s board input after an incorrect final-puzzle outcome', async (_inputMethod, controlName) => {
+        const user = userEvent.setup();
+        mockSessionReturn.mockReturnValue(makeSessionReturn({ sessionState: 'active' }));
+
+        await renderAndSolveIncorrectly(user);
+        expect(checkPuzzle).toHaveBeenCalledTimes(1);
+
+        fireEvent.click(screen.getByText(controlName));
+
+        expect(checkPuzzle).toHaveBeenCalledTimes(1);
+        const finishButton = screen.getByRole('button', { name: 'Finish Session' });
+        expect(finishButton).not.toBeDisabled();
+        expect(finishButton).toHaveClass('bg-primary');
+        expect(screen.getByText('Show Solution').closest('button')).not.toHaveClass('bg-primary');
     });
 
     it('button is disabled and shows Recording Session while completing', async () => {
