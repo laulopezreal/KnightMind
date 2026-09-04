@@ -146,23 +146,31 @@ describe('Library', () => {
         expect(screen.getByLabelText('Difficulty')).toHaveClass('min-h-11');
     });
 
-    it('keeps supplemental filters legible and functional in the contained mobile strip', async () => {
+    it('reveals every supplemental filter through one keyboard-reachable mobile action', async () => {
+        const longCauseLabel = 'Loose piece awareness caused by an overloaded defender';
+        const longOpeningLabel = 'Sicilian Defense: Najdorf Variation';
         mockGetLibraryPuzzles.mockResolvedValue({
             ...EMPTY_RESPONSE,
             puzzles: MOCK_PUZZLES,
             total: 2,
             available_motifs: ['Fork'],
             available_causes: [
-                { value: 'loose_piece_awareness', label: 'Loose piece awareness' },
+                { value: 'loose_piece_awareness', label: longCauseLabel },
             ],
-            available_openings: ['Sicilian Defense'],
+            available_openings: [longOpeningLabel],
             stats: MOCK_STATS,
         });
         render(<Library />);
 
-        const supplementalFilters = await screen.findByLabelText('Supplemental library filters');
-        expect(supplementalFilters).toHaveClass('overflow-x-auto', 'sm:flex-wrap');
+        const disclosure = await screen.findByRole('button', { name: /more filters/i });
+        expect(within(disclosure).getByText('5 controls')).toBeVisible();
+        expect(disclosure).toHaveAttribute('aria-expanded', 'false');
+        disclosure.focus();
+        expect(disclosure).toHaveFocus();
+        fireEvent.click(disclosure);
+        expect(disclosure).toHaveAttribute('aria-expanded', 'true');
 
+        const supplementalFilters = await screen.findByLabelText('Supplemental library filters');
         for (const name of [
             'Filter by motif',
             'Filter by mistake cause',
@@ -170,10 +178,7 @@ describe('Library', () => {
             'Filter by opening',
             'Sort puzzles',
         ]) {
-            expect(within(supplementalFilters).getByLabelText(name)).toHaveClass(
-                'min-h-11',
-                'shrink-0',
-            );
+            expect(within(supplementalFilters).getByLabelText(name)).toBeEnabled();
         }
 
         fireEvent.change(within(supplementalFilters).getByLabelText('Filter by motif'), {
@@ -186,18 +191,23 @@ describe('Library', () => {
             target: { value: 'middlegame' },
         });
         fireEvent.change(within(supplementalFilters).getByLabelText('Filter by opening'), {
-            target: { value: 'Sicilian Defense' },
+            target: { value: longOpeningLabel },
         });
         fireEvent.change(within(supplementalFilters).getByLabelText('Sort puzzles'), {
             target: { value: 'newest' },
         });
+
+        expect(within(supplementalFilters).getByLabelText('Filter by mistake cause'))
+            .toHaveDisplayValue(longCauseLabel);
+        expect(within(supplementalFilters).getByLabelText('Filter by opening'))
+            .toHaveDisplayValue(longOpeningLabel);
 
         await waitFor(() => {
             expect(mockGetLibraryPuzzles).toHaveBeenLastCalledWith(expect.objectContaining({
                 motif: 'Fork',
                 cause: 'loose_piece_awareness',
                 phase: 'middlegame',
-                opening: 'Sicilian Defense',
+                opening: longOpeningLabel,
                 sort: 'newest',
             }));
         });
@@ -630,6 +640,8 @@ describe('Library cause filter', () => {
 
         const select = await screen.findByLabelText('Filter by mistake cause');
         expect(select).toHaveValue('king_safety_blindness');
+        expect(screen.getByRole('button', { name: /hide more filters/i }))
+            .toHaveAttribute('aria-expanded', 'true');
     });
 
     it('labels the options rather than showing raw slugs', async () => {

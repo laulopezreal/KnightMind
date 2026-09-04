@@ -173,6 +173,9 @@ export default function Library() {
         () => new URLSearchParams(window.location.search).get('opening_line') ?? ''
     );
     const [sort, setSort] = useState<PuzzleSort>('due_soonest');
+    const [supplementalFiltersOpen, setSupplementalFiltersOpen] = useState(
+        () => Boolean(causeFilter || phaseFilter || openingFilter || openingLineFilter)
+    );
     const [offset, setOffset] = useState(0);
 
     // Debounced search
@@ -246,6 +249,10 @@ export default function Library() {
     const availableMotifs = data?.available_motifs ?? [];
     const availableCauses = data?.available_causes ?? [];
     const availableOpenings = data?.available_openings ?? [];
+    const supplementalFilterCount = 2
+        + (availableMotifs.length > 0 ? 1 : 0)
+        + (availableCauses.length > 0 ? 1 : 0)
+        + (availableOpenings.length > 0 ? 1 : 0);
     const corpusStats = data?.stats ?? null;
     // Every fetch showed the loading state here, not just the first -- a filter
     // change should visibly reload the table.
@@ -360,9 +367,23 @@ export default function Library() {
                         </label>
                     </div>
 
+                    <button
+                        type="button"
+                        aria-controls="supplemental-library-filters"
+                        aria-expanded={supplementalFiltersOpen}
+                        onClick={() => setSupplementalFiltersOpen(open => !open)}
+                        className="inline-flex min-h-11 w-full items-center justify-between border border-primary/20 rounded-sm px-3 text-primary km-interactive km-focus-visible sm:hidden"
+                    >
+                        <span>{supplementalFiltersOpen ? 'Hide more filters' : 'More filters'}</span>
+                        <span className="text-xs text-primary/70">
+                            {supplementalFilterCount} controls
+                        </span>
+                    </button>
+
                     <div
+                        id="supplemental-library-filters"
                         aria-label="Supplemental library filters"
-                        className="flex w-full gap-2 overflow-x-auto pb-1 sm:flex-wrap sm:gap-3 sm:overflow-visible sm:pb-0"
+                        className={`${supplementalFiltersOpen ? 'grid' : 'hidden'} w-full grid-cols-1 gap-2 sm:flex sm:flex-wrap sm:gap-3`}
                     >
                         {/* Motif */}
                         {availableMotifs.length > 0 && (
@@ -370,7 +391,7 @@ export default function Library() {
                                 value={motifFilter}
                                 onChange={(e) => setMotifFilter(e.target.value)}
                                 aria-label="Filter by motif"
-                                className="min-h-11 min-w-36 shrink-0 bg-bg-primary border border-primary/20 rounded-sm px-3 text-primary focus:outline-none focus:border-primary/60"
+                                className="min-h-11 w-full min-w-0 bg-bg-primary border border-primary/20 rounded-sm px-3 text-primary focus:outline-none focus:border-primary/60 sm:w-auto sm:min-w-36"
                             >
                                 <option value="">All motifs</option>
                                 {availableMotifs.map(m => (
@@ -385,7 +406,7 @@ export default function Library() {
                                 value={causeFilter}
                                 onChange={(e) => setCauseFilter(e.target.value)}
                                 aria-label="Filter by mistake cause"
-                                className="min-h-11 min-w-36 shrink-0 bg-bg-primary border border-primary/20 rounded-sm px-3 text-primary focus:outline-none focus:border-primary/60"
+                                className="min-h-11 w-full min-w-0 bg-bg-primary border border-primary/20 rounded-sm px-3 text-primary focus:outline-none focus:border-primary/60 sm:w-auto sm:min-w-36"
                             >
                                 <option value="">All causes</option>
                                 {availableCauses.map(c => (
@@ -399,7 +420,7 @@ export default function Library() {
                             so it appears as a removable chip. Without it the list is
                             narrowed with no visible reason and no way out. */}
                         {openingLineFilter && (
-                            <span className="inline-flex min-h-11 max-w-72 shrink-0 items-center gap-2 bg-primary/10 border border-primary/20 rounded-sm pl-3 text-primary font-sans text-sm">
+                            <span className="inline-flex min-h-11 w-full min-w-0 items-center gap-2 bg-primary/10 border border-primary/20 rounded-sm pl-3 text-primary font-sans text-sm sm:w-auto sm:max-w-72">
                                 <span className="truncate">{openingLineFilter}</span>
                                 <button
                                     type="button"
@@ -417,7 +438,7 @@ export default function Library() {
                             value={phaseFilter}
                             onChange={(e) => setPhaseFilter(e.target.value)}
                             aria-label="Filter by game phase"
-                            className="min-h-11 min-w-36 shrink-0 bg-bg-primary border border-primary/20 rounded-sm px-3 text-primary focus:outline-none focus:border-primary/60"
+                            className="min-h-11 w-full min-w-0 bg-bg-primary border border-primary/20 rounded-sm px-3 text-primary focus:outline-none focus:border-primary/60 sm:w-auto sm:min-w-36"
                         >
                             <option value="">All phases</option>
                             <option value="opening">Opening</option>
@@ -431,7 +452,7 @@ export default function Library() {
                                 value={openingFilter}
                                 onChange={(e) => setOpeningFilter(e.target.value)}
                                 aria-label="Filter by opening"
-                                className="min-h-11 min-w-40 shrink-0 bg-bg-primary border border-primary/20 rounded-sm px-3 text-primary focus:outline-none focus:border-primary/60"
+                                className="min-h-11 w-full min-w-0 bg-bg-primary border border-primary/20 rounded-sm px-3 text-primary focus:outline-none focus:border-primary/60 sm:w-auto sm:min-w-40"
                             >
                                 <option value="">All openings</option>
                                 {availableOpenings.map(o => (
@@ -445,7 +466,7 @@ export default function Library() {
                             value={sort}
                             onChange={(e) => setSort(e.target.value as PuzzleSort)}
                             aria-label="Sort puzzles"
-                            className="min-h-11 min-w-36 shrink-0 bg-bg-primary border border-primary/20 rounded-sm px-3 text-primary focus:outline-none focus:border-primary/60 sm:ml-auto"
+                            className="min-h-11 w-full min-w-0 bg-bg-primary border border-primary/20 rounded-sm px-3 text-primary focus:outline-none focus:border-primary/60 sm:ml-auto sm:w-auto sm:min-w-36"
                         >
                             {SORT_OPTIONS.map(o => (
                                 <option key={o.value} value={o.value}>{o.label}</option>
