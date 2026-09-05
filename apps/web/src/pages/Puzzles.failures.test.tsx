@@ -900,7 +900,7 @@ describe('Puzzles — honest failure handling', () => {
             expect(screen.queryByRole('alert')).not.toBeInTheDocument();
         });
 
-        it('keeps diagnosis compact and above the full-width primary move-on action', async () => {
+        it('keeps the primary move-on action ahead of collapsed diagnosis detail', async () => {
             const user = userEvent.setup();
             render(<Puzzles />);
 
@@ -908,9 +908,16 @@ describe('Puzzles — honest failure handling', () => {
 
             const diagnosis = await screen.findByTestId('post-resolution-diagnosis');
             const nextPuzzle = screen.getByRole('button', { name: /next puzzle/i });
+            const disclosure = screen.getByText('Review this puzzle').closest('details');
             expect(diagnosis).toHaveClass('min-w-0');
             expect(nextPuzzle).toHaveClass('w-full');
-            expect(diagnosis.compareDocumentPosition(nextPuzzle) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+            expect(nextPuzzle.compareDocumentPosition(disclosure!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+            expect(disclosure).not.toHaveAttribute('open');
+            expect(diagnosis).not.toBeVisible();
+
+            await user.click(screen.getByText('Review this puzzle'));
+            expect(disclosure).toHaveAttribute('open');
+            expect(diagnosis).toBeVisible();
         });
 
         it('confirms a ready diagnosis after persistence without blocking move-on', async () => {

@@ -934,7 +934,7 @@ export default function Puzzles() {
     };
 
     const handleCheckAnswer = async () => {
-        if (!currentPuzzle) return;
+        if (!currentPuzzle || status !== 'solving') return;
         const normalizedUserMove = userMove.trim().toLowerCase();
         if (!normalizedUserMove) return;
         // Apply the typed move to a working board so a multi-move line can play
@@ -1143,7 +1143,7 @@ export default function Puzzles() {
     }, [currentPuzzle, clueReset, startPuzzleTimer]);
 
     const onPieceDrop = (sourceSquare: string, targetSquare: string, promotion: string = 'q') => {
-        if (!currentPuzzle || status === 'correct' || status === 'revealed') return false;
+        if (!currentPuzzle || status !== 'solving') return false;
         try {
             // `game.move` mutates in place, so capture the position first —
             // processUserMove needs it to roll back if the check request fails.
@@ -2007,19 +2007,6 @@ export default function Puzzles() {
                             )}
                         </div>
 
-                        {(activeDiagnosis || diagnosisLoading) && (
-                            <div data-testid="post-resolution-diagnosis" className="min-w-0">
-                                <MistakeDiagnosisCard
-                                    diagnosis={activeDiagnosis}
-                                    revealed
-                                    loading={diagnosisLoading}
-                                    savingConfirmation={diagnosisConfirmationSaving}
-                                    confirmationError={activeDiagnosisConfirmationError}
-                                    onConfirm={confirmResolvedDiagnosis}
-                                />
-                            </div>
-                        )}
-
                         {/* Connectivity/action failures. Sits outside the status
                             region (which is polite and describes the puzzle) and
                             is announced assertively — it means an action the user
@@ -2036,18 +2023,22 @@ export default function Puzzles() {
 
                         {/* Actions */}
                         <div className="space-y-6">
-                            {/* Type Move Toggle */}
-                            <div className="flex justify-between items-center px-2">
-                                <span className="text-xs text-primary/70 uppercase tracking-widest font-sans">Input Method</span>
-                                <button
-                                    type="button"
-                                    onClick={() => setShowUciInput(!showUciInput)}
-                                    className="km-interactive km-focus-visible km-inline-link text-primary text-xs font-serif underline decoration-primary/30 underline-offset-4 transition-colors">
-                                    {showUciInput ? 'Switch to Drag & Drop' : 'Type Move Manually'}
-                                </button>
-                            </div>
+                            {/* Type Move Toggle. Once an outcome is known, remove the
+                                now-irrelevant input choice so the next action owns the
+                                resolved state. It returns with a fresh solving state. */}
+                            {status === 'solving' && (
+                                <div className="flex justify-between items-center px-2">
+                                    <span className="text-xs text-primary/70 uppercase tracking-widest font-sans">Input Method</span>
+                                    <button
+                                        type="button"
+                                        onClick={() => setShowUciInput(!showUciInput)}
+                                        className="km-interactive km-focus-visible km-inline-link text-primary text-xs font-serif underline decoration-primary/30 underline-offset-4 transition-colors">
+                                        {showUciInput ? 'Switch to Drag & Drop' : 'Type Move Manually'}
+                                    </button>
+                                </div>
+                            )}
 
-                            {showUciInput && (
+                            {status === 'solving' && showUciInput && (
                                 <div className="animate-switchedin">
                                     <input
                                         type="text"
@@ -2097,28 +2088,7 @@ export default function Puzzles() {
                                 </div>
                             )}
                             {(status === 'correct' || status === 'revealed') && (
-                                <div className="space-y-4">
-                                    {/* Performance Stats for this puzzle */}
-                                    {currentPuzzle?.attempts !== undefined && (
-                                        <div className="bg-primary/5 p-3 rounded-sm text-sm">
-                                            <div className="flex justify-between">
-                                                <span className="text-primary/70">Puzzle Stats:</span>
-                                                <span className="font-mono">
-                                                    {currentPuzzle.pass_count || 0}/{currentPuzzle.attempts || 0}
-                                                    {currentPuzzle.attempts ? ` (${Math.round(((currentPuzzle.pass_count || 0) / currentPuzzle.attempts) * 100)}%)` : ''}
-                                                </span>
-                                            </div>
-                                            {currentPuzzle.next_due_at && (
-                                                <div className="flex justify-between mt-1">
-                                                    <span className="text-primary/70">Next Review:</span>
-                                                    <span className="font-mono">
-                                                        {new Date(currentPuzzle.next_due_at).toLocaleDateString(LOCALE)}
-                                                    </span>
-                                                </div>
-                                            )}
-                                        </div>
-                                    )}
-
+                                <div className="space-y-3" data-testid="resolved-puzzle-actions">
                                     {sessionState === 'completed' ? (
                                         sessionSummary ? (
                                             <p className="text-center text-primary/70 font-sans text-sm py-4">
@@ -2146,8 +2116,50 @@ export default function Puzzles() {
                                                     <span className="animate-spin h-5 w-5 border-2 border-current/20 border-t-current rounded-full mr-2"></span>
                                                     Recording Session...
                                                 </>
-                                            ) : isFinalPuzzle ? 'All Done' : 'Next Puzzle →'}
+                                            ) : isFinalPuzzle ? 'Finish Session' : 'Next Puzzle →'}
                                         </button>
+                                    )}
+
+                                    {(currentPuzzle?.attempts !== undefined || activeDiagnosis || diagnosisLoading) && (
+                                        <details key={currentPuzzle.id} className="group border-t border-primary/10 pt-1">
+                                            <summary className="min-h-[44px] cursor-pointer list-none flex items-center justify-between gap-3 rounded-sm px-2 text-sm font-serif text-primary/70 transition-colors hover:text-primary km-focus-visible">
+                                                <span>Review this puzzle</span>
+                                                <span aria-hidden="true" className="text-base transition-transform group-open:rotate-45">＋</span>
+                                            </summary>
+                                            <div className="pt-2 space-y-3">
+                                                {currentPuzzle?.attempts !== undefined && (
+                                                    <div className="bg-primary/5 p-3 rounded-sm text-sm">
+                                                        <div className="flex justify-between gap-3">
+                                                            <span className="text-primary/70">Puzzle record</span>
+                                                            <span className="font-mono">
+                                                                {currentPuzzle.pass_count || 0}/{currentPuzzle.attempts || 0}
+                                                                {currentPuzzle.attempts ? ` (${Math.round(((currentPuzzle.pass_count || 0) / currentPuzzle.attempts) * 100)}%)` : ''}
+                                                            </span>
+                                                        </div>
+                                                        {currentPuzzle.next_due_at && (
+                                                            <div className="flex justify-between gap-3 mt-1">
+                                                                <span className="text-primary/70">Next review</span>
+                                                                <span className="font-mono">
+                                                                    {new Date(currentPuzzle.next_due_at).toLocaleDateString(LOCALE)}
+                                                                </span>
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                )}
+                                                {(activeDiagnosis || diagnosisLoading) && (
+                                                    <div data-testid="post-resolution-diagnosis" className="min-w-0">
+                                                        <MistakeDiagnosisCard
+                                                            diagnosis={activeDiagnosis}
+                                                            revealed
+                                                            loading={diagnosisLoading}
+                                                            savingConfirmation={diagnosisConfirmationSaving}
+                                                            confirmationError={activeDiagnosisConfirmationError}
+                                                            onConfirm={confirmResolvedDiagnosis}
+                                                        />
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </details>
                                     )}
                                 </div>
                             )}

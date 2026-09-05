@@ -289,7 +289,7 @@ describe('Multi-move (full-PV) solve flow', () => {
         await waitFor(() => expect(screen.getByText('Correct! Excellent.')).toBeInTheDocument());
 
         // Advancing records the verified pass with the FULL line (space-joined).
-        await user.click(screen.getByRole('button', { name: 'All Done' }));
+        await user.click(screen.getByRole('button', { name: 'Finish Session' }));
         await waitFor(() =>
             expect(mockHandleReviewPuzzle).toHaveBeenCalledWith('pass', undefined, 'd2d4 c2c4')
         );
@@ -324,7 +324,7 @@ describe('Multi-move (full-PV) solve flow', () => {
         expect(mockCheckPuzzle).toHaveBeenCalledWith('pv-1', 'testplayer', 'd2d4', 0);
 
         // The single move is what gets submitted for verification.
-        await user.click(screen.getByRole('button', { name: 'All Done' }));
+        await user.click(screen.getByRole('button', { name: 'Finish Session' }));
         await waitFor(() =>
             expect(mockHandleReviewPuzzle).toHaveBeenCalledWith('pass', undefined, 'd2d4')
         );
