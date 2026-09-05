@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom';
 import type { SessionSummary } from '../api/sessions';
 import { calculateAccuracy } from '../utils/accuracy';
 
@@ -12,6 +13,8 @@ interface WarmupSummaryProps {
  */
 export function WarmupSummary({ sessionSummary, onContinue }: WarmupSummaryProps) {
   const accuracy = calculateAccuracy(sessionSummary.pass_count, sessionSummary.fail_count);
+  const missedPuzzles = sessionSummary.missed_puzzles;
+  const hasMissedPuzzles = Boolean(missedPuzzles?.length);
 
   // Determine feedback based on performance
   const getFeedbackMessage = (acc: number): string => {
@@ -74,14 +77,47 @@ export function WarmupSummary({ sessionSummary, onContinue }: WarmupSummaryProps
         </p>
       </div>
 
-      {/* Continue Button */}
+      {hasMissedPuzzles && missedPuzzles && (
+        <section className="mb-6 border-y border-primary/10 py-5" aria-labelledby="warmup-missed-puzzles-heading">
+          <h3 id="warmup-missed-puzzles-heading" className="text-lg font-serif text-primary mb-1">
+            {missedPuzzles.length === 1 ? 'Missed puzzle' : `Missed puzzles (${missedPuzzles.length})`}
+          </h3>
+          <p className="text-sm text-primary/70 mb-3">Review what to learn from this warmup.</p>
+          <ul className="divide-y divide-primary/10" aria-label="Missed puzzles">
+            {missedPuzzles.map((missedPuzzle) => (
+              <li
+                key={missedPuzzle.puzzle_id}
+                className="flex flex-col items-stretch gap-1 py-3 sm:flex-row sm:items-center sm:gap-3"
+              >
+                <div className="min-w-0 flex-1">
+                  <span className="block text-sm font-serif text-primary whitespace-normal break-words">
+                    {missedPuzzle.display_name}
+                  </span>
+                  {missedPuzzle.cause_label && (
+                    <span className="block text-xs text-primary/70 mt-1 whitespace-normal break-words">
+                      {missedPuzzle.cause_label}
+                    </span>
+                  )}
+                </div>
+                <Link
+                  to={`/library/${missedPuzzle.puzzle_id}?from=session`}
+                  className="self-start sm:self-auto shrink-0 inline-flex items-center justify-center min-h-11 min-w-11 text-xs font-serif text-primary/70 underline underline-offset-2 hover:text-primary transition-colors km-focus-visible"
+                  aria-label={`Review ${missedPuzzle.display_name}`}
+                >
+                  Review
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
       <button
         type="button"
         onClick={onContinue}
         className="w-full px-6 py-3 bg-primary text-bg-primary rounded-sm font-serif transition-opacity hover:opacity-90 cursor-pointer km-focus-visible"
-        aria-label="Continue to dashboard"
       >
-        Continue to Dashboard
+        Back to Dashboard
       </button>
     </section>
   );
