@@ -265,7 +265,9 @@ main() {
     # Clean up the temp file on any exit (set -e abort, signal, etc.) so failed
     # backups don't leave orphaned *.tmp.* files behind. The successful path
     # renames it first, so the trap is then a no-op.
-    trap 'rm -f "${tmp_dump_file}"' EXIT
+    # Capture the path in the trap command now: tmp_dump_file is local to main
+    # and is otherwise out of scope when EXIT runs after main returns.
+    trap "rm -f -- $(printf '%q' "${tmp_dump_file}")" EXIT
     # --env-file: compose only auto-loads a file literally named ".env" for
     # ${POSTGRES_*} interpolation; this project uses .env.docker.
     docker compose -f /home/lauureal/apps/knightmind/docker-compose.yml \
@@ -273,6 +275,7 @@ main() {
         pg_dump -U "${POSTGRES_USER}" "${POSTGRES_DB}" \
         | gzip > "${tmp_dump_file}"
     mv "${tmp_dump_file}" "${dump_file}"
+    trap - EXIT
 
     # The ad-hoc dumps taken by hand have always carried a .sha256 beside them;
     # the ones this script produced did not, so the sanctioned mechanism was the

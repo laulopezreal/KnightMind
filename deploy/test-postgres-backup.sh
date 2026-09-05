@@ -197,5 +197,61 @@ prune_backups > /dev/null
 assert_file "quarantined file is not swept" "${BAD}.corrupt"
 
 # ---------------------------------------------------------------------------
+echo "direct execution cleanup"
+# ---------------------------------------------------------------------------
+FAKE_BIN="${WORK}/fake-bin"
+mkdir -p "${FAKE_BIN}"
+cat > "${FAKE_BIN}/docker" <<'SH'
+#!/usr/bin/env bash
+printf 'SELECT 1;\n'
+[ "${FAKE_DOCKER_FAIL:-0}" -eq 0 ]
+SH
+chmod +x "${FAKE_BIN}/docker"
+
+DIRECT_ENV="${WORK}/direct.env"
+cat > "${DIRECT_ENV}" <<'ENV'
+POSTGRES_DB=knightmind_test
+POSTGRES_USER=knightmind_test
+ENV
+
+DIRECT_BACKUPS="${WORK}/direct-success"
+if PATH="${FAKE_BIN}:${PATH}" \
+        ENV_FILE="${DIRECT_ENV}" \
+        BACKUP_DIR="${DIRECT_BACKUPS}" \
+        CITATION_PATHS="${WORK}/empty-docs" \
+        "${SELF_DIR}/postgres-backup.sh" > "${WORK}/direct-success.log" 2>&1; then
+    ok "successful direct execution exits zero"
+else
+    no "successful direct execution exits zero"
+fi
+if compgen -G "${DIRECT_BACKUPS}/knightmind_test_*.sql.gz" > /dev/null; then
+    ok "successful direct execution leaves the completed dump"
+else
+    no "successful direct execution leaves the completed dump"
+fi
+if ! compgen -G "${DIRECT_BACKUPS}/*.tmp.*" > /dev/null; then
+    ok "successful direct execution leaves no temporary dump"
+else
+    no "successful direct execution leaves no temporary dump"
+fi
+
+FAILED_BACKUPS="${WORK}/direct-failure"
+if PATH="${FAKE_BIN}:${PATH}" \
+        FAKE_DOCKER_FAIL=1 \
+        ENV_FILE="${DIRECT_ENV}" \
+        BACKUP_DIR="${FAILED_BACKUPS}" \
+        CITATION_PATHS="${WORK}/empty-docs" \
+        "${SELF_DIR}/postgres-backup.sh" > "${WORK}/direct-failure.log" 2>&1; then
+    no "failed direct execution exits non-zero"
+else
+    ok "failed direct execution exits non-zero"
+fi
+if ! compgen -G "${FAILED_BACKUPS}/*.tmp.*" > /dev/null; then
+    ok "failed direct execution cleans its temporary dump"
+else
+    no "failed direct execution cleans its temporary dump"
+fi
+
+# ---------------------------------------------------------------------------
 printf '\n%s passed, %s failed\n' "${PASS}" "${FAIL}"
 [ "${FAIL}" -eq 0 ]
