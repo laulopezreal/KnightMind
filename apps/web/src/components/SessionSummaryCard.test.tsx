@@ -170,7 +170,7 @@ describe('SessionSummaryCard', () => {
       />
     );
 
-    expect(screen.queryByText('Achievements Earned')).not.toBeInTheDocument();
+    expect(screen.queryByText('Achievements earned')).not.toBeInTheDocument();
   });
 
   it('shows no missed-puzzle section when session has no failures', () => {
@@ -227,6 +227,56 @@ describe('SessionSummaryCard', () => {
     expect(reviewLink).toHaveAttribute('href', '/library/p-abc?from=session');
   });
 
+  it('puts missed-puzzle learning before supporting session details', () => {
+    const summary = {
+      ...mockSessionSummary,
+      missed_puzzles: [
+        { puzzle_id: 'p-order', display_name: 'Critical moment', cause: null, cause_label: null },
+      ],
+    };
+
+    render(
+      <MemoryRouter>
+        <SessionSummaryCard
+          sessionSummary={summary}
+          achievements={mockAchievements}
+          onStartNewSession={vi.fn()}
+        />
+      </MemoryRouter>
+    );
+
+    const missedHeading = screen.getByRole('heading', { name: 'Missed puzzle' });
+    const detailsHeading = screen.getByRole('heading', { name: 'Session details' });
+    expect(missedHeading.compareDocumentPosition(detailsHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('keeps long puzzle identity and cause text wrapping instead of truncating', () => {
+    const longName = 'Championship preparation game · Sicilian Najdorf poisoned pawn · move 38';
+    const longCause = 'Missed the long forcing sequence after overlooking the opponent’s back-rank threat';
+    const summary = {
+      ...mockSessionSummary,
+      missed_puzzles: [
+        { puzzle_id: 'p-long', display_name: longName, cause: 'calculation', cause_label: longCause },
+      ],
+    };
+
+    render(
+      <MemoryRouter>
+        <SessionSummaryCard
+          sessionSummary={summary}
+          achievements={[]}
+          onStartNewSession={vi.fn()}
+        />
+      </MemoryRouter>
+    );
+
+    const identity = screen.getByText(longName);
+    const cause = screen.getByText(longCause);
+    expect(identity).toHaveClass('whitespace-normal', 'break-words');
+    expect(identity).not.toHaveClass('truncate');
+    expect(cause).toHaveClass('whitespace-normal', 'break-words');
+  });
+
   it('shows honest copy when missed puzzle has no diagnosed cause', () => {
     const summary = {
       ...mockSessionSummary,
@@ -276,7 +326,7 @@ describe('SessionSummaryCard', () => {
   });
 
   // --- YELLOW-1 regression: Review hit-target contract ---
-  it('Review link carries min-h-[44px] and min-w-[44px] for WCAG 2.5.5 touch target', () => {
+  it('Review link carries framework 44px sizing utilities for WCAG 2.5.5 touch target', () => {
     const summary = {
       ...mockSessionSummary,
       missed_puzzles: [
@@ -301,8 +351,8 @@ describe('SessionSummaryCard', () => {
 
     const reviewLink = screen.getByRole('link', { name: /review test puzzle/i });
     // Class guards the 44×44 contract — if removed the touch target regresses.
-    expect(reviewLink).toHaveClass('min-h-[44px]');
-    expect(reviewLink).toHaveClass('min-w-[44px]');
+    expect(reviewLink).toHaveClass('min-h-11');
+    expect(reviewLink).toHaveClass('min-w-11');
     // Flex layout is what makes the min-h/w apply as the interactive area.
     expect(reviewLink).toHaveClass('inline-flex');
     expect(reviewLink).toHaveClass('items-center');
