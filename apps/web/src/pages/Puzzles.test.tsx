@@ -1,8 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, render, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import Puzzles from './Puzzles';
-import { generatePuzzles, revealPuzzle, reviewPuzzle, startSession } from '../api';
+import { completeSession, generatePuzzles, revealPuzzle, reviewPuzzle, startSession } from '../api';
 import { setupMockLocalStorage } from '../test/helpers';
+import { WarmupSummary } from '../components/WarmupSummary';
 
 const mockNavigate = vi.fn();
 let mockSearchParams = new URLSearchParams();
@@ -121,9 +123,21 @@ vi.mock('../components/SessionSummaryCard', () => ({
   SessionSummaryCard: () => <div data-testid="session-summary">Summary</div>,
 }));
 
-vi.mock('../components/WarmupSummary', () => ({
-  WarmupSummary: () => <div data-testid="warmup-summary">WarmupSummary</div>,
-}));
+vi.mock('../components/WarmupSummary', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../components/WarmupSummary')>();
+  const MockWarmupSummary = ({ sessionSummary, onContinue }: {
+    sessionSummary: { missed_puzzles?: Array<{ display_name: string }> };
+    onContinue: () => void;
+  }) => (
+    <div data-testid="warmup-summary">
+      WarmupSummary
+      {sessionSummary.missed_puzzles?.map(puzzle => <span key={puzzle.display_name}>{puzzle.display_name}</span>)}
+      <button type="button" onClick={onContinue}>Back to Dashboard</button>
+    </div>
+  );
+  Object.assign(MockWarmupSummary, actual.WarmupSummary);
+  return { ...actual, WarmupSummary: MockWarmupSummary };
+});
 
 vi.mock('../components/AchievementsList', () => ({
   AchievementsList: () => null,
@@ -627,6 +641,99 @@ describe('Puzzles', () => {
 
       await waitFor(() => expect(startSession).toHaveBeenCalled());
       expect(vi.mocked(startSession).mock.calls[0][5]).toEqual(expect.objectContaining({ focus_cause: focus.cause }));
+    });
+  });
+
+  describe('Warmup review return', () => {
+    const completedWarmup = {
+      session_id: 'warmup-complete-1',
+      requested_n: 5,
+      pass_count: 4,
+      fail_count: 1,
+      total_time_ms: 60_000,
+      created_at: '2025-01-15T11:59:00Z',
+      completed_at: '2025-01-15T12:00:00Z',
+      current_streak: 4,
+      best_streak: 4,
+      hints_used: 0,
+      missed_puzzles: [{
+        puzzle_id: 'p-abc',
+        display_name: '12 Mar · Sicilian · move 18',
+        cause: 'king_safety_blindness',
+        cause_label: 'King safety blindness',
+      }],
+    };
+
+    it('shows the returned completed warmup without starting or completing another session', async () => {
+      const token = WarmupSummary.createReturnToken('testplayer', completedWarmup);
+      mockSearchParams = new URLSearchParams(`warmup_return=${encodeURIComponent(token)}`);
+
+      render(<Puzzles />);
+
+      expect(await screen.findByTestId('warmup-summary')).toBeInTheDocument();
+      expect(screen.getByText('12 Mar · Sicilian · move 18')).toBeInTheDocument();
+      expect(startSession).not.toHaveBeenCalled();
+      expect(completeSession).not.toHaveBeenCalled();
+    });
+
+    it('does not resume a saved active session underneath a returned completion', async () => {
+      localStorage.setItem('knightmind:session:testplayer', 'older-active-session');
+      const token = WarmupSummary.createReturnToken('testplayer', completedWarmup);
+      mockSearchParams = new URLSearchParams(`warmup_return=${encodeURIComponent(token)}`);
+
+      render(<Puzzles />);
+
+      expect(await screen.findByTestId('warmup-summary')).toBeInTheDocument();
+      await waitFor(() => expect(mockGetSession).not.toHaveBeenCalled());
+      expect(mockGetDuePuzzles).not.toHaveBeenCalled();
+    });
+
+    it('rejects a stale in-flight resume when return ownership arrives', async () => {
+      localStorage.setItem('knightmind:session:testplayer', 'older-active-session');
+      let resolveSession!: (value: Record<string, unknown>) => void;
+      mockGetSession.mockReturnValue(new Promise(resolve => { resolveSession = resolve; }));
+
+      const view = render(<Puzzles />);
+      await waitFor(() => expect(mockGetSession).toHaveBeenCalledWith('older-active-session'));
+
+      const token = WarmupSummary.createReturnToken('testplayer', completedWarmup);
+      mockSearchParams = new URLSearchParams(`warmup_return=${encodeURIComponent(token)}`);
+      view.rerender(<Puzzles />);
+      resolveSession({
+        ...completedWarmup,
+        session_id: 'older-active-session',
+        completed_at: null,
+        session_type: 'standard',
+      });
+
+      expect(await screen.findByTestId('warmup-summary')).toBeInTheDocument();
+      await act(async () => { await Promise.resolve(); });
+      expect(mockGetDuePuzzles).not.toHaveBeenCalled();
+    });
+
+    it('consumes the return token when Back to Dashboard closes the summary', async () => {
+      const user = userEvent.setup();
+      const token = WarmupSummary.createReturnToken('testplayer', completedWarmup);
+      mockSearchParams = new URLSearchParams(`warmup_return=${encodeURIComponent(token)}`);
+
+      const first = render(<Puzzles />);
+      await user.click(await screen.findByRole('button', { name: 'Back to Dashboard' }));
+      expect(mockNavigate).toHaveBeenCalledWith('/dashboard', { replace: true });
+
+      first.unmount();
+      render(<Puzzles />);
+      expect(screen.queryByTestId('warmup-summary')).not.toBeInTheDocument();
+    });
+
+    it.each([
+      ['malformed', 'not-a-registered-token'],
+      ['different-user', WarmupSummary.createReturnToken('other-player', completedWarmup)],
+    ])('fails closed for %s return context', (_label, token) => {
+      mockSearchParams = new URLSearchParams(`warmup_return=${encodeURIComponent(token)}`);
+
+      render(<Puzzles />);
+
+      expect(screen.queryByTestId('warmup-summary')).not.toBeInTheDocument();
     });
   });
 

@@ -12,6 +12,7 @@ import { DataStateError, DataStateOffline } from '../components/DataState';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
 import { useAsyncData } from '../hooks/useAsyncData';
 import { ConnectAccountEmpty } from '../components/ConnectAccountEmpty';
+import { WarmupSummary } from '../components/WarmupSummary';
 
 type SolveStatus = 'solving' | 'correct' | 'incorrect' | 'revealed';
 
@@ -33,6 +34,11 @@ export default function LibraryPuzzle() {
     // them there instead of the Library list.
     const [searchParams] = useSearchParams();
     const fromSession = searchParams.get('from') === 'session';
+    const warmupReturnToken = searchParams.get('warmup_return');
+    const warmupReturn = fromSession ? WarmupSummary.readReturnToken(warmupReturnToken, username) : null;
+    const sessionReturnPath = fromSession && warmupReturn
+        ? `/puzzles?warmup_return=${encodeURIComponent(warmupReturn.token)}`
+        : fromSession ? '/puzzles' : '/library';
 
     const [game, setGame] = useState(new Chess());
     const [status, setStatus] = useState<SolveStatus>('solving');
@@ -449,7 +455,7 @@ export default function LibraryPuzzle() {
         return (
             <div className="space-y-12 animate-teedin">
                 <section>
-                    <Link to={fromSession ? '/puzzles' : '/library'} className="text-primary/70 hover:text-primary mb-4 inline-block font-sans text-sm tracking-widest uppercase transition-colors">
+                    <Link to={sessionReturnPath} className="text-primary/70 hover:text-primary mb-4 inline-block font-sans text-sm tracking-widest uppercase transition-colors">
                         {fromSession ? '← Back to Session Summary' : '← Back to Library'}
                     </Link>
                     <h1 className="text-3xl md:text-4xl font-serif text-primary">Puzzle</h1>
@@ -467,7 +473,7 @@ export default function LibraryPuzzle() {
         return (
             <div className="space-y-12 animate-teedin">
                 <section>
-                    <Link to={fromSession ? '/puzzles' : '/library'} className="text-primary/70 hover:text-primary mb-4 inline-block font-sans text-sm tracking-widest uppercase transition-colors">
+                    <Link to={sessionReturnPath} className="text-primary/70 hover:text-primary mb-4 inline-block font-sans text-sm tracking-widest uppercase transition-colors">
                         {fromSession ? '← Back to Session Summary' : '← Back to Library'}
                     </Link>
                     <h1 className="text-3xl md:text-4xl font-serif text-primary">Puzzle</h1>
@@ -487,7 +493,7 @@ export default function LibraryPuzzle() {
         return (
             <div className="space-y-12 animate-teedin">
                 <section>
-                    <Link to={fromSession ? '/puzzles' : '/library'} className="text-primary/70 hover:text-primary mb-4 inline-block font-sans text-sm tracking-widest uppercase transition-colors">
+                    <Link to={sessionReturnPath} className="text-primary/70 hover:text-primary mb-4 inline-block font-sans text-sm tracking-widest uppercase transition-colors">
                         {fromSession ? '← Back to Session Summary' : '← Back to Library'}
                     </Link>
                     <h1 className="text-3xl md:text-4xl font-serif text-primary mb-4">Puzzle</h1>
@@ -521,7 +527,7 @@ export default function LibraryPuzzle() {
         <div className="flex flex-col gap-6 md:gap-12 animate-teedin">
             {/* Back link + Header */}
             <section className="order-1">
-                <Link to={fromSession ? '/puzzles' : '/library'} className="text-primary/70 hover:text-primary mb-2 md:mb-4 inline-block font-sans text-sm tracking-widest uppercase transition-colors">
+                <Link to={sessionReturnPath} className="text-primary/70 hover:text-primary mb-2 md:mb-4 inline-block font-sans text-sm tracking-widest uppercase transition-colors">
                     {fromSession ? '← Back to Session Summary' : '← Back to Library'}
                 </Link>
                 <h1 className="text-2xl md:text-4xl font-serif text-primary">
@@ -697,7 +703,7 @@ export default function LibraryPuzzle() {
 
                         {(status === 'correct' || status === 'revealed') && (
                             <Link
-                                to={fromSession ? '/puzzles' : '/library'}
+                                to={sessionReturnPath}
                                 className="block w-full px-6 py-4 bg-green-600 text-white rounded-sm font-serif text-lg text-center transition-colors km-interactive km-focus-visible"
                             >
                                 {fromSession ? 'Back to Session Summary' : 'Back to Library'}

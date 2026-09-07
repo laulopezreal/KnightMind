@@ -177,6 +177,7 @@ export default function Puzzles() {
     const focusOpening = searchParams.get('focus_opening');
     const focusOpeningScope = searchParams.get('focus_opening_scope');
     const isWarmupMode = searchParams.get('warmup') === 'true';
+    const warmupReturn = WarmupSummary.readReturnToken?.(searchParams.get('warmup_return'), username) ?? null;
 
     // A normal-focus URL is only an intent. The current server planner is the
     // authority that decides whether that cause is still this user's focus.
@@ -279,6 +280,7 @@ export default function Puzzles() {
         targetAccuracy,
         targetTimeMinutes,
         warmupMode,
+        resumeEnabled: !warmupReturn,
         motifFilter,
         focusCause: effectiveFocusCause,
         focusPracticeMode,
@@ -302,6 +304,8 @@ export default function Puzzles() {
         handleStartSession, handleReviewPuzzle, handleCompleteSession, handleUseHint,
         calculateRecentPerformance, getPerformanceTrend,
     } = session;
+    const presentationSessionState = warmupReturn ? 'completed' : sessionState;
+    const completedSummary = warmupReturn?.summary ?? sessionSummary;
 
     const startPuzzleTimer = timer.startPuzzleTimer;
     const currentPuzzle = puzzles[currentIndex];
@@ -587,7 +591,7 @@ export default function Puzzles() {
     // Disable only while the completion API call is in-flight. Once completed,
     // render a real post-session action instead of a dead final-puzzle CTA.
     const finishButtonDisabled = sessionState === 'completing';
-    const controlsEnabled = sessionState === 'idle' || sessionState === 'error';
+    const controlsEnabled = presentationSessionState === 'idle' || presentationSessionState === 'error';
 
     // Sync activeJobId when username changes (during render, not in effect)
     if (prevUsername !== username) {
@@ -660,7 +664,7 @@ export default function Puzzles() {
         // "loading or generating" to wait on — don't show a start reason at all.
         activeSessionId
             ? null
-            : sessionState === 'completed'
+            : presentationSessionState === 'completed'
                 // Post-summary the old branch fell through to "Please wait for
                 // the current task to finish" — there is no task; the session
                 // is done and the summary card below has the real CTA.
@@ -1127,9 +1131,9 @@ export default function Puzzles() {
     // session's payoff and must be seen, not pointed at with "see below".
     const summaryRef = useRef<HTMLDivElement>(null);
     useEffect(() => {
-        if (sessionState !== 'completed') return;
+        if (presentationSessionState !== 'completed') return;
         setTimeout(() => scrollWithSettle(summaryRef.current), 60);
-    }, [sessionState]);
+    }, [presentationSessionState]);
 
     // Reset clue and start timer when puzzle changes (side effects in effect)
     useEffect(() => {
@@ -2256,19 +2260,21 @@ export default function Puzzles() {
             )}
 
             {/* Session Summary */}
-            {sessionSummary && sessionState === 'completed' && (
+            {completedSummary && presentationSessionState === 'completed' && (
                 <div ref={summaryRef} className="lg:order-7 scroll-mt-6">
-                    {warmupMode ? (
+                    {warmupMode || warmupReturn ? (
                         <WarmupSummary
-                            sessionSummary={sessionSummary}
+                            username={username}
+                            sessionSummary={completedSummary}
                             onContinue={() => {
+                                if (warmupReturn) WarmupSummary.consumeReturnState(warmupReturn);
                                 setWarmupMode(false);
-                                navigate('/dashboard');
+                                navigate('/dashboard', { replace: Boolean(warmupReturn) });
                             }}
                         />
                     ) : (
                         <SessionSummaryCard
-                            sessionSummary={sessionSummary}
+                            sessionSummary={completedSummary}
                             achievements={achievements}
                             onStartNewSession={() => {
                                 setSessionSummary(null);

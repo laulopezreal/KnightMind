@@ -1,20 +1,218 @@
+import { useMemo } from 'react';
 import { Link } from 'react-router-dom';
-import type { SessionSummary } from '../api/sessions';
+import type { MissedPuzzleSummary, SessionSummary } from '../api/sessions';
 import { calculateAccuracy } from '../utils/accuracy';
 
+const WARMUP_RETURN_MAX_AGE_MS = 30 * 60 * 1000;
+const consumedWarmupReturnTokens = new Set<string>();
+const warmupReturnRegistry = new Map<string, WarmupReturnState>();
+
+export type WarmupReturnSummary = Pick<
+  SessionSummary,
+  | 'session_id'
+  | 'requested_n'
+  | 'pass_count'
+  | 'fail_count'
+  | 'total_time_ms'
+  | 'created_at'
+  | 'completed_at'
+  | 'current_streak'
+  | 'best_streak'
+  | 'hints_used'
+  | 'missed_puzzles'
+>;
+
+export interface WarmupReturnState {
+  version: 1;
+  token: string;
+  username: string;
+  issuedAt: number;
+  summary: WarmupReturnSummary;
+}
+
 interface WarmupSummaryProps {
-  sessionSummary: SessionSummary;
+  username: string;
+  sessionSummary: WarmupReturnSummary;
   onContinue: () => void;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isBoundedString(value: unknown, maxLength = 256): value is string {
+  return typeof value === 'string' && value.length > 0 && value.length <= maxLength;
+}
+
+function isNullableBoundedString(value: unknown): value is string | null {
+  return value === null || isBoundedString(value);
+}
+
+function readMissedPuzzles(value: unknown): MissedPuzzleSummary[] | null | undefined {
+  if (value === undefined || value === null) return value;
+  if (!Array.isArray(value) || value.length > 100) return undefined;
+
+  const puzzles: MissedPuzzleSummary[] = [];
+  for (const item of value) {
+    if (
+      !isRecord(item)
+      || !isBoundedString(item.puzzle_id)
+      || !isBoundedString(item.display_name)
+      || !isNullableBoundedString(item.cause)
+      || !isNullableBoundedString(item.cause_label)
+    ) {
+      return undefined;
+    }
+    puzzles.push({
+      puzzle_id: item.puzzle_id,
+      display_name: item.display_name,
+      cause: item.cause,
+      cause_label: item.cause_label,
+    });
+  }
+  return puzzles;
+}
+
+function readSummary(value: unknown): WarmupReturnSummary | null {
+  if (!isRecord(value)) return null;
+  const numericKeys = [
+    'requested_n',
+    'pass_count',
+    'fail_count',
+    'total_time_ms',
+    'current_streak',
+    'best_streak',
+    'hints_used',
+  ] as const;
+  if (numericKeys.some(key => !Number.isSafeInteger(value[key]) || (value[key] as number) < 0)) return null;
+  if ((value.requested_n as number) === 0) return null;
+  if ((value.pass_count as number) + (value.fail_count as number) > (value.requested_n as number)) return null;
+  if (!isBoundedString(value.session_id) || !isBoundedString(value.created_at)) return null;
+  if (!isBoundedString(value.completed_at)) return null;
+  if (!Number.isFinite(Date.parse(value.created_at)) || !Number.isFinite(Date.parse(value.completed_at))) return null;
+
+  const missedPuzzles = readMissedPuzzles(value.missed_puzzles);
+  if (value.missed_puzzles !== undefined && missedPuzzles === undefined) return null;
+
+  return {
+    session_id: value.session_id,
+    requested_n: value.requested_n as number,
+    pass_count: value.pass_count as number,
+    fail_count: value.fail_count as number,
+    total_time_ms: value.total_time_ms as number,
+    created_at: value.created_at,
+    completed_at: value.completed_at,
+    current_streak: value.current_streak as number,
+    best_streak: value.best_streak as number,
+    hints_used: value.hints_used as number,
+    ...(missedPuzzles !== undefined ? { missed_puzzles: missedPuzzles } : {}),
+  };
+}
+
+function isConsumed(state: WarmupReturnState): boolean {
+  return consumedWarmupReturnTokens.has(state.token);
+}
+
+function createToken(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+  return `warmup-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+/** Build a route-state projection containing only safe completed-summary fields. */
+function createWarmupReturnLocationState(
+  username: string,
+  summary: WarmupReturnSummary,
+): { warmupReturn: WarmupReturnState } {
+  return {
+    warmupReturn: {
+      version: 1,
+      token: createToken(),
+      username,
+      issuedAt: Date.now(),
+      summary: {
+        session_id: summary.session_id,
+        requested_n: summary.requested_n,
+        pass_count: summary.pass_count,
+        fail_count: summary.fail_count,
+        total_time_ms: summary.total_time_ms,
+        created_at: summary.created_at,
+        completed_at: summary.completed_at,
+        current_streak: summary.current_streak,
+        best_streak: summary.best_streak,
+        hints_used: summary.hints_used,
+        ...(summary.missed_puzzles !== undefined ? {
+          missed_puzzles: summary.missed_puzzles?.map(puzzle => ({
+            puzzle_id: puzzle.puzzle_id,
+            display_name: puzzle.display_name,
+            cause: puzzle.cause,
+            cause_label: puzzle.cause_label,
+          })) ?? null,
+        } : {}),
+      },
+    },
+  };
+}
+
+/** Register a safe tab-memory payload and return its route-owned opaque token. */
+function createWarmupReturnToken(username: string, summary: WarmupReturnSummary): string {
+  const locationState = createWarmupReturnLocationState(username, summary);
+  warmupReturnRegistry.set(locationState.warmupReturn.token, locationState.warmupReturn);
+  return locationState.warmupReturn.token;
+}
+
+/** Validate and sanitize route-owned return state for the current user. */
+function readWarmupReturnState(value: unknown, username: string): WarmupReturnState | null {
+  if (!isRecord(value) || !isRecord(value.warmupReturn)) return null;
+  const candidate = value.warmupReturn;
+  if (
+    candidate.version !== 1
+    || !isBoundedString(candidate.token, 128)
+    || !isBoundedString(candidate.username)
+    || candidate.username !== username
+    || typeof candidate.issuedAt !== 'number'
+    || !Number.isFinite(candidate.issuedAt)
+  ) return null;
+
+  const age = Date.now() - candidate.issuedAt;
+  if (age < -60_000 || age > WARMUP_RETURN_MAX_AGE_MS) return null;
+  const summary = readSummary(candidate.summary);
+  if (!summary) return null;
+
+  const sanitized: WarmupReturnState = {
+    version: 1,
+    token: candidate.token,
+    username: candidate.username,
+    issuedAt: candidate.issuedAt,
+    summary,
+  };
+  return isConsumed(sanitized) ? null : sanitized;
+}
+
+/** Resolve and validate the opaque token carried by the review-return route. */
+function readWarmupReturnToken(token: string | null, username: string): WarmupReturnState | null {
+  if (!token) return null;
+  const state = warmupReturnRegistry.get(token);
+  return state ? readWarmupReturnState({ warmupReturn: state }, username) : null;
+}
+
+/** Mark one return context closed so history cannot replay it. */
+function consumeWarmupReturnState(state: WarmupReturnState): void {
+  consumedWarmupReturnTokens.add(state.token);
+  warmupReturnRegistry.delete(state.token);
 }
 
 /**
  * WarmupSummary displays results after completing a warmup diagnostic session
  * Shows accuracy, pass/fail counts, and personalized feedback
  */
-export function WarmupSummary({ sessionSummary, onContinue }: WarmupSummaryProps) {
+function WarmupSummaryComponent({ username, sessionSummary, onContinue }: WarmupSummaryProps) {
   const accuracy = calculateAccuracy(sessionSummary.pass_count, sessionSummary.fail_count);
   const missedPuzzles = sessionSummary.missed_puzzles;
   const hasMissedPuzzles = Boolean(missedPuzzles?.length);
+  const returnToken = useMemo(
+    () => createWarmupReturnToken(username, sessionSummary),
+    [sessionSummary, username],
+  );
 
   // Determine feedback based on performance
   const getFeedbackMessage = (acc: number): string => {
@@ -100,7 +298,7 @@ export function WarmupSummary({ sessionSummary, onContinue }: WarmupSummaryProps
                   )}
                 </div>
                 <Link
-                  to={`/library/${missedPuzzle.puzzle_id}?from=session`}
+                  to={`/library/${missedPuzzle.puzzle_id}?from=session&warmup_return=${encodeURIComponent(returnToken)}`}
                   className="self-start sm:self-auto shrink-0 inline-flex items-center justify-center min-h-11 min-w-11 text-xs font-serif text-primary/70 underline underline-offset-2 hover:text-primary transition-colors km-focus-visible"
                   aria-label={`Review ${missedPuzzle.display_name}`}
                 >
@@ -122,3 +320,10 @@ export function WarmupSummary({ sessionSummary, onContinue }: WarmupSummaryProps
     </section>
   );
 }
+
+export const WarmupSummary = Object.assign(WarmupSummaryComponent, {
+  createReturnToken: createWarmupReturnToken,
+  readReturnState: readWarmupReturnState,
+  readReturnToken: readWarmupReturnToken,
+  consumeReturnState: consumeWarmupReturnState,
+});
