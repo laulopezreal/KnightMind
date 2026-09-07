@@ -28,6 +28,7 @@ export function ConnectAccountEmpty({ description }: ConnectAccountEmptyProps) {
             description={description}
             actionLabel="Connect account"
             onAction={() => navigate('/')}
+            actionClassName="min-h-11"
         />
     );
 }
