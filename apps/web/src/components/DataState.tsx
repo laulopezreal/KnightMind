@@ -101,7 +101,7 @@ export function DataStateEmpty({ title, description, actionLabel, onAction }: Da
       <button
         type="button"
         onClick={onAction}
-        className="px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-opacity hover:opacity-90 cursor-pointer km-focus-visible"
+        className="min-h-11 px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-opacity hover:opacity-90 cursor-pointer km-focus-visible"
       >
         {actionLabel}
       </button>
