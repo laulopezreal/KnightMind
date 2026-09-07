@@ -286,7 +286,7 @@ export default function Engine() {
 
       <section className="grid lg:grid-cols-2 gap-12 lg:gap-24">
         {/* Board */}
-        <div className="order-2 lg:order-1">
+        <div className="order-1 lg:order-1" data-testid="engine-board-region">
           <div className="aspect-square w-full max-w-[600px] mx-auto shadow-2xl shadow-primary/5 rounded-sm overflow-hidden border border-primary/10">
             <AccessibleChessboard
               onKeyboardMove={({ sourceSquare, targetSquare, promotion }) =>
@@ -303,14 +303,14 @@ export default function Engine() {
               }}
             />
           </div>
-          <div className="mt-8 flex justify-center gap-3">
+          <div className="mt-8 flex flex-wrap justify-center gap-3">
             <button
               type="button"
               onClick={handleBack}
               disabled={historyIndex <= 0}
               aria-label="Go back a position"
               title="Go back"
-              className="km-interactive km-focus-visible border border-primary/20 px-4 py-2 text-primary/70 font-sans font-normal text-xs uppercase tracking-widest transition-colors rounded-sm"
+              className="km-interactive km-focus-visible min-h-11 min-w-11 border border-primary/20 px-4 py-2 text-primary/70 font-sans font-normal text-xs uppercase tracking-widest transition-colors rounded-sm"
             >
               ←
             </button>
@@ -320,14 +320,14 @@ export default function Engine() {
               disabled={historyIndex >= fenHistory.length - 1}
               aria-label="Go forward a position"
               title="Go forward"
-              className="km-interactive km-focus-visible border border-primary/20 px-4 py-2 text-primary/70 font-sans font-normal text-xs uppercase tracking-widest transition-colors rounded-sm"
+              className="km-interactive km-focus-visible min-h-11 min-w-11 border border-primary/20 px-4 py-2 text-primary/70 font-sans font-normal text-xs uppercase tracking-widest transition-colors rounded-sm"
             >
               →
             </button>
             <button
               type="button"
               onClick={handleReset}
-              className="km-interactive km-focus-visible px-6 py-2 text-primary/70 font-sans font-normal text-xs uppercase tracking-widest transition-colors rounded-sm"
+              className="km-interactive km-focus-visible min-h-11 px-6 py-2 text-primary/70 font-sans font-normal text-xs uppercase tracking-widest transition-colors rounded-sm"
             >
               Reset Position
             </button>
@@ -335,7 +335,7 @@ export default function Engine() {
         </div>
 
         {/* Controls */}
-        <div className="order-1 lg:order-2 space-y-8 flex flex-col justify-center">
+        <div className="order-2 lg:order-2 min-w-0 flex flex-col justify-center gap-8" data-testid="engine-controls-region">
 
           {/* Evaluation */}
           <div className="bg-primary/5 border border-primary/10 rounded-sm p-8 space-y-6 min-h-[220px] flex flex-col">
@@ -404,13 +404,13 @@ export default function Engine() {
           {/* FEN */}
           <div className="space-y-2">
             <label htmlFor="fen-input" className="block text-xs font-sans uppercase tracking-widest text-primary/70">Or paste FEN position</label>
-            <div className="flex gap-4 border-b border-primary/20 pb-2 focus-within:border-primary/60 transition-colors">
+            <div className="flex min-w-0 items-center gap-3 border-b border-primary/20 focus-within:border-primary/60 transition-colors sm:gap-4">
               <input id="fen-input" type="text" value={fenInput} onChange={(e) => setFenInput(e.target.value)}
                 aria-invalid={fenError ? true : undefined}
                 aria-describedby={fenError ? 'fen-error' : undefined}
-                className="flex-1 bg-transparent border-none outline-none text-primary font-mono text-sm placeholder-primary/30"
+                className="min-w-0 flex-1 bg-transparent border-none py-2 outline-none text-primary font-mono text-sm placeholder-primary/30"
               />
-              <button type="button" onClick={handleFenSubmit} className="km-interactive km-focus-visible text-xs font-sans font-normal uppercase tracking-widest text-primary transition-colors">
+              <button type="button" onClick={handleFenSubmit} className="km-interactive km-focus-visible min-h-11 shrink-0 px-3 text-xs font-sans font-normal uppercase tracking-widest text-primary transition-colors">
                 Load
               </button>
             </div>

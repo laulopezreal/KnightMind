@@ -340,6 +340,27 @@ describe('Engine - Clue Functionality', () => {
   });
 
   describe('UI Integration', () => {
+    it('places the board before the controls on mobile while preserving desktop order', async () => {
+      renderEngine();
+      await screen.findByText('Engine ready');
+
+      const boardRegion = screen.getByTestId('engine-board-region');
+      const controlsRegion = screen.getByTestId('engine-controls-region');
+
+      expect(boardRegion).toHaveClass('order-1', 'lg:order-1');
+      expect(controlsRegion).toHaveClass('order-2', 'lg:order-2');
+    });
+
+    it('gives every position control a 44px minimum touch height', async () => {
+      renderEngine();
+      await screen.findByText('Engine ready');
+
+      expect(screen.getByRole('button', { name: 'Load' })).toHaveClass('min-h-11');
+      expect(screen.getByRole('button', { name: 'Go back a position' })).toHaveClass('min-h-11');
+      expect(screen.getByRole('button', { name: 'Go forward a position' })).toHaveClass('min-h-11');
+      expect(screen.getByRole('button', { name: 'Reset Position' })).toHaveClass('min-h-11');
+    });
+
     it('should not show clue button when no evaluation is available', () => {
       renderEngine();
 
