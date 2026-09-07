@@ -10,20 +10,27 @@ interface JobStatusCardProps {
     onCancel?: () => void;
 }
 
-export function JobStatusCard({ status, progress = 0, message, hint, error, onCancel }: JobStatusCardProps) {
+export function JobStatusCard({ status, progress, message, hint, error, onCancel }: JobStatusCardProps) {
     if (!status) return null;
 
     const isProcessing = status === 'queued' || status === 'running';
+    const isQueued = status === 'queued';
+    const isRunning = status === 'running';
     const isError = status === 'failed';
     const isSuccess = status === 'succeeded';
+    const isCanceled = status === 'canceled';
+    const hasServerProgress = isRunning && typeof progress === 'number' && Number.isFinite(progress);
+    const serverProgress = hasServerProgress ? Math.min(100, Math.max(0, progress)) : null;
 
     return (
         <div className="bg-primary/5 border border-primary/10 rounded-sm p-6 backdrop-blur-sm space-y-4 animate-teedin">
             <div className="flex items-center justify-between">
                 <h3 className="font-serif text-xl text-primary">
-                    {isProcessing && 'Generating Puzzles...'}
+                    {isQueued && 'Waiting to start'}
+                    {isRunning && 'Generating Puzzles…'}
                     {isSuccess && 'Generation Complete'}
                     {isError && 'Generation Failed'}
+                    {isCanceled && 'Generation Canceled'}
                 </h3>
                 {isProcessing && (
                     <div className="animate-spin h-5 w-5 border-2 border-primary/20 border-t-primary rounded-full" />
@@ -44,10 +51,19 @@ export function JobStatusCard({ status, progress = 0, message, hint, error, onCa
                     <div
                         className="w-full rounded-full h-1.5 overflow-hidden"
                         style={{ backgroundColor: 'color-mix(in srgb, var(--text-primary) 12%, transparent)' }}
+                        role="progressbar"
+                        aria-label={isQueued
+                            ? 'Waiting for puzzle generation to start'
+                            : hasServerProgress
+                                ? 'Puzzle generation progress'
+                                : 'Puzzle generation in progress'}
+                        aria-valuemin={hasServerProgress ? 0 : undefined}
+                        aria-valuemax={hasServerProgress ? 100 : undefined}
+                        aria-valuenow={serverProgress ?? undefined}
                     >
                         <div
-                            className="bg-primary h-full transition-all duration-500 ease-out"
-                            style={{ width: `${Math.max(5, progress)}%` }} // Minimum 5% visibility
+                            className={`bg-primary h-full ${hasServerProgress ? 'transition-all duration-500 ease-out' : 'w-1/3 animate-pulse'}`}
+                            style={serverProgress === null ? undefined : { width: `${serverProgress}%` }}
                         />
                     </div>
                     {hint && (
