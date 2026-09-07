@@ -1112,6 +1112,7 @@ describe('LibraryPuzzle', () => {
             // Header back-link must say "Back to Session Summary" and point to /puzzles.
             const backLink = screen.getByRole('link', { name: /back to session summary/i });
             expect(backLink).toHaveAttribute('href', '/puzzles');
+            expect(backLink).toHaveClass('min-h-11', 'min-w-11', 'inline-flex', 'items-center');
         });
 
         it('post-completion button targets /puzzles when from=session', async () => {

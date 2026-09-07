@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import Puzzles from './Puzzles';
-import { completeSession, generatePuzzles, revealPuzzle, reviewPuzzle, startSession } from '../api';
+import { completeSession, generatePuzzles, getDailyPuzzles, revealPuzzle, reviewPuzzle, startSession, type JobStatusResponse } from '../api';
 import { setupMockLocalStorage } from '../test/helpers';
 import { WarmupSummary } from '../components/WarmupSummary';
 
@@ -10,6 +10,11 @@ const mockNavigate = vi.fn();
 let mockSearchParams = new URLSearchParams();
 
 let mockUsername = 'testplayer';
+let mockPolledJob: JobStatusResponse | null = null;
+let mockJobPollingOptions: {
+  onSuccess?: (job: JobStatusResponse) => void | Promise<void>;
+  onError?: (error: Error) => void;
+} | undefined;
 
 vi.mock('react-router-dom', () => ({
   useNavigate: () => mockNavigate,
@@ -32,7 +37,13 @@ vi.mock('../context/PuzzleModeContext', () => ({
 }));
 
 vi.mock('../hooks/useJobPolling', () => ({
-  useJobPolling: () => ({ job: null, isPolling: false }),
+  useJobPolling: (_jobId: string | null, options?: typeof mockJobPollingOptions) => {
+    mockJobPollingOptions = options;
+    return {
+      job: mockPolledJob,
+      isPolling: mockPolledJob?.status === 'queued' || mockPolledJob?.status === 'running',
+    };
+  },
 }));
 
 const mockGetDuePuzzles = vi.fn();
@@ -152,6 +163,8 @@ describe('Puzzles', () => {
     vi.resetAllMocks();
     setupMockLocalStorage();
     mockUsername = 'testplayer';
+    mockPolledJob = null;
+    mockJobPollingOptions = undefined;
     mockSearchParams = new URLSearchParams();
     mockGetUserStatus.mockResolvedValue({
       games_count: 50,
@@ -232,8 +245,8 @@ describe('Puzzles', () => {
     generate.click();
 
     // JobStatusCard is stubbed to null in this suite, so the error text itself
-    // never renders — the card's own Retry button is the observable signal.
-    await screen.findByRole('button', { name: 'Retry' });
+    // never renders. The generation-specific recovery is the observable signal.
+    await screen.findByRole('button', { name: 'Try generation again' });
 
     // Now the account goes away underneath the error state.
     mockUsername = '';
@@ -291,6 +304,131 @@ describe('Puzzles', () => {
     await waitFor(() => {
       expect(screen.getByText(/no games imported/i)).toBeInTheDocument();
     });
+  });
+
+  it('shows one explanatory generation entry when imported games have no puzzles', async () => {
+    mockGetUserStatus.mockResolvedValue({
+      games_count: 50,
+      puzzles_count: 0,
+      due_count: 0,
+      has_new_games: true,
+    });
+    vi.mocked(generatePuzzles).mockResolvedValue({ job_id: 'generation-job' });
+
+    render(<Puzzles />);
+
+    const generate = await screen.findByRole('button', { name: 'Generate Puzzles' });
+    expect(screen.getAllByRole('button', { name: /generate/i })).toHaveLength(1);
+    expect(generate).toHaveClass('min-h-11');
+    expect(screen.getByText(/recent imported games.*personalized practice.*few minutes/i)).toBeInTheDocument();
+
+    generate.focus();
+    expect(generate).toHaveFocus();
+  });
+
+  it('retries a failed generation once without starting a session or duplicating rapid activation', async () => {
+    mockGetUserStatus.mockResolvedValue({
+      games_count: 50,
+      puzzles_count: 20,
+      due_count: 5,
+      has_new_games: true,
+    });
+    vi.mocked(generatePuzzles)
+      .mockRejectedValueOnce(new Error('generation failed'))
+      .mockImplementationOnce(() => new Promise(() => {}));
+
+    render(<Puzzles />);
+
+    const generate = await screen.findByRole('button', { name: 'Generate New' });
+    await waitFor(() => expect(generate).toBeEnabled());
+    await act(async () => {
+      generate.click();
+    });
+
+    const retry = await screen.findByRole('button', { name: 'Try generation again' });
+    act(() => {
+      retry.click();
+      retry.click();
+    });
+
+    expect(generatePuzzles).toHaveBeenCalledTimes(2);
+    expect(generatePuzzles).toHaveBeenLastCalledWith('testplayer');
+    expect(startSession).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
+  });
+
+  it('keeps polling and stall failures owned by generation recovery', async () => {
+    mockGetUserStatus.mockResolvedValue({
+      games_count: 50,
+      puzzles_count: 20,
+      due_count: 5,
+      has_new_games: true,
+    });
+    mockPolledJob = {
+      job_id: 'stalled-generation',
+      status: 'failed',
+      message: 'Generation stopped responding',
+    };
+    vi.mocked(generatePuzzles).mockResolvedValue({ job_id: 'retry-job' });
+
+    render(<Puzzles />);
+    act(() => mockJobPollingOptions?.onError?.(new Error('Generation stopped responding')));
+
+    const retry = await screen.findByRole('button', { name: 'Try generation again' });
+    await act(async () => {
+      retry.click();
+    });
+
+    expect(generatePuzzles).toHaveBeenCalledTimes(1);
+    expect(startSession).not.toHaveBeenCalled();
+  });
+
+  it('surfaces a generation-owned recovery when completed work cannot be loaded', async () => {
+    mockGetUserStatus.mockResolvedValue({
+      games_count: 50,
+      puzzles_count: 20,
+      due_count: 5,
+      has_new_games: true,
+    });
+    vi.mocked(getDailyPuzzles).mockRejectedValueOnce(new Error('refresh unavailable'));
+
+    render(<Puzzles />);
+    await act(async () => {
+      await mockJobPollingOptions?.onSuccess?.({ job_id: 'completed-job', status: 'succeeded' });
+    });
+
+    expect(await screen.findByRole('button', { name: 'Try generation again' })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: 'Retry session' })).not.toBeInTheDocument();
+  });
+
+  it('keeps session recovery distinct from generation recovery', async () => {
+    const sessionPuzzles = {
+      due_count: 1,
+      returned_count: 1,
+      now: new Date().toISOString(),
+      puzzles: [{ id: 'p1', fen: '8/8/8/8/8/8/8/8 w - - 0 1', side_to_move: 'white', best_move_uci: 'e2e4' }],
+    };
+    mockGetDuePuzzles
+      .mockRejectedValueOnce(new Error('session unavailable'))
+      .mockResolvedValueOnce(sessionPuzzles);
+    vi.mocked(startSession).mockResolvedValue({ session_id: 'session-2', requested_n: 1 } as never);
+
+    render(<Puzzles />);
+
+    const start = await screen.findByRole('button', { name: 'Start Session' });
+    await waitFor(() => expect(start).toBeEnabled());
+    await act(async () => {
+      start.click();
+    });
+
+    const retry = await screen.findByRole('button', { name: 'Retry session' });
+    await act(async () => {
+      retry.click();
+    });
+
+    await waitFor(() => expect(mockGetDuePuzzles).toHaveBeenCalledTimes(2));
+    expect(startSession).toHaveBeenCalledTimes(1);
+    expect(generatePuzzles).not.toHaveBeenCalled();
   });
 
   // Regression tests for #411: motif ratios must be internally consistent.

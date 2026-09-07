@@ -140,6 +140,12 @@ describe.each(PAGES)('$name without a Chess.com username', ({ Component, heading
         expect(mockNavigate).toHaveBeenCalledWith('/');
     });
 
+    it('keeps the only account-recovery action at least 44px tall', () => {
+        renderAt(<Component />);
+
+        expect(screen.getByRole('button', { name: 'Connect account' })).toHaveClass('min-h-11');
+    });
+
     it('says what this particular page will show once connected', () => {
         renderAt(<Component />);
 

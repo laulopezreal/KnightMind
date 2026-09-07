@@ -455,7 +455,7 @@ export default function LibraryPuzzle() {
         return (
             <div className="space-y-12 animate-teedin">
                 <section>
-                    <Link to={sessionReturnPath} className="text-primary/70 hover:text-primary mb-4 inline-block font-sans text-sm tracking-widest uppercase transition-colors">
+                    <Link to={sessionReturnPath} className="text-primary/70 hover:text-primary mb-4 inline-flex min-h-11 min-w-11 items-center font-sans text-sm tracking-widest uppercase transition-colors">
                         {fromSession ? '← Back to Session Summary' : '← Back to Library'}
                     </Link>
                     <h1 className="text-3xl md:text-4xl font-serif text-primary">Puzzle</h1>
@@ -473,7 +473,7 @@ export default function LibraryPuzzle() {
         return (
             <div className="space-y-12 animate-teedin">
                 <section>
-                    <Link to={sessionReturnPath} className="text-primary/70 hover:text-primary mb-4 inline-block font-sans text-sm tracking-widest uppercase transition-colors">
+                    <Link to={sessionReturnPath} className="text-primary/70 hover:text-primary mb-4 inline-flex min-h-11 min-w-11 items-center font-sans text-sm tracking-widest uppercase transition-colors">
                         {fromSession ? '← Back to Session Summary' : '← Back to Library'}
                     </Link>
                     <h1 className="text-3xl md:text-4xl font-serif text-primary">Puzzle</h1>
@@ -493,7 +493,7 @@ export default function LibraryPuzzle() {
         return (
             <div className="space-y-12 animate-teedin">
                 <section>
-                    <Link to={sessionReturnPath} className="text-primary/70 hover:text-primary mb-4 inline-block font-sans text-sm tracking-widest uppercase transition-colors">
+                    <Link to={sessionReturnPath} className="text-primary/70 hover:text-primary mb-4 inline-flex min-h-11 min-w-11 items-center font-sans text-sm tracking-widest uppercase transition-colors">
                         {fromSession ? '← Back to Session Summary' : '← Back to Library'}
                     </Link>
                     <h1 className="text-3xl md:text-4xl font-serif text-primary mb-4">Puzzle</h1>
@@ -527,7 +527,7 @@ export default function LibraryPuzzle() {
         <div className="flex flex-col gap-6 md:gap-12 animate-teedin">
             {/* Back link + Header */}
             <section className="order-1">
-                <Link to={sessionReturnPath} className="text-primary/70 hover:text-primary mb-2 md:mb-4 inline-block font-sans text-sm tracking-widest uppercase transition-colors">
+                <Link to={sessionReturnPath} className="text-primary/70 hover:text-primary mb-2 md:mb-4 inline-flex min-h-11 min-w-11 items-center font-sans text-sm tracking-widest uppercase transition-colors">
                     {fromSession ? '← Back to Session Summary' : '← Back to Library'}
                 </Link>
                 <h1 className="text-2xl md:text-4xl font-serif text-primary">

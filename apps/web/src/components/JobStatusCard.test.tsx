@@ -12,27 +12,43 @@ describe('JobStatusCard', () => {
     expect(container.firstChild).toBeNull();
   });
 
-  it('should show "Generating Puzzles..." for queued status', () => {
-    render(<JobStatusCard status="queued" message="Waiting in queue" />);
+  it('presents queued work as waiting without invented progress', () => {
+    render(<JobStatusCard status="queued" progress={0} message="Waiting in queue" />);
 
-    expect(screen.getByText('Generating Puzzles...')).toBeInTheDocument();
+    expect(screen.getByText('Waiting to start')).toBeInTheDocument();
     expect(screen.getByText('Waiting in queue')).toBeInTheDocument();
+    expect(screen.queryByText('Generating Puzzles…')).not.toBeInTheDocument();
+    expect(screen.getByRole('progressbar', { name: 'Waiting for puzzle generation to start' }))
+      .not.toHaveAttribute('aria-valuenow');
+    expect(document.querySelector('[style*="width: 5%"]')).not.toBeInTheDocument();
   });
 
-  it('should show "Generating Puzzles..." for running status', () => {
+  it('should show "Generating Puzzles…" for running status', () => {
     render(<JobStatusCard status="running" progress={50} message="Processing..." />);
 
-    expect(screen.getByText('Generating Puzzles...')).toBeInTheDocument();
+    expect(screen.getByText('Generating Puzzles…')).toBeInTheDocument();
   });
 
-  it('should show progress bar for processing status', () => {
-    const { container } = render(<JobStatusCard status="running" progress={75} />);
+  it('uses only server-provided progress for a running job', () => {
+    render(<JobStatusCard status="running" progress={75} />);
 
-    const progressBar = container.querySelector('[style*="width"]');
-    expect(progressBar).toBeInTheDocument();
-    // The fill must use a rendering utility. bg-primary generated no CSS (no
-    // --color-primary token), so the bar painted transparent — invisible progress.
-    expect(progressBar).toHaveClass('bg-primary');
+    const progressBar = screen.getByRole('progressbar', { name: 'Puzzle generation progress' });
+    expect(progressBar).toHaveAttribute('aria-valuenow', '75');
+    expect(progressBar.firstElementChild).toHaveStyle({ width: '75%' });
+  });
+
+  it('keeps running work indeterminate when the server omits progress', () => {
+    render(<JobStatusCard status="running" message="Starting analysis" />);
+
+    expect(screen.getByRole('progressbar', { name: 'Puzzle generation in progress' }))
+      .not.toHaveAttribute('aria-valuenow');
+  });
+
+  it('keeps running work indeterminate when server progress is not finite', () => {
+    render(<JobStatusCard status="running" progress={Number.NaN} />);
+
+    expect(screen.getByRole('progressbar', { name: 'Puzzle generation in progress' }))
+      .not.toHaveAttribute('aria-valuenow');
   });
 
   it('should show "Generation Complete" for succeeded status', () => {
@@ -47,6 +63,14 @@ describe('JobStatusCard', () => {
 
     expect(screen.getByText('Generation Failed')).toBeInTheDocument();
     expect(screen.getByText('Something went wrong')).toBeInTheDocument();
+  });
+
+  it('should show a truthful terminal heading for canceled status', () => {
+    render(<JobStatusCard status="canceled" message="Canceled by user" />);
+
+    expect(screen.getByText('Generation Canceled')).toBeInTheDocument();
+    expect(screen.getByText('Canceled by user')).toBeInTheDocument();
+    expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
   });
 
   it('should show cancel button when onCancel is provided and processing', () => {

@@ -152,6 +152,8 @@ export default function Puzzles() {
         if (!username) return null;
         return localStorage.getItem(`knightmind:lastJob:${username}`);
     });
+    const [errorOperation, setErrorOperation] = useState<'generation' | null>(null);
+    const generationRequestRef = useRef<Promise<void> | null>(null);
     const [prevUsername, setPrevUsername] = useState(username);
     const [game, setGame] = useState(new Chess());
     // Transient "we couldn't reach the server" for a board action (check a move,
@@ -656,6 +658,7 @@ export default function Puzzles() {
     // Sync activeJobId when username changes (during render, not in effect)
     if (prevUsername !== username) {
         setPrevUsername(username);
+        setErrorOperation(null);
         const savedJobId = username
             ? localStorage.getItem(`knightmind:lastJob:${username}`)
             : null;
@@ -665,6 +668,7 @@ export default function Puzzles() {
     const { job, isPolling: isJobPolling } = useJobPolling(activeJobId, {
         enabled: !!activeJobId,
         onSuccess: async () => {
+            setActiveJobId(null);
             try {
                 const res = await getDailyPuzzles(username, 5);
                 setPuzzles(res.puzzles);
@@ -679,14 +683,18 @@ export default function Puzzles() {
                 if (res.puzzles.length > 0) {
                     setSessionState('active');
                     setError(null);
+                    setErrorOperation(null);
                 } else {
                     setSessionState('error');
                     setError('No puzzles returned from generation');
+                    setErrorOperation('generation');
                 }
             } catch (err) {
                 console.error('Failed to refresh puzzles after generation:', err);
                 const message = err instanceof Error ? err.message : 'Failed to refresh puzzles';
+                setSessionState('error');
                 setError(message);
+                setErrorOperation('generation');
             }
 
             localStorage.removeItem(`knightmind:lastJob:${username}`);
@@ -695,10 +703,12 @@ export default function Puzzles() {
             await refreshUserStatus();
         },
         onError: (err) => {
+            setActiveJobId(null);
             localStorage.removeItem(`knightmind:lastJob:${username}`);
             const message = err instanceof Error ? err.message : 'Failed to generate puzzles';
             setSessionState('error');
             setError(message);
+            setErrorOperation('generation');
         }
     });
 
@@ -712,7 +722,15 @@ export default function Puzzles() {
         userStatus.due_count === 0 &&
         !hasValidFocusPracticeIntent
     );
-    const showGenerateAction = !isNoDueWithoutValidFocusIntent || Boolean(userStatus?.has_new_games) || isGenerating;
+    const isGenerationEntryEmptyState = Boolean(
+        userStatus &&
+        userStatus.games_count > 0 &&
+        userStatus.puzzles_count === 0 &&
+        userStatus.has_new_games
+    );
+    const showGenerateAction =
+        (!isNoDueWithoutValidFocusIntent || Boolean(userStatus?.has_new_games) || isGenerating) &&
+        !isGenerationEntryEmptyState;
     const { selectedModeLabel, screenReaderModeLabel } = getModeLabels(sessionType);
     const modeAvailabilityLabel = sessionType === 'standard' ? 'Active' : 'Beta';
     const presentationModeLabel = hasValidFocusPracticeIntent ? 'Focus practice' : selectedModeLabel;
@@ -769,39 +787,52 @@ export default function Puzzles() {
     const sessionDetailsA11yCopy = getSessionDetailsA11yCopy(showSessionDetails, screenReaderModeLabel);
     const puzzleActionA11yCopy = getPuzzleActionA11yCopy(clue.clueStage);
 
-    const handleGeneratePuzzles = async () => {
-        if (!username.trim()) {
-            setError('Please enter a username');
-            return;
-        }
-        setSessionState('loading');
-        setError(null);
+    const handleGeneratePuzzles = () => {
+        if (generationRequestRef.current || activeJobId) return generationRequestRef.current;
 
-        try {
-            const { job_id } = await generatePuzzles(username.trim());
-            setActiveJobId(job_id);
-            localStorage.setItem(`knightmind:lastJob:${username.trim()}`, job_id);
-            // Polling will auto-start
-        } catch (err) {
-            if (err instanceof ApiError) {
-                if (err.statusCode === 404) {
-                    // Differentiate between no games at all vs no new games
-                    if (userStatus?.games_count === 0) {
-                        setError('No games found. Please import games first.');
+        const operation = (async () => {
+            if (!username.trim()) {
+                setError('Please enter a username');
+                setErrorOperation('generation');
+                return;
+            }
+            setSessionState('loading');
+            setError(null);
+            setErrorOperation(null);
+
+            try {
+                const { job_id } = await generatePuzzles(username.trim());
+                setActiveJobId(job_id);
+                localStorage.setItem(`knightmind:lastJob:${username.trim()}`, job_id);
+                // Polling will auto-start
+            } catch (err) {
+                if (err instanceof ApiError) {
+                    if (err.statusCode === 404) {
+                        // Differentiate between no games at all vs no new games
+                        if (userStatus?.games_count === 0) {
+                            setError('No games found. Please import games first.');
+                        } else {
+                            setError('No new games available. All current games have been used for puzzles. Import more games to generate new puzzles.');
+                        }
                     } else {
-                        setError('No new games available. All current games have been used for puzzles. Import more games to generate new puzzles.');
+                        // Show the friendly message; keep the raw cause (endpoints,
+                        // timeouts, "backend is down") in the console for devs only.
+                        if (err.detail) console.error('[puzzles:generate]', err.detail);
+                        setError(err.message);
                     }
                 } else {
-                    // Show the friendly message; keep the raw cause (endpoints,
-                    // timeouts, "backend is down") in the console for devs only.
-                    if (err.detail) console.error('[puzzles:generate]', err.detail);
-                    setError(err.message);
+                    setError(err instanceof Error ? err.message : 'Failed to generate puzzles');
                 }
-            } else {
-                setError(err instanceof Error ? err.message : 'Failed to generate puzzles');
+                setErrorOperation('generation');
+                setSessionState('error');
             }
-            setSessionState('error');
-        }
+        })();
+
+        generationRequestRef.current = operation;
+        void operation.finally(() => {
+            if (generationRequestRef.current === operation) generationRequestRef.current = null;
+        });
+        return operation;
     };
 
     const handleCancelJob = async () => {
@@ -1545,13 +1576,13 @@ export default function Puzzles() {
                                 <>
                                     <h3 className="font-serif text-xl text-primary">Ready to generate puzzles</h3>
                                     <p className="text-primary/70 font-sans">
-                                        We found {userStatus.games_count} games. Let&apos;s create training puzzles.
+                                        Your recent imported games are analyzed into personalized practice. This may take a few minutes.
                                     </p>
                                     <button
                                         type="button"
                                         onClick={handleGeneratePuzzles}
-                                        disabled={controlsDisabled}
-                                        className={`px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-colors km-focus-visible ${controlsDisabled ? 'km-interactive-disabled' : 'km-interactive'}`}
+                                        disabled={generateNewDisabled}
+                                        className={`min-h-11 px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-colors km-focus-visible ${generateNewDisabled ? 'km-interactive-disabled' : 'km-interactive'}`}
                                     >
                                         Generate Puzzles
                                     </button>
@@ -1616,22 +1647,23 @@ export default function Puzzles() {
                         <div className="space-y-4">
                             <JobStatusCard status="failed" error={error ?? 'Failed to generate puzzles'} />
                             <div className="flex flex-wrap justify-center gap-3">
-                                <button
-                                    type="button"
-                                    onClick={handleStartSession}
-                                    disabled={!canRetryLoad}
-                                    className={`px-6 py-2 border border-primary/20 text-primary rounded-sm font-serif transition-all km-focus-visible ${!canRetryLoad ? 'km-interactive-disabled' : 'km-interactive'}`}
-                                >
-                                    Retry
-                                </button>
-                                {userStatus?.has_new_games && (
+                                {errorOperation === 'generation' ? (
                                     <button
                                         type="button"
                                         onClick={handleGeneratePuzzles}
                                         disabled={!canRetryLoad}
-                                        className={`px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-colors km-focus-visible ${!canRetryLoad ? 'km-interactive-disabled' : 'km-interactive'}`}
+                                        className={`min-h-11 px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-colors km-focus-visible ${!canRetryLoad ? 'km-interactive-disabled' : 'km-interactive'}`}
                                     >
-                                        Generate New
+                                        Try generation again
+                                    </button>
+                                ) : (
+                                    <button
+                                        type="button"
+                                        onClick={handleStartSession}
+                                        disabled={!canRetryLoad}
+                                        className={`min-h-11 px-6 py-2 border border-primary/20 text-primary rounded-sm font-serif transition-all km-focus-visible ${!canRetryLoad ? 'km-interactive-disabled' : 'km-interactive'}`}
+                                    >
+                                        Retry session
                                     </button>
                                 )}
                                 {/* No connect control here. The panel above is
