@@ -32,9 +32,10 @@ describe('WarmupSummary', () => {
   const user = userEvent.setup();
 
   function renderSummary(summary: SessionSummary = mockSessionSummary, onContinue = vi.fn()) {
+    const returnToken = WarmupSummary.createReturnToken('testplayer', summary);
     return render(
       <MemoryRouter>
-        <WarmupSummary username="testplayer" sessionSummary={summary} onContinue={onContinue} />
+        <WarmupSummary sessionSummary={summary} returnToken={returnToken} onContinue={onContinue} />
       </MemoryRouter>,
     );
   }
@@ -145,6 +146,61 @@ describe('WarmupSummary', () => {
     expect(screen.queryByRole('link')).not.toBeInTheDocument();
   });
 
+  it('does not allocate a return capability without a reviewable missed puzzle', () => {
+    expect(WarmupSummary.createReturnToken('testplayer', mockSessionSummary)).toBeNull();
+    expect(WarmupSummary.createReturnToken('testplayer', {
+      ...mockSessionSummary,
+      missed_puzzles: [],
+    })).toBeNull();
+  });
+
+  it('expires stale capabilities and deterministically evicts the oldest entries at capacity', () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-09-07T12:00:00Z'));
+      const reviewable = {
+        ...mockSessionSummary,
+        missed_puzzles: [{
+          puzzle_id: 'p-capacity',
+          display_name: 'Capacity puzzle',
+          cause: null,
+          cause_label: null,
+        }],
+      };
+      const expired = WarmupSummary.createReturnToken('testplayer', reviewable);
+      expect(expired).not.toBeNull();
+
+      vi.setSystemTime(new Date('2026-09-07T12:31:00Z'));
+      const tokens = Array.from({ length: 129 }, (_, index) => WarmupSummary.createReturnToken('testplayer', {
+        ...reviewable,
+        session_id: `warmup-capacity-${index}`,
+      }));
+
+      expect(WarmupSummary.readReturnToken(expired, 'testplayer')).toBeNull();
+      expect(WarmupSummary.readReturnToken(tokens[0]!, 'testplayer')).toBeNull();
+      expect(WarmupSummary.readReturnToken(tokens[1]!, 'testplayer')).not.toBeNull();
+      expect(WarmupSummary.readReturnToken(tokens[tokens.length - 1]!, 'testplayer')).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('revokes a registered capability when another user attempts to read it', () => {
+    const token = WarmupSummary.createReturnToken('testplayer', {
+      ...mockSessionSummary,
+      session_id: 'cross-user-return',
+      missed_puzzles: [{
+        puzzle_id: 'p-cross-user',
+        display_name: 'Cross-user puzzle',
+        cause: null,
+        cause_label: null,
+      }],
+    });
+
+    expect(WarmupSummary.readReturnToken(token, 'other-player')).toBeNull();
+    expect(WarmupSummary.readReturnToken(token, 'testplayer')).toBeNull();
+  });
+
   it('keeps long missed-puzzle identity and cause text wrapping safely', () => {
     const longName = 'Championship preparation game · Sicilian Najdorf poisoned pawn · move 38';
     const longCause = 'Missed the long forcing sequence after overlooking the opponent’s back-rank threat';
@@ -178,14 +234,18 @@ describe('WarmupSummary', () => {
           cause_label: 'King safety blindness',
         }],
       } : returned?.summary;
+      const returnToken = returned?.token ?? (summary
+        ? WarmupSummary.createReturnToken('testplayer', summary)
+        : null);
 
       if (!summary) return <p>Training idle</p>;
       return (
         <WarmupSummary
-          username="testplayer"
           sessionSummary={summary}
+          returnToken={returnToken}
           onContinue={() => {
-            if (returned) WarmupSummary.consumeReturnState(returned);
+            const lifecycle = WarmupSummary.readReturnToken(returnToken, 'testplayer');
+            if (lifecycle) WarmupSummary.consumeReturnState(lifecycle);
             navigate('/dashboard', { replace: true });
           }}
         />

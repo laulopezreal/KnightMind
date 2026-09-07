@@ -1,10 +1,9 @@
-import { useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import type { MissedPuzzleSummary, SessionSummary } from '../api/sessions';
 import { calculateAccuracy } from '../utils/accuracy';
 
 const WARMUP_RETURN_MAX_AGE_MS = 30 * 60 * 1000;
-const consumedWarmupReturnTokens = new Set<string>();
+const WARMUP_RETURN_MAX_ENTRIES = 128;
 const warmupReturnRegistry = new Map<string, WarmupReturnState>();
 
 export type WarmupReturnSummary = Pick<
@@ -31,8 +30,8 @@ export interface WarmupReturnState {
 }
 
 interface WarmupSummaryProps {
-  username: string;
   sessionSummary: WarmupReturnSummary;
+  returnToken: string | null;
   onContinue: () => void;
 }
 
@@ -109,8 +108,20 @@ function readSummary(value: unknown): WarmupReturnSummary | null {
   };
 }
 
-function isConsumed(state: WarmupReturnState): boolean {
-  return consumedWarmupReturnTokens.has(state.token);
+function hasReviewableMissedPuzzle(summary: WarmupReturnSummary): boolean {
+  return Boolean(summary.missed_puzzles?.length);
+}
+
+function isCurrentIssuedAt(issuedAt: number, now: number): boolean {
+  const age = now - issuedAt;
+  return age >= -60_000 && age <= WARMUP_RETURN_MAX_AGE_MS;
+}
+
+/** Remove invalid lifecycles before every registry operation. */
+function pruneWarmupReturnRegistry(now = Date.now()): void {
+  for (const [token, state] of warmupReturnRegistry) {
+    if (!isCurrentIssuedAt(state.issuedAt, now)) warmupReturnRegistry.delete(token);
+  }
 }
 
 function createToken(): string {
@@ -153,15 +164,33 @@ function createWarmupReturnLocationState(
   };
 }
 
-/** Register a safe tab-memory payload and return its route-owned opaque token. */
-function createWarmupReturnToken(username: string, summary: WarmupReturnSummary): string {
-  const locationState = createWarmupReturnLocationState(username, summary);
+/** Register one bounded capability for a reviewable completed lifecycle. */
+function createWarmupReturnToken(username: string, summary: WarmupReturnSummary): string | null {
+  pruneWarmupReturnRegistry();
+  const safeSummary = readSummary(summary);
+  if (!safeSummary || !hasReviewableMissedPuzzle(safeSummary)) return null;
+
+  for (const state of warmupReturnRegistry.values()) {
+    if (state.username === username && state.summary.session_id === safeSummary.session_id) {
+      state.summary = safeSummary;
+      return state.token;
+    }
+  }
+
+  while (warmupReturnRegistry.size >= WARMUP_RETURN_MAX_ENTRIES) {
+    const oldestToken = warmupReturnRegistry.keys().next().value as string | undefined;
+    if (!oldestToken) break;
+    warmupReturnRegistry.delete(oldestToken);
+  }
+
+  const locationState = createWarmupReturnLocationState(username, safeSummary);
   warmupReturnRegistry.set(locationState.warmupReturn.token, locationState.warmupReturn);
   return locationState.warmupReturn.token;
 }
 
 /** Validate and sanitize route-owned return state for the current user. */
 function readWarmupReturnState(value: unknown, username: string): WarmupReturnState | null {
+  pruneWarmupReturnRegistry();
   if (!isRecord(value) || !isRecord(value.warmupReturn)) return null;
   const candidate = value.warmupReturn;
   if (
@@ -173,8 +202,7 @@ function readWarmupReturnState(value: unknown, username: string): WarmupReturnSt
     || !Number.isFinite(candidate.issuedAt)
   ) return null;
 
-  const age = Date.now() - candidate.issuedAt;
-  if (age < -60_000 || age > WARMUP_RETURN_MAX_AGE_MS) return null;
+  if (!isCurrentIssuedAt(candidate.issuedAt, Date.now())) return null;
   const summary = readSummary(candidate.summary);
   if (!summary) return null;
 
@@ -185,19 +213,24 @@ function readWarmupReturnState(value: unknown, username: string): WarmupReturnSt
     issuedAt: candidate.issuedAt,
     summary,
   };
-  return isConsumed(sanitized) ? null : sanitized;
+  return sanitized;
 }
 
 /** Resolve and validate the opaque token carried by the review-return route. */
-function readWarmupReturnToken(token: string | null, username: string): WarmupReturnState | null {
+function readWarmupReturnToken(token: string | null | undefined, username: string): WarmupReturnState | null {
+  pruneWarmupReturnRegistry();
   if (!token) return null;
   const state = warmupReturnRegistry.get(token);
+  if (state && state.username !== username) {
+    warmupReturnRegistry.delete(token);
+    return null;
+  }
   return state ? readWarmupReturnState({ warmupReturn: state }, username) : null;
 }
 
 /** Mark one return context closed so history cannot replay it. */
 function consumeWarmupReturnState(state: WarmupReturnState): void {
-  consumedWarmupReturnTokens.add(state.token);
+  pruneWarmupReturnRegistry();
   warmupReturnRegistry.delete(state.token);
 }
 
@@ -205,14 +238,10 @@ function consumeWarmupReturnState(state: WarmupReturnState): void {
  * WarmupSummary displays results after completing a warmup diagnostic session
  * Shows accuracy, pass/fail counts, and personalized feedback
  */
-function WarmupSummaryComponent({ username, sessionSummary, onContinue }: WarmupSummaryProps) {
+function WarmupSummaryComponent({ sessionSummary, returnToken, onContinue }: WarmupSummaryProps) {
   const accuracy = calculateAccuracy(sessionSummary.pass_count, sessionSummary.fail_count);
   const missedPuzzles = sessionSummary.missed_puzzles;
-  const hasMissedPuzzles = Boolean(missedPuzzles?.length);
-  const returnToken = useMemo(
-    () => createWarmupReturnToken(username, sessionSummary),
-    [sessionSummary, username],
-  );
+  const hasMissedPuzzles = Boolean(missedPuzzles?.length && returnToken);
 
   // Determine feedback based on performance
   const getFeedbackMessage = (acc: number): string => {
@@ -298,7 +327,7 @@ function WarmupSummaryComponent({ username, sessionSummary, onContinue }: Warmup
                   )}
                 </div>
                 <Link
-                  to={`/library/${missedPuzzle.puzzle_id}?from=session&warmup_return=${encodeURIComponent(returnToken)}`}
+                  to={`/library/${missedPuzzle.puzzle_id}?from=session&warmup_return=${encodeURIComponent(returnToken!)}`}
                   className="self-start sm:self-auto shrink-0 inline-flex items-center justify-center min-h-11 min-w-11 text-xs font-serif text-primary/70 underline underline-offset-2 hover:text-primary transition-colors km-focus-visible"
                   aria-label={`Review ${missedPuzzle.display_name}`}
                 >

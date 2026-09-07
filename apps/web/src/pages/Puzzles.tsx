@@ -177,7 +177,9 @@ export default function Puzzles() {
     const focusOpening = searchParams.get('focus_opening');
     const focusOpeningScope = searchParams.get('focus_opening_scope');
     const isWarmupMode = searchParams.get('warmup') === 'true';
-    const warmupReturn = WarmupSummary.readReturnToken?.(searchParams.get('warmup_return'), username) ?? null;
+    const warmupReturnToken = searchParams.get('warmup_return');
+    const hasWarmupReturnIntent = searchParams.has('warmup_return');
+    const warmupReturn = WarmupSummary.readReturnToken?.(warmupReturnToken, username) ?? null;
 
     // A normal-focus URL is only an intent. The current server planner is the
     // authority that decides whether that cause is still this user's focus.
@@ -280,7 +282,7 @@ export default function Puzzles() {
         targetAccuracy,
         targetTimeMinutes,
         warmupMode,
-        resumeEnabled: !warmupReturn,
+        resumeEnabled: !hasWarmupReturnIntent,
         motifFilter,
         focusCause: effectiveFocusCause,
         focusPracticeMode,
@@ -304,8 +306,66 @@ export default function Puzzles() {
         handleStartSession, handleReviewPuzzle, handleCompleteSession, handleUseHint,
         calculateRecentPerformance, getPerformanceTrend,
     } = session;
-    const presentationSessionState = warmupReturn ? 'completed' : sessionState;
-    const completedSummary = warmupReturn?.summary ?? sessionSummary;
+    const [initialWarmupLifecycle, setInitialWarmupLifecycle] = useState<{
+        username: string;
+        sessionId: string;
+        token: string | null;
+    } | null>(null);
+    const warmupUsernameRef = useRef(username);
+    const returnedWarmupLifecycleRef = useRef<typeof warmupReturn>(null);
+    useEffect(() => {
+        if (warmupUsernameRef.current !== username) {
+            if (initialWarmupLifecycle?.token) {
+                const owned = WarmupSummary.readReturnToken(initialWarmupLifecycle.token, initialWarmupLifecycle.username);
+                if (owned) WarmupSummary.consumeReturnState(owned);
+            }
+            if (returnedWarmupLifecycleRef.current) {
+                WarmupSummary.consumeReturnState(returnedWarmupLifecycleRef.current);
+                returnedWarmupLifecycleRef.current = null;
+            }
+            warmupUsernameRef.current = username;
+            setInitialWarmupLifecycle(null);
+            if (sessionState === 'completed') {
+                setSessionSummary(null);
+                setSessionState('idle');
+            }
+            return;
+        }
+
+        if (warmupReturn) {
+            returnedWarmupLifecycleRef.current = warmupReturn;
+            if (initialWarmupLifecycle) setInitialWarmupLifecycle(null);
+            return;
+        }
+        if (!warmupMode || !sessionSummary || sessionState !== 'completed') return;
+        if (
+            initialWarmupLifecycle?.username === username
+            && initialWarmupLifecycle.sessionId === sessionSummary.session_id
+        ) return;
+
+        if (initialWarmupLifecycle?.token) {
+            const previous = WarmupSummary.readReturnToken(initialWarmupLifecycle.token, initialWarmupLifecycle.username);
+            if (previous) WarmupSummary.consumeReturnState(previous);
+        }
+        const token = WarmupSummary.createReturnToken(username, sessionSummary);
+        setInitialWarmupLifecycle({ username, sessionId: sessionSummary.session_id, token });
+    }, [
+        initialWarmupLifecycle,
+        sessionState,
+        sessionSummary,
+        setSessionState,
+        setSessionSummary,
+        username,
+        warmupMode,
+        warmupReturn,
+    ]);
+    const ownedInitialSummary = initialWarmupLifecycle?.username === username
+        && initialWarmupLifecycle.sessionId === sessionSummary?.session_id
+        ? sessionSummary
+        : null;
+    const presentationSessionState = warmupReturn || ownedInitialSummary ? 'completed' : sessionState;
+    const completedSummary = warmupReturn?.summary ?? (warmupMode ? ownedInitialSummary : sessionSummary);
+    const warmupLifecycleToken = warmupReturn?.token ?? initialWarmupLifecycle?.token ?? null;
 
     const startPuzzleTimer = timer.startPuzzleTimer;
     const currentPuzzle = puzzles[currentIndex];
@@ -2264,10 +2324,12 @@ export default function Puzzles() {
                 <div ref={summaryRef} className="lg:order-7 scroll-mt-6">
                     {warmupMode || warmupReturn ? (
                         <WarmupSummary
-                            username={username}
                             sessionSummary={completedSummary}
+                            returnToken={warmupLifecycleToken}
                             onContinue={() => {
-                                if (warmupReturn) WarmupSummary.consumeReturnState(warmupReturn);
+                                const lifecycle = WarmupSummary.readReturnToken(warmupLifecycleToken, username);
+                                if (lifecycle) WarmupSummary.consumeReturnState(lifecycle);
+                                returnedWarmupLifecycleRef.current = null;
                                 setWarmupMode(false);
                                 navigate('/dashboard', { replace: Boolean(warmupReturn) });
                             }}
