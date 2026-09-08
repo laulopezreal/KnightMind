@@ -11,6 +11,10 @@ vi.mock('../api', () => ({
   ApiError: class extends Error { detail?: string },
 }));
 
+vi.mock('../api/puzzles', () => ({
+  createManualPuzzle: vi.fn(),
+}));
+
 vi.mock('react-router-dom', () => ({
   Link: ({ children, to, ...props }: { children: React.ReactNode; to: string; [key: string]: unknown }) => (
     <a href={to} {...props}>{children}</a>
@@ -52,8 +56,10 @@ vi.mock('chess.js', () => {
 
 // Import mocked functions after vi.mock
 import { evaluateFen, getEngineStatus } from '../api';
+import { createManualPuzzle } from '../api/puzzles';
 const mockEvaluateFen = vi.mocked(evaluateFen);
 const mockGetEngineStatus = vi.mocked(getEngineStatus);
+const mockCreateManualPuzzle = vi.mocked(createManualPuzzle);
 
 const STARTING_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
 const ALT_FEN = 'rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1';
@@ -72,6 +78,7 @@ describe('Engine - Clue Functionality', () => {
   beforeEach(() => {
     user = userEvent.setup();
     vi.resetAllMocks();
+    localStorage.removeItem('knightmind:chesscom_username');
     mockGetEngineStatus.mockResolvedValue({ available: true, message: 'Engine ready' });
     mockEvaluateFen.mockResolvedValue({ best_move_uci: 'e2e4', eval: 0.5 });
   });
@@ -361,8 +368,71 @@ describe('Engine - Clue Functionality', () => {
       expect(screen.getByRole('button', { name: 'Reset Position' })).toHaveClass('min-h-11');
     });
 
-    it('should not show clue button when no evaluation is available', () => {
+    it('keeps the best move hidden until the 44px Show control is used', async () => {
       renderEngine();
+      await evaluatePosition();
+
+      expect(screen.getByText('Hidden')).toBeInTheDocument();
+      expect(screen.queryByText('e2e4')).not.toBeInTheDocument();
+
+      const showButton = screen.getByRole('button', { name: 'Show' });
+      expect(showButton).toHaveClass('min-h-11');
+      await user.click(showButton);
+
+      expect(screen.getByText('e2e4')).toBeInTheDocument();
+      const hideButton = screen.getByRole('button', { name: 'Hide' });
+      expect(hideButton).toHaveClass('min-h-11');
+      await user.click(hideButton);
+      expect(screen.getByText('Hidden')).toBeInTheDocument();
+    });
+
+    it('keeps every clue-stage control at least 44px high', async () => {
+      renderEngine();
+      await evaluatePosition();
+
+      const clueButton = screen.getByRole('button', { name: 'Clue' });
+      expect(clueButton).toHaveClass('min-h-11');
+      expect(clueButton.parentElement).not.toHaveClass('sm:flex-row');
+      await user.click(clueButton);
+
+      const revealButton = screen.getByRole('button', { name: 'Reveal squares' });
+      expect(revealButton).toHaveClass('min-h-11');
+      await user.click(revealButton);
+
+      expect(screen.getByRole('button', { name: 'Hide clues and reset' })).toHaveClass('min-h-11');
+    });
+
+    it('keeps the optional save form in a collapsed native disclosure by default', async () => {
+      renderEngine();
+      await evaluatePosition();
+
+      const summary = screen.getByText('Save this position as a puzzle').closest('summary');
+      const disclosure = summary?.closest('details');
+      expect(summary?.tagName).toBe('SUMMARY');
+      expect(disclosure).not.toHaveAttribute('open');
+
+      await user.click(summary!);
+      expect(disclosure).toHaveAttribute('open');
+      expect(screen.getByLabelText('Title')).toBeInTheDocument();
+      expect(screen.getByLabelText('Solution line')).toHaveValue('e2e4');
+    });
+
+    it('opens the save disclosure with Enter from its focused summary', async () => {
+      renderEngine();
+      await evaluatePosition();
+
+      const summary = screen.getByText('Save this position as a puzzle').closest('summary')!;
+      const disclosure = summary.closest('details');
+      summary.focus();
+      await user.keyboard('{Enter}');
+
+      expect(disclosure).toHaveAttribute('open');
+    });
+
+    it('should not show clue button when no evaluation is available', async () => {
+      renderEngine();
+
+      await screen.findByText('Engine ready');
 
       expect(screen.queryByText('Clue')).not.toBeInTheDocument();
     });
@@ -570,11 +640,36 @@ describe('Engine - Clue Functionality', () => {
 
       await evaluatePosition();
 
+      await user.click(screen.getByText('Save this position as a puzzle'));
+
       // Naming the action is not enough — it has to be reachable. The username
       // editor is unmounted while the username is empty, so Home is the way in.
       const link = await screen.findByRole('link', { name: /Connect your Chess.com account/i });
       expect(link).toHaveAttribute('href', '/');
       expect(screen.getByText(/to save puzzles/i)).toBeInTheDocument();
+    });
+
+    it('keeps a failed save recoverable and preserves the saved-puzzle link after retry', async () => {
+      localStorage.setItem('knightmind:chesscom_username', 'lau-test');
+      mockCreateManualPuzzle
+        .mockRejectedValueOnce(new Error('network down'))
+        .mockResolvedValueOnce({ puzzle_id: 'puzzle-123', is_new: true });
+      renderEngine();
+      await evaluatePosition();
+
+      const summary = screen.getByText('Save this position as a puzzle');
+      await user.click(summary);
+      await user.type(screen.getByLabelText('Title'), 'Back rank idea');
+      await user.click(screen.getByRole('button', { name: 'Save puzzle' }));
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('Failed to save puzzle');
+      expect(summary.closest('details')).toHaveAttribute('open');
+      expect(screen.getByText('+0.50')).toBeInTheDocument();
+
+      await user.click(screen.getByRole('button', { name: 'Save puzzle' }));
+      const savedLink = await screen.findByRole('link', { name: /View in Library/i });
+      expect(savedLink).toHaveAttribute('href', '/library/puzzle-123');
+      expect(mockCreateManualPuzzle).toHaveBeenCalledTimes(2);
     });
   });
 
