@@ -137,6 +137,66 @@ describe('WarmupSummary', () => {
   });
 
   it.each([
+    ['unavailable', {}],
+    ['throwing', { randomUUID: vi.fn(() => { throw new Error('UUID unavailable'); }) }],
+  ])('fails closed when secure UUID generation is %s', (_label, unavailableCrypto) => {
+    vi.stubGlobal('crypto', unavailableCrypto);
+    try {
+      const summary = {
+        ...mockSessionSummary,
+        session_id: `warmup-no-uuid-${_label}`,
+        missed_puzzles: [{
+          puzzle_id: 'p-no-token',
+          display_name: 'Safe missed-puzzle detail',
+          cause: 'calculation',
+          cause_label: 'Calculation depth',
+        }],
+      };
+
+      const token = WarmupSummary.createReturnToken('testplayer', summary);
+      expect(token).toBeNull();
+      expect(WarmupSummary.readReturnToken(token, 'testplayer')).toBeNull();
+
+      render(
+        <MemoryRouter>
+          <WarmupSummary sessionSummary={summary} returnToken={token} onContinue={vi.fn()} />
+        </MemoryRouter>,
+      );
+
+      expect(screen.getByRole('heading', { name: 'Missed puzzle' })).toBeInTheDocument();
+      expect(screen.getByText('Safe missed-puzzle detail')).toBeInTheDocument();
+      expect(screen.getByText('Calculation depth')).toBeInTheDocument();
+      expect(screen.queryByRole('link')).not.toBeInTheDocument();
+      expect(document.body.innerHTML).not.toContain('warmup_return=');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('mints and registers the secure UUID happy path', () => {
+    const secureToken = '123e4567-e89b-42d3-a456-426614174000';
+    vi.stubGlobal('crypto', { randomUUID: vi.fn(() => secureToken) });
+    try {
+      const summary = {
+        ...mockSessionSummary,
+        session_id: 'warmup-secure-uuid',
+        missed_puzzles: [{
+          puzzle_id: 'p-secure',
+          display_name: 'Secure return puzzle',
+          cause: null,
+          cause_label: null,
+        }],
+      };
+
+      expect(WarmupSummary.createReturnToken('testplayer', summary)).toBe(secureToken);
+      expect(WarmupSummary.readReturnToken(secureToken, 'testplayer')?.summary.session_id)
+        .toBe('warmup-secure-uuid');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it.each([
     ['absent', undefined],
     ['empty', []],
   ])('does not render missed-puzzle learning when data is %s', (_label, missedPuzzles) => {

@@ -124,20 +124,27 @@ function pruneWarmupReturnRegistry(now = Date.now()): void {
   }
 }
 
-function createToken(): string {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
-  return `warmup-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+function createToken(): string | null {
+  if (typeof crypto === 'undefined' || typeof crypto.randomUUID !== 'function') return null;
+  try {
+    const token = crypto.randomUUID();
+    return isBoundedString(token, 128) ? token : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Build a route-state projection containing only safe completed-summary fields. */
 function createWarmupReturnLocationState(
   username: string,
   summary: WarmupReturnSummary,
-): { warmupReturn: WarmupReturnState } {
+): { warmupReturn: WarmupReturnState } | null {
+  const token = createToken();
+  if (!token) return null;
   return {
     warmupReturn: {
       version: 1,
-      token: createToken(),
+      token,
       username,
       issuedAt: Date.now(),
       summary: {
@@ -177,13 +184,15 @@ function createWarmupReturnToken(username: string, summary: WarmupReturnSummary)
     }
   }
 
+  const locationState = createWarmupReturnLocationState(username, safeSummary);
+  if (!locationState) return null;
+
   while (warmupReturnRegistry.size >= WARMUP_RETURN_MAX_ENTRIES) {
     const oldestToken = warmupReturnRegistry.keys().next().value as string | undefined;
     if (!oldestToken) break;
     warmupReturnRegistry.delete(oldestToken);
   }
 
-  const locationState = createWarmupReturnLocationState(username, safeSummary);
   warmupReturnRegistry.set(locationState.warmupReturn.token, locationState.warmupReturn);
   return locationState.warmupReturn.token;
 }
@@ -241,7 +250,7 @@ function consumeWarmupReturnState(state: WarmupReturnState): void {
 function WarmupSummaryComponent({ sessionSummary, returnToken, onContinue }: WarmupSummaryProps) {
   const accuracy = calculateAccuracy(sessionSummary.pass_count, sessionSummary.fail_count);
   const missedPuzzles = sessionSummary.missed_puzzles;
-  const hasMissedPuzzles = Boolean(missedPuzzles?.length && returnToken);
+  const hasMissedPuzzles = Boolean(missedPuzzles?.length);
 
   // Determine feedback based on performance
   const getFeedbackMessage = (acc: number): string => {
@@ -309,7 +318,9 @@ function WarmupSummaryComponent({ sessionSummary, returnToken, onContinue }: War
           <h3 id="warmup-missed-puzzles-heading" className="text-lg font-serif text-primary mb-1">
             {missedPuzzles.length === 1 ? 'Missed puzzle' : `Missed puzzles (${missedPuzzles.length})`}
           </h3>
-          <p className="text-sm text-primary/70 mb-3">Review what to learn from this warmup.</p>
+          <p className="text-sm text-primary/70 mb-3">
+            {returnToken ? 'Review what to learn from this warmup.' : 'Keep these learning moments in mind.'}
+          </p>
           <ul className="divide-y divide-primary/10" aria-label="Missed puzzles">
             {missedPuzzles.map((missedPuzzle) => (
               <li
@@ -326,13 +337,15 @@ function WarmupSummaryComponent({ sessionSummary, returnToken, onContinue }: War
                     </span>
                   )}
                 </div>
-                <Link
-                  to={`/library/${missedPuzzle.puzzle_id}?from=session&warmup_return=${encodeURIComponent(returnToken!)}`}
-                  className="self-start sm:self-auto shrink-0 inline-flex items-center justify-center min-h-11 min-w-11 text-xs font-serif text-primary/70 underline underline-offset-2 hover:text-primary transition-colors km-focus-visible"
-                  aria-label={`Review ${missedPuzzle.display_name}`}
-                >
-                  Review
-                </Link>
+                {returnToken && (
+                  <Link
+                    to={`/library/${missedPuzzle.puzzle_id}?from=session&warmup_return=${encodeURIComponent(returnToken)}`}
+                    className="self-start sm:self-auto shrink-0 inline-flex items-center justify-center min-h-11 min-w-11 text-xs font-serif text-primary/70 underline underline-offset-2 hover:text-primary transition-colors km-focus-visible"
+                    aria-label={`Review ${missedPuzzle.display_name}`}
+                  >
+                    Review
+                  </Link>
+                )}
               </li>
             ))}
           </ul>
