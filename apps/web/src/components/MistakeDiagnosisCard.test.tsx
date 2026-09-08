@@ -216,6 +216,13 @@ describe('MistakeDiagnosisCard', () => {
     });
 
     describe('honest states', () => {
+        it('preserves the withheld state without exposing diagnosis evidence', () => {
+            render(<MistakeDiagnosisCard diagnosis={diagnosis({ state: 'withheld' })} revealed />);
+            expect(screen.getByText(/no diagnosis is shown for this result/i)).toBeInTheDocument();
+            expect(screen.getByText(/only considered after you attempt a move/i)).toBeInTheDocument();
+            expect(screen.queryByText('Qxd5 (forcing)')).not.toBeInTheDocument();
+        });
+
         it('says a puzzle has not been analysed yet rather than showing nothing', () => {
             render(
                 <MistakeDiagnosisCard diagnosis={diagnosis({ state: 'pending' })} revealed />
