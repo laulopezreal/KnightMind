@@ -189,23 +189,23 @@ export function MistakeDiagnosisCard({
                 )}
 
                 {evidence.length > 0 && (
-                    <div>
-                        <h3 className="font-sans font-normal text-xs uppercase tracking-widest text-primary/70 mb-2">
-                            {diagnosis.explanation ? 'Evidence' : 'Why'}
-                        </h3>
-                        <dl className="space-y-1">
+                    <details className="min-w-0 border-t border-primary/10 pt-1 font-sans text-sm text-primary/70">
+                        <summary className="min-h-11 py-2 cursor-pointer font-sans text-sm text-primary/70 km-focus-visible">
+                            Technical details
+                        </summary>
+                        <dl className="mt-1 space-y-3 border-l border-primary/20 pl-3">
                             {evidence.map((item) => (
-                                <div key={item.id} className="flex gap-2 text-sm">
-                                    <dt className="font-sans text-primary/70 shrink-0">
+                                <div key={item.id} className="min-w-0 text-sm">
+                                    <dt className="font-sans text-primary/70">
                                         {item.label}:
                                     </dt>
-                                    <dd className="font-mono text-primary/80 break-words">
+                                    <dd className="mt-0.5 min-w-0 font-mono text-primary/80 break-words [overflow-wrap:anywhere]">
                                         {item.value}
                                     </dd>
                                 </div>
                             ))}
                         </dl>
-                    </div>
+                    </details>
                 )}
 
                 {diagnosis.evidence_withheld && (

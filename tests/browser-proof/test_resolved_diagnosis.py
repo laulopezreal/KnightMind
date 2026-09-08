@@ -6,14 +6,13 @@ Proof origin: test/resolved-diagnosis-browser-proof (original proof branch)
 Candidate: the checked-out commit, recorded at runtime
 Pre-fix parent: 392e7c8
 
-Proves at both desktop (1280x800) and mobile (390x844):
+Proves in day and night themes at desktop (1280x800) and mobile (390x844):
   1. After a successful review + ready diagnosis, the card renders:
-     heading, cause, explanation, evidence, next-time guidance.
-  2. The diagnosis section is reachable and does not overflow horizontally on mobile.
-  3. Browser console errors are empty after navigation and after resolution.
-  4. Moving to a different puzzle clears the prior diagnosis.
-  5. The test passes against the checked-out candidate and fails against pre-fix (392e7c8).
-     (Point 5 is demonstrated by the RED build section at the bottom of this script.)
+     heading, cause, explanation, next-time guidance, and a compact disclosure.
+  2. Real pointer/touch and keyboard input reveal every exact evidence item.
+  3. Expanded evidence stays readable and does not overflow horizontally.
+  4. Browser console errors are empty after navigation and after resolution.
+  5. Moving to a different puzzle clears the prior diagnosis.
 
 Usage:
   python3 tests/browser-proof/test_resolved_diagnosis.py
@@ -218,6 +217,16 @@ DIAGNOSIS_READY = {
     "evidence": [
         {"id": "best.move", "label": "Best move", "value": "e2e4 (forcing)"},
         {"id": "eval.swing", "label": "Evaluation swing (pawns)", "value": "1.00"},
+        {
+            "id": "solution.attacks",
+            "label": "Pieces the solution attacks",
+            "value": "king on h3, rook on e6, queen on a8, bishop on g2",
+        },
+        {
+            "id": "played.attacks",
+            "label": "Pieces the played move attacks after the move",
+            "value": "king on h3, rook on e6",
+        },
     ],
     "evidence_withheld": False,
     "explanation": "You moved the pawn passively instead of taking central control.",
@@ -362,7 +371,9 @@ def setup_routes(page, static_origin):
     page.route("**/api/**", handle)
 
 
-def run_test(viewport_name, width, height, page, static_origin, username="testplayer"):
+def run_test(
+    viewport_name, width, height, page, static_origin, theme, username="testplayer"
+):
     """Run the full resolved-diagnosis browser proof for one viewport."""
     print(f"\n=== {viewport_name} ({width}x{height}) ===", flush=True)
     page.set_viewport_size({"width": width, "height": height})
@@ -370,6 +381,7 @@ def run_test(viewport_name, width, height, page, static_origin, username="testpl
     # Set username in localStorage so the app doesn't ask for it
     page.goto(static_origin)
     page.evaluate(f"localStorage.setItem('knightmind:chesscom_username', '{username}')")
+    page.evaluate(f"localStorage.setItem('knightmind:theme', '{theme}')")
 
     # Register before navigation so route-load errors are included in the proof.
     console_errors = []
@@ -403,7 +415,15 @@ def run_test(viewport_name, width, height, page, static_origin, username="testpl
     move_input.press("Enter")
     page.wait_for_timeout(600)
 
-    # ── 3. Wait for diagnosis card ────────────────────────────────
+    # ── 3. Open the result review and wait for diagnosis ─────────
+    # Next Puzzle stays the surrounding primary action. Diagnosis is deliberately
+    # behind the existing secondary result-review disclosure.
+    review_summary = page.get_by_text(
+        "Review your result and any available diagnosis", exact=False
+    )
+    review_summary.wait_for(state="visible", timeout=3000)
+    review_summary.click()
+
     # The diagnosis must appear within 5s after the correct answer.
     # The real production flow: checkPuzzle returns correct → handleCheckAnswer
     # triggers the review → usePuzzleSession.handleReviewPuzzle calls reviewPuzzle
@@ -450,18 +470,96 @@ def run_test(viewport_name, width, height, page, static_origin, username="testpl
         or diag.locator("text=central control").count() > 0
     ), f"{viewport_name}: Explanation text not visible"
 
-    # Evidence
-    assert (
-        diag.locator("text=e2e4").count() > 0
-    ), f"{viewport_name}: Evidence (best move) not visible"
-
     # Next-time guidance
     assert (
         diag.locator("text=Next time").count() > 0
     ), f"{viewport_name}: 'Next time' recommendation heading not visible"
 
     print(
-        "  [OK] Diagnosis heading, cause, explanation, evidence, next-time — all visible",
+        "  [OK] Diagnosis heading, cause, explanation, and next-time guidance are visible",
+        flush=True,
+    )
+
+    # Detailed evidence stays secondary until the user asks for it.
+    details = diag.locator("details").filter(has_text="Technical details")
+    summary = details.locator("summary")
+    attack_value = details.get_by_text(
+        "king on h3, rook on e6, queen on a8, bishop on g2", exact=True
+    )
+    assert details.count() == 1, f"{viewport_name}: Technical disclosure missing"
+    assert not details.evaluate("el => el.open"), (
+        f"{viewport_name}: Technical evidence is expanded by default"
+    )
+    assert not attack_value.is_visible(), (
+        f"{viewport_name}: Detailed attack evidence is visible while collapsed"
+    )
+    collapsed_height = diag.evaluate("el => el.getBoundingClientRect().height")
+    assert collapsed_height < 620, (
+        f"{viewport_name}: Collapsed diagnosis is not compact ({collapsed_height:.1f}px)"
+    )
+
+    summary.scroll_into_view_if_needed()
+    summary_box = summary.bounding_box()
+    assert summary_box is not None and summary_box["height"] >= 44, (
+        f"{viewport_name}: Technical disclosure target is below 44px"
+    )
+    assert summary.evaluate(
+        """el => {
+            const rect = el.getBoundingClientRect();
+            const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+            return hit === el || el.contains(hit);
+        }"""
+    ), f"{viewport_name}: Technical disclosure is occluded at its tap center"
+
+    center_x = summary_box["x"] + summary_box["width"] / 2
+    center_y = summary_box["y"] + summary_box["height"] / 2
+    if width == 390:
+        page.touchscreen.tap(center_x, center_y)
+    else:
+        page.mouse.click(center_x, center_y)
+    page.wait_for_function("el => el.open", arg=details.element_handle())
+    assert attack_value.is_visible(), (
+        f"{viewport_name}: Detailed evidence did not become visible"
+    )
+
+    expanded_height = diag.evaluate("el => el.getBoundingClientRect().height")
+    assert expanded_height > collapsed_height + 80, (
+        f"{viewport_name}: Disclosure did not reveal the full evidence packet"
+    )
+    geometry = details.evaluate(
+        """el => Array.from(el.querySelectorAll('dl > div')).map(row => {
+            const label = row.querySelector('dt').getBoundingClientRect();
+            const value = row.querySelector('dd').getBoundingClientRect();
+            const lineHeight = parseFloat(getComputedStyle(row.querySelector('dd')).lineHeight);
+            return {
+                labelLeft: label.left,
+                valueLeft: value.left,
+                valueWidth: value.width,
+                valueLines: Math.round(value.height / lineHeight),
+            };
+        })"""
+    )
+    assert all(abs(row["labelLeft"] - row["valueLeft"]) <= 2 for row in geometry), (
+        f"{viewport_name}: Evidence labels and values are not stacked: {geometry}"
+    )
+    assert min(row["valueWidth"] for row in geometry) >= 180, (
+        f"{viewport_name}: Evidence values collapse into a narrow column: {geometry}"
+    )
+    assert max(row["valueLines"] for row in geometry) <= 4, (
+        f"{viewport_name}: Evidence wraps into a one-word-per-line column: {geometry}"
+    )
+
+    summary.focus()
+    summary.press("Enter")
+    assert not details.evaluate("el => el.open"), (
+        f"{viewport_name}: Enter did not close the native disclosure"
+    )
+    summary.press("Space")
+    assert details.evaluate("el => el.open"), (
+        f"{viewport_name}: Space did not reopen the native disclosure"
+    )
+    print(
+        f"  [OK] {theme} theme: compact collapsed card, 44px real input, keyboard disclosure, readable expanded evidence",
         flush=True,
     )
 
@@ -472,23 +570,22 @@ def run_test(viewport_name, width, height, page, static_origin, username="testpl
         f"  Screenshot: {ARTIFACTS}/{viewport_name}_diagnosis_visible.png", flush=True
     )
 
-    # ── 5. Mobile: no horizontal overflow ─────────────────────────
-    if width == 390:
-        scroll_width = page.evaluate("document.documentElement.scrollWidth")
-        inner_width = page.evaluate("window.innerWidth")
-        print(f"  scrollWidth={scroll_width} innerWidth={inner_width}", flush=True)
-        if scroll_width > inner_width + 2:  # 2px tolerance
-            page.screenshot(
-                path=str(ARTIFACTS / f"{viewport_name}_overflow.png"), full_page=True
-            )
-        assert (
-            scroll_width <= inner_width + 2
-        ), f"{viewport_name}: Horizontal overflow — scrollWidth ({scroll_width}) > innerWidth ({inner_width})"
-        print("  [OK] No horizontal overflow on mobile", flush=True)
+    # ── 5. No horizontal overflow after the full packet expands ───
+    scroll_width = page.evaluate("document.documentElement.scrollWidth")
+    inner_width = page.evaluate("window.innerWidth")
+    print(f"  scrollWidth={scroll_width} innerWidth={inner_width}", flush=True)
+    if scroll_width > inner_width + 2:  # 2px tolerance
         page.screenshot(
-            path=str(ARTIFACTS / f"{viewport_name}_no_overflow.png"), full_page=True
+            path=str(ARTIFACTS / f"{viewport_name}_overflow.png"), full_page=True
         )
-        print(f"  Screenshot: {ARTIFACTS}/{viewport_name}_no_overflow.png", flush=True)
+    assert (
+        scroll_width <= inner_width + 2
+    ), f"{viewport_name}: Horizontal overflow — scrollWidth ({scroll_width}) > innerWidth ({inner_width})"
+    print("  [OK] No horizontal overflow with technical details expanded", flush=True)
+    page.screenshot(
+        path=str(ARTIFACTS / f"{viewport_name}_no_overflow.png"), full_page=True
+    )
+    print(f"  Screenshot: {ARTIFACTS}/{viewport_name}_no_overflow.png", flush=True)
 
     # ── 6. Console errors ─────────────────────────────────────────
     # Allow known React DevTools / strict mode noise; block real errors.
@@ -581,19 +678,22 @@ def main():
     with sync_playwright() as pw:
         browser = pw.chromium.launch(headless=True)
 
-        for viewport_name, width, height in [
-            ("desktop", 1280, 800),
-            ("mobile_390x844", 390, 844),
+        for viewport_name, width, height, theme in [
+            ("desktop_day", 1280, 800, "day"),
+            ("desktop_night", 1280, 800, "night"),
+            ("mobile_390x844_day", 390, 844, "day"),
+            ("mobile_390x844_night", 390, 844, "night"),
         ]:
             context = browser.new_context(
                 viewport={"width": width, "height": height},
                 device_scale_factor=2 if width == 390 else 1,
+                has_touch=width == 390,
             )
             page = context.new_page()
             setup_routes(page, origin)
 
             try:
-                run_test(viewport_name, width, height, page, origin)
+                run_test(viewport_name, width, height, page, origin, theme)
             except AssertionError as e:
                 failures.append(str(e))
                 print(f"  [FAIL] {e}", flush=True)

@@ -47,11 +47,55 @@ describe('MistakeDiagnosisCard', () => {
     });
 
     describe('once resolved', () => {
-        it('names the cause and shows the evidence behind it', () => {
+        it('names the cause while keeping technical evidence collapsed by default', () => {
             render(<MistakeDiagnosisCard diagnosis={diagnosis()} revealed />);
             expect(screen.getByText('Loose piece awareness')).toBeInTheDocument();
-            expect(screen.getByText('Qxd5 (forcing)')).toBeInTheDocument();
-            expect(screen.getByText('Evaluation swing (pawns):')).toBeInTheDocument();
+            const disclosure = screen.getByText('Technical details');
+            const details = disclosure.closest('details');
+
+            expect(details).not.toBeNull();
+            expect(details).not.toHaveAttribute('open');
+            expect(screen.getByText('Qxd5 (forcing)')).not.toBeVisible();
+            expect(screen.getByText('Evaluation swing (pawns):')).not.toBeVisible();
+        });
+
+        it('reveals every exact evidence item through the native disclosure', async () => {
+            const user = userEvent.setup();
+            const longAttackTargets = 'king on h3, rook on e6, queen on a8, bishop on g2';
+            render(
+                <MistakeDiagnosisCard
+                    diagnosis={diagnosis({
+                        evidence: [
+                            { id: 'best.move', label: 'Best move', value: 'Qh1+ (forcing)' },
+                            {
+                                id: 'solution.attacks',
+                                label: 'Pieces the solution attacks',
+                                value: longAttackTargets,
+                            },
+                            {
+                                id: 'played.attacks',
+                                label: 'Pieces the played move attacks after the move',
+                                value: 'king on h3, rook on e6',
+                            },
+                        ],
+                    })}
+                    revealed
+                />
+            );
+
+            const disclosure = screen.getByText('Technical details');
+            const details = disclosure.closest('details');
+            expect(screen.getByText(longAttackTargets)).not.toBeVisible();
+
+            await user.click(disclosure);
+
+            expect(details).toHaveAttribute('open');
+            expect(screen.getByText('Best move:')).toBeVisible();
+            expect(screen.getByText('Qh1+ (forcing)')).toBeVisible();
+            expect(screen.getByText('Pieces the solution attacks:')).toBeVisible();
+            expect(screen.getByText(longAttackTargets)).toBeVisible();
+            expect(screen.getByText('Pieces the played move attacks after the move:')).toBeVisible();
+            expect(screen.getByText('king on h3, rook on e6')).toBeVisible();
         });
 
         it('lists secondary causes as supporting context', () => {
@@ -106,7 +150,9 @@ describe('MistakeDiagnosisCard', () => {
             );
 
             expect(screen.getByRole('button', { name: /this fits/i })).toBeInTheDocument();
-            expect(screen.getByRole('group')).not.toHaveAttribute('open');
+            expect(screen.getByText('Choose a different cause').closest('details')).not.toHaveAttribute(
+                'open'
+            );
             await user.click(screen.getByRole('button', { name: /this fits/i }));
             expect(onConfirm).toHaveBeenCalledTimes(1);
             expect(onConfirm).toHaveBeenCalledWith('loose_piece_awareness');
@@ -295,11 +341,9 @@ describe('MistakeDiagnosisCard', () => {
             expect(screen.getByText(/scan for loose pieces/i)).toBeInTheDocument();
         });
 
-        it('demotes the evidence heading once prose carries the explanation', () => {
-            const { rerender } = render(
-                <MistakeDiagnosisCard diagnosis={diagnosis()} revealed />
-            );
-            expect(screen.getByText('Why')).toBeInTheDocument();
+        it('uses the same plain secondary disclosure label with or without prose', () => {
+            const { rerender } = render(<MistakeDiagnosisCard diagnosis={diagnosis()} revealed />);
+            expect(screen.getByText('Technical details')).toBeInTheDocument();
 
             rerender(
                 <MistakeDiagnosisCard
@@ -307,8 +351,7 @@ describe('MistakeDiagnosisCard', () => {
                     diagnosis={diagnosis({ explanation: 'Because the queen was loose.' })}
                 />
             );
-            expect(screen.getByText('Evidence')).toBeInTheDocument();
-            expect(screen.queryByText('Why')).not.toBeInTheDocument();
+            expect(screen.getByText('Technical details')).toBeInTheDocument();
         });
 
         it('renders a rules-only row as complete, not degraded', () => {
