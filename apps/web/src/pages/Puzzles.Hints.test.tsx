@@ -238,6 +238,16 @@ function makeSessionReturn(overrides: Partial<UsePuzzleSessionReturn> = {}): Use
     };
 }
 
+function deferred<T>() {
+    let resolve!: (value: T) => void;
+    let reject!: (reason?: unknown) => void;
+    const promise = new Promise<T>((res, rej) => {
+        resolve = res;
+        reject = rej;
+    });
+    return { promise, resolve, reject };
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────
 
 describe('Puzzle hint ladder', () => {
@@ -296,6 +306,86 @@ describe('Puzzle hint ladder', () => {
         await waitFor(() => expect(mockHandleUseHint).toHaveBeenCalledTimes(1));
         // The visual reveal still happens — recording is additive, not a swap.
         expect(screen.getByText('Move the pawn')).toBeInTheDocument();
+    });
+
+    it('summarises a server-verified solve that used a hint', async () => {
+        const user = userEvent.setup();
+        const { rerender } = render(<Puzzles />);
+
+        await user.click(screen.getByRole('button', { name: /hint/i }));
+        await waitFor(() => expect(screen.getByText('Move the pawn')).toBeInTheDocument());
+        await user.click(screen.getByRole('button', { name: /type move manually/i }));
+        await user.type(screen.getByPlaceholderText('e.g. e2e4'), 'e2e4');
+        await user.click(screen.getByRole('button', { name: /check entered move/i }));
+
+        expect(await screen.findByText('You found the server-verified move after using a hint.')).toBeVisible();
+        servedPuzzle = { ...servedPuzzle, attempts: 1, pass_count: 1 };
+        rerender(<Puzzles />);
+        expect(screen.getByText('You found the server-verified move after using a hint.')).toBeVisible();
+    });
+
+    it('does not carry a prior puzzle hint into a genuinely new puzzle identity', async () => {
+        const user = userEvent.setup();
+        const { rerender } = render(<Puzzles />);
+
+        await user.click(screen.getByRole('button', { name: /hint/i }));
+        await waitFor(() => expect(screen.getByText('Move the pawn')).toBeInTheDocument());
+
+        servedPuzzle = { ...puzzle, id: 'p2', display_name: 'Next puzzle' };
+        rerender(<Puzzles />);
+        await user.click(screen.getByRole('button', { name: /type move manually/i }));
+        await user.type(screen.getByPlaceholderText('e.g. e2e4'), 'e2e4');
+        await user.click(screen.getByRole('button', { name: /check entered move/i }));
+
+        expect(await screen.findByText('You found the server-verified move without revealing the solution.')).toBeVisible();
+        expect(screen.queryByText('You found the server-verified move after using a hint.')).not.toBeInTheDocument();
+    });
+
+    it('ignores a late motif hint response owned by the previous puzzle', async () => {
+        const pendingHint = deferred<{ puzzle_id: string; primary_motif: string; hints_used: number }>();
+        vi.mocked(requestMotifHint).mockReturnValue(pendingHint.promise as never);
+        servedPuzzle = { ...puzzle, primary_motif: null as unknown as string };
+        const user = userEvent.setup();
+        const { rerender } = render(<Puzzles />);
+
+        await user.click(screen.getByRole('button', { name: /hint/i }));
+        await waitFor(() => expect(requestMotifHint).toHaveBeenCalledWith('p1', 'testplayer', undefined));
+        servedPuzzle = { ...puzzle, id: 'p2', display_name: 'Next puzzle' };
+        rerender(<Puzzles />);
+
+        await act(async () => {
+            pendingHint.resolve({ puzzle_id: 'p1', primary_motif: 'fork', hints_used: 1 });
+            await pendingHint.promise;
+        });
+        expect(screen.queryByText(/look for a fork/i)).not.toBeInTheDocument();
+
+        await user.click(screen.getByRole('button', { name: /type move manually/i }));
+        await user.type(screen.getByPlaceholderText('e.g. e2e4'), 'e2e4');
+        await user.click(screen.getByRole('button', { name: /check entered move/i }));
+        expect(await screen.findByText('You found the server-verified move without revealing the solution.')).toBeVisible();
+    });
+
+    it('ignores a late solution hint response owned by the previous puzzle', async () => {
+        const pendingReveal = deferred<{ best_move_uci: string; solution_pv: string[] }>();
+        vi.mocked(revealPuzzle).mockReturnValue(pendingReveal.promise as never);
+        const user = userEvent.setup();
+        const { rerender } = render(<Puzzles />);
+
+        await user.click(screen.getByRole('button', { name: /hint/i }));
+        await waitFor(() => expect(revealPuzzle).toHaveBeenCalledWith('p1', 'testplayer'));
+        servedPuzzle = { ...puzzle, id: 'p2', display_name: 'Next puzzle' };
+        rerender(<Puzzles />);
+
+        await act(async () => {
+            pendingReveal.resolve({ best_move_uci: 'e2e4', solution_pv: ['e2e4'] });
+            await pendingReveal.promise;
+        });
+        expect(screen.queryByText('Move the pawn')).not.toBeInTheDocument();
+
+        await user.click(screen.getByRole('button', { name: /type move manually/i }));
+        await user.type(screen.getByPlaceholderText('e.g. e2e4'), 'e2e4');
+        await user.click(screen.getByRole('button', { name: /check entered move/i }));
+        expect(await screen.findByText('You found the server-verified move without revealing the solution.')).toBeVisible();
     });
 
     it('does not render the completed-session summary while a session is still active', async () => {

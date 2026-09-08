@@ -248,6 +248,10 @@ export default function Puzzles() {
     // would change a surface this feature has nothing to do with.
     const [motifHint, setMotifHint] = useState<string | null>(null);
     const [motifHintAsked, setMotifHintAsked] = useState(false);
+    // Presentation-only fact for the current exposure. The clue resets as soon
+    // as a move is submitted, so its stage cannot truthfully describe how the
+    // now-resolved move was reached.
+    const usedHintForCurrentPuzzleRef = useRef(false);
     const [previousSessionId, setPreviousSessionId] = useState<string | null>(null);
     useEffect(() => {
         statusRef.current = status;
@@ -438,6 +442,10 @@ export default function Puzzles() {
         setDiagnosisConfirmationError(null);
     }
     currentPuzzleIdRef.current = currentPuzzle?.id ?? null;
+    const ownsCurrentPuzzleExposure = (puzzleId: string, puzzleEpoch: number, ownerUsername: string) =>
+        currentPuzzleIdRef.current === puzzleId &&
+        puzzleEpochRef.current === puzzleEpoch &&
+        currentUsernameRef.current === ownerUsername;
     const diagnosisOwner = diagnosisResult?.owner;
     const activeDiagnosis =
         diagnosisOwner &&
@@ -638,6 +646,7 @@ export default function Puzzles() {
         setDiagnosisLoadingOwner(null);
         setDiagnosisConfirmationOwner(null);
         setDiagnosisConfirmationError(null);
+        usedHintForCurrentPuzzleRef.current = false;
         dispatchBoard({ type: 'RESET' });
         setGame(new Chess(currentPuzzle.fen));
         clue.reset();
@@ -902,8 +911,14 @@ export default function Puzzles() {
     const ensureRevealedMove = async (): Promise<{ move: string | null; pv: string[] }> => {
         if (revealedMove) return { move: revealedMove, pv: revealedPv };
         if (!currentPuzzle || !username) return { move: null, pv: [] };
+        const puzzleId = currentPuzzle.id;
+        const puzzleEpoch = puzzleEpochRef.current;
+        const ownerUsername = username;
         try {
-            const { best_move_uci, solution_pv } = await revealPuzzle(currentPuzzle.id, username);
+            const { best_move_uci, solution_pv } = await revealPuzzle(puzzleId, ownerUsername);
+            if (!ownsCurrentPuzzleExposure(puzzleId, puzzleEpoch, ownerUsername)) {
+                return { move: null, pv: [] };
+            }
             const move = best_move_uci.toLowerCase();
             const pv = (solution_pv ?? []).map((m) => m.toLowerCase());
             setRevealedMove(move);
@@ -1056,7 +1071,12 @@ export default function Puzzles() {
 
     const handleRevealSolution = async () => {
         setActionError(null);
+        if (!currentPuzzle) return;
+        const puzzleId = currentPuzzle.id;
+        const puzzleEpoch = puzzleEpochRef.current;
+        const ownerUsername = username;
         const { move: bestMove, pv } = await ensureRevealedMove();
+        if (!ownsCurrentPuzzleExposure(puzzleId, puzzleEpoch, ownerUsername)) return;
         // Without a solution there is nothing to reveal. Flipping to 'revealed'
         // anyway printed an empty "Solution …", removed every solving control,
         // and left the puzzle queued to be recorded as a self-reported fail —
@@ -1113,6 +1133,9 @@ export default function Puzzles() {
     // but the visual reveal never depends on that write succeeding.
     const handleHint = async () => {
         if (!currentPuzzle) return;
+        const puzzleId = currentPuzzle.id;
+        const puzzleEpoch = puzzleEpochRef.current;
+        const ownerUsername = username;
 
         // Rung 0: the motif, before the ladder starts. Only offered while the
         // payload does not already carry it -- with the gate off the chip is
@@ -1122,18 +1145,21 @@ export default function Puzzles() {
             setMotifHintAsked(true);
             try {
                 const { primary_motif } = await requestMotifHint(
-                    currentPuzzle.id,
-                    username.trim(),
+                    puzzleId,
+                    ownerUsername.trim(),
                     activeSessionId || undefined,
                 );
+                if (!ownsCurrentPuzzleExposure(puzzleId, puzzleEpoch, ownerUsername)) return;
                 // null means no motif was identified. The rung is still spent
                 // -- the user asked -- but there is nothing to show, so fall
                 // through to rung 1 rather than leaving them with nothing.
                 if (primary_motif) {
                     setMotifHint(primary_motif);
+                    usedHintForCurrentPuzzleRef.current = true;
                     return;
                 }
             } catch {
+                if (!ownsCurrentPuzzleExposure(puzzleId, puzzleEpoch, ownerUsername)) return;
                 // A failed request must not cost the rung: let the next press
                 // try the ladder rather than stranding the user. But say so --
                 // a silent no-op reads as a dead button on flaky connections.
@@ -1149,14 +1175,17 @@ export default function Puzzles() {
         // Bail if the fetch fails — advancing with nothing to show would be a lie.
         if (stage === 0) {
             const { move } = await ensureRevealedMove();
+            if (!ownsCurrentPuzzleExposure(puzzleId, puzzleEpoch, ownerUsername)) return;
             if (!move) return;
         }
         // Force past advance()'s "no move known" guard: on the first press the
         // move was only just fetched, so this render's closure hasn't seen it.
         clue.advance(true);
+        usedHintForCurrentPuzzleRef.current = true;
         // Rung 3 hands over the whole line — same destination as the Reveal button.
         if (stage === 2) {
             await handleRevealSolution();
+            if (!ownsCurrentPuzzleExposure(puzzleId, puzzleEpoch, ownerUsername)) return;
         }
         if (activeSessionId) {
             await handleUseHint();
@@ -1166,6 +1195,7 @@ export default function Puzzles() {
     // Sync game board when puzzle changes (setState during render, not in effect)
     const [prevPuzzle, setPrevPuzzle] = useState(currentPuzzle);
     if (currentPuzzle && currentPuzzle !== prevPuzzle) {
+        const puzzleIdentityChanged = currentPuzzle.id !== prevPuzzle?.id;
         setPrevPuzzle(currentPuzzle);
         setGame(new Chess(currentPuzzle.fen));
         // Drop any solution held for the previous puzzle.
@@ -1176,6 +1206,13 @@ export default function Puzzles() {
         dispatchBoard({ type: 'SET_LINE_PLY_INDEX', index: 0 });
         dispatchBoard({ type: 'SET_CLICK_FROM', square: null });
         setActionError(null);
+        // A review response may fold updated attempts into a new object for the
+        // same resolved puzzle. Keep its hint fact; clear only for a new puzzle.
+        if (puzzleIdentityChanged) {
+            setMotifHint(null);
+            setMotifHintAsked(false);
+            usedHintForCurrentPuzzleRef.current = false;
+        }
     }
 
     // Bring the board into view when a session starts: it renders below the
@@ -1264,6 +1301,7 @@ export default function Puzzles() {
             outcomeWriteRef.current = null;
             setMotifHint(null);
             setMotifHintAsked(false);
+            usedHintForCurrentPuzzleRef.current = false;
             setLastFeedback('');
             clue.reset();
         }
@@ -2067,6 +2105,11 @@ export default function Puzzles() {
                             {status === 'correct' && (
                                 <div className="text-center">
                                     <p className="text-positive font-serif text-2xl animate-teedin">Correct! Excellent.</p>
+                                    <p className="text-primary/70 font-sans text-sm mt-2 animate-teedin">
+                                        {usedHintForCurrentPuzzleRef.current
+                                            ? 'You found the server-verified move after using a hint.'
+                                            : 'You found the server-verified move without revealing the solution.'}
+                                    </p>
                                     {lastFeedback && (
                                         <p className="text-positive font-sans text-sm mt-2 animate-teedin">{lastFeedback}</p>
                                     )}
@@ -2075,6 +2118,9 @@ export default function Puzzles() {
                             {status === 'incorrect' && (
                                 <div className="text-center">
                                     <p className="text-negative font-serif text-2xl animate-teedin">Not this one — take another look.</p>
+                                    <p className="text-primary/70 font-sans text-sm mt-2 animate-teedin">
+                                        Nothing has been recorded yet. Try again, or record the failure before seeing the solution.
+                                    </p>
                                     {lastFeedback && (
                                         <p className="text-negative font-sans text-sm mt-2 animate-teedin">{lastFeedback}</p>
                                     )}
@@ -2099,6 +2145,9 @@ export default function Puzzles() {
                                     {lastFeedback && (
                                         <p className="text-primary/80 font-sans text-sm mt-2 animate-teedin">{lastFeedback}</p>
                                     )}
+                                    <p className="text-primary/70 font-sans text-sm mt-2 animate-teedin">
+                                        You chose to reveal the server-provided solution.
+                                    </p>
                                 </div>
                             )}
                         </div>
@@ -2219,7 +2268,7 @@ export default function Puzzles() {
                                     {(currentPuzzle?.attempts !== undefined || activeDiagnosis || diagnosisLoading) && (
                                         <details key={currentPuzzle.id} className="group border-t border-primary/10 pt-1">
                                             <summary className="min-h-[44px] cursor-pointer list-none flex items-center justify-between gap-3 rounded-sm px-2 text-sm font-serif text-primary/70 transition-colors hover:text-primary km-focus-visible">
-                                                <span>Review this puzzle</span>
+                                                <span>Review your result and any available diagnosis to see what may help next.</span>
                                                 <span aria-hidden="true" className="text-base transition-transform group-open:rotate-45">＋</span>
                                             </summary>
                                             <div className="pt-2 space-y-3">
@@ -2280,8 +2329,8 @@ export default function Puzzles() {
                                                 }
                                                 beginFreshExposureAfterPersistedFail();
                                             }}
-                                            className="px-2 py-3 md:px-6 md:py-4 border border-primary/20 text-primary rounded-sm font-serif text-sm md:text-lg transition-all km-interactive km-focus-visible">
-                                            <span className="md:hidden">Try Again</span>
+                                            className="px-2 py-3 md:px-6 md:py-4 border border-primary/20 text-primary rounded-sm font-serif text-sm md:text-lg transition-all km-interactive km-focus-visible whitespace-nowrap md:whitespace-normal">
+                                            <span className="md:hidden">Record fail & retry</span>
                                             <span className="hidden md:inline">Mark as Failed & Try Again</span>
                                         </button>
                                         <button

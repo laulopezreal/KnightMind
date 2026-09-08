@@ -303,11 +303,11 @@ describe('Issue #154: finish button on final puzzle', () => {
         expect(finishButton).not.toBeDisabled();
         expect(screen.queryByText('Input Method')).not.toBeInTheDocument();
 
-        const details = screen.getByText('Review this puzzle').closest('details');
+        const details = screen.getByText(/review your result and any available diagnosis/i).closest('details');
         expect(details).not.toHaveAttribute('open');
         expect(screen.getByText('Puzzle record')).not.toBeVisible();
 
-        await user.click(screen.getByText('Review this puzzle'));
+        await user.click(screen.getByText(/review your result and any available diagnosis/i));
         expect(details).toHaveAttribute('open');
         expect(screen.getByText('Puzzle record')).toBeVisible();
     });

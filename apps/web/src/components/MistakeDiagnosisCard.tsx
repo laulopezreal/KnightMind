@@ -62,7 +62,7 @@ export function MistakeDiagnosisCard({
         return (
             <Shell>
                 <p className="font-sans text-sm text-primary/70">
-                    Attempt this puzzle to see why the move was a mistake.
+                    No diagnosis is shown for this result. Diagnosis is only considered after you attempt a move.
                 </p>
             </Shell>
         );
@@ -144,7 +144,7 @@ export function MistakeDiagnosisCard({
                                 type="button"
                                 onClick={() => onConfirm(primary_cause)}
                                 disabled={savingConfirmation}
-                                className="px-3 py-2 bg-primary text-bg-primary rounded-sm font-serif text-sm transition-colors km-focus-visible"
+                                className="min-h-11 px-3 py-2 bg-primary text-bg-primary rounded-sm font-serif text-sm transition-colors km-focus-visible"
                             >
                                 {savingConfirmation ? 'Saving…' : 'This fits'}
                             </button>
@@ -158,7 +158,7 @@ export function MistakeDiagnosisCard({
                                                 type="button"
                                                 onClick={() => onConfirm(option.value)}
                                                 disabled={savingConfirmation}
-                                                className="px-2 py-1 border border-primary/20 text-primary rounded-sm font-sans font-normal text-xs km-focus-visible"
+                                                className="min-h-11 px-2 py-1 border border-primary/20 text-primary rounded-sm font-sans font-normal text-xs km-focus-visible"
                                             >
                                                 {option.label}
                                             </button>
