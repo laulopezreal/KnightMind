@@ -44,6 +44,8 @@ export interface UsePuzzleSessionOptions {
     targetAccuracy: number;
     targetTimeMinutes: number;
     warmupMode: boolean;
+    /** Skip active-session hydration while presenting a completed return summary. */
+    resumeEnabled?: boolean;
     motifFilter: string | null;
     /** Mistake cause to bias the queue toward. Never narrows it. */
     focusCause: string | null;
@@ -148,6 +150,7 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
         targetAccuracy,
         targetTimeMinutes,
         warmupMode,
+        resumeEnabled = true,
         motifFilter,
         focusCause,
         focusPracticeMode,
@@ -261,7 +264,19 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
 
     // ── Session resume from localStorage ──
     useEffect(() => {
-        if (!username) return;
+        let cancelled = false;
+        if (!username || !resumeEnabled) {
+            setIsResumingSession(false);
+            if (!resumeEnabled) {
+                setActiveSessionId(null);
+                setSessionSummary(null);
+                setPuzzles([]);
+                setCurrentIndex(0);
+                setSessionState('idle');
+                setIsLoading(false);
+            }
+            return () => { cancelled = true; };
+        }
 
         const savedSessionId = localStorage.getItem(`knightmind:session:${username}`);
 
@@ -271,17 +286,13 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
             try {
                 setIsResumingSession(true);
                 const session = await getSession(savedSessionId);
+                if (cancelled) return;
 
                 if (session.completed_at) {
                     localStorage.removeItem(`knightmind:session:${username}`);
                     setActiveSessionId(null);
                     return;
                 }
-
-                setActiveSessionId(session.session_id);
-                setSessionSummary(session);
-                setReviewedCount(session.pass_count + session.fail_count);
-                setHintsUsed(session.hints_used || 0);
 
                 // Parse saved session state once for reuse
                 let parsedSessionState: { sessionId?: string; streak?: number; currentIndex?: number; performanceHistory?: Array<{ time: number; result: 'pass' | 'fail' }> } | null = null;
@@ -323,6 +334,11 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
                             session.focus_opening || undefined,
                             session.focus_opening_scope || undefined,
                         );
+                    if (cancelled) return;
+                    setActiveSessionId(session.session_id);
+                    setSessionSummary(session);
+                    setReviewedCount(session.pass_count + session.fail_count);
+                    setHintsUsed(session.hints_used || 0);
                     setPuzzles(response.puzzles);
 
                     // Restore current index with bounds checking
@@ -350,25 +366,28 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
                         setSessionState('error');
                     }
                 } catch (err) {
+                    if (cancelled) return;
                     const message = err instanceof Error ? err.message : 'Failed to load puzzles';
                     setError(message);
                     setSessionState('error');
                 } finally {
-                    setIsLoading(false);
+                    if (!cancelled) setIsLoading(false);
                 }
             } catch (err) {
+                if (cancelled) return;
                 console.error('Failed to resume session:', err);
                 localStorage.removeItem(`knightmind:session:${username}`);
                 setActiveSessionId(null);
                 setSessionState('idle');
             } finally {
-                setIsResumingSession(false);
+                if (!cancelled) setIsResumingSession(false);
             }
         };
 
-        loadSessionAndPuzzles();
-        // eslint-disable-next-line react-hooks/exhaustive-deps -- run only on username change
-    }, [username]);
+        void loadSessionAndPuzzles();
+        return () => { cancelled = true; };
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- run only when identity or explicit resume ownership changes
+    }, [resumeEnabled, username]);
 
     // ── handleCompleteSession ──
     const handleCompleteSession = useCallback(async () => {

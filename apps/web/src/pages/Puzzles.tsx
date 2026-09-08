@@ -179,6 +179,9 @@ export default function Puzzles() {
     const focusOpening = searchParams.get('focus_opening');
     const focusOpeningScope = searchParams.get('focus_opening_scope');
     const isWarmupMode = searchParams.get('warmup') === 'true';
+    const warmupReturnToken = searchParams.get('warmup_return');
+    const hasWarmupReturnIntent = searchParams.has('warmup_return');
+    const warmupReturn = WarmupSummary.readReturnToken?.(warmupReturnToken, username) ?? null;
 
     // A normal-focus URL is only an intent. The current server planner is the
     // authority that decides whether that cause is still this user's focus.
@@ -281,6 +284,7 @@ export default function Puzzles() {
         targetAccuracy,
         targetTimeMinutes,
         warmupMode,
+        resumeEnabled: !hasWarmupReturnIntent,
         motifFilter,
         focusCause: effectiveFocusCause,
         focusPracticeMode,
@@ -304,6 +308,66 @@ export default function Puzzles() {
         handleStartSession, handleReviewPuzzle, handleCompleteSession, handleUseHint,
         calculateRecentPerformance, getPerformanceTrend,
     } = session;
+    const [initialWarmupLifecycle, setInitialWarmupLifecycle] = useState<{
+        username: string;
+        sessionId: string;
+        token: string | null;
+    } | null>(null);
+    const warmupUsernameRef = useRef(username);
+    const returnedWarmupLifecycleRef = useRef<typeof warmupReturn>(null);
+    useEffect(() => {
+        if (warmupUsernameRef.current !== username) {
+            if (initialWarmupLifecycle?.token) {
+                const owned = WarmupSummary.readReturnToken(initialWarmupLifecycle.token, initialWarmupLifecycle.username);
+                if (owned) WarmupSummary.consumeReturnState(owned);
+            }
+            if (returnedWarmupLifecycleRef.current) {
+                WarmupSummary.consumeReturnState(returnedWarmupLifecycleRef.current);
+                returnedWarmupLifecycleRef.current = null;
+            }
+            warmupUsernameRef.current = username;
+            setInitialWarmupLifecycle(null);
+            if (sessionState === 'completed') {
+                setSessionSummary(null);
+                setSessionState('idle');
+            }
+            return;
+        }
+
+        if (warmupReturn) {
+            returnedWarmupLifecycleRef.current = warmupReturn;
+            if (initialWarmupLifecycle) setInitialWarmupLifecycle(null);
+            return;
+        }
+        if (!warmupMode || !sessionSummary || sessionState !== 'completed') return;
+        if (
+            initialWarmupLifecycle?.username === username
+            && initialWarmupLifecycle.sessionId === sessionSummary.session_id
+        ) return;
+
+        if (initialWarmupLifecycle?.token) {
+            const previous = WarmupSummary.readReturnToken(initialWarmupLifecycle.token, initialWarmupLifecycle.username);
+            if (previous) WarmupSummary.consumeReturnState(previous);
+        }
+        const token = WarmupSummary.createReturnToken(username, sessionSummary);
+        setInitialWarmupLifecycle({ username, sessionId: sessionSummary.session_id, token });
+    }, [
+        initialWarmupLifecycle,
+        sessionState,
+        sessionSummary,
+        setSessionState,
+        setSessionSummary,
+        username,
+        warmupMode,
+        warmupReturn,
+    ]);
+    const ownedInitialSummary = initialWarmupLifecycle?.username === username
+        && initialWarmupLifecycle.sessionId === sessionSummary?.session_id
+        ? sessionSummary
+        : null;
+    const presentationSessionState = warmupReturn || ownedInitialSummary ? 'completed' : sessionState;
+    const completedSummary = warmupReturn?.summary ?? (warmupMode ? ownedInitialSummary : sessionSummary);
+    const warmupLifecycleToken = warmupReturn?.token ?? initialWarmupLifecycle?.token ?? null;
 
     const startPuzzleTimer = timer.startPuzzleTimer;
     const currentPuzzle = puzzles[currentIndex];
@@ -589,7 +653,7 @@ export default function Puzzles() {
     // Disable only while the completion API call is in-flight. Once completed,
     // render a real post-session action instead of a dead final-puzzle CTA.
     const finishButtonDisabled = sessionState === 'completing';
-    const controlsEnabled = sessionState === 'idle' || sessionState === 'error';
+    const controlsEnabled = presentationSessionState === 'idle' || presentationSessionState === 'error';
 
     // Sync activeJobId when username changes (during render, not in effect)
     if (prevUsername !== username) {
@@ -678,7 +742,7 @@ export default function Puzzles() {
         // "loading or generating" to wait on — don't show a start reason at all.
         activeSessionId
             ? null
-            : sessionState === 'completed'
+            : presentationSessionState === 'completed'
                 // Post-summary the old branch fell through to "Please wait for
                 // the current task to finish" — there is no task; the session
                 // is done and the summary card below has the real CTA.
@@ -1158,9 +1222,9 @@ export default function Puzzles() {
     // session's payoff and must be seen, not pointed at with "see below".
     const summaryRef = useRef<HTMLDivElement>(null);
     useEffect(() => {
-        if (sessionState !== 'completed') return;
+        if (presentationSessionState !== 'completed') return;
         setTimeout(() => scrollWithSettle(summaryRef.current), 60);
-    }, [sessionState]);
+    }, [presentationSessionState]);
 
     // Reset clue and start timer when puzzle changes (side effects in effect)
     useEffect(() => {
@@ -2288,19 +2352,23 @@ export default function Puzzles() {
             )}
 
             {/* Session Summary */}
-            {sessionSummary && sessionState === 'completed' && (
+            {completedSummary && presentationSessionState === 'completed' && (
                 <div ref={summaryRef} className="lg:order-7 scroll-mt-6">
-                    {warmupMode ? (
+                    {warmupMode || warmupReturn ? (
                         <WarmupSummary
-                            sessionSummary={sessionSummary}
+                            sessionSummary={completedSummary}
+                            returnToken={warmupLifecycleToken}
                             onContinue={() => {
+                                const lifecycle = WarmupSummary.readReturnToken(warmupLifecycleToken, username);
+                                if (lifecycle) WarmupSummary.consumeReturnState(lifecycle);
+                                returnedWarmupLifecycleRef.current = null;
                                 setWarmupMode(false);
-                                navigate('/dashboard');
+                                navigate('/dashboard', { replace: Boolean(warmupReturn) });
                             }}
                         />
                     ) : (
                         <SessionSummaryCard
-                            sessionSummary={sessionSummary}
+                            sessionSummary={completedSummary}
                             achievements={achievements}
                             onStartNewSession={() => {
                                 setSessionSummary(null);
