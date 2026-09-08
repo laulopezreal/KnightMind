@@ -417,18 +417,6 @@ describe('Engine - Clue Functionality', () => {
       expect(screen.getByLabelText('Solution line')).toHaveValue('e2e4');
     });
 
-    it('opens the save disclosure with Enter from its focused summary', async () => {
-      renderEngine();
-      await evaluatePosition();
-
-      const summary = screen.getByText('Save this position as a puzzle').closest('summary')!;
-      const disclosure = summary.closest('details');
-      summary.focus();
-      await user.keyboard('{Enter}');
-
-      expect(disclosure).toHaveAttribute('open');
-    });
-
     it('should not show clue button when no evaluation is available', async () => {
       renderEngine();
 

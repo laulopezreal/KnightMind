@@ -60,7 +60,6 @@ export default function Engine() {
   const lastEvaluatedFen = useRef<string | null>(null);
   const autoEvalTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isMountedRef = useRef(true);
-  const saveDisclosureRef = useRef<HTMLDetailsElement | null>(null);
   const clue = useClue(evaluation?.bestMove ?? '', fen);
   const clueReset = clue.reset;
 
@@ -420,15 +419,8 @@ export default function Engine() {
 
           {/* Save as puzzle */}
           {evaluation && (
-            <details ref={saveDisclosureRef} className="group bg-primary/5 border border-primary/10 rounded-sm overflow-hidden">
+            <details className="group bg-primary/5 border border-primary/10 rounded-sm overflow-hidden">
               <summary
-                onKeyDown={(event) => {
-                  if (event.key !== 'Enter') return;
-                  event.preventDefault();
-                  if (saveDisclosureRef.current) {
-                    saveDisclosureRef.current.open = !saveDisclosureRef.current.open;
-                  }
-                }}
                 className="km-focus-visible flex min-h-11 cursor-pointer list-none items-center justify-between gap-4 px-6 py-3 font-serif text-base text-primary [&::-webkit-details-marker]:hidden [&::marker]:hidden"
               >
                 <span>Save this position as a puzzle</span>
