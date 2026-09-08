@@ -126,10 +126,6 @@ vi.mock('../api/users', () => ({
   getImportStatus: vi.fn(),
 }));
 
-vi.mock('../components/JobStatusCard', () => ({
-  JobStatusCard: () => null,
-}));
-
 vi.mock('../components/SessionSummaryCard', () => ({
   SessionSummaryCard: () => <div data-testid="session-summary">Summary</div>,
 }));
@@ -244,8 +240,7 @@ describe('Puzzles', () => {
     await waitFor(() => expect(generate).toBeEnabled());
     generate.click();
 
-    // JobStatusCard is stubbed to null in this suite, so the error text itself
-    // never renders. The generation-specific recovery is the observable signal.
+    // The generation-specific recovery is the observable signal.
     await screen.findByRole('button', { name: 'Try generation again' });
 
     // Now the account goes away underneath the error state.
@@ -374,13 +369,33 @@ describe('Puzzles', () => {
     render(<Puzzles />);
     act(() => mockJobPollingOptions?.onError?.(new Error('Generation stopped responding')));
 
-    const retry = await screen.findByRole('button', { name: 'Try generation again' });
+    expect(await screen.findAllByRole('heading', { name: 'Generation Failed' })).toHaveLength(1);
+    expect(screen.getAllByText('Generation stopped responding')).toHaveLength(1);
+    const retryButtons = screen.getAllByRole('button', { name: 'Try generation again' });
+    expect(retryButtons).toHaveLength(1);
+    expect(retryButtons[0]).toBeEnabled();
     await act(async () => {
-      retry.click();
+      retryButtons[0].click();
     });
 
     expect(generatePuzzles).toHaveBeenCalledTimes(1);
     expect(startSession).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['queued', 'Waiting to start'],
+    ['running', 'Generating Puzzles…'],
+  ] as const)('renders one truthful %s generation status', async (status, heading) => {
+    mockPolledJob = {
+      job_id: `${status}-generation`,
+      status,
+      message: status === 'queued' ? 'Waiting for a worker' : 'Analyzing games',
+    };
+
+    render(<Puzzles />);
+
+    expect(await screen.findAllByRole('heading', { name: heading })).toHaveLength(1);
+    expect(screen.getAllByRole('progressbar')).toHaveLength(1);
   });
 
   it('surfaces a generation-owned recovery when completed work cannot be loaded', async () => {

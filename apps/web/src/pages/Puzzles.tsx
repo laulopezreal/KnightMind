@@ -864,12 +864,19 @@ export default function Puzzles() {
         }
     }, [warmupMode, sessionState, username, userStatus, isResumingSession, handleStartSession]);
 
+    const shouldShowErrorCard = sessionState === 'error' && !!error;
+    const generationFailurePresentedByErrorCard =
+        shouldShowErrorCard &&
+        errorOperation === 'generation' &&
+        job?.status === 'failed' &&
+        error === (job.error || job.message || 'Job failed');
     const shouldShowJobStatusCard =
         !!job &&
         (job.status === 'queued' ||
             job.status === 'running' ||
-            (!puzzlesAvailable && (job.status === 'succeeded' || job.status === 'failed')));
-    const shouldShowErrorCard = sessionState === 'error' && !!error;
+            (!puzzlesAvailable &&
+                (job.status === 'succeeded' ||
+                    (job.status === 'failed' && !generationFailurePresentedByErrorCard))));
     const shouldShowLoadingCard =
         (isLoading || isLoadingStatus || isResumingSession) && !isGenerating && !shouldShowJobStatusCard;
     const shouldShowEmptyState =
