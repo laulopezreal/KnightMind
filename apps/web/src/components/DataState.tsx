@@ -81,6 +81,7 @@ interface DataStateEmptyProps {
   description: string;
   actionLabel: string;
   onAction: () => void;
+  actionClassName?: string;
 }
 
 /**
@@ -93,7 +94,13 @@ interface DataStateEmptyProps {
  * Styled as an h2 it would jump to Cormorant 500, so `km-heading-sans` keeps
  * the body face; see the note on that class in `index.css`.
  */
-export function DataStateEmpty({ title, description, actionLabel, onAction }: DataStateEmptyProps) {
+export function DataStateEmpty({
+  title,
+  description,
+  actionLabel,
+  onAction,
+  actionClassName = '',
+}: DataStateEmptyProps) {
   return (
     <div className="bg-primary/5 border border-primary/10 rounded-sm p-10 text-center">
       <h2 className="text-primary/70 km-heading-sans text-lg mb-3">{title}</h2>
@@ -101,7 +108,7 @@ export function DataStateEmpty({ title, description, actionLabel, onAction }: Da
       <button
         type="button"
         onClick={onAction}
-        className="px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-opacity hover:opacity-90 cursor-pointer km-focus-visible"
+        className={`${actionClassName} px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-opacity hover:opacity-90 cursor-pointer km-focus-visible`}
       >
         {actionLabel}
       </button>

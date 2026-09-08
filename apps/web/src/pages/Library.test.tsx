@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import Library from './Library';
 
 let mockUsername = 'testplayer';
@@ -135,19 +136,121 @@ describe('Library', () => {
         expect(screen.getByPlaceholderText(/Search by name, opening, or ID/i)).toBeInTheDocument();
     });
 
-    it('should render filter dropdowns', async () => {
+    it('shows visible labels for the status and difficulty filters', async () => {
         render(<Library />);
+
+        expect(screen.getByText('Status', { selector: 'span' })).toBeVisible();
+        expect(screen.getByText('Difficulty', { selector: 'span' })).toBeVisible();
+        expect(screen.getByLabelText('Status')).toHaveValue('');
+        expect(screen.getByLabelText('Difficulty')).toHaveValue('');
+        expect(screen.getByLabelText('Status')).toHaveClass('min-h-11');
+        expect(screen.getByLabelText('Difficulty')).toHaveClass('min-h-11');
+    });
+
+    it('reveals every supplemental filter through one keyboard-reachable mobile action', async () => {
+        const user = userEvent.setup();
+        const longCauseLabel = 'Loose piece awareness caused by an overloaded defender';
+        const longOpeningLabel = 'Sicilian Defense: Najdorf Variation';
+        mockGetLibraryPuzzles.mockResolvedValue({
+            ...EMPTY_RESPONSE,
+            puzzles: MOCK_PUZZLES,
+            total: 2,
+            available_motifs: ['Fork'],
+            available_causes: [
+                { value: 'loose_piece_awareness', label: longCauseLabel },
+            ],
+            available_openings: [longOpeningLabel],
+            stats: MOCK_STATS,
+        });
+        render(<Library />);
+
+        const disclosure = await screen.findByRole('button', { name: /more filters/i });
+        expect(within(disclosure).getByText('5 controls')).toBeVisible();
+        expect(disclosure).toHaveAttribute('aria-expanded', 'false');
+        disclosure.focus();
+        expect(disclosure).toHaveFocus();
+        await user.keyboard('{Enter}');
+        expect(disclosure).toHaveAttribute('aria-expanded', 'true');
+
+        const supplementalFilters = await screen.findByLabelText('Supplemental library filters');
+        for (const name of [
+            'Filter by motif',
+            'Filter by mistake cause',
+            'Filter by game phase',
+            'Filter by opening',
+            'Sort puzzles',
+        ]) {
+            expect(within(supplementalFilters).getByLabelText(name)).toBeEnabled();
+        }
+
+        fireEvent.change(within(supplementalFilters).getByLabelText('Filter by motif'), {
+            target: { value: 'Fork' },
+        });
+        fireEvent.change(within(supplementalFilters).getByLabelText('Filter by mistake cause'), {
+            target: { value: 'loose_piece_awareness' },
+        });
+        fireEvent.change(within(supplementalFilters).getByLabelText('Filter by game phase'), {
+            target: { value: 'middlegame' },
+        });
+        fireEvent.change(within(supplementalFilters).getByLabelText('Filter by opening'), {
+            target: { value: longOpeningLabel },
+        });
+        fireEvent.change(within(supplementalFilters).getByLabelText('Sort puzzles'), {
+            target: { value: 'newest' },
+        });
+
+        const selectedCause = within(supplementalFilters).getByLabelText('Selected mistake cause');
+        expect(selectedCause).toBeVisible();
+        expect(within(selectedCause).getByText(`Selected: ${longCauseLabel}`, { exact: true }))
+            .toBeVisible();
+        expect(selectedCause).not.toBe(within(supplementalFilters).getByLabelText('Filter by mistake cause'));
+
+        const selectedOpening = within(supplementalFilters).getByLabelText('Selected opening');
+        expect(selectedOpening).toBeVisible();
+        expect(within(selectedOpening).getByText(`Selected: ${longOpeningLabel}`, { exact: true }))
+            .toBeVisible();
+        expect(selectedOpening).not.toBe(within(supplementalFilters).getByLabelText('Filter by opening'));
+
         await waitFor(() => {
-            const allSelects = screen.getAllByDisplayValue('All');
-            expect(allSelects.length).toBeGreaterThanOrEqual(2);
+            expect(mockGetLibraryPuzzles).toHaveBeenLastCalledWith(expect.objectContaining({
+                motif: 'Fork',
+                cause: 'loose_piece_awareness',
+                phase: 'middlegame',
+                opening: longOpeningLabel,
+                sort: 'newest',
+            }));
         });
     });
 
-    it('should render link to training page', async () => {
+    it('keeps puzzle results immediately after the compact filter region', async () => {
         render(<Library />);
-        await waitFor(() => {
-            expect(screen.getByText(/Start Training/i)).toBeInTheDocument();
+
+        const filters = await screen.findByLabelText('Library filters');
+        const results = screen.getByLabelText('Library puzzle results');
+        expect(filters.nextElementSibling).toBe(results);
+    });
+
+    it('puts the existing training action beside the due-review summary', async () => {
+        render(<Library />);
+
+        const reviewSummary = await screen.findByLabelText('Library review summary');
+        expect(within(reviewSummary).getByText(/1 puzzle due for review/i)).toBeVisible();
+        expect(within(reviewSummary).getByRole('link', { name: 'Start Training' }))
+            .toHaveAttribute('href', '/puzzles');
+    });
+
+    it('does not claim a review is due when the due count is zero', async () => {
+        mockGetLibraryPuzzles.mockResolvedValue({
+            ...EMPTY_RESPONSE,
+            puzzles: [MOCK_PUZZLES[1]],
+            total: 1,
+            stats: { total: 1, due: 0, new: 1, learning: 0, mastered: 0 },
         });
+        render(<Library />);
+
+        await screen.findByText('Knight Outpost');
+        expect(screen.queryByLabelText('Library review summary')).not.toBeInTheDocument();
+        expect(screen.queryByRole('link', { name: 'Start Training' })).not.toBeInTheDocument();
     });
 
     it('genuinely-empty library offers a Generate Puzzles button (no dead end)', async () => {
@@ -223,6 +326,15 @@ describe('Library', () => {
             expect(screen.getByText('Poison Pawn Trap')).toBeInTheDocument();
             expect(screen.getByText('Knight Outpost')).toBeInTheDocument();
         });
+    });
+
+    it('spells out the side to move instead of showing an unexplained initial', async () => {
+        render(<Library />);
+
+        expect(await screen.findByText('White to move')).toBeVisible();
+        expect(screen.getByText('Black to move')).toBeVisible();
+        expect(screen.queryByText('W')).not.toBeInTheDocument();
+        expect(screen.queryByText('B')).not.toBeInTheDocument();
     });
 
     it('should display status badges', async () => {
@@ -537,6 +649,8 @@ describe('Library cause filter', () => {
 
         const select = await screen.findByLabelText('Filter by mistake cause');
         expect(select).toHaveValue('king_safety_blindness');
+        expect(screen.getByRole('button', { name: /hide more filters/i }))
+            .toHaveAttribute('aria-expanded', 'true');
     });
 
     it('labels the options rather than showing raw slugs', async () => {
@@ -673,6 +787,25 @@ describe('Library opening-line filter (the Openings → Train destination)', () 
         expect(
             await screen.findByText('Sicilian Defense: Najdorf Variation')
         ).toBeInTheDocument();
+    });
+
+    it('auto-opens filters and shows the complete arriving long opening line', async () => {
+        const longOpeningLine = 'Sicilian Defense: Najdorf Variation, Poisoned Pawn Main Line with an early queen excursion';
+        window.history.replaceState(
+            {}, '', `/library?opening_line=${encodeURIComponent(longOpeningLine)}`
+        );
+        render(<Library />);
+
+        const disclosure = await screen.findByRole('button', { name: /hide more filters/i });
+        expect(disclosure).toHaveAttribute('aria-expanded', 'true');
+
+        const supplementalFilters = screen.getByLabelText('Supplemental library filters');
+        expect(supplementalFilters).toBeVisible();
+        expect(within(supplementalFilters).getByText(longOpeningLine, { exact: true }))
+            .toBeVisible();
+        expect(mockGetLibraryPuzzles).toHaveBeenCalledWith(
+            expect.objectContaining({ opening_line: longOpeningLine })
+        );
     });
 
     it('lets the user clear a line they arrived with', async () => {

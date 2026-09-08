@@ -96,61 +96,51 @@ function PuzzleRow({ puzzle }: { puzzle: LibraryPuzzle }) {
     return (
         <Link
             to={`/library/${puzzle.id}`}
-            className="block bg-primary/5 border border-primary/10 rounded-sm p-4 km-interactive transition-all hover:border-primary/30 hover:bg-primary/8"
+            className="block min-h-11 bg-primary/5 border border-primary/10 rounded-sm p-3 sm:p-4 km-interactive transition-all hover:border-primary/30 hover:bg-primary/8"
         >
-            <div className="flex items-center justify-between gap-4">
-                {/* Left: title + badges */}
-                <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                        {/* min-w-0 is what makes `truncate` do anything here: a
-                            flex item's min-width defaults to auto, so without it
-                            the span refuses to shrink below its text and the
-                            badges wrap to a second line instead. Titles used to
-                            be one of seven short motif strings and never reached
-                            that limit; they are position- and model-derived now,
-                            so they can. */}
-                        <span className="font-serif text-primary truncate min-w-0">
-                            {puzzle.display_name}
-                        </span>
-                        <StatusBadge status={puzzle.status} />
-                        <DifficultyBadge difficulty={puzzle.difficulty} />
-                        {puzzle.primary_motif && (
-                            <span className="text-xs font-sans text-primary/70 px-2 py-0.5 bg-primary/10 rounded-sm">
-                                {puzzle.primary_motif}
-                            </span>
-                        )}
-                        <DiagnosisBadge summary={puzzle.diagnosis_summary} />
-                    </div>
-                    {/* Stats row */}
-                    <div className="flex items-center gap-4 mt-1 text-xs font-sans text-primary/70">
-                        {puzzle.attempts > 0 && (
-                            <span>
-                                {puzzle.pass_count}/{puzzle.attempts} solved
-                                {successRate !== null && ` (${successRate}%)`}
-                            </span>
-                        )}
-                        {puzzle.fail_count > 0 && (
-                            <span className="text-negative">{puzzle.fail_count} failed</span>
-                        )}
-                        {puzzle.last_reviewed_at && (
-                            <span>
-                                Last: {new Date(puzzle.last_reviewed_at).toLocaleDateString(LOCALE)}
-                            </span>
-                        )}
-                        {puzzle.next_due_at && (
-                            <span>
-                                Due: {new Date(puzzle.next_due_at).toLocaleDateString(LOCALE)}
-                            </span>
-                        )}
-                    </div>
-                </div>
+            <div className="flex items-start justify-between gap-3">
+                {/* min-w-0 is what makes `truncate` do anything here: a flex
+                    item otherwise refuses to shrink below its title. */}
+                <span className="font-serif text-primary truncate min-w-0">
+                    {puzzle.display_name}
+                </span>
+                <span className="shrink-0 text-xs font-sans text-primary/70">
+                    {puzzle.side_to_move === 'white' ? 'White to move' : 'Black to move'}
+                </span>
+            </div>
 
-                {/* Right: side to move indicator */}
-                <div className="flex-shrink-0">
-                    <span className="text-xs font-sans text-primary/70 uppercase tracking-wider">
-                        {puzzle.side_to_move === 'white' ? 'W' : 'B'}
+            <div className="flex items-center gap-2 flex-wrap mt-2">
+                <StatusBadge status={puzzle.status} />
+                <DifficultyBadge difficulty={puzzle.difficulty} />
+                {puzzle.primary_motif && (
+                    <span className="text-xs font-sans text-primary/70 px-2 py-0.5 bg-primary/10 rounded-sm">
+                        {puzzle.primary_motif}
                     </span>
-                </div>
+                )}
+                <DiagnosisBadge summary={puzzle.diagnosis_summary} />
+            </div>
+
+            {/* Wrapping preserves every review fact without widening the card. */}
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-2 text-xs font-sans text-primary/70">
+                {puzzle.attempts > 0 && (
+                    <span>
+                        {puzzle.pass_count}/{puzzle.attempts} solved
+                        {successRate !== null && ` (${successRate}%)`}
+                    </span>
+                )}
+                {puzzle.fail_count > 0 && (
+                    <span className="text-negative">{puzzle.fail_count} failed</span>
+                )}
+                {puzzle.last_reviewed_at && (
+                    <span>
+                        Last: {new Date(puzzle.last_reviewed_at).toLocaleDateString(LOCALE)}
+                    </span>
+                )}
+                {puzzle.next_due_at && (
+                    <span>
+                        Due: {new Date(puzzle.next_due_at).toLocaleDateString(LOCALE)}
+                    </span>
+                )}
             </div>
         </Link>
     );
@@ -183,6 +173,9 @@ export default function Library() {
         () => new URLSearchParams(window.location.search).get('opening_line') ?? ''
     );
     const [sort, setSort] = useState<PuzzleSort>('due_soonest');
+    const [supplementalFiltersOpen, setSupplementalFiltersOpen] = useState(
+        () => Boolean(causeFilter || phaseFilter || openingFilter || openingLineFilter)
+    );
     const [offset, setOffset] = useState(0);
 
     // Debounced search
@@ -256,6 +249,10 @@ export default function Library() {
     const availableMotifs = data?.available_motifs ?? [];
     const availableCauses = data?.available_causes ?? [];
     const availableOpenings = data?.available_openings ?? [];
+    const supplementalFilterCount = 2
+        + (availableMotifs.length > 0 ? 1 : 0)
+        + (availableCauses.length > 0 ? 1 : 0)
+        + (availableOpenings.length > 0 ? 1 : 0);
     const corpusStats = data?.stats ?? null;
     // Every fetch showed the loading state here, not just the first -- a filter
     // change should visibly reload the table.
@@ -281,7 +278,7 @@ export default function Library() {
     }
 
     return (
-        <div className="space-y-8 animate-teedin">
+        <div className="space-y-4 sm:space-y-8 animate-teedin">
             {/* Header */}
             <PageHeader
                 title="Library"
@@ -290,7 +287,7 @@ export default function Library() {
 
             {/* Corpus stats */}
             {corpusStats && corpusStats.total > 0 && (
-                <section className="grid grid-cols-2 md:grid-cols-5 gap-3">
+                <section className="grid grid-cols-5 gap-1.5 sm:gap-3">
                     {[
                         // Labels are neutral text-primary/70: a coloured /60 label
                         // rendered ~2:1 (fails AA) in both themes, and a single
@@ -303,16 +300,33 @@ export default function Library() {
                         { label: 'Learning', value: corpusStats.learning, containerClasses: 'bg-yellow-500/5 border-yellow-500/15', valueClasses: 'text-status-learning', labelClasses: 'text-primary/70' },
                         { label: 'Mastered', value: corpusStats.mastered, containerClasses: 'bg-green-500/5 border-green-500/15', valueClasses: 'text-status-mastered', labelClasses: 'text-primary/70' },
                     ].map(stat => (
-                        <div key={stat.label} className={`${stat.containerClasses} border rounded-sm p-3 text-center`}>
-                            <span className={`block text-2xl font-serif ${stat.valueClasses}`}>{stat.value}</span>
-                            <span className={`text-xs font-sans ${stat.labelClasses} uppercase tracking-wider`}>{stat.label}</span>
+                        <div key={stat.label} className={`${stat.containerClasses} min-w-0 border rounded-sm px-1 py-1.5 sm:p-3 text-center`}>
+                            <span className={`block text-xl sm:text-2xl font-serif ${stat.valueClasses}`}>{stat.value}</span>
+                            <span className={`block truncate text-[10px] sm:text-xs font-sans ${stat.labelClasses} uppercase tracking-normal sm:tracking-wider`}>{stat.label}</span>
                         </div>
                     ))}
                 </section>
             )}
 
+            {corpusStats && corpusStats.due > 0 && (
+                <section
+                    aria-label="Library review summary"
+                    className="flex items-center justify-between gap-3 bg-orange-500/5 border border-orange-500/15 rounded-sm px-3 py-2 sm:px-4 sm:py-3"
+                >
+                    <p className="text-sm font-sans text-primary/70">
+                        {corpusStats.due} puzzle{corpusStats.due !== 1 ? 's' : ''} due for review
+                    </p>
+                    <Link
+                        to="/puzzles"
+                        className="inline-flex min-h-11 shrink-0 items-center px-4 border border-primary/20 text-primary hover:bg-primary hover:text-bg-primary hover:border-transparent rounded-sm font-serif transition-all km-interactive km-focus-visible"
+                    >
+                        Start Training
+                    </Link>
+                </section>
+            )}
+
             {/* Search + Filters */}
-            <section className="bg-primary/5 border border-primary/10 rounded-sm p-4 space-y-4">
+            <section aria-label="Library filters" className="bg-primary/5 border border-primary/10 rounded-sm p-3 sm:p-4 space-y-2 sm:space-y-4">
                 {/* Search */}
                 <input
                     type="text"
@@ -320,122 +334,166 @@ export default function Library() {
                     aria-label="Search puzzles by name, opening, or ID"
                     value={search}
                     onChange={(e) => setSearch(e.target.value)}
-                    className="w-full bg-transparent border-b border-primary/20 py-2 text-primary font-sans placeholder:text-primary/70 focus:outline-none focus:border-primary/60 transition-colors"
+                    className="w-full min-h-11 bg-transparent border-b border-primary/20 py-2 text-primary font-sans placeholder:text-primary/70 focus:outline-none focus:border-primary/60 transition-colors"
                 />
 
                 {/* Filter row */}
-                <div className="flex flex-wrap gap-3 items-center text-sm font-sans">
-                    {/* Status */}
-                    <select
-                        value={statusFilter}
-                        onChange={(e) => setStatusFilter(e.target.value as PuzzleStatus | '')}
-                        aria-label="Filter by status"
-                        className="bg-bg-primary border border-primary/20 rounded-sm px-3 py-1.5 text-primary focus:outline-none focus:border-primary/60"
-                    >
-                        {STATUS_OPTIONS.map(o => (
-                            <option key={o.value} value={o.value}>{o.label}</option>
-                        ))}
-                    </select>
-
-                    {/* Difficulty */}
-                    <select
-                        value={difficultyFilter}
-                        onChange={(e) => setDifficultyFilter(e.target.value as PuzzleDifficulty | '')}
-                        aria-label="Filter by difficulty"
-                        className="bg-bg-primary border border-primary/20 rounded-sm px-3 py-1.5 text-primary focus:outline-none focus:border-primary/60"
-                    >
-                        {DIFFICULTY_OPTIONS.map(o => (
-                            <option key={o.value} value={o.value}>{o.label}</option>
-                        ))}
-                    </select>
-
-                    {/* Motif */}
-                    {availableMotifs.length > 0 && (
-                        <select
-                            value={motifFilter}
-                            onChange={(e) => setMotifFilter(e.target.value)}
-                            aria-label="Filter by motif"
-                            className="bg-bg-primary border border-primary/20 rounded-sm px-3 py-1.5 text-primary focus:outline-none focus:border-primary/60"
-                        >
-                            <option value="">All motifs</option>
-                            {availableMotifs.map(m => (
-                                <option key={m} value={m}>{m}</option>
-                            ))}
-                        </select>
-                    )}
-
-                    {/* Mistake cause — the target of the Insights "practise this" links */}
-                    {availableCauses.length > 0 && (
-                        <select
-                            value={causeFilter}
-                            onChange={(e) => setCauseFilter(e.target.value)}
-                            aria-label="Filter by mistake cause"
-                            className="bg-bg-primary border border-primary/20 rounded-sm px-3 py-1.5 text-primary focus:outline-none focus:border-primary/60"
-                        >
-                            <option value="">All causes</option>
-                            {availableCauses.map(c => (
-                                <option key={c.value} value={c.value}>{c.label}</option>
-                            ))}
-                        </select>
-                    )}
-
-                    {/* An arriving line filter has no select of its own — a
-                        dropdown of every line in the corpus would be unusable —
-                        so it appears as a removable chip. Without it the list is
-                        narrowed with no visible reason and no way out. */}
-                    {openingLineFilter && (
-                        <span className="inline-flex items-center gap-2 bg-primary/10 border border-primary/20 rounded-sm px-3 py-1.5 text-primary font-sans text-sm">
-                            {openingLineFilter}
-                            <button
-                                type="button"
-                                onClick={() => setOpeningLineFilter('')}
-                                aria-label={`Clear the ${openingLineFilter} filter`}
-                                className="km-focus-visible text-primary/70 hover:text-primary transition-colors"
+                <div className="flex flex-wrap gap-2 sm:gap-3 items-end text-sm font-sans">
+                    <div className="grid w-full grid-cols-2 gap-3 sm:w-auto">
+                        <label className="min-w-0 space-y-1 text-xs text-primary/70">
+                            <span className="block">Status</span>
+                            <select
+                                value={statusFilter}
+                                onChange={(e) => setStatusFilter(e.target.value as PuzzleStatus | '')}
+                                className="w-full min-w-0 min-h-11 bg-bg-primary border border-primary/20 rounded-sm px-3 text-primary focus:outline-none focus:border-primary/60"
                             >
-                                ×
-                            </button>
-                        </span>
-                    )}
+                                {STATUS_OPTIONS.map(o => (
+                                    <option key={o.value} value={o.value}>{o.label}</option>
+                                ))}
+                            </select>
+                        </label>
 
-                    {/* Phase */}
-                    <select
-                        value={phaseFilter}
-                        onChange={(e) => setPhaseFilter(e.target.value)}
-                        aria-label="Filter by game phase"
-                        className="bg-bg-primary border border-primary/20 rounded-sm px-3 py-1.5 text-primary focus:outline-none focus:border-primary/60"
+                        <label className="min-w-0 space-y-1 text-xs text-primary/70">
+                            <span className="block">Difficulty</span>
+                            <select
+                                value={difficultyFilter}
+                                onChange={(e) => setDifficultyFilter(e.target.value as PuzzleDifficulty | '')}
+                                className="w-full min-w-0 min-h-11 bg-bg-primary border border-primary/20 rounded-sm px-3 text-primary focus:outline-none focus:border-primary/60"
+                            >
+                                {DIFFICULTY_OPTIONS.map(o => (
+                                    <option key={o.value} value={o.value}>{o.label}</option>
+                                ))}
+                            </select>
+                        </label>
+                    </div>
+
+                    <button
+                        type="button"
+                        aria-controls="supplemental-library-filters"
+                        aria-expanded={supplementalFiltersOpen}
+                        onClick={() => setSupplementalFiltersOpen(open => !open)}
+                        className="inline-flex min-h-11 w-full items-center justify-between border border-primary/20 rounded-sm px-3 text-primary km-interactive km-focus-visible sm:hidden"
                     >
-                        <option value="">All phases</option>
-                        <option value="opening">Opening</option>
-                        <option value="middlegame">Middlegame</option>
-                        <option value="endgame">Endgame</option>
-                    </select>
+                        <span>{supplementalFiltersOpen ? 'Hide more filters' : 'More filters'}</span>
+                        <span className="text-xs text-primary/70">
+                            {supplementalFilterCount} controls
+                        </span>
+                    </button>
 
-                    {/* Opening family — only offered once games have been classified */}
-                    {availableOpenings.length > 0 && (
+                    <div
+                        id="supplemental-library-filters"
+                        aria-label="Supplemental library filters"
+                        className={`${supplementalFiltersOpen ? 'grid' : 'hidden'} w-full grid-cols-1 gap-2 sm:flex sm:flex-wrap sm:gap-3`}
+                    >
+                        {/* Motif */}
+                        {availableMotifs.length > 0 && (
+                            <div className="min-w-0 space-y-1 sm:w-auto sm:max-w-72">
+                                <select
+                                    value={motifFilter}
+                                    onChange={(e) => setMotifFilter(e.target.value)}
+                                    aria-label="Filter by motif"
+                                    className="min-h-11 w-full min-w-0 bg-bg-primary border border-primary/20 rounded-sm px-3 text-primary focus:outline-none focus:border-primary/60 sm:min-w-36"
+                                >
+                                    <option value="">All motifs</option>
+                                    {availableMotifs.map(m => (
+                                        <option key={m} value={m}>{m}</option>
+                                    ))}
+                                </select>
+                                {motifFilter && (
+                                    <p aria-label="Selected motif" className="break-words px-1 text-xs leading-relaxed text-primary/70">
+                                        Selected: {motifFilter}
+                                    </p>
+                                )}
+                            </div>
+                        )}
+
+                        {/* Mistake cause — the target of the Insights "practise this" links */}
+                        {availableCauses.length > 0 && (
+                            <div className="min-w-0 space-y-1 sm:w-auto sm:max-w-72">
+                                <select
+                                    value={causeFilter}
+                                    onChange={(e) => setCauseFilter(e.target.value)}
+                                    aria-label="Filter by mistake cause"
+                                    className="min-h-11 w-full min-w-0 bg-bg-primary border border-primary/20 rounded-sm px-3 text-primary focus:outline-none focus:border-primary/60 sm:min-w-36"
+                                >
+                                    <option value="">All causes</option>
+                                    {availableCauses.map(c => (
+                                        <option key={c.value} value={c.value}>{c.label}</option>
+                                    ))}
+                                </select>
+                                {causeFilter && (
+                                    <p aria-label="Selected mistake cause" className="break-words px-1 text-xs leading-relaxed text-primary/70">
+                                        Selected: {availableCauses.find(c => c.value === causeFilter)?.label ?? causeFilter}
+                                    </p>
+                                )}
+                            </div>
+                        )}
+
+                        {/* An arriving line filter has no select of its own — a
+                            dropdown of every line in the corpus would be unusable —
+                            so it appears as a removable chip. Without it the list is
+                            narrowed with no visible reason and no way out. */}
+                        {openingLineFilter && (
+                            <span className="inline-flex min-h-11 w-full min-w-0 items-center gap-2 bg-primary/10 border border-primary/20 rounded-sm pl-3 text-primary font-sans text-sm sm:w-auto sm:max-w-72">
+                                <span className="min-w-0 break-words py-2">{openingLineFilter}</span>
+                                <button
+                                    type="button"
+                                    onClick={() => setOpeningLineFilter('')}
+                                    aria-label={`Clear the ${openingLineFilter} filter`}
+                                    className="inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center km-interactive km-focus-visible text-primary/70 hover:text-primary transition-colors"
+                                >
+                                    ×
+                                </button>
+                            </span>
+                        )}
+
+                        {/* Phase */}
                         <select
-                            value={openingFilter}
-                            onChange={(e) => setOpeningFilter(e.target.value)}
-                            aria-label="Filter by opening"
-                            className="bg-bg-primary border border-primary/20 rounded-sm px-3 py-1.5 text-primary focus:outline-none focus:border-primary/60"
+                            value={phaseFilter}
+                            onChange={(e) => setPhaseFilter(e.target.value)}
+                            aria-label="Filter by game phase"
+                            className="min-h-11 w-full min-w-0 bg-bg-primary border border-primary/20 rounded-sm px-3 text-primary focus:outline-none focus:border-primary/60 sm:w-auto sm:min-w-36"
                         >
-                            <option value="">All openings</option>
-                            {availableOpenings.map(o => (
-                                <option key={o} value={o}>{o}</option>
+                            <option value="">All phases</option>
+                            <option value="opening">Opening</option>
+                            <option value="middlegame">Middlegame</option>
+                            <option value="endgame">Endgame</option>
+                        </select>
+
+                        {/* Opening family — only offered once games have been classified */}
+                        {availableOpenings.length > 0 && (
+                            <div className="min-w-0 space-y-1 sm:w-auto sm:max-w-72">
+                                <select
+                                    value={openingFilter}
+                                    onChange={(e) => setOpeningFilter(e.target.value)}
+                                    aria-label="Filter by opening"
+                                    className="min-h-11 w-full min-w-0 bg-bg-primary border border-primary/20 rounded-sm px-3 text-primary focus:outline-none focus:border-primary/60 sm:min-w-40"
+                                >
+                                    <option value="">All openings</option>
+                                    {availableOpenings.map(o => (
+                                        <option key={o} value={o}>{o}</option>
+                                    ))}
+                                </select>
+                                {openingFilter && (
+                                    <p aria-label="Selected opening" className="break-words px-1 text-xs leading-relaxed text-primary/70">
+                                        Selected: {openingFilter}
+                                    </p>
+                                )}
+                            </div>
+                        )}
+
+                        {/* Sort */}
+                        <select
+                            value={sort}
+                            onChange={(e) => setSort(e.target.value as PuzzleSort)}
+                            aria-label="Sort puzzles"
+                            className="min-h-11 w-full min-w-0 bg-bg-primary border border-primary/20 rounded-sm px-3 text-primary focus:outline-none focus:border-primary/60 sm:ml-auto sm:w-auto sm:min-w-36"
+                        >
+                            {SORT_OPTIONS.map(o => (
+                                <option key={o.value} value={o.value}>{o.label}</option>
                             ))}
                         </select>
-                    )}
-
-                    {/* Sort */}
-                    <select
-                        value={sort}
-                        onChange={(e) => setSort(e.target.value as PuzzleSort)}
-                        aria-label="Sort puzzles"
-                        className="bg-bg-primary border border-primary/20 rounded-sm px-3 py-1.5 text-primary focus:outline-none focus:border-primary/60 ml-auto"
-                    >
-                        {SORT_OPTIONS.map(o => (
-                            <option key={o.value} value={o.value}>{o.label}</option>
-                        ))}
-                    </select>
+                    </div>
                 </div>
 
                 {/* Result count — hidden on error so it can't contradict the error box */}
@@ -472,7 +530,7 @@ export default function Library() {
             )}
 
             {/* Puzzle list */}
-            <section className="space-y-2">
+            <section aria-label="Library puzzle results" className="space-y-2">
                 {puzzles.map(puzzle => (
                     <PuzzleRow key={puzzle.id} puzzle={puzzle} />
                 ))}
@@ -495,7 +553,7 @@ export default function Library() {
                         {(!corpusStats || corpusStats.total === 0) && (
                             <Link
                                 to="/puzzles"
-                                className="inline-block px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-colors km-interactive km-focus-visible"
+                                className="inline-flex min-h-11 items-center px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-colors km-interactive km-focus-visible"
                             >
                                 Generate Puzzles
                             </Link>
@@ -512,7 +570,7 @@ export default function Library() {
                         type="button"
                         onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}
                         disabled={offset === 0}
-                        className="px-4 py-2 border border-primary/20 rounded-sm text-primary km-interactive km-focus-visible"
+                        className="min-h-11 px-4 py-2 border border-primary/20 rounded-sm text-primary km-interactive km-focus-visible"
                     >
                         Previous
                     </button>
@@ -523,25 +581,20 @@ export default function Library() {
                         type="button"
                         onClick={() => setOffset(offset + PAGE_SIZE)}
                         disabled={currentPage >= totalPages}
-                        className="px-4 py-2 border border-primary/20 rounded-sm text-primary km-interactive km-focus-visible"
+                        className="min-h-11 px-4 py-2 border border-primary/20 rounded-sm text-primary km-interactive km-focus-visible"
                     >
                         Next
                     </button>
                 </div>
             )}
 
-            {/* Training nudge */}
-            <div className="text-center text-sm font-sans text-primary/70">
-                {corpusStats && corpusStats.due > 0 ? (
-                    <Link to="/puzzles" className="km-interactive km-inline-link underline decoration-primary/20 underline-offset-4 hover:text-primary/70 transition-colors">
-                        {corpusStats.due} puzzle{corpusStats.due !== 1 ? 's' : ''} due for review — Start Training
-                    </Link>
-                ) : (
-                    <Link to="/puzzles" className="km-interactive km-inline-link underline decoration-primary/20 underline-offset-4 hover:text-primary/70 transition-colors">
+            {(!corpusStats || corpusStats.due === 0) && (
+                <div className="text-center text-sm font-sans text-primary/70">
+                    <Link to="/puzzles" className="inline-flex min-h-11 items-center km-interactive km-inline-link underline decoration-primary/20 underline-offset-4 hover:text-primary/70 transition-colors">
                         Go to Training
                     </Link>
-                )}
-            </div>
+                </div>
+            )}
         </div>
     );
 }

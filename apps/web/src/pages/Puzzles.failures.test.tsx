@@ -297,6 +297,23 @@ describe('Puzzles — honest failure handling', () => {
         expect(screen.queryByText(/Mark as Failed/i)).not.toBeInTheDocument();
     });
 
+    it('explains the unrecorded incorrect outcome and keeps the mobile action consequential', async () => {
+        vi.mocked(checkPuzzle).mockResolvedValue({ correct: false, result: 'fail' } as never);
+        const user = userEvent.setup();
+        render(<Puzzles />);
+
+        await typeAndCheck(user, 'e2e4');
+
+        expect(await screen.findByText(/nothing has been recorded yet/i)).toHaveTextContent(
+            'Nothing has been recorded yet. Try again, or record the failure before seeing the solution.',
+        );
+        const retry = screen.getByRole('button', { name: /record fail & retry/i });
+        expect(retry).toHaveClass('whitespace-nowrap');
+        expect(retry).toHaveClass('md:whitespace-normal');
+        expect(mockHandleReviewPuzzle).not.toHaveBeenCalled();
+        expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
+
     it('keeps the user on the puzzle when the solution cannot be loaded', async () => {
         vi.mocked(revealPuzzle).mockRejectedValue(new Error('network down'));
         const user = userEvent.setup();
@@ -341,6 +358,32 @@ describe('Puzzles — honest failure handling', () => {
 
         await waitFor(() => expect(mockSetCurrentIndex).toHaveBeenCalledWith(1));
         expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
+
+    it('summarises a server-verified solve before the secondary review disclosure', async () => {
+        const user = userEvent.setup();
+        render(<Puzzles />);
+
+        await typeAndCheck(user, 'e2e4');
+
+        const summary = await screen.findByText('You found the server-verified move without revealing the solution.');
+        const nextPuzzle = screen.getByRole('button', { name: /next puzzle/i });
+        const disclosure = screen.getByText(/review your result and any available diagnosis/i).closest('details');
+        expect(summary).toBeVisible();
+        expect(disclosure).not.toHaveAttribute('open');
+        expect(nextPuzzle.compareDocumentPosition(disclosure!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    });
+
+    it('summarises an explicit reveal without exposing diagnosis outside the collapsed review', async () => {
+        const user = userEvent.setup();
+        render(<Puzzles />);
+
+        await user.click(screen.getByRole('button', { name: /reveal/i }));
+
+        expect(await screen.findByText('You chose to reveal the server-provided solution.')).toBeVisible();
+        const disclosure = screen.getByText(/review your result and any available diagnosis/i).closest('details');
+        expect(disclosure).not.toHaveAttribute('open');
+        expect(screen.getByTestId('post-resolution-diagnosis')).not.toBeVisible();
     });
 
     describe('a solve is recorded at the solve, not at move-on', () => {
@@ -900,7 +943,7 @@ describe('Puzzles — honest failure handling', () => {
             expect(screen.queryByRole('alert')).not.toBeInTheDocument();
         });
 
-        it('keeps diagnosis compact and above the full-width primary move-on action', async () => {
+        it('keeps the primary move-on action ahead of collapsed diagnosis detail', async () => {
             const user = userEvent.setup();
             render(<Puzzles />);
 
@@ -908,9 +951,16 @@ describe('Puzzles — honest failure handling', () => {
 
             const diagnosis = await screen.findByTestId('post-resolution-diagnosis');
             const nextPuzzle = screen.getByRole('button', { name: /next puzzle/i });
+            const disclosure = screen.getByText(/review your result and any available diagnosis/i).closest('details');
             expect(diagnosis).toHaveClass('min-w-0');
             expect(nextPuzzle).toHaveClass('w-full');
-            expect(diagnosis.compareDocumentPosition(nextPuzzle) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+            expect(nextPuzzle.compareDocumentPosition(disclosure!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+            expect(disclosure).not.toHaveAttribute('open');
+            expect(diagnosis).not.toBeVisible();
+
+            await user.click(screen.getByText(/review your result and any available diagnosis/i));
+            expect(disclosure).toHaveAttribute('open');
+            expect(diagnosis).toBeVisible();
         });
 
         it('confirms a ready diagnosis after persistence without blocking move-on', async () => {

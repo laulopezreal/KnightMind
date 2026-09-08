@@ -113,7 +113,9 @@ class BundleProvenanceTests(unittest.TestCase):
         )
         for caller_dist in variants:
             with self.subTest(caller_dist=str(caller_dist)):
-                with self.assertRaisesRegex(RuntimeError, r"^bundle provenance malformed$"):
+                with self.assertRaisesRegex(
+                    RuntimeError, r"^bundle provenance malformed$"
+                ):
                     validate_manifest(caller_dist, COMMIT)
 
     def test_missing_manifest_is_rejected(self):
@@ -142,7 +144,9 @@ class BundleProvenanceTests(unittest.TestCase):
                 target = self.dist / relative_path
                 original = target.read_text(encoding="utf-8")
                 target.write_text(original + "mutated", encoding="utf-8")
-                with self.assertRaisesRegex(RuntimeError, r"^bundle provenance mismatch$"):
+                with self.assertRaisesRegex(
+                    RuntimeError, r"^bundle provenance mismatch$"
+                ):
                     validate_manifest(str(self.dist), COMMIT)
                 target.write_text(original, encoding="utf-8")
 
@@ -223,7 +227,9 @@ class BundleProvenanceTests(unittest.TestCase):
             with self.subTest(label=label):
                 write_manifest(self.dist, COMMIT)
                 self._assert_scan_mutation_rejected(directory, mutate)
-                injected = directory / ("injected" if directory == self.dist else "injected.js")
+                injected = directory / (
+                    "injected" if directory == self.dist else "injected.js"
+                )
                 if injected.is_dir():
                     injected.rmdir()
                 elif injected.exists():
@@ -278,7 +284,9 @@ class BundleProvenanceTests(unittest.TestCase):
         for inventory in malformed_values:
             with self.subTest(inventory=inventory):
                 self._write_manifest(inventory=inventory)
-                with self.assertRaisesRegex(RuntimeError, r"^bundle provenance malformed$"):
+                with self.assertRaisesRegex(
+                    RuntimeError, r"^bundle provenance malformed$"
+                ):
                     validate_manifest(str(self.dist), COMMIT)
 
     def test_unsafe_inventory_paths_are_rejected_without_disclosure(self):
@@ -297,7 +305,9 @@ class BundleProvenanceTests(unittest.TestCase):
                 self._write_manifest(
                     inventory=[{"path": unsafe_path, "sha256": "a" * 64}]
                 )
-                with self.assertRaisesRegex(RuntimeError, r"^bundle provenance malformed$"):
+                with self.assertRaisesRegex(
+                    RuntimeError, r"^bundle provenance malformed$"
+                ):
                     validate_manifest(str(self.dist), COMMIT)
 
     def test_manifest_writer_refuses_symlinked_target(self):
@@ -340,7 +350,9 @@ class BundleProvenanceTests(unittest.TestCase):
         write_manifest(self.dist, COMMIT)
         for commit in (True, "A" * 40, "a" * 39):
             with self.subTest(commit=commit):
-                with self.assertRaisesRegex(RuntimeError, r"^bundle provenance malformed$"):
+                with self.assertRaisesRegex(
+                    RuntimeError, r"^bundle provenance malformed$"
+                ):
                     validate_manifest(str(self.dist), commit)
 
     def test_malformed_expected_commit_error_does_not_leak_input(self):
@@ -367,7 +379,9 @@ class BundleProvenanceTests(unittest.TestCase):
         for manifest_dist in variants:
             with self.subTest(manifest_dist=manifest_dist):
                 self._write_manifest(dist=manifest_dist)
-                with self.assertRaisesRegex(RuntimeError, r"^bundle provenance malformed$"):
+                with self.assertRaisesRegex(
+                    RuntimeError, r"^bundle provenance malformed$"
+                ):
                     validate_manifest(str(self.dist), COMMIT)
 
     def test_symlinked_manifest_target_is_rejected(self):
@@ -375,7 +389,12 @@ class BundleProvenanceTests(unittest.TestCase):
         linked_manifest = pathlib.Path(self.temp_dir.name) / "linked-manifest.json"
         linked_manifest.write_text(
             json.dumps(
-                {"version": 2, "commit": COMMIT, "dist": str(self.dist), "inventory": []}
+                {
+                    "version": 2,
+                    "commit": COMMIT,
+                    "dist": str(self.dist),
+                    "inventory": [],
+                }
             ),
             encoding="utf-8",
         )
@@ -385,7 +404,9 @@ class BundleProvenanceTests(unittest.TestCase):
 
     def test_nonregular_manifest_target_is_rejected_without_blocking(self):
         (self.dist / MANIFEST_NAME).mkdir()
-        with self.assertRaisesRegex(RuntimeError, r"^bundle provenance missing or malformed$"):
+        with self.assertRaisesRegex(
+            RuntimeError, r"^bundle provenance missing or malformed$"
+        ):
             validate_manifest(str(self.dist), COMMIT)
 
     def test_embedded_nul_manifest_dist_is_rejected_as_malformed(self):
@@ -412,7 +433,9 @@ class BundleProvenanceTests(unittest.TestCase):
             object(),
         ):
             with self.subTest(invalid_dist=type(invalid_dist).__name__):
-                with self.assertRaisesRegex(RuntimeError, r"^bundle provenance malformed$"):
+                with self.assertRaisesRegex(
+                    RuntimeError, r"^bundle provenance malformed$"
+                ):
                     validate_manifest(invalid_dist, COMMIT)
 
     def test_mismatch_error_does_not_leak_commits(self):
@@ -484,7 +507,9 @@ class BundleProvenanceTests(unittest.TestCase):
         repo = self._make_repo()
         source = repo / "apps/web/src/App.tsx"
         source.write_text("export default 'dirty'\n", encoding="utf-8")
-        subprocess.run(["git", "-C", str(repo), "add", str(source.relative_to(repo))], check=True)
+        subprocess.run(
+            ["git", "-C", str(repo), "add", str(source.relative_to(repo))], check=True
+        )
         with self.assertRaisesRegex(RuntimeError, "tracked build input is dirty"):
             assert_build_inputs_clean(repo)
 
@@ -547,10 +572,17 @@ class BundleProvenanceTests(unittest.TestCase):
         source = repo / "apps/web/src/App.tsx"
         source.parent.mkdir(parents=True)
         source.write_text("export default 'clean'\n", encoding="utf-8")
-        (repo / "apps/web/index.html").write_text("<div id=\"root\"></div>\n", encoding="utf-8")
+        (repo / "apps/web/index.html").write_text(
+            '<div id="root"></div>\n', encoding="utf-8"
+        )
         subprocess.run(["git", "init", "-q", str(repo)], check=True)
-        subprocess.run(["git", "-C", str(repo), "config", "user.email", "test@example.com"], check=True)
-        subprocess.run(["git", "-C", str(repo), "config", "user.name", "Test"], check=True)
+        subprocess.run(
+            ["git", "-C", str(repo), "config", "user.email", "test@example.com"],
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(repo), "config", "user.name", "Test"], check=True
+        )
         subprocess.run(["git", "-C", str(repo), "add", "apps/web"], check=True)
         subprocess.run(["git", "-C", str(repo), "commit", "-qm", "fixture"], check=True)
         return repo

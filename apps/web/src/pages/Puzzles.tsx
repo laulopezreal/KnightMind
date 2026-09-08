@@ -152,6 +152,8 @@ export default function Puzzles() {
         if (!username) return null;
         return localStorage.getItem(`knightmind:lastJob:${username}`);
     });
+    const [errorOperation, setErrorOperation] = useState<'generation' | null>(null);
+    const generationRequestRef = useRef<Promise<void> | null>(null);
     const [prevUsername, setPrevUsername] = useState(username);
     const [game, setGame] = useState(new Chess());
     // Transient "we couldn't reach the server" for a board action (check a move,
@@ -173,9 +175,13 @@ export default function Puzzles() {
     // in a dead-end empty session and needs no escape hatch.
     const focusCause = searchParams.get('focus_cause');
     const focusPracticeMode = searchParams.get('mode') === 'focus_practice';
+    const focusPracticeCause = focusPracticeMode ? focusCause?.trim() || null : null;
     const focusOpening = searchParams.get('focus_opening');
     const focusOpeningScope = searchParams.get('focus_opening_scope');
     const isWarmupMode = searchParams.get('warmup') === 'true';
+    const warmupReturnToken = searchParams.get('warmup_return');
+    const hasWarmupReturnIntent = searchParams.has('warmup_return');
+    const warmupReturn = WarmupSummary.readReturnToken?.(warmupReturnToken, username) ?? null;
 
     // A normal-focus URL is only an intent. The current server planner is the
     // authority that decides whether that cause is still this user's focus.
@@ -201,7 +207,7 @@ export default function Puzzles() {
         return () => { current = false; };
     }, [focusCause, focusPracticeMode, sessionType, username]);
 
-    const effectiveFocusCause = focusPracticeMode ? focusCause : validatedNormalFocus?.cause ?? null;
+    const effectiveFocusCause = focusPracticeMode ? focusPracticeCause : validatedNormalFocus?.cause ?? null;
 
     // Warmup state
     const [warmupMode, setWarmupMode] = useState(isWarmupMode);
@@ -242,6 +248,10 @@ export default function Puzzles() {
     // would change a surface this feature has nothing to do with.
     const [motifHint, setMotifHint] = useState<string | null>(null);
     const [motifHintAsked, setMotifHintAsked] = useState(false);
+    // Presentation-only fact for the current exposure. The clue resets as soon
+    // as a move is submitted, so its stage cannot truthfully describe how the
+    // now-resolved move was reached.
+    const usedHintForCurrentPuzzleRef = useRef(false);
     const [previousSessionId, setPreviousSessionId] = useState<string | null>(null);
     useEffect(() => {
         statusRef.current = status;
@@ -278,6 +288,7 @@ export default function Puzzles() {
         targetAccuracy,
         targetTimeMinutes,
         warmupMode,
+        resumeEnabled: !hasWarmupReturnIntent,
         motifFilter,
         focusCause: effectiveFocusCause,
         focusPracticeMode,
@@ -301,6 +312,66 @@ export default function Puzzles() {
         handleStartSession, handleReviewPuzzle, handleCompleteSession, handleUseHint,
         calculateRecentPerformance, getPerformanceTrend,
     } = session;
+    const [initialWarmupLifecycle, setInitialWarmupLifecycle] = useState<{
+        username: string;
+        sessionId: string;
+        token: string | null;
+    } | null>(null);
+    const warmupUsernameRef = useRef(username);
+    const returnedWarmupLifecycleRef = useRef<typeof warmupReturn>(null);
+    useEffect(() => {
+        if (warmupUsernameRef.current !== username) {
+            if (initialWarmupLifecycle?.token) {
+                const owned = WarmupSummary.readReturnToken(initialWarmupLifecycle.token, initialWarmupLifecycle.username);
+                if (owned) WarmupSummary.consumeReturnState(owned);
+            }
+            if (returnedWarmupLifecycleRef.current) {
+                WarmupSummary.consumeReturnState(returnedWarmupLifecycleRef.current);
+                returnedWarmupLifecycleRef.current = null;
+            }
+            warmupUsernameRef.current = username;
+            setInitialWarmupLifecycle(null);
+            if (sessionState === 'completed') {
+                setSessionSummary(null);
+                setSessionState('idle');
+            }
+            return;
+        }
+
+        if (warmupReturn) {
+            returnedWarmupLifecycleRef.current = warmupReturn;
+            if (initialWarmupLifecycle) setInitialWarmupLifecycle(null);
+            return;
+        }
+        if (!warmupMode || !sessionSummary || sessionState !== 'completed') return;
+        if (
+            initialWarmupLifecycle?.username === username
+            && initialWarmupLifecycle.sessionId === sessionSummary.session_id
+        ) return;
+
+        if (initialWarmupLifecycle?.token) {
+            const previous = WarmupSummary.readReturnToken(initialWarmupLifecycle.token, initialWarmupLifecycle.username);
+            if (previous) WarmupSummary.consumeReturnState(previous);
+        }
+        const token = WarmupSummary.createReturnToken(username, sessionSummary);
+        setInitialWarmupLifecycle({ username, sessionId: sessionSummary.session_id, token });
+    }, [
+        initialWarmupLifecycle,
+        sessionState,
+        sessionSummary,
+        setSessionState,
+        setSessionSummary,
+        username,
+        warmupMode,
+        warmupReturn,
+    ]);
+    const ownedInitialSummary = initialWarmupLifecycle?.username === username
+        && initialWarmupLifecycle.sessionId === sessionSummary?.session_id
+        ? sessionSummary
+        : null;
+    const presentationSessionState = warmupReturn || ownedInitialSummary ? 'completed' : sessionState;
+    const completedSummary = warmupReturn?.summary ?? (warmupMode ? ownedInitialSummary : sessionSummary);
+    const warmupLifecycleToken = warmupReturn?.token ?? initialWarmupLifecycle?.token ?? null;
 
     const startPuzzleTimer = timer.startPuzzleTimer;
     const currentPuzzle = puzzles[currentIndex];
@@ -371,6 +442,10 @@ export default function Puzzles() {
         setDiagnosisConfirmationError(null);
     }
     currentPuzzleIdRef.current = currentPuzzle?.id ?? null;
+    const ownsCurrentPuzzleExposure = (puzzleId: string, puzzleEpoch: number, ownerUsername: string) =>
+        currentPuzzleIdRef.current === puzzleId &&
+        puzzleEpochRef.current === puzzleEpoch &&
+        currentUsernameRef.current === ownerUsername;
     const diagnosisOwner = diagnosisResult?.owner;
     const activeDiagnosis =
         diagnosisOwner &&
@@ -571,6 +646,7 @@ export default function Puzzles() {
         setDiagnosisLoadingOwner(null);
         setDiagnosisConfirmationOwner(null);
         setDiagnosisConfirmationError(null);
+        usedHintForCurrentPuzzleRef.current = false;
         dispatchBoard({ type: 'RESET' });
         setGame(new Chess(currentPuzzle.fen));
         clue.reset();
@@ -586,11 +662,12 @@ export default function Puzzles() {
     // Disable only while the completion API call is in-flight. Once completed,
     // render a real post-session action instead of a dead final-puzzle CTA.
     const finishButtonDisabled = sessionState === 'completing';
-    const controlsEnabled = sessionState === 'idle' || sessionState === 'error';
+    const controlsEnabled = presentationSessionState === 'idle' || presentationSessionState === 'error';
 
     // Sync activeJobId when username changes (during render, not in effect)
     if (prevUsername !== username) {
         setPrevUsername(username);
+        setErrorOperation(null);
         const savedJobId = username
             ? localStorage.getItem(`knightmind:lastJob:${username}`)
             : null;
@@ -600,6 +677,7 @@ export default function Puzzles() {
     const { job, isPolling: isJobPolling } = useJobPolling(activeJobId, {
         enabled: !!activeJobId,
         onSuccess: async () => {
+            setActiveJobId(null);
             try {
                 const res = await getDailyPuzzles(username, 5);
                 setPuzzles(res.puzzles);
@@ -614,14 +692,18 @@ export default function Puzzles() {
                 if (res.puzzles.length > 0) {
                     setSessionState('active');
                     setError(null);
+                    setErrorOperation(null);
                 } else {
                     setSessionState('error');
                     setError('No puzzles returned from generation');
+                    setErrorOperation('generation');
                 }
             } catch (err) {
                 console.error('Failed to refresh puzzles after generation:', err);
                 const message = err instanceof Error ? err.message : 'Failed to refresh puzzles';
+                setSessionState('error');
                 setError(message);
+                setErrorOperation('generation');
             }
 
             localStorage.removeItem(`knightmind:lastJob:${username}`);
@@ -630,17 +712,34 @@ export default function Puzzles() {
             await refreshUserStatus();
         },
         onError: (err) => {
+            setActiveJobId(null);
             localStorage.removeItem(`knightmind:lastJob:${username}`);
             const message = err instanceof Error ? err.message : 'Failed to generate puzzles';
             setSessionState('error');
             setError(message);
+            setErrorOperation('generation');
         }
     });
 
     const isGenerating = isJobPolling || (job?.status === 'queued' || job?.status === 'running');
     const controlsDisabled = !controlsEnabled || isLoading || isGenerating || normalFocusValidationPending;
     const generateNewDisabled = !controlsEnabled || isLoading || isGenerating || !userStatus?.has_new_games;
-    const hasValidFocusPracticeIntent = focusPracticeMode && Boolean(focusCause);
+    const hasValidFocusPracticeIntent = Boolean(focusPracticeCause);
+    const isNoDueWithoutValidFocusIntent = Boolean(
+        userStatus &&
+        userStatus.puzzles_count > 0 &&
+        userStatus.due_count === 0 &&
+        !hasValidFocusPracticeIntent
+    );
+    const isGenerationEntryEmptyState = Boolean(
+        userStatus &&
+        userStatus.games_count > 0 &&
+        userStatus.puzzles_count === 0 &&
+        userStatus.has_new_games
+    );
+    const showGenerateAction =
+        (!isNoDueWithoutValidFocusIntent || Boolean(userStatus?.has_new_games) || isGenerating) &&
+        !isGenerationEntryEmptyState;
     const { selectedModeLabel, screenReaderModeLabel } = getModeLabels(sessionType);
     const modeAvailabilityLabel = sessionType === 'standard' ? 'Active' : 'Beta';
     const presentationModeLabel = hasValidFocusPracticeIntent ? 'Focus practice' : selectedModeLabel;
@@ -652,7 +751,7 @@ export default function Puzzles() {
         // "loading or generating" to wait on — don't show a start reason at all.
         activeSessionId
             ? null
-            : sessionState === 'completed'
+            : presentationSessionState === 'completed'
                 // Post-summary the old branch fell through to "Please wait for
                 // the current task to finish" — there is no task; the session
                 // is done and the summary card below has the real CTA.
@@ -663,12 +762,12 @@ export default function Puzzles() {
                 ? ((insightsError && !isLoadingStatus && !isRefreshingInsights) ? "Couldn't load your training data." : 'Loading your training data...')
                 : userStatus.puzzles_count === 0
                     ? 'Generate puzzles first to unlock sessions.'
-                    : focusPracticeMode && !focusCause
+                    : focusPracticeMode && !hasValidFocusPracticeIntent
                         ? 'This focus is no longer available. Return to Today’s Focus and choose a current practice session.'
                     : userStatus.due_count === 0 && hasValidFocusPracticeIntent
                         ? 'Extra practice is available for this focus. The server decides which positions are safe and available.'
                     : userStatus.due_count === 0 && !hasValidFocusPracticeIntent
-                        ? 'No puzzles are due right now. Generate new puzzles to keep training.'
+                        ? 'No puzzles are ready to practise right now. Generate new puzzles to keep training.'
                         : sessionType !== 'standard'
                             ? 'Only Standard mode can start sessions for now. Switch mode in the sidebar.'
                             : null;
@@ -684,50 +783,65 @@ export default function Puzzles() {
                         : userStatus.games_count === 0
                             ? 'No games imported yet. Sync games from Chess.com to get started.'
                             : userStatus.due_count > 0
-                                ? `All imported games are already processed. Train your ${userStatus.due_count} due puzzle${userStatus.due_count === 1 ? '' : 's'}, or sync newer games from Chess.com.`
+                                ? `All imported games are already processed. You have ${userStatus.due_count} puzzle${userStatus.due_count === 1 ? '' : 's'} ready to practise, or sync newer games from Chess.com.`
                                 : 'All imported games are already processed. Sync newer games from Chess.com to generate more puzzles.'
                     : null;
     const generateButtonLabel = isGenerating
         ? 'Generating...'
+        : isNoDueWithoutValidFocusIntent && userStatus?.has_new_games
+            ? 'Generate from New Games'
         : userStatus && !userStatus.has_new_games && userStatus.games_count > 0
             ? 'No new games to generate'
             : 'Generate New';
     const sessionDetailsA11yCopy = getSessionDetailsA11yCopy(showSessionDetails, screenReaderModeLabel);
     const puzzleActionA11yCopy = getPuzzleActionA11yCopy(clue.clueStage);
 
-    const handleGeneratePuzzles = async () => {
-        if (!username.trim()) {
-            setError('Please enter a username');
-            return;
-        }
-        setSessionState('loading');
-        setError(null);
+    const handleGeneratePuzzles = () => {
+        if (generationRequestRef.current || activeJobId) return generationRequestRef.current;
 
-        try {
-            const { job_id } = await generatePuzzles(username.trim());
-            setActiveJobId(job_id);
-            localStorage.setItem(`knightmind:lastJob:${username.trim()}`, job_id);
-            // Polling will auto-start
-        } catch (err) {
-            if (err instanceof ApiError) {
-                if (err.statusCode === 404) {
-                    // Differentiate between no games at all vs no new games
-                    if (userStatus?.games_count === 0) {
-                        setError('No games found. Please import games first.');
+        const operation = (async () => {
+            if (!username.trim()) {
+                setError('Please enter a username');
+                setErrorOperation('generation');
+                return;
+            }
+            setSessionState('loading');
+            setError(null);
+            setErrorOperation(null);
+
+            try {
+                const { job_id } = await generatePuzzles(username.trim());
+                setActiveJobId(job_id);
+                localStorage.setItem(`knightmind:lastJob:${username.trim()}`, job_id);
+                // Polling will auto-start
+            } catch (err) {
+                if (err instanceof ApiError) {
+                    if (err.statusCode === 404) {
+                        // Differentiate between no games at all vs no new games
+                        if (userStatus?.games_count === 0) {
+                            setError('No games found. Please import games first.');
+                        } else {
+                            setError('No new games available. All current games have been used for puzzles. Import more games to generate new puzzles.');
+                        }
                     } else {
-                        setError('No new games available. All current games have been used for puzzles. Import more games to generate new puzzles.');
+                        // Show the friendly message; keep the raw cause (endpoints,
+                        // timeouts, "backend is down") in the console for devs only.
+                        if (err.detail) console.error('[puzzles:generate]', err.detail);
+                        setError(err.message);
                     }
                 } else {
-                    // Show the friendly message; keep the raw cause (endpoints,
-                    // timeouts, "backend is down") in the console for devs only.
-                    if (err.detail) console.error('[puzzles:generate]', err.detail);
-                    setError(err.message);
+                    setError(err instanceof Error ? err.message : 'Failed to generate puzzles');
                 }
-            } else {
-                setError(err instanceof Error ? err.message : 'Failed to generate puzzles');
+                setErrorOperation('generation');
+                setSessionState('error');
             }
-            setSessionState('error');
-        }
+        })();
+
+        generationRequestRef.current = operation;
+        void operation.finally(() => {
+            if (generationRequestRef.current === operation) generationRequestRef.current = null;
+        });
+        return operation;
     };
 
     const handleCancelJob = async () => {
@@ -750,12 +864,19 @@ export default function Puzzles() {
         }
     }, [warmupMode, sessionState, username, userStatus, isResumingSession, handleStartSession]);
 
+    const shouldShowErrorCard = sessionState === 'error' && !!error;
+    const generationFailurePresentedByErrorCard =
+        shouldShowErrorCard &&
+        errorOperation === 'generation' &&
+        job?.status === 'failed' &&
+        error === (job.error || job.message || 'Job failed');
     const shouldShowJobStatusCard =
         !!job &&
         (job.status === 'queued' ||
             job.status === 'running' ||
-            (!puzzlesAvailable && (job.status === 'succeeded' || job.status === 'failed')));
-    const shouldShowErrorCard = sessionState === 'error' && !!error;
+            (!puzzlesAvailable &&
+                (job.status === 'succeeded' ||
+                    (job.status === 'failed' && !generationFailurePresentedByErrorCard))));
     const shouldShowLoadingCard =
         (isLoading || isLoadingStatus || isResumingSession) && !isGenerating && !shouldShowJobStatusCard;
     const shouldShowEmptyState =
@@ -797,8 +918,14 @@ export default function Puzzles() {
     const ensureRevealedMove = async (): Promise<{ move: string | null; pv: string[] }> => {
         if (revealedMove) return { move: revealedMove, pv: revealedPv };
         if (!currentPuzzle || !username) return { move: null, pv: [] };
+        const puzzleId = currentPuzzle.id;
+        const puzzleEpoch = puzzleEpochRef.current;
+        const ownerUsername = username;
         try {
-            const { best_move_uci, solution_pv } = await revealPuzzle(currentPuzzle.id, username);
+            const { best_move_uci, solution_pv } = await revealPuzzle(puzzleId, ownerUsername);
+            if (!ownsCurrentPuzzleExposure(puzzleId, puzzleEpoch, ownerUsername)) {
+                return { move: null, pv: [] };
+            }
             const move = best_move_uci.toLowerCase();
             const pv = (solution_pv ?? []).map((m) => m.toLowerCase());
             setRevealedMove(move);
@@ -924,7 +1051,7 @@ export default function Puzzles() {
     };
 
     const handleCheckAnswer = async () => {
-        if (!currentPuzzle) return;
+        if (!currentPuzzle || status !== 'solving') return;
         const normalizedUserMove = userMove.trim().toLowerCase();
         if (!normalizedUserMove) return;
         // Apply the typed move to a working board so a multi-move line can play
@@ -951,7 +1078,12 @@ export default function Puzzles() {
 
     const handleRevealSolution = async () => {
         setActionError(null);
+        if (!currentPuzzle) return;
+        const puzzleId = currentPuzzle.id;
+        const puzzleEpoch = puzzleEpochRef.current;
+        const ownerUsername = username;
         const { move: bestMove, pv } = await ensureRevealedMove();
+        if (!ownsCurrentPuzzleExposure(puzzleId, puzzleEpoch, ownerUsername)) return;
         // Without a solution there is nothing to reveal. Flipping to 'revealed'
         // anyway printed an empty "Solution …", removed every solving control,
         // and left the puzzle queued to be recorded as a self-reported fail —
@@ -1008,6 +1140,9 @@ export default function Puzzles() {
     // but the visual reveal never depends on that write succeeding.
     const handleHint = async () => {
         if (!currentPuzzle) return;
+        const puzzleId = currentPuzzle.id;
+        const puzzleEpoch = puzzleEpochRef.current;
+        const ownerUsername = username;
 
         // Rung 0: the motif, before the ladder starts. Only offered while the
         // payload does not already carry it -- with the gate off the chip is
@@ -1017,18 +1152,21 @@ export default function Puzzles() {
             setMotifHintAsked(true);
             try {
                 const { primary_motif } = await requestMotifHint(
-                    currentPuzzle.id,
-                    username.trim(),
+                    puzzleId,
+                    ownerUsername.trim(),
                     activeSessionId || undefined,
                 );
+                if (!ownsCurrentPuzzleExposure(puzzleId, puzzleEpoch, ownerUsername)) return;
                 // null means no motif was identified. The rung is still spent
                 // -- the user asked -- but there is nothing to show, so fall
                 // through to rung 1 rather than leaving them with nothing.
                 if (primary_motif) {
                     setMotifHint(primary_motif);
+                    usedHintForCurrentPuzzleRef.current = true;
                     return;
                 }
             } catch {
+                if (!ownsCurrentPuzzleExposure(puzzleId, puzzleEpoch, ownerUsername)) return;
                 // A failed request must not cost the rung: let the next press
                 // try the ladder rather than stranding the user. But say so --
                 // a silent no-op reads as a dead button on flaky connections.
@@ -1044,14 +1182,17 @@ export default function Puzzles() {
         // Bail if the fetch fails — advancing with nothing to show would be a lie.
         if (stage === 0) {
             const { move } = await ensureRevealedMove();
+            if (!ownsCurrentPuzzleExposure(puzzleId, puzzleEpoch, ownerUsername)) return;
             if (!move) return;
         }
         // Force past advance()'s "no move known" guard: on the first press the
         // move was only just fetched, so this render's closure hasn't seen it.
         clue.advance(true);
+        usedHintForCurrentPuzzleRef.current = true;
         // Rung 3 hands over the whole line — same destination as the Reveal button.
         if (stage === 2) {
             await handleRevealSolution();
+            if (!ownsCurrentPuzzleExposure(puzzleId, puzzleEpoch, ownerUsername)) return;
         }
         if (activeSessionId) {
             await handleUseHint();
@@ -1061,6 +1202,7 @@ export default function Puzzles() {
     // Sync game board when puzzle changes (setState during render, not in effect)
     const [prevPuzzle, setPrevPuzzle] = useState(currentPuzzle);
     if (currentPuzzle && currentPuzzle !== prevPuzzle) {
+        const puzzleIdentityChanged = currentPuzzle.id !== prevPuzzle?.id;
         setPrevPuzzle(currentPuzzle);
         setGame(new Chess(currentPuzzle.fen));
         // Drop any solution held for the previous puzzle.
@@ -1071,6 +1213,13 @@ export default function Puzzles() {
         dispatchBoard({ type: 'SET_LINE_PLY_INDEX', index: 0 });
         dispatchBoard({ type: 'SET_CLICK_FROM', square: null });
         setActionError(null);
+        // A review response may fold updated attempts into a new object for the
+        // same resolved puzzle. Keep its hint fact; clear only for a new puzzle.
+        if (puzzleIdentityChanged) {
+            setMotifHint(null);
+            setMotifHintAsked(false);
+            usedHintForCurrentPuzzleRef.current = false;
+        }
     }
 
     // Bring the board into view when a session starts: it renders below the
@@ -1117,9 +1266,9 @@ export default function Puzzles() {
     // session's payoff and must be seen, not pointed at with "see below".
     const summaryRef = useRef<HTMLDivElement>(null);
     useEffect(() => {
-        if (sessionState !== 'completed') return;
+        if (presentationSessionState !== 'completed') return;
         setTimeout(() => scrollWithSettle(summaryRef.current), 60);
-    }, [sessionState]);
+    }, [presentationSessionState]);
 
     // Reset clue and start timer when puzzle changes (side effects in effect)
     useEffect(() => {
@@ -1133,7 +1282,7 @@ export default function Puzzles() {
     }, [currentPuzzle, clueReset, startPuzzleTimer]);
 
     const onPieceDrop = (sourceSquare: string, targetSquare: string, promotion: string = 'q') => {
-        if (!currentPuzzle || status === 'correct' || status === 'revealed') return false;
+        if (!currentPuzzle || status !== 'solving') return false;
         try {
             // `game.move` mutates in place, so capture the position first —
             // processUserMove needs it to roll back if the check request fails.
@@ -1159,6 +1308,7 @@ export default function Puzzles() {
             outcomeWriteRef.current = null;
             setMotifHint(null);
             setMotifHintAsked(false);
+            usedHintForCurrentPuzzleRef.current = false;
             setLastFeedback('');
             clue.reset();
         }
@@ -1296,7 +1446,7 @@ export default function Puzzles() {
                                 to="/puzzles"
                                 className="mt-2 inline-block text-sm font-sans text-primary/70 km-interactive km-focus-visible km-inline-link underline decoration-primary/30 underline-offset-4"
                             >
-                                Train everything that&apos;s due instead
+                                Train everything that&apos;s ready to practise instead
                             </Link>
                         )}
                     </div>
@@ -1318,25 +1468,27 @@ export default function Puzzles() {
                             {username}
                         </div>
                     </div>
-                    <div className="flex gap-4 flex-wrap">
-                        {!activeSessionId && (
+                    <div className="flex w-full md:w-auto gap-4 flex-wrap">
+                        {!activeSessionId && !isNoDueWithoutValidFocusIntent && (
                             <button
                                 type="button"
                                 onClick={handleStartSession}
                                 disabled={controlsDisabled || !userStatus || userStatus.puzzles_count === 0 || (userStatus.due_count === 0 && !hasValidFocusPracticeIntent) || sessionType !== 'standard'}
                                 title={startSessionDisabledReason ?? 'Start a new training session'}
-                                className={`min-h-11 px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-opacity km-focus-visible ${(controlsDisabled || !userStatus || userStatus.puzzles_count === 0 || (userStatus.due_count === 0 && !hasValidFocusPracticeIntent) || sessionType !== 'standard') ? 'km-interactive-disabled' : 'hover:opacity-90 cursor-pointer'}`}>
+                                className={`min-h-11 w-full md:w-auto px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-opacity km-focus-visible ${(controlsDisabled || !userStatus || userStatus.puzzles_count === 0 || (userStatus.due_count === 0 && !hasValidFocusPracticeIntent) || sessionType !== 'standard') ? 'km-interactive-disabled' : 'hover:opacity-90 cursor-pointer'}`}>
                                 Start Session
                             </button>
                         )}
-                        <button
-                            type="button"
-                            onClick={handleGeneratePuzzles}
-                            disabled={generateNewDisabled}
-                            title={generateDisabledReason ?? 'Generate puzzles from new games'}
-                            className={`px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-colors km-focus-visible ${generateNewDisabled ? 'km-interactive-disabled' : 'km-interactive'}`}>
-                            {generateButtonLabel}
-                        </button>
+                        {showGenerateAction && (
+                            <button
+                                type="button"
+                                onClick={handleGeneratePuzzles}
+                                disabled={generateNewDisabled}
+                                title={generateDisabledReason ?? 'Generate puzzles from new games'}
+                                className={`min-h-11 w-full md:w-auto px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-colors km-focus-visible ${generateNewDisabled ? 'km-interactive-disabled' : 'km-interactive'}`}>
+                                {generateButtonLabel}
+                            </button>
+                        )}
                     </div>
                 </div>
 
@@ -1345,7 +1497,7 @@ export default function Puzzles() {
                     and states with a working link. Two near-identical sentences
                     stacked read as a rendering bug. The reasons still reach the
                     buttons' own title tooltips. */}
-                {username && (startSessionDisabledReason || generateDisabledReason) && (
+                {username && !isNoDueWithoutValidFocusIntent && (startSessionDisabledReason || generateDisabledReason) && (
                     <p className="text-sm text-primary/70 font-sans" role="status" aria-live="polite">
                         {startSessionDisabledReason ?? generateDisabledReason}
                     </p>
@@ -1390,7 +1542,7 @@ export default function Puzzles() {
                                         </strong>
                                     </p>
                                     <p className="text-sm text-primary/70 font-sans mt-1">
-                                        This session prioritises eligible due puzzles from this focus and may top up from the ordinary due queue. The session does not exclusively contain focus puzzles.
+                                        This session prioritises puzzles ready to practise from this focus and may top up from the ordinary practice queue. The session does not exclusively contain focus puzzles.
                                     </p>
                                 </div>
                                 <div className="p-4 bg-primary/5 border border-primary/20 rounded-sm">
@@ -1469,13 +1621,13 @@ export default function Puzzles() {
                                 <>
                                     <h3 className="font-serif text-xl text-primary">Ready to generate puzzles</h3>
                                     <p className="text-primary/70 font-sans">
-                                        We found {userStatus.games_count} games. Let&apos;s create training puzzles.
+                                        Your recent imported games are analyzed into personalized practice. This may take a few minutes.
                                     </p>
                                     <button
                                         type="button"
                                         onClick={handleGeneratePuzzles}
-                                        disabled={controlsDisabled}
-                                        className={`px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-colors km-focus-visible ${controlsDisabled ? 'km-interactive-disabled' : 'km-interactive'}`}
+                                        disabled={generateNewDisabled}
+                                        className={`min-h-11 px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-colors km-focus-visible ${generateNewDisabled ? 'km-interactive-disabled' : 'km-interactive'}`}
                                     >
                                         Generate Puzzles
                                     </button>
@@ -1489,30 +1641,26 @@ export default function Puzzles() {
                                 </>
                             ) : userStatus.due_count === 0 ? (
                                 <>
-                                    <h3 className="font-serif text-xl text-primary">All caught up</h3>
+                                    <h3 className="font-serif text-xl text-primary">No reviews due</h3>
                                     <p className="text-primary/70 font-sans">
                                         {userStatus.next_due_at
-                                            ? `Next review on ${new Date(userStatus.next_due_at).toLocaleDateString(LOCALE, { weekday: 'long', month: 'short', day: 'numeric' })}.`
-                                            : 'No puzzles are due for review yet.'}
+                                            ? `Your next scheduled review is ${new Date(userStatus.next_due_at).toLocaleDateString(LOCALE, { weekday: 'long', month: 'short', day: 'numeric' })}.`
+                                            : 'No reviews are scheduled yet.'}
                                     </p>
-                                    {userStatus.has_new_games && (
-                                        <button
-                                            type="button"
-                                            onClick={handleGeneratePuzzles}
-                                            disabled={controlsDisabled}
-                                            className={`px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-colors km-focus-visible ${controlsDisabled ? 'km-interactive-disabled' : 'km-interactive'}`}
-                                        >
-                                            Generate from New Games
-                                        </button>
-                                    )}
+                                    <p className="text-primary/70 font-sans">
+                                        You still have {userStatus.puzzles_count} puzzle{userStatus.puzzles_count === 1 ? '' : 's'} in your library.{' '}
+                                        {userStatus.has_new_games
+                                            ? 'Generate from your new games to keep training.'
+                                            : 'Sync newer games from Chess.com to create more puzzles.'}
+                                    </p>
                                 </>
                             ) : (
                                 <>
                                     <h3 className="font-serif text-xl text-primary">
-                                        {userStatus.due_count} puzzle{userStatus.due_count === 1 ? '' : 's'} ready
+                                        {userStatus.due_count} puzzle{userStatus.due_count === 1 ? '' : 's'} ready to practise
                                     </h3>
                                     <p className="text-primary/70 font-sans">
-                                        Start a session to review your due puzzles.
+                                        Start a session to practise them.
                                     </p>
                                 </>
                             )}
@@ -1544,22 +1692,23 @@ export default function Puzzles() {
                         <div className="space-y-4">
                             <JobStatusCard status="failed" error={error ?? 'Failed to generate puzzles'} />
                             <div className="flex flex-wrap justify-center gap-3">
-                                <button
-                                    type="button"
-                                    onClick={handleStartSession}
-                                    disabled={!canRetryLoad}
-                                    className={`px-6 py-2 border border-primary/20 text-primary rounded-sm font-serif transition-all km-focus-visible ${!canRetryLoad ? 'km-interactive-disabled' : 'km-interactive'}`}
-                                >
-                                    Retry
-                                </button>
-                                {userStatus?.has_new_games && (
+                                {errorOperation === 'generation' ? (
                                     <button
                                         type="button"
                                         onClick={handleGeneratePuzzles}
                                         disabled={!canRetryLoad}
-                                        className={`px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-colors km-focus-visible ${!canRetryLoad ? 'km-interactive-disabled' : 'km-interactive'}`}
+                                        className={`min-h-11 px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-colors km-focus-visible ${!canRetryLoad ? 'km-interactive-disabled' : 'km-interactive'}`}
                                     >
-                                        Generate New
+                                        Try generation again
+                                    </button>
+                                ) : (
+                                    <button
+                                        type="button"
+                                        onClick={handleStartSession}
+                                        disabled={!canRetryLoad}
+                                        className={`min-h-11 px-6 py-2 border border-primary/20 text-primary rounded-sm font-serif transition-all km-focus-visible ${!canRetryLoad ? 'km-interactive-disabled' : 'km-interactive'}`}
+                                    >
+                                        Retry session
                                     </button>
                                 )}
                                 {/* No connect control here. The panel above is
@@ -1963,6 +2112,11 @@ export default function Puzzles() {
                             {status === 'correct' && (
                                 <div className="text-center">
                                     <p className="text-positive font-serif text-2xl animate-teedin">Correct! Excellent.</p>
+                                    <p className="text-primary/70 font-sans text-sm mt-2 animate-teedin">
+                                        {usedHintForCurrentPuzzleRef.current
+                                            ? 'You found the server-verified move after using a hint.'
+                                            : 'You found the server-verified move without revealing the solution.'}
+                                    </p>
                                     {lastFeedback && (
                                         <p className="text-positive font-sans text-sm mt-2 animate-teedin">{lastFeedback}</p>
                                     )}
@@ -1971,6 +2125,9 @@ export default function Puzzles() {
                             {status === 'incorrect' && (
                                 <div className="text-center">
                                     <p className="text-negative font-serif text-2xl animate-teedin">Not this one — take another look.</p>
+                                    <p className="text-primary/70 font-sans text-sm mt-2 animate-teedin">
+                                        Nothing has been recorded yet. Try again, or record the failure before seeing the solution.
+                                    </p>
                                     {lastFeedback && (
                                         <p className="text-negative font-sans text-sm mt-2 animate-teedin">{lastFeedback}</p>
                                     )}
@@ -1995,22 +2152,12 @@ export default function Puzzles() {
                                     {lastFeedback && (
                                         <p className="text-primary/80 font-sans text-sm mt-2 animate-teedin">{lastFeedback}</p>
                                     )}
+                                    <p className="text-primary/70 font-sans text-sm mt-2 animate-teedin">
+                                        You chose to reveal the server-provided solution.
+                                    </p>
                                 </div>
                             )}
                         </div>
-
-                        {(activeDiagnosis || diagnosisLoading) && (
-                            <div data-testid="post-resolution-diagnosis" className="min-w-0">
-                                <MistakeDiagnosisCard
-                                    diagnosis={activeDiagnosis}
-                                    revealed
-                                    loading={diagnosisLoading}
-                                    savingConfirmation={diagnosisConfirmationSaving}
-                                    confirmationError={activeDiagnosisConfirmationError}
-                                    onConfirm={confirmResolvedDiagnosis}
-                                />
-                            </div>
-                        )}
 
                         {/* Connectivity/action failures. Sits outside the status
                             region (which is polite and describes the puzzle) and
@@ -2028,18 +2175,22 @@ export default function Puzzles() {
 
                         {/* Actions */}
                         <div className="space-y-6">
-                            {/* Type Move Toggle */}
-                            <div className="flex justify-between items-center px-2">
-                                <span className="text-xs text-primary/70 uppercase tracking-widest font-sans">Input Method</span>
-                                <button
-                                    type="button"
-                                    onClick={() => setShowUciInput(!showUciInput)}
-                                    className="km-interactive km-focus-visible km-inline-link text-primary text-xs font-serif underline decoration-primary/30 underline-offset-4 transition-colors">
-                                    {showUciInput ? 'Switch to Drag & Drop' : 'Type Move Manually'}
-                                </button>
-                            </div>
+                            {/* Type Move Toggle. Once an outcome is known, remove the
+                                now-irrelevant input choice so the next action owns the
+                                resolved state. It returns with a fresh solving state. */}
+                            {status === 'solving' && (
+                                <div className="flex justify-between items-center px-2">
+                                    <span className="text-xs text-primary/70 uppercase tracking-widest font-sans">Input Method</span>
+                                    <button
+                                        type="button"
+                                        onClick={() => setShowUciInput(!showUciInput)}
+                                        className="km-interactive km-focus-visible km-inline-link text-primary text-xs font-serif underline decoration-primary/30 underline-offset-4 transition-colors">
+                                        {showUciInput ? 'Switch to Drag & Drop' : 'Type Move Manually'}
+                                    </button>
+                                </div>
+                            )}
 
-                            {showUciInput && (
+                            {status === 'solving' && showUciInput && (
                                 <div className="animate-switchedin">
                                     <input
                                         type="text"
@@ -2089,28 +2240,7 @@ export default function Puzzles() {
                                 </div>
                             )}
                             {(status === 'correct' || status === 'revealed') && (
-                                <div className="space-y-4">
-                                    {/* Performance Stats for this puzzle */}
-                                    {currentPuzzle?.attempts !== undefined && (
-                                        <div className="bg-primary/5 p-3 rounded-sm text-sm">
-                                            <div className="flex justify-between">
-                                                <span className="text-primary/70">Puzzle Stats:</span>
-                                                <span className="font-mono">
-                                                    {currentPuzzle.pass_count || 0}/{currentPuzzle.attempts || 0}
-                                                    {currentPuzzle.attempts ? ` (${Math.round(((currentPuzzle.pass_count || 0) / currentPuzzle.attempts) * 100)}%)` : ''}
-                                                </span>
-                                            </div>
-                                            {currentPuzzle.next_due_at && (
-                                                <div className="flex justify-between mt-1">
-                                                    <span className="text-primary/70">Next Review:</span>
-                                                    <span className="font-mono">
-                                                        {new Date(currentPuzzle.next_due_at).toLocaleDateString(LOCALE)}
-                                                    </span>
-                                                </div>
-                                            )}
-                                        </div>
-                                    )}
-
+                                <div className="space-y-3" data-testid="resolved-puzzle-actions">
                                     {sessionState === 'completed' ? (
                                         sessionSummary ? (
                                             <p className="text-center text-primary/70 font-sans text-sm py-4">
@@ -2138,8 +2268,50 @@ export default function Puzzles() {
                                                     <span className="animate-spin h-5 w-5 border-2 border-current/20 border-t-current rounded-full mr-2"></span>
                                                     Recording Session...
                                                 </>
-                                            ) : isFinalPuzzle ? 'All Done' : 'Next Puzzle →'}
+                                            ) : isFinalPuzzle ? 'Finish Session' : 'Next Puzzle →'}
                                         </button>
+                                    )}
+
+                                    {(currentPuzzle?.attempts !== undefined || activeDiagnosis || diagnosisLoading) && (
+                                        <details key={currentPuzzle.id} className="group border-t border-primary/10 pt-1">
+                                            <summary className="min-h-[44px] cursor-pointer list-none flex items-center justify-between gap-3 rounded-sm px-2 text-sm font-serif text-primary/70 transition-colors hover:text-primary km-focus-visible">
+                                                <span>Review your result and any available diagnosis to see what may help next.</span>
+                                                <span aria-hidden="true" className="text-base transition-transform group-open:rotate-45">＋</span>
+                                            </summary>
+                                            <div className="pt-2 space-y-3">
+                                                {currentPuzzle?.attempts !== undefined && (
+                                                    <div className="bg-primary/5 p-3 rounded-sm text-sm">
+                                                        <div className="flex justify-between gap-3">
+                                                            <span className="text-primary/70">Puzzle record</span>
+                                                            <span className="font-mono">
+                                                                {currentPuzzle.pass_count || 0}/{currentPuzzle.attempts || 0}
+                                                                {currentPuzzle.attempts ? ` (${Math.round(((currentPuzzle.pass_count || 0) / currentPuzzle.attempts) * 100)}%)` : ''}
+                                                            </span>
+                                                        </div>
+                                                        {currentPuzzle.next_due_at && (
+                                                            <div className="flex justify-between gap-3 mt-1">
+                                                                <span className="text-primary/70">Next review</span>
+                                                                <span className="font-mono">
+                                                                    {new Date(currentPuzzle.next_due_at).toLocaleDateString(LOCALE)}
+                                                                </span>
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                )}
+                                                {(activeDiagnosis || diagnosisLoading) && (
+                                                    <div data-testid="post-resolution-diagnosis" className="min-w-0">
+                                                        <MistakeDiagnosisCard
+                                                            diagnosis={activeDiagnosis}
+                                                            revealed
+                                                            loading={diagnosisLoading}
+                                                            savingConfirmation={diagnosisConfirmationSaving}
+                                                            confirmationError={activeDiagnosisConfirmationError}
+                                                            onConfirm={confirmResolvedDiagnosis}
+                                                        />
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </details>
                                     )}
                                 </div>
                             )}
@@ -2164,8 +2336,8 @@ export default function Puzzles() {
                                                 }
                                                 beginFreshExposureAfterPersistedFail();
                                             }}
-                                            className="px-2 py-3 md:px-6 md:py-4 border border-primary/20 text-primary rounded-sm font-serif text-sm md:text-lg transition-all km-interactive km-focus-visible">
-                                            <span className="md:hidden">Try Again</span>
+                                            className="px-2 py-3 md:px-6 md:py-4 border border-primary/20 text-primary rounded-sm font-serif text-sm md:text-lg transition-all km-interactive km-focus-visible whitespace-nowrap md:whitespace-normal">
+                                            <span className="md:hidden">Record fail & retry</span>
                                             <span className="hidden md:inline">Mark as Failed & Try Again</span>
                                         </button>
                                         <button
@@ -2236,19 +2408,23 @@ export default function Puzzles() {
             )}
 
             {/* Session Summary */}
-            {sessionSummary && sessionState === 'completed' && (
+            {completedSummary && presentationSessionState === 'completed' && (
                 <div ref={summaryRef} className="lg:order-7 scroll-mt-6">
-                    {warmupMode ? (
+                    {warmupMode || warmupReturn ? (
                         <WarmupSummary
-                            sessionSummary={sessionSummary}
+                            sessionSummary={completedSummary}
+                            returnToken={warmupLifecycleToken}
                             onContinue={() => {
+                                const lifecycle = WarmupSummary.readReturnToken(warmupLifecycleToken, username);
+                                if (lifecycle) WarmupSummary.consumeReturnState(lifecycle);
+                                returnedWarmupLifecycleRef.current = null;
                                 setWarmupMode(false);
-                                navigate('/dashboard');
+                                navigate('/dashboard', { replace: Boolean(warmupReturn) });
                             }}
                         />
                     ) : (
                         <SessionSummaryCard
-                            sessionSummary={sessionSummary}
+                            sessionSummary={completedSummary}
                             achievements={achievements}
                             onStartNewSession={() => {
                                 setSessionSummary(null);

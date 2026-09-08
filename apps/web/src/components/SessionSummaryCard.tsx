@@ -43,29 +43,27 @@ export function SessionSummaryCard({
 
     const missedPuzzles = sessionSummary.missed_puzzles;
     const hasMissed = missedPuzzles && missedPuzzles.length > 0;
+    const earnedAchievements = achievements.filter(achievement => achievement.earned);
+    const completionTime = `${Math.floor(sessionSummary.total_time_ms / 60000)}m ${Math.floor((sessionSummary.total_time_ms % 60000) / 1000)}s`;
 
     // Token-only success treatment: a raw green-500 fill with a white tick is a
     // fixed pair that cannot clear contrast in both themes, and it was the only
     // green of its kind in the app. The soft tint + positive ink reads as
     // "complete" in day and night alike.
     return (
-        <section className="bg-primary/5 border border-positive-soft rounded-sm p-8 backdrop-blur-sm animate-teedin">
-            <div className="flex items-center mb-6">
-                <div className="shrink-0 size-8 rounded-full bg-positive-fill flex items-center justify-center mr-3">
-                    <svg className="size-5 text-positive" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                    </svg>
+        <section className="bg-primary/5 border border-positive-soft rounded-sm p-6 sm:p-8 backdrop-blur-sm animate-teedin">
+            <header className="mb-6">
+                <div className="flex items-center">
+                    <div className="shrink-0 size-8 rounded-full bg-positive-fill flex items-center justify-center mr-3">
+                        <svg className="size-5 text-positive" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                        </svg>
+                    </div>
+                    <h2 className="text-2xl font-serif text-primary">{headline}</h2>
                 </div>
-                <h2 className="text-2xl font-serif text-primary">{headline}</h2>
-            </div>
+            </header>
 
-            {sessionSummary.completed_at && (
-                <div className="text-sm text-primary/70 mb-4">
-                    Completed on {new Date(sessionSummary.completed_at).toLocaleString(LOCALE)}
-                </div>
-            )}
-
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-6 mb-6">
+            <div className="grid grid-cols-3 gap-3 sm:gap-6 mb-6" aria-label="Session result">
                 <div className="text-center">
                     <div className="text-3xl font-serif text-positive"><AnimatedNumber value={sessionSummary.pass_count} /></div>
                     <div className="text-xs uppercase tracking-widest text-primary/70 mt-1">Passed</div>
@@ -80,68 +78,41 @@ export function SessionSummaryCard({
                     </div>
                     <div className="text-xs uppercase tracking-widest text-primary/70 mt-1">Accuracy</div>
                 </div>
-                <div className="text-center">
-                    <div className="text-3xl font-serif text-primary">
-                        {Math.floor(sessionSummary.total_time_ms / 60000)}m {Math.floor((sessionSummary.total_time_ms % 60000) / 1000)}s
-                    </div>
-                    <div className="text-xs uppercase tracking-widest text-primary/70 mt-1">Total Time</div>
-                </div>
-            </div>
-
-            {/* Enhanced Session Stats */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-6 mb-6">
-                <div className="text-center">
-                    <div className="text-3xl font-serif text-primary"><AnimatedNumber value={sessionSummary.best_streak} /></div>
-                    <div className="text-xs uppercase tracking-widest text-primary/70 mt-1">Best Streak</div>
-                </div>
-                <div className="text-center">
-                    <div className="text-3xl font-serif text-primary"><AnimatedNumber value={sessionSummary.hints_used} /></div>
-                    <div className="text-xs uppercase tracking-widest text-primary/70 mt-1">Hints Used</div>
-                </div>
-                {sessionSummary.session_type && sessionSummary.session_type !== 'standard' && (
-                    <div className="text-center md:col-span-2">
-                        <div className="text-xl font-serif text-primary capitalize">
-                            {sessionSummary.session_type.replace('_', ' ')}
-                            {sessionSummary.target_accuracy && ` (${sessionSummary.target_accuracy}% accuracy)`}
-                            {sessionSummary.target_time_minutes && ` (${sessionSummary.target_time_minutes} minutes)`}
-                        </div>
-                        <div className="text-xs uppercase tracking-widest text-primary/70 mt-1">Session Type</div>
-                    </div>
-                )}
             </div>
 
             {/* Missed Puzzles — teach, not just count */}
             {hasMissed && (
-                <div className="mb-6">
-                    <h3 className="text-lg font-serif text-primary mb-3">
+                <section className="mb-6 border-y border-primary/10 py-5" aria-labelledby="missed-puzzles-heading">
+                    <h3 id="missed-puzzles-heading" className="text-lg font-serif text-primary mb-1">
                         {missedPuzzles.length === 1 ? 'Missed puzzle' : `Missed puzzles (${missedPuzzles.length})`}
                     </h3>
+                    <p className="text-sm text-primary/70 mb-3">Review what to learn from this session.</p>
                     <ul className="divide-y divide-primary/10" aria-label="Missed puzzles">
                         {missedPuzzles.map(mp => (
                             <li
                                 key={mp.puzzle_id}
-                                className="flex items-center justify-between gap-3 py-3"
+                                className="flex flex-col items-stretch gap-1 py-3 sm:flex-row sm:items-center sm:gap-3"
                             >
-                                <div className="min-w-0">
-                                    <span className="block text-sm font-serif text-primary truncate">
+                                <div className="min-w-0 flex-1">
+                                    <span className="block text-sm font-serif text-primary whitespace-normal break-words">
                                         {mp.display_name}
                                     </span>
                                     {mp.cause_label ? (
-                                        <span className="block text-xs text-primary/60 mt-0.5">
+                                        <span className="block text-xs text-primary/70 mt-1 whitespace-normal break-words">
                                             {mp.cause_label}
                                         </span>
                                     ) : (
-                                        <span className="block text-xs text-primary/40 mt-0.5 italic">
+                                        <span className="block text-xs text-primary/70 mt-1 italic">
                                             Cause not yet diagnosed
                                         </span>
                                     )}
                                 </div>
-                                {/* min-h/min-w 44px: WCAG 2.5.5 touch-target contract.
+                                {/* min-h/min-w 11 (44px): WCAG 2.5.5 touch-target contract.
                                     The flex wrapper expands the interactive area without
                                     visually bloating the row — the text stays text-xs. */}
                                 <Link
                                     to={`/library/${mp.puzzle_id}?from=session`}
-                                    className="km-review-link shrink-0 inline-flex items-center justify-center min-h-[44px] min-w-[44px] text-xs font-serif text-primary/70 underline underline-offset-2 hover:text-primary transition-colors km-focus-visible"
+                                    className="km-review-link self-start sm:self-auto shrink-0 inline-flex items-center justify-center min-h-11 min-w-11 text-xs font-serif text-primary/70 underline underline-offset-2 hover:text-primary transition-colors km-focus-visible"
                                     aria-label={`Review ${mp.display_name}`}
                                 >
                                     Review
@@ -149,27 +120,61 @@ export function SessionSummaryCard({
                             </li>
                         ))}
                     </ul>
-                </div>
+                </section>
             )}
 
-            {/* Achievements Earned */}
-            {achievements.filter(a => a.earned).length > 0 && (
-                <div className="mb-6">
-                    <h3 className="text-lg font-serif text-primary mb-3">Achievements Earned</h3>
-                    <div className="flex flex-wrap gap-2">
-                        {achievements.filter(a => a.earned).map(achievement => (
-                            <div
-                                key={achievement.id}
-                                className="flex items-center bg-primary/10 border border-primary/20 rounded-full px-3 py-1"
-                                title={achievement.description}
-                            >
-                                <span className="text-lg mr-2">{achievement.icon}</span>
-                                <span className="text-sm font-serif text-primary">{achievement.name}</span>
-                            </div>
-                        ))}
+            {/* Supporting details stay available without competing with the result. */}
+            <section className="mb-6 border-t border-primary/10 pt-4" aria-labelledby="session-details-heading">
+                <h3 id="session-details-heading" className="text-sm font-serif text-primary mb-3">Session details</h3>
+                <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
+                    <div>
+                        <dt className="text-primary/70">Best streak</dt>
+                        <dd className="font-serif text-lg text-primary"><AnimatedNumber value={sessionSummary.best_streak} /></dd>
                     </div>
-                </div>
-            )}
+                    <div>
+                        <dt className="text-primary/70">Hints used</dt>
+                        <dd className="font-serif text-lg text-primary"><AnimatedNumber value={sessionSummary.hints_used} /></dd>
+                    </div>
+                    <div>
+                        <dt className="text-primary/70">Total time</dt>
+                        <dd className="font-serif text-primary">{completionTime}</dd>
+                    </div>
+                    {sessionSummary.completed_at && (
+                        <div>
+                            <dt className="text-primary/70">Completed</dt>
+                            <dd className="font-serif text-primary">{new Date(sessionSummary.completed_at).toLocaleString(LOCALE)}</dd>
+                        </div>
+                    )}
+                    {sessionSummary.session_type && sessionSummary.session_type !== 'standard' && (
+                        <div className="col-span-2">
+                            <dt className="text-primary/70">Session type</dt>
+                            <dd className="font-serif text-primary capitalize">
+                                {sessionSummary.session_type.replace('_', ' ')}
+                                {sessionSummary.target_accuracy && ` (${sessionSummary.target_accuracy}% accuracy)`}
+                                {sessionSummary.target_time_minutes && ` (${sessionSummary.target_time_minutes} minutes)`}
+                            </dd>
+                        </div>
+                    )}
+                </dl>
+
+                {earnedAchievements.length > 0 && (
+                    <div className="mt-4 border-t border-primary/10 pt-4">
+                        <h4 className="text-sm font-serif text-primary mb-2">Achievements earned</h4>
+                        <div className="flex flex-wrap gap-2">
+                            {earnedAchievements.map(achievement => (
+                                <div
+                                    key={achievement.id}
+                                    className="flex items-center bg-primary/10 border border-primary/20 rounded-full px-3 py-1"
+                                    title={achievement.description}
+                                >
+                                    <span className="text-lg mr-2">{achievement.icon}</span>
+                                    <span className="text-sm font-serif text-primary">{achievement.name}</span>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                )}
+            </section>
 
             {/* Closeout actions: Back to Dashboard is the primary ritual close;
                 Start New Session is secondary — do not trap the user in a forced ritual. */}

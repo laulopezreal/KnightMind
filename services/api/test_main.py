@@ -1235,6 +1235,9 @@ def test_check_endpoint_wrong_move(client_with_db, db_session):
     assert body["result"] == "fail"
     assert body["complete"] is False
     assert body["reply"] is None
+    assert "best_move_uci" not in body
+    assert "accept_moves_uci" not in body
+    assert "d2d4" not in str(body)
 
 
 def test_check_endpoint_illegal_move_is_incorrect(client_with_db, db_session):
@@ -1296,7 +1299,8 @@ def test_reveal_endpoint_puzzle_not_found(client_with_db):
 # --- Library list/detail solution gating (dim 13) ---------------------------
 # The Library browse surface must not passively echo the solution: a user could
 # GET the answer and replay it in a scored /due session for a "verified" pass.
-# best_move_uci/accept_moves_uci are omitted unless ?reveal=true is set.
+# best_move_uci/accept_moves_uci are never part of this list contract. Answers
+# are available through the explicit per-puzzle reveal boundary instead.
 
 
 def test_puzzles_list_omits_solution_when_strip_enabled(
@@ -1312,20 +1316,22 @@ def test_puzzles_list_omits_solution_when_strip_enabled(
     puzzles = response.json()["puzzles"]
     assert puzzles
     for p in puzzles:
-        assert p["best_move_uci"] is None
-        assert p["accept_moves_uci"] == []
+        assert "best_move_uci" not in p
+        assert "accept_moves_uci" not in p
+        assert "solution_pv" not in p
 
 
-def test_puzzles_list_reveals_solution_on_demand(client_with_db, db_session):
-    """?reveal=true opts in to the solution (owner asking to see the answer)."""
+def test_puzzles_list_ignores_legacy_reveal_query(client_with_db, db_session):
+    """The old list query cannot bypass the explicit per-puzzle reveal boundary."""
     _create_puzzle(db_session, "p-list-show", "testuser")
     db_session.commit()
 
     response = client_with_db.get("/puzzles/list?username=testuser&reveal=true")
     assert response.status_code == 200
     p = response.json()["puzzles"][0]
-    assert p["best_move_uci"] == "d2d4"
-    assert "d2d4" in p["accept_moves_uci"]
+    assert "best_move_uci" not in p
+    assert "accept_moves_uci" not in p
+    assert "solution_pv" not in p
 
 
 def test_puzzle_detail_omits_solution_when_strip_enabled(
@@ -1339,8 +1345,8 @@ def test_puzzle_detail_omits_solution_when_strip_enabled(
     response = client_with_db.get("/puzzles/p-detail-hide?username=testuser")
     assert response.status_code == 200
     body = response.json()
-    assert body["best_move_uci"] is None
-    assert body["accept_moves_uci"] == []
+    assert "best_move_uci" not in body
+    assert "accept_moves_uci" not in body
 
 
 def test_puzzle_detail_reveals_solution_on_demand(client_with_db, db_session):
@@ -1357,30 +1363,37 @@ def test_puzzle_detail_reveals_solution_on_demand(client_with_db, db_session):
     assert "d2d4" in body["accept_moves_uci"]
 
 
-# --- Additive rollout: strip flag OFF (default) keeps solutions for the old
-#     client-grading frontend (KNIGHTMIND_STRIP_PUZZLE_SOLUTIONS default false) ---
+# --- The Library list stays answerless in every legacy rollout-flag state. ---
 
 
-def test_puzzles_list_includes_solution_by_default(client_with_db, db_session):
-    """Default (strip flag OFF): /puzzles/list ships the solution (old-frontend compat)."""
+@pytest.mark.parametrize("strip_flag", [None, "", "0", "false", "no", "off"])
+def test_puzzles_list_omits_solution_with_false_like_strip_flag(
+    client_with_db, db_session, monkeypatch, strip_flag
+):
+    """Unset and false-like rollout values cannot expose answers on the list."""
+    if strip_flag is None:
+        monkeypatch.delenv("KNIGHTMIND_STRIP_PUZZLE_SOLUTIONS", raising=False)
+    else:
+        monkeypatch.setenv("KNIGHTMIND_STRIP_PUZZLE_SOLUTIONS", strip_flag)
     _create_puzzle(db_session, "p-list-default", "testuser")
     db_session.commit()
     response = client_with_db.get("/puzzles/list?username=testuser")
     assert response.status_code == 200
     p = response.json()["puzzles"][0]
-    assert p["best_move_uci"] == "d2d4"
-    assert "d2d4" in p["accept_moves_uci"]
+    assert "best_move_uci" not in p
+    assert "accept_moves_uci" not in p
+    assert "solution_pv" not in p
 
 
-def test_puzzle_detail_includes_solution_by_default(client_with_db, db_session):
-    """Default (strip flag OFF): /puzzles/{id} ships the solution (old-frontend compat)."""
+def test_puzzle_detail_omits_solution_by_default(client_with_db, db_session):
+    """The no-reveal detail contract is deterministic even with the rollout flag off."""
     _create_puzzle(db_session, "p-detail-default", "testuser")
     db_session.commit()
     response = client_with_db.get("/puzzles/p-detail-default?username=testuser")
     assert response.status_code == 200
     body = response.json()
-    assert body["best_move_uci"] == "d2d4"
-    assert "d2d4" in body["accept_moves_uci"]
+    assert "best_move_uci" not in body
+    assert "accept_moves_uci" not in body
 
 
 def test_due_puzzles_include_solution_by_default(client_with_db, db_session):

@@ -65,6 +65,12 @@ describe('DataStateEmpty', () => {
 
         expect(onAction).toHaveBeenCalledTimes(1);
     });
+
+    it('preserves the base action geometry for non-account empty states', () => {
+        renderEmpty();
+
+        expect(screen.getByRole('button', { name: 'Import games' })).not.toHaveClass('min-h-11');
+    });
 });
 
 describe('DataStateOffline', () => {
