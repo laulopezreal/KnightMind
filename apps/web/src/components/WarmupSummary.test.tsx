@@ -173,6 +173,127 @@ describe('WarmupSummary', () => {
     }
   });
 
+  it.each([
+    ['unavailable', {}],
+    ['throwing', { randomUUID: vi.fn(() => { throw new Error('UUID unavailable'); }) }],
+  ])('fails closed for an existing lifecycle when secure UUID generation becomes %s', (_label, unavailableCrypto) => {
+    const registeredToken = _label === 'unavailable'
+      ? '123e4567-e89b-42d3-a456-426614174001'
+      : '123e4567-e89b-42d3-a456-426614174002';
+    const summary = {
+      ...mockSessionSummary,
+      session_id: `warmup-existing-no-uuid-${_label}`,
+      missed_puzzles: [{
+        puzzle_id: 'p-existing-no-token',
+        display_name: 'Existing safe missed-puzzle detail',
+        cause: 'calculation',
+        cause_label: 'Calculation depth',
+      }],
+    };
+
+    vi.stubGlobal('crypto', { randomUUID: vi.fn(() => registeredToken) });
+    expect(WarmupSummary.createReturnToken('testplayer', summary)).toBe(registeredToken);
+    vi.stubGlobal('crypto', unavailableCrypto);
+
+    try {
+      const retryToken = WarmupSummary.createReturnToken('testplayer', summary);
+      expect(retryToken).toBeNull();
+
+      render(
+        <MemoryRouter>
+          <WarmupSummary sessionSummary={summary} returnToken={retryToken} onContinue={vi.fn()} />
+        </MemoryRouter>,
+      );
+
+      expect(screen.getByText('Existing safe missed-puzzle detail')).toBeInTheDocument();
+      expect(screen.queryByRole('link')).not.toBeInTheDocument();
+      expect(document.body.innerHTML).not.toContain('warmup_return=');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('rejects a malformed UUID without creating a return capability or Review URL', () => {
+    const malformedToken = 'bounded-but-not-a-uuid';
+    vi.stubGlobal('crypto', { randomUUID: vi.fn(() => malformedToken) });
+    try {
+      const summary = {
+        ...mockSessionSummary,
+        session_id: 'warmup-malformed-uuid',
+        missed_puzzles: [{
+          puzzle_id: 'p-malformed',
+          display_name: 'Malformed token puzzle',
+          cause: null,
+          cause_label: null,
+        }],
+      };
+
+      const token = WarmupSummary.createReturnToken('testplayer', summary);
+      expect(token).toBeNull();
+      expect(WarmupSummary.readReturnToken(malformedToken, 'testplayer')).toBeNull();
+
+      render(
+        <MemoryRouter>
+          <WarmupSummary sessionSummary={summary} returnToken={token} onContinue={vi.fn()} />
+        </MemoryRouter>,
+      );
+
+      expect(screen.getByText('Malformed token puzzle')).toBeInTheDocument();
+      expect(screen.queryByRole('link')).not.toBeInTheDocument();
+      expect(document.body.innerHTML).not.toContain('warmup_return=');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('rejects a UUID collision without overwriting the registered capability or creating a Review URL', () => {
+    const collidingToken = '123e4567-e89b-42d3-a456-426614174003';
+    vi.stubGlobal('crypto', { randomUUID: vi.fn(() => collidingToken) });
+    try {
+      const registeredSummary = {
+        ...mockSessionSummary,
+        session_id: 'warmup-collision-original',
+        missed_puzzles: [{
+          puzzle_id: 'p-collision-original',
+          display_name: 'Original collision puzzle',
+          cause: null,
+          cause_label: null,
+        }],
+      };
+      const rejectedSummary = {
+        ...registeredSummary,
+        session_id: 'warmup-collision-rejected',
+        missed_puzzles: [{
+          puzzle_id: 'p-collision-rejected',
+          display_name: 'Rejected collision puzzle',
+          cause: null,
+          cause_label: null,
+        }],
+      };
+
+      expect(WarmupSummary.createReturnToken('testplayer', registeredSummary)).toBe(collidingToken);
+      const rejectedToken = WarmupSummary.createReturnToken('testplayer', rejectedSummary);
+      expect(rejectedToken).toBeNull();
+      expect(WarmupSummary.readReturnToken(collidingToken, 'testplayer')?.summary)
+        .toMatchObject({
+          session_id: 'warmup-collision-original',
+          missed_puzzles: [{ display_name: 'Original collision puzzle' }],
+        });
+
+      render(
+        <MemoryRouter>
+          <WarmupSummary sessionSummary={rejectedSummary} returnToken={rejectedToken} onContinue={vi.fn()} />
+        </MemoryRouter>,
+      );
+
+      expect(screen.getByText('Rejected collision puzzle')).toBeInTheDocument();
+      expect(screen.queryByRole('link')).not.toBeInTheDocument();
+      expect(document.body.innerHTML).not.toContain('warmup_return=');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('mints and registers the secure UUID happy path', () => {
     const secureToken = '123e4567-e89b-42d3-a456-426614174000';
     vi.stubGlobal('crypto', { randomUUID: vi.fn(() => secureToken) });

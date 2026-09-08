@@ -128,7 +128,9 @@ function createToken(): string | null {
   if (typeof crypto === 'undefined' || typeof crypto.randomUUID !== 'function') return null;
   try {
     const token = crypto.randomUUID();
-    return isBoundedString(token, 128) ? token : null;
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(token)
+      ? token
+      : null;
   } catch {
     return null;
   }
@@ -177,15 +179,15 @@ function createWarmupReturnToken(username: string, summary: WarmupReturnSummary)
   const safeSummary = readSummary(summary);
   if (!safeSummary || !hasReviewableMissedPuzzle(safeSummary)) return null;
 
+  const locationState = createWarmupReturnLocationState(username, safeSummary);
+  if (!locationState || warmupReturnRegistry.has(locationState.warmupReturn.token)) return null;
+
   for (const state of warmupReturnRegistry.values()) {
     if (state.username === username && state.summary.session_id === safeSummary.session_id) {
       state.summary = safeSummary;
       return state.token;
     }
   }
-
-  const locationState = createWarmupReturnLocationState(username, safeSummary);
-  if (!locationState) return null;
 
   while (warmupReturnRegistry.size >= WARMUP_RETURN_MAX_ENTRIES) {
     const oldestToken = warmupReturnRegistry.keys().next().value as string | undefined;
