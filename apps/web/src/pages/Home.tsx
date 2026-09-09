@@ -238,13 +238,13 @@ export default function Home() {
       let generationFailed = false;
 
       if (result.games_count === 0 || result.new_games === 0) {
-        setActionStatus('No new games — you\u2019re all caught up!');
+        setActionStatus('No new games. You\u2019re all caught up!');
         setOnboardingPhase('idle');
       } else {
         // Baseline for the "how many puzzles did this actually create?" delta.
         puzzlesBeforeImportRef.current = userStatus?.puzzles_count ?? 0;
         setGeneratedPuzzleCount(null);
-        setActionStatus(`${result.new_games} new game${result.new_games === 1 ? '' : 's'} found — generating puzzles...`);
+        setActionStatus(`${result.new_games} new game${result.new_games === 1 ? '' : 's'} found. Generating puzzles...`);
         setOnboardingPhase('generating');
 
         try {

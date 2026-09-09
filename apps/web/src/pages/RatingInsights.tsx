@@ -355,7 +355,7 @@ export default function RatingInsights() {
             <section className="flex flex-col md:flex-row justify-between items-end gap-6">
                 <PageHeader
                     title="Rating Insights"
-                    subtitle="What moved your rating — tracked automatically from your games."
+                    subtitle="What moved your rating, tracked automatically from your games."
                 />
 
                 <div className="flex flex-wrap gap-4 items-start">
@@ -488,8 +488,8 @@ export default function RatingInsights() {
                             <div>
                                 <h2 className="text-2xl font-serif text-primary mb-2">No {timeControlLabel} games yet</h2>
                                 <p className="text-primary/70 font-sans leading-relaxed">
-                                    Import your Chess.com games — or play a few {timeControlLabel} games and
-                                    import again — and this page will chart your rating and explain what moved it.
+                                    Import your Chess.com games, or play a few {timeControlLabel} games and
+                                    import again. This page will chart your rating and explain what moved it.
                                 </p>
                             </div>
                             <div className="space-y-3">
@@ -501,7 +501,7 @@ export default function RatingInsights() {
                                     Import your games
                                 </button>
                                 <p className="text-xs text-primary/70 font-sans leading-relaxed">
-                                    Your rating is tracked automatically — when you import games, finish a
+                                    Your rating is tracked automatically when you import games, finish a
                                     training session, or visit this page. Nothing to record by hand.
                                 </p>
                             </div>
@@ -543,7 +543,7 @@ export default function RatingInsights() {
                                 )}
                                 {insufficientSample && (
                                     <span className="text-[10px] font-sans text-status-learning">
-                                        Small sample — not enough games in this window to explain the rating change.
+                                        Small sample: not enough games in this window to explain the rating change.
                                     </span>
                                 )}
                                 {data.stats.missing_opponent_rating_games > 0 && (
@@ -569,7 +569,7 @@ export default function RatingInsights() {
                                     label="Net Change"
                                     value={hasWindowRating && data.rating.net_change !== null
                                         ? formatSigned(data.rating.net_change)
-                                        : "—"}
+                                        : "No data"}
                                     sub={
                                         hasWindowRating && data.rating.start !== null && data.rating.end !== null
                                             ? `${data.rating.start} → ${data.rating.end}${estimatedNote}`
@@ -583,20 +583,20 @@ export default function RatingInsights() {
                                     label="Performance"
                                     value={hasGames
                                         ? `${data.stats.wins}W - ${data.stats.draws}D - ${data.stats.losses}L`
-                                        : "—"}
+                                        : "No data"}
                                     sub={`${data.stats.games} games analyzed`}
                                 />
                                 <StatCard
                                     label="Performance vs Expectation"
                                     value={hasGames && data.stats.actual_minus_expected !== null
                                         ? formatSigned(data.stats.actual_minus_expected, 1)
-                                        : "—"}
+                                        : "No data"}
                                     sub="Actual minus expected score"
                                     helper="Positive means you outperformed expectations. Negative means you underperformed."
                                 />
                                 <StatCard
                                     label="Opponent Strength"
-                                    value={hasGames ? (data.stats.avg_opponent_rating?.toString() || "—") : "—"}
+                                    value={hasGames ? (data.stats.avg_opponent_rating?.toString() || "No data") : "No data"}
                                     sub={data.rating.reference_rating > 0
                                         ? `Avg opponent vs your ${data.rating.reference_rating}`
                                         : "Average opponent rating"
@@ -624,7 +624,7 @@ export default function RatingInsights() {
                                     </ul>
                                 ) : (
                                     <p className="text-primary/70 font-sans italic">
-                                        Performance matched expectations — no standout drivers in this window.
+                                        Performance matched expectations. There were no standout drivers in this window.
                                     </p>
                                 )}
                                 <p className="mt-8 text-xs text-primary/70 font-sans italic">
@@ -668,7 +668,7 @@ export default function RatingInsights() {
                                     <div>
                                         <h3 className="text-xl font-serif text-primary mb-3">Game Highlights</h3>
                                         <p className="text-primary/70 font-sans italic">
-                                            All games matched expectations — no significant surprises in this window.
+                                            All games matched expectations. There were no significant surprises in this window.
                                         </p>
                                     </div>
                                 )}

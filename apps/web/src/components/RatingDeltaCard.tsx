@@ -28,7 +28,7 @@ export function RatingDeltaCard({ data, timeControlLabel }: RatingDeltaCardProps
   const points = (data.chart_series ?? data.trajectory ?? []).map((p) => p.rating);
   const trend: 'up' | 'down' = hasDelta && net < 0 ? 'down' : 'up';
 
-  const value = hasDelta ? formatSigned(net) : '—';
+  const value = hasDelta ? formatSigned(net) : 'No data';
   const sub = hasDelta && data.rating.start != null && data.rating.end != null
     ? `${data.rating.start} → ${data.rating.end}`
     : games > 0

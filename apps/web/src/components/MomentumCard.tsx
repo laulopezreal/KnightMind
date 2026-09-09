@@ -87,7 +87,7 @@ export function MomentumCard({ recentForm }: MomentumCardProps) {
         </div>
 
         <p className="text-xs text-primary/70 font-sans italic pt-1">
-          Recall on puzzles you've reviewed — not a chess-skill score.
+          Recall on puzzles you've reviewed, not a chess-skill score.
         </p>
       </div>
     </section>

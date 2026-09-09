@@ -282,7 +282,7 @@ async function renderAndSolveIncorrectly(user: ReturnType<typeof userEvent.setup
     await user.click(screen.getByText('Type Move Manually'));
     await user.type(screen.getByPlaceholderText('e.g. e2e4'), 'e2e4');
     await user.click(screen.getByText('Check Move'));
-    await waitFor(() => expect(screen.getByText('Not this one — take another look.')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('Not this one. Take another look.')).toBeInTheDocument());
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────
@@ -321,7 +321,7 @@ describe('Issue #154: finish button on final puzzle', () => {
 
         await renderAndSolveIncorrectly(user);
         expect(checkPuzzle).toHaveBeenCalledTimes(1);
-        const incorrectOutcome = screen.getByText('Not this one — take another look.');
+        const incorrectOutcome = screen.getByText('Not this one. Take another look.');
 
         fireEvent.click(screen.getByText(controlName));
 

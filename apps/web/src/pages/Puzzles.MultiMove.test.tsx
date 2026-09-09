@@ -308,7 +308,7 @@ describe('Multi-move (full-PV) solve flow', () => {
         );
 
         await playMove(user, 'b1c3');
-        await waitFor(() => expect(screen.getByText('Not this one — take another look.')).toBeInTheDocument());
+        await waitFor(() => expect(screen.getByText('Not this one. Take another look.')).toBeInTheDocument());
     });
 
     it('legacy single-move puzzle completes on the first correct move', async () => {

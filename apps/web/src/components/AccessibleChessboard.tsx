@@ -201,7 +201,7 @@ export function AccessibleChessboard({ onKeyboardMove, moveableSide, ...props }:
                 }
                 if (moveableSide && code[0] !== moveableSide) {
                     const yours = moveableSide === 'w' ? 'White' : 'Black';
-                    setAnnouncement(`That is a ${COLORS[code[0]]} piece — ${yours} to move.`);
+                    setAnnouncement(`That is a ${COLORS[code[0]]} piece. ${yours} to move.`);
                     return;
                 }
                 setSelectedSquare(square);

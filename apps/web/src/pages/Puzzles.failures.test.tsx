@@ -290,7 +290,7 @@ describe('Puzzles — honest failure handling', () => {
         await waitFor(() =>
             expect(screen.getByRole('alert')).toHaveTextContent(/couldn't check that move/i),
         );
-        expect(screen.queryByText('Not this one — take another look.')).not.toBeInTheDocument();
+        expect(screen.queryByText('Not this one. Take another look.')).not.toBeInTheDocument();
         // Still solving: the hint ladder and Reveal are available, and the
         // "Mark as Failed & Try Again" control (which WOULD write a fail) is not.
         expect(screen.getByRole('button', { name: /hint/i })).toBeInTheDocument();
@@ -534,7 +534,7 @@ describe('Puzzles — honest failure handling', () => {
             const checkCallsBeforeRetry = vi.mocked(checkPuzzle).mock.calls.length;
 
             await typeAndCheck(user, 'e2e3');
-            await waitFor(() => expect(screen.getByText('Not this one — take another look.')).toBeInTheDocument());
+            await waitFor(() => expect(screen.getByText('Not this one. Take another look.')).toBeInTheDocument());
 
             await user.click(screen.getByRole('button', { name: /mark as failed/i }));
             await waitFor(() => expect(mockHandleReviewPuzzle).toHaveBeenCalledWith('fail'));
@@ -560,7 +560,7 @@ describe('Puzzles — honest failure handling', () => {
 
             await waitFor(() => expect(mockStartPuzzleTimer).toHaveBeenCalledTimes(1));
             await typeAndCheck(user, 'e2e3');
-            await waitFor(() => expect(screen.getByText('Not this one — take another look.')).toBeInTheDocument());
+            await waitFor(() => expect(screen.getByText('Not this one. Take another look.')).toBeInTheDocument());
 
             await user.click(screen.getByRole('button', { name: /mark as failed/i }));
             expect(mockHandleReviewPuzzle).toHaveBeenCalledWith('fail');
