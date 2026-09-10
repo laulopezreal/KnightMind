@@ -350,6 +350,55 @@ describe('SessionSummaryCard', () => {
     expect(missedHeading.compareDocumentPosition(detailsHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
+  it('places the closeout actions before five full-detail missed puzzles', async () => {
+    const onStartNewSession = vi.fn();
+    const missedPuzzles = Array.from({ length: 5 }, (_, index) => ({
+      puzzle_id: `p-five-${index + 1}`,
+      display_name: `Championship preparation game ${index + 1} · Sicilian Najdorf poisoned pawn · move ${38 + index}`,
+      cause: 'calculation',
+      cause_label: 'Missed the long forcing sequence after overlooking the opponent’s back-rank threat',
+    }));
+
+    render(
+      <MemoryRouter>
+        <SessionSummaryCard
+          sessionSummary={{
+            ...mockSessionSummary,
+            pass_count: 5,
+            fail_count: 5,
+            missed_puzzles: missedPuzzles,
+          }}
+          achievements={mockAchievements}
+          onStartNewSession={onStartNewSession}
+        />
+      </MemoryRouter>
+    );
+
+    const result = screen.getByLabelText('Session result');
+    const closeout = screen.getByRole('group', { name: 'Session closeout actions' });
+    const missedHeading = screen.getByRole('heading', { name: 'Missed puzzles (5)' });
+    const detailsHeading = screen.getByRole('heading', { name: 'Session details' });
+    expect(result.compareDocumentPosition(closeout) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(closeout.compareDocumentPosition(missedHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(closeout.compareDocumentPosition(detailsHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    const reviewLinks = missedPuzzles.map(({ display_name }) => (
+      screen.getByRole('link', { name: `Review ${display_name}` })
+    ));
+    expect(reviewLinks).toHaveLength(5);
+    expect(screen.getByRole('link', { name: 'Review your patterns' })).toBeInTheDocument();
+
+    const dashboardLink = screen.getByRole('link', { name: 'Back to Dashboard' });
+    expect(dashboardLink).toHaveAttribute('href', '/dashboard');
+    expect(dashboardLink).toHaveClass('bg-primary', 'text-bg-primary');
+
+    const startButton = screen.getByRole('button', { name: 'Start New Session' });
+    expect(startButton).toHaveClass('border');
+    expect(startButton).not.toHaveClass('bg-primary');
+    await user.click(startButton);
+    expect(onStartNewSession).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps long puzzle identity and cause text wrapping instead of truncating', () => {
     const longName = 'Championship preparation game · Sicilian Najdorf poisoned pawn · move 38';
     const longCause = 'Missed the long forcing sequence after overlooking the opponent’s back-rank threat';
