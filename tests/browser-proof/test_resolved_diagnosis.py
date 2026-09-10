@@ -29,6 +29,7 @@ import http.server
 import json
 import os
 import pathlib
+import re
 import subprocess
 import sys
 import threading
@@ -415,14 +416,15 @@ def run_test(
     move_input.press("Enter")
     page.wait_for_timeout(600)
 
-    # ── 3. Open the result review and wait for diagnosis ─────────
-    # Next Puzzle stays the surrounding primary action. Diagnosis is deliberately
-    # behind the existing secondary result-review disclosure.
+    # ── 3. Wait for the immediately visible diagnosis ─────────────
+    # Next Puzzle stays the surrounding primary action. The obsolete outer result
+    # disclosure must not hide the primary diagnosis hierarchy.
     review_summary = page.get_by_text(
         "Review your result and any available diagnosis", exact=False
     )
-    review_summary.wait_for(state="visible", timeout=3000)
-    review_summary.click()
+    assert review_summary.count() == 0, (
+        f"{viewport_name}: Obsolete outer result-review disclosure is still present"
+    )
 
     # The diagnosis must appear within 5s after the correct answer.
     # The real production flow: checkPuzzle returns correct → handleCheckAnswer
@@ -454,26 +456,29 @@ def run_test(
     # Heading ("Mistake diagnosis")
     heading = diag.locator('h2, [id="mistake-diagnosis-heading"]')
     assert heading.count() > 0, f"{viewport_name}: Diagnosis heading not found"
+    assert heading.first.is_visible(), f"{viewport_name}: Diagnosis heading is hidden"
     heading_text = heading.first.text_content() or ""
     assert (
         "diagnosis" in heading_text.lower()
     ), f"{viewport_name}: Heading text unexpected: {heading_text!r}"
 
     # Cause ("Loose piece awareness")
-    assert (
-        diag.locator("text=Loose piece awareness").count() > 0
-    ), f"{viewport_name}: Cause label not visible"
+    cause = diag.get_by_text("Loose piece awareness", exact=True)
+    assert cause.count() > 0 and cause.first.is_visible(), (
+        f"{viewport_name}: Cause label not visible"
+    )
 
     # Explanation
-    assert (
-        diag.locator("text=pawn passively").count() > 0
-        or diag.locator("text=central control").count() > 0
-    ), f"{viewport_name}: Explanation text not visible"
+    explanation = diag.get_by_text(re.compile("pawn passively|central control", re.I))
+    assert explanation.count() > 0 and explanation.first.is_visible(), (
+        f"{viewport_name}: Explanation text not visible"
+    )
 
     # Next-time guidance
-    assert (
-        diag.locator("text=Next time").count() > 0
-    ), f"{viewport_name}: 'Next time' recommendation heading not visible"
+    next_time = diag.get_by_text("Next time", exact=True)
+    assert next_time.count() > 0 and next_time.first.is_visible(), (
+        f"{viewport_name}: 'Next time' recommendation heading not visible"
+    )
 
     print(
         "  [OK] Diagnosis heading, cause, explanation, and next-time guidance are visible",
