@@ -112,7 +112,12 @@ function puzzleBoardReducer(state: PuzzleBoardState, action: PuzzleBoardAction):
 
 export default function Puzzles() {
     const { username } = useChessUsername();
-    const { sessionType, targetAccuracy, setTargetAccuracy, targetTimeMinutes, setTargetTimeMinutes } = usePuzzleMode();
+    const { sessionType } = usePuzzleMode();
+    // The shared session hook still accepts future-mode parameters. Standard
+    // ignores both values, so keep neutral defaults here without exposing dead
+    // settings in the UI.
+    const targetAccuracy = 80;
+    const targetTimeMinutes = 10;
     const navigate = useNavigate();
     // Coupled puzzle-board state: always co-updated at puzzle transitions (new
     // puzzle, retry after fail, reveal). useReducer keeps each transition atomic.
@@ -192,7 +197,7 @@ export default function Puzzles() {
     useEffect(() => {
         let current = true;
         setValidatedNormalFocus(null);
-        if (!username || !focusCause || focusPracticeMode || sessionType !== 'standard') {
+        if (!username || !focusCause || focusPracticeMode) {
             setNormalFocusValidationPending(false);
             return () => { current = false; };
         }
@@ -205,7 +210,7 @@ export default function Puzzles() {
             if (current) setNormalFocusValidationPending(false);
         });
         return () => { current = false; };
-    }, [focusCause, focusPracticeMode, sessionType, username]);
+    }, [focusCause, focusPracticeMode, username]);
 
     const effectiveFocusCause = focusPracticeMode ? focusPracticeCause : validatedNormalFocus?.cause ?? null;
 
@@ -741,9 +746,7 @@ export default function Puzzles() {
         (!isNoDueWithoutValidFocusIntent || Boolean(userStatus?.has_new_games) || isGenerating) &&
         !isGenerationEntryEmptyState;
     const { selectedModeLabel, screenReaderModeLabel } = getModeLabels(sessionType);
-    const modeAvailabilityLabel = sessionType === 'standard' ? 'Active' : 'Beta';
     const presentationModeLabel = hasValidFocusPracticeIntent ? 'Focus practice' : selectedModeLabel;
-    const presentationModeAvailabilityLabel = hasValidFocusPracticeIntent ? 'Active' : modeAvailabilityLabel;
     // No `!username` arm: the page returns ConnectAccountEmpty above, so these
     // reasons are only ever read by a signed-in user.
     const startSessionDisabledReason =
@@ -768,9 +771,7 @@ export default function Puzzles() {
                         ? 'Extra practice is available for this focus. The server decides which positions are safe and available.'
                     : userStatus.due_count === 0 && !hasValidFocusPracticeIntent
                         ? 'No puzzles are ready to practise right now. Generate new puzzles to keep training.'
-                        : sessionType !== 'standard'
-                            ? 'Only Standard mode can start sessions for now. Switch mode in the sidebar.'
-                            : null;
+                        : null;
     const generateDisabledReason = isGenerating
             ? 'Puzzle generation is already in progress.'
             : activeSessionId
@@ -1424,11 +1425,8 @@ export default function Puzzles() {
                         </h1>
                         <div className={`${activeSessionId && currentPuzzle ? 'hidden lg:flex' : 'flex'} items-center gap-2 mb-3`}>
                             <span className="text-xs font-sans uppercase tracking-wider px-2 py-1 rounded-sm border border-primary/20 bg-primary/5 text-primary/80">
-                                {presentationModeLabel} {presentationModeAvailabilityLabel}
+                                {presentationModeLabel} Active
                             </span>
-                            {sessionType !== 'standard' && (
-                                <span className="text-xs font-sans text-primary/70">Switch to Standard to start sessions.</span>
-                            )}
                         </div>
                         <p className={`${activeSessionId && currentPuzzle ? 'hidden lg:block' : ''} text-lg text-primary/70 font-sans`}>
                             {hasValidFocusPracticeIntent
@@ -1473,9 +1471,9 @@ export default function Puzzles() {
                             <button
                                 type="button"
                                 onClick={handleStartSession}
-                                disabled={controlsDisabled || !userStatus || userStatus.puzzles_count === 0 || (userStatus.due_count === 0 && !hasValidFocusPracticeIntent) || sessionType !== 'standard'}
+                                disabled={controlsDisabled || !userStatus || userStatus.puzzles_count === 0 || (userStatus.due_count === 0 && !hasValidFocusPracticeIntent)}
                                 title={startSessionDisabledReason ?? 'Start a new training session'}
-                                className={`min-h-11 w-full md:w-auto px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-opacity km-focus-visible ${(controlsDisabled || !userStatus || userStatus.puzzles_count === 0 || (userStatus.due_count === 0 && !hasValidFocusPracticeIntent) || sessionType !== 'standard') ? 'km-interactive-disabled' : 'hover:opacity-90 cursor-pointer'}`}>
+                                className={`min-h-11 w-full md:w-auto px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-opacity km-focus-visible ${(controlsDisabled || !userStatus || userStatus.puzzles_count === 0 || (userStatus.due_count === 0 && !hasValidFocusPracticeIntent)) ? 'km-interactive-disabled' : 'hover:opacity-90 cursor-pointer'}`}>
                                 Start Session
                             </button>
                         )}
@@ -1529,7 +1527,7 @@ export default function Puzzles() {
                                     <strong className="font-medium">Focus practice</strong> gives you extra practice for the selected focus. The server decides whether positions are safe and available.
                                 </p>
                             </div>
-                        ) : validatedNormalFocus && sessionType === 'standard' ? (
+                        ) : validatedNormalFocus ? (
                             <>
                                 {/* Today's Focus trust label: the cause was chosen from the Dashboard
                                     but the session entry gave no visible confirmation. This panel
@@ -1552,49 +1550,12 @@ export default function Puzzles() {
                                     </p>
                                 </div>
                             </>
-                        ) : sessionType === 'standard' ? (
+                        ) : (
                             <div className="p-4 bg-primary/5 border border-primary/20 rounded-sm">
                                 <p className="text-sm text-primary/70 font-sans">
                                     <strong className="font-medium">Standard mode</strong> uses spaced repetition to help you master tactical patterns from your own games.
                                     Complete 5 puzzles per session with immediate feedback on each move.
                                 </p>
-                            </div>
-                        ) : (
-                            <div className="p-4 bg-primary/5 border border-primary/20 rounded-sm">
-                                <p className="text-sm text-primary/70 font-sans mb-3">
-                                    <strong className="font-medium">{sessionType === 'timed' ? 'Timed' : 'Accuracy Goal'} mode</strong> is currently in development.
-                                    Try it out by adjusting the settings, but sessions can only be started in Standard mode for now.
-                                </p>
-                                {sessionType === 'timed' && (
-                                    <div className="flex items-center gap-2">
-                                        <label htmlFor="duration-input" className="text-sm text-primary/70 font-sans">Duration:</label>
-                                        <input
-                                            id="duration-input"
-                                            type="number"
-                                            min="1"
-                                            max="60"
-                                            value={targetTimeMinutes}
-                                            onChange={(e) => setTargetTimeMinutes(Number(e.target.value))}
-                                            className="px-3 py-2 border border-primary/20 rounded-sm bg-bg-primary text-primary w-20"
-                                        />
-                                        <span className="text-sm text-primary/70 font-sans">minutes</span>
-                                    </div>
-                                )}
-                                {sessionType === 'accuracy_goal' && (
-                                    <div className="flex items-center gap-2">
-                                        <label htmlFor="accuracy-input" className="text-sm text-primary/70 font-sans">Target accuracy:</label>
-                                        <input
-                                            id="accuracy-input"
-                                            type="number"
-                                            min="50"
-                                            max="100"
-                                            value={targetAccuracy}
-                                            onChange={(e) => setTargetAccuracy(Number(e.target.value))}
-                                            className="px-3 py-2 border border-primary/20 rounded-sm bg-bg-primary text-primary w-20"
-                                        />
-                                        <span className="text-sm text-primary/70 font-sans">%</span>
-                                    </div>
-                                )}
                             </div>
                         )}
                     </>

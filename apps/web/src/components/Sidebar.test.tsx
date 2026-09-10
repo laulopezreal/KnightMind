@@ -3,8 +3,6 @@ import { render, screen, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import Sidebar from './Sidebar';
 
-const mockSetSessionType = vi.fn();
-const mockSessionType = 'standard';
 let mockPathname = '/';
 
 vi.mock('react-router-dom', () => ({
@@ -14,9 +12,6 @@ vi.mock('react-router-dom', () => ({
   useLocation: () => ({ pathname: mockPathname }),
 }));
 
-vi.mock('../context/PuzzleModeContext', () => ({
-  usePuzzleMode: () => ({ sessionType: mockSessionType, setSessionType: mockSetSessionType }),
-}));
 
 // Mock focus-trap-react to avoid focus-trap issues in jsdom (no layout, so
 // tabbable() sees no visible nodes). Matches Modal.test.tsx.
@@ -140,29 +135,14 @@ describe('Sidebar', () => {
     expect(nav).toBeInTheDocument();
   });
 
-  it('should show puzzle sub-items when on puzzles route', () => {
+  it('does not expose unavailable training modes or a one-item mode submenu', () => {
     mockPathname = '/puzzles';
-    render(<Sidebar />);
-
-    expect(screen.getByText('Standard')).toBeInTheDocument();
-    expect(screen.getByText('Timed')).toBeInTheDocument();
-    expect(screen.getByText('Accuracy Goal')).toBeInTheDocument();
-  });
-
-  it('should not show puzzle sub-items on other routes', () => {
-    mockPathname = '/dashboard';
     render(<Sidebar />);
 
     expect(screen.queryByText('Standard')).not.toBeInTheDocument();
     expect(screen.queryByText('Timed')).not.toBeInTheDocument();
-  });
-
-  it('should call setSessionType when sub-item is clicked', async () => {
-    mockPathname = '/puzzles';
-    render(<Sidebar />);
-
-    await user.click(screen.getByText('Timed'));
-    expect(mockSetSessionType).toHaveBeenCalledWith('timed');
+    expect(screen.queryByText('Accuracy Goal')).not.toBeInTheDocument();
+    expect(screen.queryByText('SOON')).not.toBeInTheDocument();
   });
 
   it('should render KNIGHTMIND branding', () => {
@@ -178,13 +158,6 @@ describe('Sidebar', () => {
     expect(homeLink).toBeInTheDocument();
   });
 
-  it('should give training mode sub-items a 44px touch target', () => {
-    mockPathname = '/puzzles';
-    render(<Sidebar />);
-
-    const standardBtn = screen.getByRole('button', { name: /standard/i });
-    expect(standardBtn).toHaveClass('min-h-11');
-  });
 });
 
 /**

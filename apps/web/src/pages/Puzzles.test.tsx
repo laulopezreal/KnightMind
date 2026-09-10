@@ -287,6 +287,19 @@ describe('Puzzles', () => {
     expect(screen.getByText(/Back to Dashboard/)).toBeInTheDocument();
   });
 
+  it('presents only the usable Standard training flow', async () => {
+    render(<Puzzles />);
+
+    expect(await screen.findByRole('button', { name: 'Start Session' })).toBeEnabled();
+    expect(screen.getByText(/Standard\s+Active/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Timed/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Accuracy Goal/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Switch to Standard/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/currently in development/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/Duration/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/Target accuracy/i)).not.toBeInTheDocument();
+  });
+
   it('should show no-games message when user has no games', async () => {
     mockGetUserStatus.mockResolvedValue({
       games_count: 0,
