@@ -212,8 +212,8 @@ DIAGNOSIS_READY = {
     "primary_motif": "hanging_queen",
     "primary_cause": "loose_piece_awareness",
     "primary_cause_label": "Loose piece awareness",
-    "secondary_causes": [],
-    "secondary_cause_labels": [],
+    "secondary_causes": ["king_safety_blindness"],
+    "secondary_cause_labels": ["King safety blindness"],
     "phase": "middlegame",
     "evidence": [
         {"id": "best.move", "label": "Best move", "value": "e2e4 (forcing)"},
@@ -468,6 +468,15 @@ def run_test(
         f"{viewport_name}: Cause label not visible"
     )
 
+    # A representative secondary cause is part of the immediate diagnosis hierarchy,
+    # before the user activates the collapsed Technical details disclosure.
+    secondary_cause = diag.locator("span").filter(
+        has_text=re.compile(r"^King safety blindness$")
+    )
+    assert secondary_cause.count() > 0 and secondary_cause.first.is_visible(), (
+        f"{viewport_name}: Secondary cause label not immediately visible"
+    )
+
     # Explanation
     explanation = diag.get_by_text(re.compile("pawn passively|central control", re.I))
     assert explanation.count() > 0 and explanation.first.is_visible(), (
@@ -481,7 +490,7 @@ def run_test(
     )
 
     print(
-        "  [OK] Diagnosis heading, cause, explanation, and next-time guidance are visible",
+        "  [OK] Diagnosis heading, primary and secondary causes, explanation, and next-time guidance are visible",
         flush=True,
     )
 
