@@ -254,10 +254,12 @@ describe('Puzzles — honest failure handling', () => {
             puzzle_id: 'p1',
             primary_cause: 'loose_piece_awareness',
             primary_cause_label: 'Loose piece awareness',
-            secondary_causes: [],
-            secondary_cause_labels: [],
+            secondary_causes: ['calculation_gap'],
+            secondary_cause_labels: ['Calculation gap'],
             evidence: [{ id: 'best.move', label: 'Best move', value: 'Qxd5' }],
             evidence_withheld: false,
+            explanation: 'The loose piece was left undefended before the tactic landed.',
+            training_recommendation: 'Scan every attacked and undefended piece before committing.',
             cause_options: [
                 { value: 'loose_piece_awareness', label: 'Loose piece awareness' },
                 { value: 'king_safety_blindness', label: 'King safety blindness' },
@@ -360,7 +362,7 @@ describe('Puzzles — honest failure handling', () => {
         expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     });
 
-    it('summarises a server-verified solve before the secondary review disclosure', async () => {
+    it('summarises a server-verified solve before the secondary puzzle record disclosure', async () => {
         const user = userEvent.setup();
         render(<Puzzles />);
 
@@ -368,22 +370,36 @@ describe('Puzzles — honest failure handling', () => {
 
         const summary = await screen.findByText('You found the server-verified move without revealing the solution.');
         const nextPuzzle = screen.getByRole('button', { name: /next puzzle/i });
-        const disclosure = screen.getByText(/review your result and any available diagnosis/i).closest('details');
+        const disclosure = screen.getByText('Puzzle record').closest('details');
         expect(summary).toBeVisible();
         expect(disclosure).not.toHaveAttribute('open');
         expect(nextPuzzle.compareDocumentPosition(disclosure!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+        expect(screen.queryByText(/review your result and any available diagnosis/i)).not.toBeInTheDocument();
     });
 
-    it('summarises an explicit reveal without exposing diagnosis outside the collapsed review', async () => {
+    it('withholds diagnosis until reveal, then shows primary guidance without an outer disclosure', async () => {
         const user = userEvent.setup();
         render(<Puzzles />);
+
+        expect(screen.queryByTestId('post-resolution-diagnosis')).not.toBeInTheDocument();
+        expect(screen.queryByText('Loose piece awareness')).not.toBeInTheDocument();
+        expect(screen.queryByText('Qxd5')).not.toBeInTheDocument();
 
         await user.click(screen.getByRole('button', { name: /reveal/i }));
 
         expect(await screen.findByText('You chose to reveal the server-provided solution.')).toBeVisible();
-        const disclosure = screen.getByText(/review your result and any available diagnosis/i).closest('details');
-        expect(disclosure).not.toHaveAttribute('open');
-        expect(screen.getByTestId('post-resolution-diagnosis')).not.toBeVisible();
+        const diagnosis = await screen.findByTestId('post-resolution-diagnosis');
+        expect(diagnosis).toBeVisible();
+        expect(screen.getByText('Loose piece awareness')).toBeVisible();
+        expect(screen.getByText('The loose piece was left undefended before the tactic landed.')).toBeVisible();
+        expect(screen.getByText('Next time')).toBeVisible();
+        expect(screen.getByText('Scan every attacked and undefended piece before committing.')).toBeVisible();
+        expect(screen.getByText('Calculation gap')).toBeVisible();
+        expect(screen.queryByText(/review your result and any available diagnosis/i)).not.toBeInTheDocument();
+
+        const technicalDetails = screen.getByText('Technical details').closest('details');
+        expect(technicalDetails).not.toHaveAttribute('open');
+        expect(screen.getByText('Qxd5')).not.toBeVisible();
     });
 
     describe('a solve is recorded at the solve, not at move-on', () => {
@@ -943,7 +959,7 @@ describe('Puzzles — honest failure handling', () => {
             expect(screen.queryByRole('alert')).not.toBeInTheDocument();
         });
 
-        it('keeps the primary move-on action ahead of collapsed diagnosis detail', async () => {
+        it('keeps the primary move-on action ahead of immediately visible diagnosis guidance', async () => {
             const user = userEvent.setup();
             render(<Puzzles />);
 
@@ -951,16 +967,13 @@ describe('Puzzles — honest failure handling', () => {
 
             const diagnosis = await screen.findByTestId('post-resolution-diagnosis');
             const nextPuzzle = screen.getByRole('button', { name: /next puzzle/i });
-            const disclosure = screen.getByText(/review your result and any available diagnosis/i).closest('details');
-            expect(diagnosis).toHaveClass('min-w-0');
-            expect(nextPuzzle).toHaveClass('w-full');
-            expect(nextPuzzle.compareDocumentPosition(disclosure!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-            expect(disclosure).not.toHaveAttribute('open');
-            expect(diagnosis).not.toBeVisible();
-
-            await user.click(screen.getByText(/review your result and any available diagnosis/i));
-            expect(disclosure).toHaveAttribute('open');
             expect(diagnosis).toBeVisible();
+            expect(screen.getByText('The loose piece was left undefended before the tactic landed.')).toBeVisible();
+            expect(nextPuzzle.compareDocumentPosition(diagnosis) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+            expect(screen.queryByText(/review your result and any available diagnosis/i)).not.toBeInTheDocument();
+
+            const technicalDetails = screen.getByText('Technical details').closest('details');
+            expect(technicalDetails).not.toHaveAttribute('open');
         });
 
         it('confirms a ready diagnosis after persistence without blocking move-on', async () => {
