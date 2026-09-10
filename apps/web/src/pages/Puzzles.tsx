@@ -755,7 +755,7 @@ export default function Puzzles() {
                 // Post-summary the old branch fell through to "Please wait for
                 // the current task to finish" — there is no task; the session
                 // is done and the summary card below has the real CTA.
-                ? 'Session finished — your summary is below.'
+                ? 'Session finished. Your summary is below.'
             : controlsDisabled
                 ? 'Please wait for the current task to finish.'
                 : !userStatus
@@ -1042,7 +1042,7 @@ export default function Puzzles() {
             console.error('Failed to check move:', err);
             setGame(new Chess(fenBefore));
             setUserMove('');
-            setActionError("We couldn't check that move — your attempt wasn't recorded. Check your connection and try again.");
+            setActionError("We couldn't check that move. Your attempt wasn't recorded. Check your connection and try again.");
         } finally {
             if (checkingPuzzleRef.current === checkOwner) {
                 checkingPuzzleRef.current = null;
@@ -1090,7 +1090,7 @@ export default function Puzzles() {
         // charging the user for a request that never landed. Same guard the
         // hint ladder already applies at rung 1.
         if (!bestMove) {
-            setActionError("We couldn't load the solution — you're still on this puzzle. Check your connection and try again.");
+            setActionError("We couldn't load the solution. You're still on this puzzle. Check your connection and try again.");
             return;
         }
         setStatus('revealed');
@@ -1171,7 +1171,7 @@ export default function Puzzles() {
                 // try the ladder rather than stranding the user. But say so --
                 // a silent no-op reads as a dead button on flaky connections.
                 setMotifHintAsked(false);
-                setActionError("We couldn't fetch that hint — check your connection and tap Hint again.");
+                setActionError("We couldn't fetch that hint. Check your connection and tap Hint again.");
                 return;
             }
         }
@@ -1352,7 +1352,7 @@ export default function Puzzles() {
             // puzzle, baked the loss into the summary). Stay put and let the
             // user press again — the idempotency key makes the retry safe.
             if (!recorded) {
-                setActionError("We couldn't save that result — you're still on this puzzle. Check your connection and try again.");
+                setActionError("We couldn't save that result. You're still on this puzzle. Check your connection and try again.");
                 return;
             }
 
@@ -2096,7 +2096,7 @@ export default function Puzzles() {
                                         Look for a {formatMotifName(motifHint).toLowerCase()}.
                                     </p>
                                     : linePlyIndex > 0
-                                        ? <p className="text-positive font-serif text-lg italic">Good move — now find the next move in the line.</p>
+                                        ? <p className="text-positive font-serif text-lg italic">Good move. Now find the next move in the line.</p>
                                         : <p className="text-primary/70 font-serif text-lg italic">Find the best move...</p>
                             )}
                             {status === 'solving' && clue.clueStage === 1 && (
@@ -2124,7 +2124,7 @@ export default function Puzzles() {
                             )}
                             {status === 'incorrect' && (
                                 <div className="text-center">
-                                    <p className="text-negative font-serif text-2xl animate-teedin">Not this one — take another look.</p>
+                                    <p className="text-negative font-serif text-2xl animate-teedin">Not this one. Take another look.</p>
                                     <p className="text-primary/70 font-sans text-sm mt-2 animate-teedin">
                                         Nothing has been recorded yet. Try again, or record the failure before seeing the solution.
                                     </p>
@@ -2244,7 +2244,7 @@ export default function Puzzles() {
                                     {sessionState === 'completed' ? (
                                         sessionSummary ? (
                                             <p className="text-center text-primary/70 font-sans text-sm py-4">
-                                                Session complete — see your summary below.
+                                                Session complete. See your summary below.
                                             </p>
                                         ) : (
                                             <Link
@@ -2331,7 +2331,7 @@ export default function Puzzles() {
                                                 setActionError(null);
                                                 if (!await recordPuzzleOutcome('fail')) {
                                                     outcomeWriteRef.current = null;
-                                                    setActionError("We couldn't save that result — nothing was recorded. Check your connection and try again.");
+                                                    setActionError("We couldn't save that result. Nothing was recorded. Check your connection and try again.");
                                                     return;
                                                 }
                                                 beginFreshExposureAfterPersistedFail();
@@ -2378,7 +2378,7 @@ export default function Puzzles() {
                                                         recorded = await recordPuzzleOutcome('fail', undefined, true);
                                                     }
                                                     if (!recorded) {
-                                                        setActionError("We couldn't save that result — the session is still open. Check your connection and try again.");
+                                                        setActionError("We couldn't save that result. The session is still open. Check your connection and try again.");
                                                         return;
                                                     }
                                                     // Finishing the final puzzle (as a fail) ends the session.

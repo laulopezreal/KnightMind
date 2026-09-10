@@ -223,8 +223,108 @@ describe('SessionSummaryCard', () => {
     expect(screen.getByText(/missed puzzle/i)).toBeInTheDocument();
     expect(screen.getByText('12 Mar · Sicilian · move 18')).toBeInTheDocument();
     expect(screen.getByText('King safety blindness')).toBeInTheDocument();
-    const reviewLink = screen.getByRole('link', { name: /review/i });
+    const reviewLink = screen.getByRole('link', { name: 'Review 12 Mar · Sicilian · move 18' });
     expect(reviewLink).toHaveAttribute('href', '/library/p-abc?from=session');
+  });
+
+  it('hands a diagnosed miss off to Insights after the learning context', () => {
+    const summary = {
+      ...mockSessionSummary,
+      missed_puzzles: [
+        {
+          puzzle_id: 'p-pattern',
+          display_name: 'Critical moment',
+          cause: '  king_safety_blindness  ',
+          cause_label: '  King safety blindness  ',
+        },
+        {
+          puzzle_id: 'p-undiagnosed',
+          display_name: 'Later miss',
+          cause: null,
+          cause_label: null,
+        },
+      ],
+    };
+
+    render(
+      <MemoryRouter>
+        <SessionSummaryCard
+          sessionSummary={summary}
+          achievements={[]}
+          onStartNewSession={vi.fn()}
+        />
+      </MemoryRouter>
+    );
+
+    const patternLinks = screen.getAllByRole('link', { name: 'Review your patterns' });
+    expect(patternLinks).toHaveLength(1);
+    expect(patternLinks[0]).toHaveAttribute('href', '/insights');
+    expect(patternLinks[0]).toHaveClass('inline-flex', 'min-h-11', 'km-focus-visible');
+
+    const missedList = screen.getByRole('list', { name: 'Missed puzzles' });
+    const detailsHeading = screen.getByRole('heading', { name: 'Session details' });
+    expect(missedList.compareDocumentPosition(patternLinks[0]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(patternLinks[0].compareDocumentPosition(detailsHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    const dashboardLink = screen.getByRole('link', { name: 'Back to Dashboard' });
+    expect(dashboardLink).toHaveClass('bg-primary', 'text-bg-primary');
+    expect(patternLinks[0]).not.toHaveClass('bg-primary', 'text-bg-primary');
+  });
+
+  it.each([
+    ['missing cause', null, 'Diagnosed label'],
+    ['empty cause', '', 'Diagnosed label'],
+    ['whitespace-only cause', '   ', 'Diagnosed label'],
+    ['missing cause label', 'calculation', null],
+    ['empty cause label', 'calculation', ''],
+    ['whitespace-only cause label', 'calculation', '   '],
+  ])('does not offer pattern review for a miss with %s', (_case, cause, causeLabel) => {
+    render(
+      <MemoryRouter>
+        <SessionSummaryCard
+          sessionSummary={{
+            ...mockSessionSummary,
+            missed_puzzles: [
+              { puzzle_id: 'p-no-pattern', display_name: 'Critical moment', cause, cause_label: causeLabel },
+            ],
+          }}
+          achievements={[]}
+          onStartNewSession={vi.fn()}
+        />
+      </MemoryRouter>
+    );
+
+    expect(screen.queryByRole('link', { name: 'Review your patterns' })).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Review Critical moment' })).toHaveAttribute(
+      'href',
+      '/library/p-no-pattern?from=session',
+    );
+  });
+
+  it('does not offer pattern review for an empty session', () => {
+    render(
+      <MemoryRouter>
+        <SessionSummaryCard
+          sessionSummary={{
+            ...mockSessionSummary,
+            pass_count: 0,
+            fail_count: 0,
+            missed_puzzles: [
+              {
+                puzzle_id: 'p-stale',
+                display_name: 'Stale miss',
+                cause: 'calculation',
+                cause_label: 'Calculation',
+              },
+            ],
+          }}
+          achievements={[]}
+          onStartNewSession={vi.fn()}
+        />
+      </MemoryRouter>
+    );
+
+    expect(screen.queryByRole('link', { name: 'Review your patterns' })).not.toBeInTheDocument();
   });
 
   it('puts missed-puzzle learning before supporting session details', () => {

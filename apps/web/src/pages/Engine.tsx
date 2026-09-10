@@ -50,7 +50,7 @@ export default function Engine() {
   // Seeded from a bad `?fen=` deep link so the fallback to the start position
   // is explained rather than silently substituted.
   const [fenError, setFenError] = useState<string | null>(
-    initialFen.invalid ? 'That link carried an invalid FEN — showing the starting position instead.' : null
+    initialFen.invalid ? 'That link carried an invalid FEN, so the starting position is shown instead.' : null
   );
   const [evaluationError, setEvaluationError] = useState<string | null>(null);
   const [engineAvailable, setEngineAvailable] = useState<boolean | null>(null);

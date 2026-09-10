@@ -112,7 +112,7 @@ export function TimeControlOverview({ username, active, onSelect }: TimeControlO
                                 <div className="h-8 w-16 bg-primary/10 rounded-sm animate-pulse" aria-hidden="true" />
                             ) : (
                                 <span className="text-2xl font-serif text-primary leading-none">
-                                    {latest ?? '—'}
+                                    {latest ?? 'No data'}
                                 </span>
                             )}
                             {points.length >= 2 && (

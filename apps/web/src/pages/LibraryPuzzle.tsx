@@ -355,7 +355,7 @@ export default function LibraryPuzzle() {
             console.error('Failed to check move:', err);
             if (rollbackFen) setGame(new Chess(rollbackFen));
             setStatus('solving');
-            setActionError("We couldn't check that move — your attempt wasn't recorded. Check your connection and try again.");
+            setActionError("We couldn't check that move. Your attempt wasn't recorded. Check your connection and try again.");
         } finally {
             if (checkRequestRef.current === requestToken) {
                 checkRequestRef.current = null;
@@ -423,7 +423,7 @@ export default function LibraryPuzzle() {
                 solveGenerationRef.current !== generation
             ) return;
             console.error('Failed to reveal solution:', err);
-            setActionError("We couldn't load the solution — you're still on this puzzle. Check your connection and try again.");
+            setActionError("We couldn't load the solution. You're still on this puzzle. Check your connection and try again.");
         } finally {
             if (revealRequestRef.current === requestToken) {
                 revealRequestRef.current = null;
@@ -534,7 +534,7 @@ export default function LibraryPuzzle() {
                     {puzzle.display_name}
                 </h1>
                 <p className="mt-2 text-xs md:text-sm font-sans text-primary/70">
-                    Exploration mode — the solution is shown on request and results here
+                    Exploration mode. The solution is shown on request and results here
                     are not counted as verified training. For a scored session, use{' '}
                     <Link to="/puzzles" className="km-inline-link km-focus-visible text-primary">
                         Train

@@ -57,7 +57,7 @@ function RouteErrorFallback({ error, reset, pathname }: RouteErrorFallbackProps)
           lower leaves the document with no top-level heading. */}
       <h1 className="text-2xl font-serif text-primary mb-3">This page didn’t load</h1>
       <p className="text-primary/70 font-sans text-sm mb-6">
-        The rest of KnightMind still works — pick another page from the menu, or try again.
+        The rest of KnightMind still works. Pick another page from the menu, or try again.
       </p>
       <div className="flex flex-wrap gap-3 justify-center">
         <button

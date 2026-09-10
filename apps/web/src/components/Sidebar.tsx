@@ -54,7 +54,7 @@ const SubNavItem = ({
         // `title` never surfaces on touch and is inconsistent for keyboard users,
         // so it can't be the only place the mode is explained — the sr-only
         // description below carries it into the accessible name.
-        aria-label={tooltip ? `${label} — ${tooltip}` : undefined}
+        aria-label={tooltip ? `${label}. ${tooltip}` : undefined}
         // whitespace-nowrap: "Accuracy Goal" wrapped to two lines in the narrow
         // sub-nav column, leaving the badge floating beside a ragged label.
         // `font-sans` is stated here rather than inherited from the parent
