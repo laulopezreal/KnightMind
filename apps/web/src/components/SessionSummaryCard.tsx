@@ -83,6 +83,23 @@ export function SessionSummaryCard({
                 </div>
             </div>
 
+            {/* Closeout actions: Back to Dashboard is the primary ritual close;
+                Start New Session is secondary. Do not trap the user in a forced ritual. */}
+            <div role="group" aria-label="Session closeout actions" className="mb-6">
+                <Link
+                    to="/dashboard"
+                    className="w-full block text-center px-6 py-3 bg-primary text-bg-primary rounded-sm font-serif transition-opacity hover:opacity-90 km-focus-visible"
+                >
+                    Back to Dashboard
+                </Link>
+                <button
+                    type="button"
+                    onClick={onStartNewSession}
+                    className="w-full mt-3 px-6 py-3 border border-primary/20 text-primary rounded-sm font-serif transition-all hover:bg-primary hover:text-bg-primary hover:border-transparent km-focus-visible cursor-pointer">
+                    Start New Session
+                </button>
+            </div>
+
             {/* Missed Puzzles: teach, not just count */}
             {hasMissed && (
                 <section className="mb-6 border-y border-primary/10 py-5" aria-labelledby="missed-puzzles-heading">
@@ -187,20 +204,6 @@ export function SessionSummaryCard({
                 )}
             </section>
 
-            {/* Closeout actions: Back to Dashboard is the primary ritual close;
-                Start New Session is secondary. Do not trap the user in a forced ritual. */}
-            <Link
-                to="/dashboard"
-                className="w-full block text-center px-6 py-3 bg-primary text-bg-primary rounded-sm font-serif transition-opacity hover:opacity-90 km-focus-visible"
-            >
-                Back to Dashboard
-            </Link>
-            <button
-                type="button"
-                onClick={onStartNewSession}
-                className="w-full mt-3 px-6 py-3 border border-primary/20 text-primary rounded-sm font-serif transition-all hover:bg-primary hover:text-bg-primary hover:border-transparent km-focus-visible cursor-pointer">
-                Start New Session
-            </button>
         </section>
     );
 }
