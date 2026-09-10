@@ -2233,46 +2233,44 @@ export default function Puzzles() {
                                         </button>
                                     )}
 
-                                    {(currentPuzzle?.attempts !== undefined || activeDiagnosis || diagnosisLoading) && (
+                                    {currentPuzzle?.attempts !== undefined && (
                                         <details key={currentPuzzle.id} className="group border-t border-primary/10 pt-1">
                                             <summary className="min-h-[44px] cursor-pointer list-none flex items-center justify-between gap-3 rounded-sm px-2 text-sm font-serif text-primary/70 transition-colors hover:text-primary km-focus-visible">
-                                                <span>Review your result and any available diagnosis to see what may help next.</span>
+                                                <span>Puzzle record</span>
                                                 <span aria-hidden="true" className="text-base transition-transform group-open:rotate-45">＋</span>
                                             </summary>
-                                            <div className="pt-2 space-y-3">
-                                                {currentPuzzle?.attempts !== undefined && (
-                                                    <div className="bg-primary/5 p-3 rounded-sm text-sm">
-                                                        <div className="flex justify-between gap-3">
-                                                            <span className="text-primary/70">Puzzle record</span>
+                                            <div className="pt-2">
+                                                <div className="bg-primary/5 p-3 rounded-sm text-sm">
+                                                    <div className="flex justify-between gap-3">
+                                                        <span className="text-primary/70">Passed reviews</span>
+                                                        <span className="font-mono">
+                                                            {currentPuzzle.pass_count || 0}/{currentPuzzle.attempts || 0}
+                                                            {currentPuzzle.attempts ? ` (${Math.round(((currentPuzzle.pass_count || 0) / currentPuzzle.attempts) * 100)}%)` : ''}
+                                                        </span>
+                                                    </div>
+                                                    {currentPuzzle.next_due_at && (
+                                                        <div className="flex justify-between gap-3 mt-1">
+                                                            <span className="text-primary/70">Next review</span>
                                                             <span className="font-mono">
-                                                                {currentPuzzle.pass_count || 0}/{currentPuzzle.attempts || 0}
-                                                                {currentPuzzle.attempts ? ` (${Math.round(((currentPuzzle.pass_count || 0) / currentPuzzle.attempts) * 100)}%)` : ''}
+                                                                {new Date(currentPuzzle.next_due_at).toLocaleDateString(LOCALE)}
                                                             </span>
                                                         </div>
-                                                        {currentPuzzle.next_due_at && (
-                                                            <div className="flex justify-between gap-3 mt-1">
-                                                                <span className="text-primary/70">Next review</span>
-                                                                <span className="font-mono">
-                                                                    {new Date(currentPuzzle.next_due_at).toLocaleDateString(LOCALE)}
-                                                                </span>
-                                                            </div>
-                                                        )}
-                                                    </div>
-                                                )}
-                                                {(activeDiagnosis || diagnosisLoading) && (
-                                                    <div data-testid="post-resolution-diagnosis" className="min-w-0">
-                                                        <MistakeDiagnosisCard
-                                                            diagnosis={activeDiagnosis}
-                                                            revealed
-                                                            loading={diagnosisLoading}
-                                                            savingConfirmation={diagnosisConfirmationSaving}
-                                                            confirmationError={activeDiagnosisConfirmationError}
-                                                            onConfirm={confirmResolvedDiagnosis}
-                                                        />
-                                                    </div>
-                                                )}
+                                                    )}
+                                                </div>
                                             </div>
                                         </details>
+                                    )}
+                                    {(activeDiagnosis || diagnosisLoading) && (
+                                        <div data-testid="post-resolution-diagnosis" className="min-w-0">
+                                            <MistakeDiagnosisCard
+                                                diagnosis={activeDiagnosis}
+                                                revealed
+                                                loading={diagnosisLoading}
+                                                savingConfirmation={diagnosisConfirmationSaving}
+                                                confirmationError={activeDiagnosisConfirmationError}
+                                                onConfirm={confirmResolvedDiagnosis}
+                                            />
+                                        </div>
                                     )}
                                 </div>
                             )}
