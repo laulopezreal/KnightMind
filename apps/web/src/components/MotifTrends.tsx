@@ -151,7 +151,7 @@ export function MotifTrends({ trends, windowDays }: MotifTrendsProps) {
                             {trend.insufficient_data ? (
                                 <p
                                     className="text-xs font-sans text-primary/70"
-                                    title={`Only ${trend.total_reviews} review${trend.total_reviews === 1 ? '' : 's'} in this window — too few to show a trend.`}
+                                    title={`Only ${trend.total_reviews} review${trend.total_reviews === 1 ? '' : 's'} in this window. Too few to show a trend.`}
                                 >
                                     → Limited data
                                 </p>

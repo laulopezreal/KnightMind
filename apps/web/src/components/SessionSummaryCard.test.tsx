@@ -223,8 +223,108 @@ describe('SessionSummaryCard', () => {
     expect(screen.getByText(/missed puzzle/i)).toBeInTheDocument();
     expect(screen.getByText('12 Mar · Sicilian · move 18')).toBeInTheDocument();
     expect(screen.getByText('King safety blindness')).toBeInTheDocument();
-    const reviewLink = screen.getByRole('link', { name: /review/i });
+    const reviewLink = screen.getByRole('link', { name: 'Review 12 Mar · Sicilian · move 18' });
     expect(reviewLink).toHaveAttribute('href', '/library/p-abc?from=session');
+  });
+
+  it('hands a diagnosed miss off to Insights after the learning context', () => {
+    const summary = {
+      ...mockSessionSummary,
+      missed_puzzles: [
+        {
+          puzzle_id: 'p-pattern',
+          display_name: 'Critical moment',
+          cause: '  king_safety_blindness  ',
+          cause_label: '  King safety blindness  ',
+        },
+        {
+          puzzle_id: 'p-undiagnosed',
+          display_name: 'Later miss',
+          cause: null,
+          cause_label: null,
+        },
+      ],
+    };
+
+    render(
+      <MemoryRouter>
+        <SessionSummaryCard
+          sessionSummary={summary}
+          achievements={[]}
+          onStartNewSession={vi.fn()}
+        />
+      </MemoryRouter>
+    );
+
+    const patternLinks = screen.getAllByRole('link', { name: 'Review your patterns' });
+    expect(patternLinks).toHaveLength(1);
+    expect(patternLinks[0]).toHaveAttribute('href', '/insights');
+    expect(patternLinks[0]).toHaveClass('inline-flex', 'min-h-11', 'km-focus-visible');
+
+    const missedList = screen.getByRole('list', { name: 'Missed puzzles' });
+    const detailsHeading = screen.getByRole('heading', { name: 'Session details' });
+    expect(missedList.compareDocumentPosition(patternLinks[0]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(patternLinks[0].compareDocumentPosition(detailsHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    const dashboardLink = screen.getByRole('link', { name: 'Back to Dashboard' });
+    expect(dashboardLink).toHaveClass('bg-primary', 'text-bg-primary');
+    expect(patternLinks[0]).not.toHaveClass('bg-primary', 'text-bg-primary');
+  });
+
+  it.each([
+    ['missing cause', null, 'Diagnosed label'],
+    ['empty cause', '', 'Diagnosed label'],
+    ['whitespace-only cause', '   ', 'Diagnosed label'],
+    ['missing cause label', 'calculation', null],
+    ['empty cause label', 'calculation', ''],
+    ['whitespace-only cause label', 'calculation', '   '],
+  ])('does not offer pattern review for a miss with %s', (_case, cause, causeLabel) => {
+    render(
+      <MemoryRouter>
+        <SessionSummaryCard
+          sessionSummary={{
+            ...mockSessionSummary,
+            missed_puzzles: [
+              { puzzle_id: 'p-no-pattern', display_name: 'Critical moment', cause, cause_label: causeLabel },
+            ],
+          }}
+          achievements={[]}
+          onStartNewSession={vi.fn()}
+        />
+      </MemoryRouter>
+    );
+
+    expect(screen.queryByRole('link', { name: 'Review your patterns' })).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Review Critical moment' })).toHaveAttribute(
+      'href',
+      '/library/p-no-pattern?from=session',
+    );
+  });
+
+  it('does not offer pattern review for an empty session', () => {
+    render(
+      <MemoryRouter>
+        <SessionSummaryCard
+          sessionSummary={{
+            ...mockSessionSummary,
+            pass_count: 0,
+            fail_count: 0,
+            missed_puzzles: [
+              {
+                puzzle_id: 'p-stale',
+                display_name: 'Stale miss',
+                cause: 'calculation',
+                cause_label: 'Calculation',
+              },
+            ],
+          }}
+          achievements={[]}
+          onStartNewSession={vi.fn()}
+        />
+      </MemoryRouter>
+    );
+
+    expect(screen.queryByRole('link', { name: 'Review your patterns' })).not.toBeInTheDocument();
   });
 
   it('puts missed-puzzle learning before supporting session details', () => {
@@ -248,6 +348,55 @@ describe('SessionSummaryCard', () => {
     const missedHeading = screen.getByRole('heading', { name: 'Missed puzzle' });
     const detailsHeading = screen.getByRole('heading', { name: 'Session details' });
     expect(missedHeading.compareDocumentPosition(detailsHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('places the closeout actions before five full-detail missed puzzles', async () => {
+    const onStartNewSession = vi.fn();
+    const missedPuzzles = Array.from({ length: 5 }, (_, index) => ({
+      puzzle_id: `p-five-${index + 1}`,
+      display_name: `Championship preparation game ${index + 1} · Sicilian Najdorf poisoned pawn · move ${38 + index}`,
+      cause: 'calculation',
+      cause_label: 'Missed the long forcing sequence after overlooking the opponent’s back-rank threat',
+    }));
+
+    render(
+      <MemoryRouter>
+        <SessionSummaryCard
+          sessionSummary={{
+            ...mockSessionSummary,
+            pass_count: 5,
+            fail_count: 5,
+            missed_puzzles: missedPuzzles,
+          }}
+          achievements={mockAchievements}
+          onStartNewSession={onStartNewSession}
+        />
+      </MemoryRouter>
+    );
+
+    const result = screen.getByLabelText('Session result');
+    const closeout = screen.getByRole('group', { name: 'Session closeout actions' });
+    const missedHeading = screen.getByRole('heading', { name: 'Missed puzzles (5)' });
+    const detailsHeading = screen.getByRole('heading', { name: 'Session details' });
+    expect(result.compareDocumentPosition(closeout) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(closeout.compareDocumentPosition(missedHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(closeout.compareDocumentPosition(detailsHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    const reviewLinks = missedPuzzles.map(({ display_name }) => (
+      screen.getByRole('link', { name: `Review ${display_name}` })
+    ));
+    expect(reviewLinks).toHaveLength(5);
+    expect(screen.getByRole('link', { name: 'Review your patterns' })).toBeInTheDocument();
+
+    const dashboardLink = screen.getByRole('link', { name: 'Back to Dashboard' });
+    expect(dashboardLink).toHaveAttribute('href', '/dashboard');
+    expect(dashboardLink).toHaveClass('bg-primary', 'text-bg-primary');
+
+    const startButton = screen.getByRole('button', { name: 'Start New Session' });
+    expect(startButton).toHaveClass('border');
+    expect(startButton).not.toHaveClass('bg-primary');
+    await user.click(startButton);
+    expect(onStartNewSession).toHaveBeenCalledTimes(1);
   });
 
   it('keeps long puzzle identity and cause text wrapping instead of truncating', () => {

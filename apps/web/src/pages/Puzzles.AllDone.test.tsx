@@ -282,7 +282,7 @@ async function renderAndSolveIncorrectly(user: ReturnType<typeof userEvent.setup
     await user.click(screen.getByText('Type Move Manually'));
     await user.type(screen.getByPlaceholderText('e.g. e2e4'), 'e2e4');
     await user.click(screen.getByText('Check Move'));
-    await waitFor(() => expect(screen.getByText('Not this one — take another look.')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('Not this one. Take another look.')).toBeInTheDocument());
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────
@@ -293,7 +293,7 @@ describe('Issue #154: finish button on final puzzle', () => {
         setupMockLocalStorage();
     });
 
-    it('presents one clear finish action and folds secondary puzzle detail away', async () => {
+    it('presents one clear finish action and isolates the optional puzzle record', async () => {
         const user = userEvent.setup();
         mockSessionReturn.mockReturnValue(makeSessionReturn({ sessionState: 'active' }));
 
@@ -303,13 +303,14 @@ describe('Issue #154: finish button on final puzzle', () => {
         expect(finishButton).not.toBeDisabled();
         expect(screen.queryByText('Input Method')).not.toBeInTheDocument();
 
-        const details = screen.getByText(/review your result and any available diagnosis/i).closest('details');
+        const details = screen.getByText('Puzzle record').closest('details');
         expect(details).not.toHaveAttribute('open');
-        expect(screen.getByText('Puzzle record')).not.toBeVisible();
+        expect(screen.getByText('0/0')).not.toBeVisible();
+        expect(screen.queryByText(/review your result and any available diagnosis/i)).not.toBeInTheDocument();
 
-        await user.click(screen.getByText(/review your result and any available diagnosis/i));
+        await user.click(screen.getByText('Puzzle record'));
         expect(details).toHaveAttribute('open');
-        expect(screen.getByText('Puzzle record')).toBeVisible();
+        expect(screen.getByText('0/0')).toBeVisible();
     });
 
     it.each([
@@ -321,7 +322,7 @@ describe('Issue #154: finish button on final puzzle', () => {
 
         await renderAndSolveIncorrectly(user);
         expect(checkPuzzle).toHaveBeenCalledTimes(1);
-        const incorrectOutcome = screen.getByText('Not this one — take another look.');
+        const incorrectOutcome = screen.getByText('Not this one. Take another look.');
 
         fireEvent.click(screen.getByText(controlName));
 

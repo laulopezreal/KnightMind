@@ -112,7 +112,12 @@ function puzzleBoardReducer(state: PuzzleBoardState, action: PuzzleBoardAction):
 
 export default function Puzzles() {
     const { username } = useChessUsername();
-    const { sessionType, targetAccuracy, setTargetAccuracy, targetTimeMinutes, setTargetTimeMinutes } = usePuzzleMode();
+    const { sessionType } = usePuzzleMode();
+    // The shared session hook still accepts future-mode parameters. Standard
+    // ignores both values, so keep neutral defaults here without exposing dead
+    // settings in the UI.
+    const targetAccuracy = 80;
+    const targetTimeMinutes = 10;
     const navigate = useNavigate();
     // Coupled puzzle-board state: always co-updated at puzzle transitions (new
     // puzzle, retry after fail, reveal). useReducer keeps each transition atomic.
@@ -192,7 +197,7 @@ export default function Puzzles() {
     useEffect(() => {
         let current = true;
         setValidatedNormalFocus(null);
-        if (!username || !focusCause || focusPracticeMode || sessionType !== 'standard') {
+        if (!username || !focusCause || focusPracticeMode) {
             setNormalFocusValidationPending(false);
             return () => { current = false; };
         }
@@ -205,7 +210,7 @@ export default function Puzzles() {
             if (current) setNormalFocusValidationPending(false);
         });
         return () => { current = false; };
-    }, [focusCause, focusPracticeMode, sessionType, username]);
+    }, [focusCause, focusPracticeMode, username]);
 
     const effectiveFocusCause = focusPracticeMode ? focusPracticeCause : validatedNormalFocus?.cause ?? null;
 
@@ -741,9 +746,7 @@ export default function Puzzles() {
         (!isNoDueWithoutValidFocusIntent || Boolean(userStatus?.has_new_games) || isGenerating) &&
         !isGenerationEntryEmptyState;
     const { selectedModeLabel, screenReaderModeLabel } = getModeLabels(sessionType);
-    const modeAvailabilityLabel = sessionType === 'standard' ? 'Active' : 'Beta';
     const presentationModeLabel = hasValidFocusPracticeIntent ? 'Focus practice' : selectedModeLabel;
-    const presentationModeAvailabilityLabel = hasValidFocusPracticeIntent ? 'Active' : modeAvailabilityLabel;
     // No `!username` arm: the page returns ConnectAccountEmpty above, so these
     // reasons are only ever read by a signed-in user.
     const startSessionDisabledReason =
@@ -755,7 +758,7 @@ export default function Puzzles() {
                 // Post-summary the old branch fell through to "Please wait for
                 // the current task to finish" — there is no task; the session
                 // is done and the summary card below has the real CTA.
-                ? 'Session finished — your summary is below.'
+                ? 'Session finished. Your summary is below.'
             : controlsDisabled
                 ? 'Please wait for the current task to finish.'
                 : !userStatus
@@ -768,9 +771,7 @@ export default function Puzzles() {
                         ? 'Extra practice is available for this focus. The server decides which positions are safe and available.'
                     : userStatus.due_count === 0 && !hasValidFocusPracticeIntent
                         ? 'No puzzles are ready to practise right now. Generate new puzzles to keep training.'
-                        : sessionType !== 'standard'
-                            ? 'Only Standard mode can start sessions for now. Switch mode in the sidebar.'
-                            : null;
+                        : null;
     const generateDisabledReason = isGenerating
             ? 'Puzzle generation is already in progress.'
             : activeSessionId
@@ -1042,7 +1043,7 @@ export default function Puzzles() {
             console.error('Failed to check move:', err);
             setGame(new Chess(fenBefore));
             setUserMove('');
-            setActionError("We couldn't check that move — your attempt wasn't recorded. Check your connection and try again.");
+            setActionError("We couldn't check that move. Your attempt wasn't recorded. Check your connection and try again.");
         } finally {
             if (checkingPuzzleRef.current === checkOwner) {
                 checkingPuzzleRef.current = null;
@@ -1090,7 +1091,7 @@ export default function Puzzles() {
         // charging the user for a request that never landed. Same guard the
         // hint ladder already applies at rung 1.
         if (!bestMove) {
-            setActionError("We couldn't load the solution — you're still on this puzzle. Check your connection and try again.");
+            setActionError("We couldn't load the solution. You're still on this puzzle. Check your connection and try again.");
             return;
         }
         setStatus('revealed');
@@ -1171,7 +1172,7 @@ export default function Puzzles() {
                 // try the ladder rather than stranding the user. But say so --
                 // a silent no-op reads as a dead button on flaky connections.
                 setMotifHintAsked(false);
-                setActionError("We couldn't fetch that hint — check your connection and tap Hint again.");
+                setActionError("We couldn't fetch that hint. Check your connection and tap Hint again.");
                 return;
             }
         }
@@ -1352,7 +1353,7 @@ export default function Puzzles() {
             // puzzle, baked the loss into the summary). Stay put and let the
             // user press again — the idempotency key makes the retry safe.
             if (!recorded) {
-                setActionError("We couldn't save that result — you're still on this puzzle. Check your connection and try again.");
+                setActionError("We couldn't save that result. You're still on this puzzle. Check your connection and try again.");
                 return;
             }
 
@@ -1424,11 +1425,8 @@ export default function Puzzles() {
                         </h1>
                         <div className={`${activeSessionId && currentPuzzle ? 'hidden lg:flex' : 'flex'} items-center gap-2 mb-3`}>
                             <span className="text-xs font-sans uppercase tracking-wider px-2 py-1 rounded-sm border border-primary/20 bg-primary/5 text-primary/80">
-                                {presentationModeLabel} {presentationModeAvailabilityLabel}
+                                {presentationModeLabel} Active
                             </span>
-                            {sessionType !== 'standard' && (
-                                <span className="text-xs font-sans text-primary/70">Switch to Standard to start sessions.</span>
-                            )}
                         </div>
                         <p className={`${activeSessionId && currentPuzzle ? 'hidden lg:block' : ''} text-lg text-primary/70 font-sans`}>
                             {hasValidFocusPracticeIntent
@@ -1473,9 +1471,9 @@ export default function Puzzles() {
                             <button
                                 type="button"
                                 onClick={handleStartSession}
-                                disabled={controlsDisabled || !userStatus || userStatus.puzzles_count === 0 || (userStatus.due_count === 0 && !hasValidFocusPracticeIntent) || sessionType !== 'standard'}
+                                disabled={controlsDisabled || !userStatus || userStatus.puzzles_count === 0 || (userStatus.due_count === 0 && !hasValidFocusPracticeIntent)}
                                 title={startSessionDisabledReason ?? 'Start a new training session'}
-                                className={`min-h-11 w-full md:w-auto px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-opacity km-focus-visible ${(controlsDisabled || !userStatus || userStatus.puzzles_count === 0 || (userStatus.due_count === 0 && !hasValidFocusPracticeIntent) || sessionType !== 'standard') ? 'km-interactive-disabled' : 'hover:opacity-90 cursor-pointer'}`}>
+                                className={`min-h-11 w-full md:w-auto px-6 py-2 bg-primary text-bg-primary rounded-sm font-serif transition-opacity km-focus-visible ${(controlsDisabled || !userStatus || userStatus.puzzles_count === 0 || (userStatus.due_count === 0 && !hasValidFocusPracticeIntent)) ? 'km-interactive-disabled' : 'hover:opacity-90 cursor-pointer'}`}>
                                 Start Session
                             </button>
                         )}
@@ -1529,7 +1527,7 @@ export default function Puzzles() {
                                     <strong className="font-medium">Focus practice</strong> gives you extra practice for the selected focus. The server decides whether positions are safe and available.
                                 </p>
                             </div>
-                        ) : validatedNormalFocus && sessionType === 'standard' ? (
+                        ) : validatedNormalFocus ? (
                             <>
                                 {/* Today's Focus trust label: the cause was chosen from the Dashboard
                                     but the session entry gave no visible confirmation. This panel
@@ -1552,49 +1550,12 @@ export default function Puzzles() {
                                     </p>
                                 </div>
                             </>
-                        ) : sessionType === 'standard' ? (
+                        ) : (
                             <div className="p-4 bg-primary/5 border border-primary/20 rounded-sm">
                                 <p className="text-sm text-primary/70 font-sans">
                                     <strong className="font-medium">Standard mode</strong> uses spaced repetition to help you master tactical patterns from your own games.
                                     Complete 5 puzzles per session with immediate feedback on each move.
                                 </p>
-                            </div>
-                        ) : (
-                            <div className="p-4 bg-primary/5 border border-primary/20 rounded-sm">
-                                <p className="text-sm text-primary/70 font-sans mb-3">
-                                    <strong className="font-medium">{sessionType === 'timed' ? 'Timed' : 'Accuracy Goal'} mode</strong> is currently in development.
-                                    Try it out by adjusting the settings, but sessions can only be started in Standard mode for now.
-                                </p>
-                                {sessionType === 'timed' && (
-                                    <div className="flex items-center gap-2">
-                                        <label htmlFor="duration-input" className="text-sm text-primary/70 font-sans">Duration:</label>
-                                        <input
-                                            id="duration-input"
-                                            type="number"
-                                            min="1"
-                                            max="60"
-                                            value={targetTimeMinutes}
-                                            onChange={(e) => setTargetTimeMinutes(Number(e.target.value))}
-                                            className="px-3 py-2 border border-primary/20 rounded-sm bg-bg-primary text-primary w-20"
-                                        />
-                                        <span className="text-sm text-primary/70 font-sans">minutes</span>
-                                    </div>
-                                )}
-                                {sessionType === 'accuracy_goal' && (
-                                    <div className="flex items-center gap-2">
-                                        <label htmlFor="accuracy-input" className="text-sm text-primary/70 font-sans">Target accuracy:</label>
-                                        <input
-                                            id="accuracy-input"
-                                            type="number"
-                                            min="50"
-                                            max="100"
-                                            value={targetAccuracy}
-                                            onChange={(e) => setTargetAccuracy(Number(e.target.value))}
-                                            className="px-3 py-2 border border-primary/20 rounded-sm bg-bg-primary text-primary w-20"
-                                        />
-                                        <span className="text-sm text-primary/70 font-sans">%</span>
-                                    </div>
-                                )}
                             </div>
                         )}
                     </>
@@ -2096,7 +2057,7 @@ export default function Puzzles() {
                                         Look for a {formatMotifName(motifHint).toLowerCase()}.
                                     </p>
                                     : linePlyIndex > 0
-                                        ? <p className="text-positive font-serif text-lg italic">Good move — now find the next move in the line.</p>
+                                        ? <p className="text-positive font-serif text-lg italic">Good move. Now find the next move in the line.</p>
                                         : <p className="text-primary/70 font-serif text-lg italic">Find the best move...</p>
                             )}
                             {status === 'solving' && clue.clueStage === 1 && (
@@ -2124,7 +2085,7 @@ export default function Puzzles() {
                             )}
                             {status === 'incorrect' && (
                                 <div className="text-center">
-                                    <p className="text-negative font-serif text-2xl animate-teedin">Not this one — take another look.</p>
+                                    <p className="text-negative font-serif text-2xl animate-teedin">Not this one. Take another look.</p>
                                     <p className="text-primary/70 font-sans text-sm mt-2 animate-teedin">
                                         Nothing has been recorded yet. Try again, or record the failure before seeing the solution.
                                     </p>
@@ -2244,7 +2205,7 @@ export default function Puzzles() {
                                     {sessionState === 'completed' ? (
                                         sessionSummary ? (
                                             <p className="text-center text-primary/70 font-sans text-sm py-4">
-                                                Session complete — see your summary below.
+                                                Session complete. See your summary below.
                                             </p>
                                         ) : (
                                             <Link
@@ -2272,46 +2233,44 @@ export default function Puzzles() {
                                         </button>
                                     )}
 
-                                    {(currentPuzzle?.attempts !== undefined || activeDiagnosis || diagnosisLoading) && (
+                                    {currentPuzzle?.attempts !== undefined && (
                                         <details key={currentPuzzle.id} className="group border-t border-primary/10 pt-1">
                                             <summary className="min-h-[44px] cursor-pointer list-none flex items-center justify-between gap-3 rounded-sm px-2 text-sm font-serif text-primary/70 transition-colors hover:text-primary km-focus-visible">
-                                                <span>Review your result and any available diagnosis to see what may help next.</span>
+                                                <span>Puzzle record</span>
                                                 <span aria-hidden="true" className="text-base transition-transform group-open:rotate-45">＋</span>
                                             </summary>
-                                            <div className="pt-2 space-y-3">
-                                                {currentPuzzle?.attempts !== undefined && (
-                                                    <div className="bg-primary/5 p-3 rounded-sm text-sm">
-                                                        <div className="flex justify-between gap-3">
-                                                            <span className="text-primary/70">Puzzle record</span>
+                                            <div className="pt-2">
+                                                <div className="bg-primary/5 p-3 rounded-sm text-sm">
+                                                    <div className="flex justify-between gap-3">
+                                                        <span className="text-primary/70">Passed reviews</span>
+                                                        <span className="font-mono">
+                                                            {currentPuzzle.pass_count || 0}/{currentPuzzle.attempts || 0}
+                                                            {currentPuzzle.attempts ? ` (${Math.round(((currentPuzzle.pass_count || 0) / currentPuzzle.attempts) * 100)}%)` : ''}
+                                                        </span>
+                                                    </div>
+                                                    {currentPuzzle.next_due_at && (
+                                                        <div className="flex justify-between gap-3 mt-1">
+                                                            <span className="text-primary/70">Next review</span>
                                                             <span className="font-mono">
-                                                                {currentPuzzle.pass_count || 0}/{currentPuzzle.attempts || 0}
-                                                                {currentPuzzle.attempts ? ` (${Math.round(((currentPuzzle.pass_count || 0) / currentPuzzle.attempts) * 100)}%)` : ''}
+                                                                {new Date(currentPuzzle.next_due_at).toLocaleDateString(LOCALE)}
                                                             </span>
                                                         </div>
-                                                        {currentPuzzle.next_due_at && (
-                                                            <div className="flex justify-between gap-3 mt-1">
-                                                                <span className="text-primary/70">Next review</span>
-                                                                <span className="font-mono">
-                                                                    {new Date(currentPuzzle.next_due_at).toLocaleDateString(LOCALE)}
-                                                                </span>
-                                                            </div>
-                                                        )}
-                                                    </div>
-                                                )}
-                                                {(activeDiagnosis || diagnosisLoading) && (
-                                                    <div data-testid="post-resolution-diagnosis" className="min-w-0">
-                                                        <MistakeDiagnosisCard
-                                                            diagnosis={activeDiagnosis}
-                                                            revealed
-                                                            loading={diagnosisLoading}
-                                                            savingConfirmation={diagnosisConfirmationSaving}
-                                                            confirmationError={activeDiagnosisConfirmationError}
-                                                            onConfirm={confirmResolvedDiagnosis}
-                                                        />
-                                                    </div>
-                                                )}
+                                                    )}
+                                                </div>
                                             </div>
                                         </details>
+                                    )}
+                                    {(activeDiagnosis || diagnosisLoading) && (
+                                        <div data-testid="post-resolution-diagnosis" className="min-w-0">
+                                            <MistakeDiagnosisCard
+                                                diagnosis={activeDiagnosis}
+                                                revealed
+                                                loading={diagnosisLoading}
+                                                savingConfirmation={diagnosisConfirmationSaving}
+                                                confirmationError={activeDiagnosisConfirmationError}
+                                                onConfirm={confirmResolvedDiagnosis}
+                                            />
+                                        </div>
                                     )}
                                 </div>
                             )}
@@ -2331,7 +2290,7 @@ export default function Puzzles() {
                                                 setActionError(null);
                                                 if (!await recordPuzzleOutcome('fail')) {
                                                     outcomeWriteRef.current = null;
-                                                    setActionError("We couldn't save that result — nothing was recorded. Check your connection and try again.");
+                                                    setActionError("We couldn't save that result. Nothing was recorded. Check your connection and try again.");
                                                     return;
                                                 }
                                                 beginFreshExposureAfterPersistedFail();
@@ -2378,7 +2337,7 @@ export default function Puzzles() {
                                                         recorded = await recordPuzzleOutcome('fail', undefined, true);
                                                     }
                                                     if (!recorded) {
-                                                        setActionError("We couldn't save that result — the session is still open. Check your connection and try again.");
+                                                        setActionError("We couldn't save that result. The session is still open. Check your connection and try again.");
                                                         return;
                                                     }
                                                     // Finishing the final puzzle (as a fail) ends the session.

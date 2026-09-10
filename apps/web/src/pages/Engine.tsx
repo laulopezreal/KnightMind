@@ -50,7 +50,7 @@ export default function Engine() {
   // Seeded from a bad `?fen=` deep link so the fallback to the start position
   // is explained rather than silently substituted.
   const [fenError, setFenError] = useState<string | null>(
-    initialFen.invalid ? 'That link carried an invalid FEN — showing the starting position instead.' : null
+    initialFen.invalid ? 'That link carried an invalid FEN, so the starting position is shown instead.' : null
   );
   const [evaluationError, setEvaluationError] = useState<string | null>(null);
   const [engineAvailable, setEngineAvailable] = useState<boolean | null>(null);
@@ -339,10 +339,10 @@ export default function Engine() {
 
           {/* Evaluation */}
           <div className="bg-primary/5 border border-primary/10 rounded-sm p-8 space-y-6 min-h-[220px] flex flex-col">
-            <div className="flex justify-between items-center border-b border-primary/10 pb-4">
+            <div className="flex min-w-0 items-center justify-between gap-4 border-b border-primary/10 pb-4">
               <span className="font-serif text-xl text-primary">Evaluation</span>
               {evaluation ? (
-                <span className={`font-mono text-2xl ${getEvalColor(evaluation.eval)}`}>
+                <span className={`shrink-0 font-mono text-2xl ${getEvalColor(evaluation.eval)}`}>
                   {formatEval(evaluation.eval)}
                 </span>
               ) : loading ? (
@@ -364,28 +364,28 @@ export default function Engine() {
 
             {evaluation ? (
               <div className="space-y-3 pt-2">
-                <div className="flex justify-between items-center">
+                <div className="flex min-w-0 flex-col items-stretch gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <span className="font-sans text-sm text-primary/70 uppercase tracking-widest">Best Move</span>
-                  <div className="flex gap-4 items-center">
+                  <div className="flex min-w-0 items-center justify-between gap-4 sm:justify-end">
                     {showBestMove ? (
-                      <span className="font-mono text-primary text-lg">{evaluation.bestMove}</span>
+                      <span className="min-w-0 break-all font-mono text-primary text-lg">{evaluation.bestMove}</span>
                     ) : (
                       <span className="text-primary/70 italic text-sm">Hidden</span>
                     )}
-                    <button type="button" onClick={() => setShowBestMove(!showBestMove)} className="km-interactive km-focus-visible text-primary text-xs font-sans font-normal uppercase tracking-widest border border-primary/20 px-3 py-1 rounded-sm transition-colors">
+                    <button type="button" onClick={() => setShowBestMove(!showBestMove)} className="km-interactive km-focus-visible min-h-11 shrink-0 border border-primary/20 px-4 py-2 text-xs font-sans font-normal uppercase tracking-widest text-primary rounded-sm transition-colors">
                       {showBestMove ? 'Hide' : 'Show'}
                     </button>
                   </div>
                 </div>
-                <div className="flex flex-wrap items-center gap-3 text-xs font-sans text-primary/70">
+                <div className="flex min-w-0 flex-col items-stretch gap-2 text-xs font-sans text-primary/70">
                   <button
                     type="button"
                     onClick={handleClue}
-                    className="km-interactive km-focus-visible border border-primary/20 px-3 py-1 text-[10px] font-sans font-normal uppercase tracking-widest text-primary transition-colors"
+                    className="km-interactive km-focus-visible min-h-11 w-full shrink-0 whitespace-normal border border-primary/20 px-4 py-2 text-[10px] font-sans font-normal uppercase tracking-widest text-primary transition-colors rounded-sm"
                   >
                     {clue.clueStage === 0 ? 'Clue' : clue.clueStage === 1 ? 'Reveal squares' : 'Hide clues and reset'}
                   </button>
-                  <span>
+                  <span className="min-w-0 break-words leading-relaxed">
                     {clue.clueStage === 0
                       ? 'Tap for a small hint.'
                       : clue.clueStage === 1
@@ -419,9 +419,15 @@ export default function Engine() {
 
           {/* Save as puzzle */}
           {evaluation && (
-            <div className="bg-primary/5 border border-primary/10 rounded-sm p-6 space-y-4">
-              <span className="block font-serif text-base text-primary border-b border-primary/10 pb-3">Save as puzzle</span>
+            <details className="group bg-primary/5 border border-primary/10 rounded-sm overflow-hidden">
+              <summary
+                className="km-focus-visible flex min-h-11 cursor-pointer list-none items-center justify-between gap-4 px-6 py-3 font-serif text-base text-primary [&::-webkit-details-marker]:hidden [&::marker]:hidden"
+              >
+                <span>Save this position as a puzzle</span>
+                <span className="inline-block size-0 shrink-0 border-l-[4px] border-r-[4px] border-t-[5px] border-l-transparent border-r-transparent border-t-primary/70 transition-transform duration-200 group-open:rotate-180" aria-hidden />
+              </summary>
 
+              <div className="border-t border-primary/10 px-6 pb-6 pt-4">
               {savedPuzzleId ? (
                 <div className="space-y-2">
                   <p className="text-positive text-sm font-sans">Puzzle saved.</p>
@@ -512,7 +518,8 @@ export default function Engine() {
                   </button>
                 </div>
               )}
-            </div>
+              </div>
+            </details>
           )}
         </div>
       </section>

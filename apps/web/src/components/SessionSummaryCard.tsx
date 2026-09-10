@@ -28,7 +28,7 @@ export function SessionSummaryCard({
     achievements,
     onStartNewSession
 }: SessionSummaryCardProps) {
-    // The finish is the session's emotional peak — headline it like a result,
+    // The finish is the session's emotional peak, so headline it like a result,
     // not a database receipt ("Successfully Recorded"). Tone tracks accuracy so
     // a rough session isn't greeted with false cheer.
     const total = sessionSummary.pass_count + sessionSummary.fail_count;
@@ -38,11 +38,14 @@ export function SessionSummaryCard({
         : accuracy >= 0.8
         ? 'Sharp session!'
         : accuracy >= 0.5
-        ? 'Session complete — solid work'
-        : 'Session complete — tough one, keep at it';
+        ? 'Session complete. Solid work'
+        : 'Session complete. Tough one, keep at it';
 
     const missedPuzzles = sessionSummary.missed_puzzles;
     const hasMissed = missedPuzzles && missedPuzzles.length > 0;
+    const hasDiagnosedMiss = total > 0 && Boolean(missedPuzzles?.some(
+        missedPuzzle => missedPuzzle.cause?.trim() && missedPuzzle.cause_label?.trim()
+    ));
     const earnedAchievements = achievements.filter(achievement => achievement.earned);
     const completionTime = `${Math.floor(sessionSummary.total_time_ms / 60000)}m ${Math.floor((sessionSummary.total_time_ms % 60000) / 1000)}s`;
 
@@ -80,7 +83,24 @@ export function SessionSummaryCard({
                 </div>
             </div>
 
-            {/* Missed Puzzles — teach, not just count */}
+            {/* Closeout actions: Back to Dashboard is the primary ritual close;
+                Start New Session is secondary. Do not trap the user in a forced ritual. */}
+            <div role="group" aria-label="Session closeout actions" className="mb-6">
+                <Link
+                    to="/dashboard"
+                    className="w-full block text-center px-6 py-3 bg-primary text-bg-primary rounded-sm font-serif transition-opacity hover:opacity-90 km-focus-visible"
+                >
+                    Back to Dashboard
+                </Link>
+                <button
+                    type="button"
+                    onClick={onStartNewSession}
+                    className="w-full mt-3 px-6 py-3 border border-primary/20 text-primary rounded-sm font-serif transition-all hover:bg-primary hover:text-bg-primary hover:border-transparent km-focus-visible cursor-pointer">
+                    Start New Session
+                </button>
+            </div>
+
+            {/* Missed Puzzles: teach, not just count */}
             {hasMissed && (
                 <section className="mb-6 border-y border-primary/10 py-5" aria-labelledby="missed-puzzles-heading">
                     <h3 id="missed-puzzles-heading" className="text-lg font-serif text-primary mb-1">
@@ -109,7 +129,7 @@ export function SessionSummaryCard({
                                 </div>
                                 {/* min-h/min-w 11 (44px): WCAG 2.5.5 touch-target contract.
                                     The flex wrapper expands the interactive area without
-                                    visually bloating the row — the text stays text-xs. */}
+                                    visually bloating the row. The text stays text-xs. */}
                                 <Link
                                     to={`/library/${mp.puzzle_id}?from=session`}
                                     className="km-review-link self-start sm:self-auto shrink-0 inline-flex items-center justify-center min-h-11 min-w-11 text-xs font-serif text-primary/70 underline underline-offset-2 hover:text-primary transition-colors km-focus-visible"
@@ -120,6 +140,14 @@ export function SessionSummaryCard({
                             </li>
                         ))}
                     </ul>
+                    {hasDiagnosedMiss && (
+                        <Link
+                            to="/insights"
+                            className="km-interactive km-focus-visible km-inline-link inline-flex min-h-11 items-center text-sm font-serif text-primary/70 underline decoration-primary/30 underline-offset-4 transition-colors hover:text-primary"
+                        >
+                            Review your patterns
+                        </Link>
+                    )}
                 </section>
             )}
 
@@ -176,20 +204,6 @@ export function SessionSummaryCard({
                 )}
             </section>
 
-            {/* Closeout actions: Back to Dashboard is the primary ritual close;
-                Start New Session is secondary — do not trap the user in a forced ritual. */}
-            <Link
-                to="/dashboard"
-                className="w-full block text-center px-6 py-3 bg-primary text-bg-primary rounded-sm font-serif transition-opacity hover:opacity-90 km-focus-visible"
-            >
-                Back to Dashboard
-            </Link>
-            <button
-                type="button"
-                onClick={onStartNewSession}
-                className="w-full mt-3 px-6 py-3 border border-primary/20 text-primary rounded-sm font-serif transition-all hover:bg-primary hover:text-bg-primary hover:border-transparent km-focus-visible cursor-pointer">
-                Start New Session
-            </button>
         </section>
     );
 }

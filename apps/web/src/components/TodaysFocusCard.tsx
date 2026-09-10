@@ -37,8 +37,8 @@ export function TodaysFocusCard({ data }: TodaysFocusCardProps) {
             <Shell>
                 <p className="font-sans text-sm text-primary/70">
                     {pending > 0
-                        ? 'Still analysing your mistakes — a focus appears once a habit recurs.'
-                        : 'No habit has recurred often enough to build a plan on yet. Keep playing — this fills in on its own.'}
+                        ? 'Still analysing your mistakes. A focus appears once a habit recurs.'
+                        : 'No habit has recurred often enough to build a plan on yet. Keep playing. This fills in on its own.'}
                 </p>
             </Shell>
         );
@@ -81,7 +81,7 @@ export function TodaysFocusCard({ data }: TodaysFocusCardProps) {
                 // re-anchor intervals. A focus practice button is truthful only
                 // when the server has confirmed a safe bounded set.
                 <p className="font-sans text-xs text-primary/70 mt-4">
-                    Nothing from this pattern is due right now — it will come
+                    Nothing from this pattern is due right now. It will come
                     back around.
                 </p>
             )}

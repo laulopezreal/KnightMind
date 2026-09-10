@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { FocusTrap } from 'focus-trap-react';
-import { usePuzzleMode } from '../context/PuzzleModeContext';
 import AuthControl from './AuthControl';
 
 interface SidebarProps {
@@ -35,52 +34,8 @@ const NavItem = ({ to, label, isActive }: { to: string; label: string; isActive:
     </Link>
 );
 
-const SubNavItem = ({
-    label,
-    isActive,
-    onClick,
-    badge,
-    tooltip
-}: {
-    label: string;
-    isActive: boolean;
-    onClick: () => void;
-    badge?: string;
-    tooltip?: string;
-}) => (
-    <button
-        onClick={onClick}
-        title={tooltip}
-        // `title` never surfaces on touch and is inconsistent for keyboard users,
-        // so it can't be the only place the mode is explained — the sr-only
-        // description below carries it into the accessible name.
-        aria-label={tooltip ? `${label} — ${tooltip}` : undefined}
-        // whitespace-nowrap: "Accuracy Goal" wrapped to two lines in the narrow
-        // sub-nav column, leaving the badge floating beside a ragged label.
-        // `font-sans` is stated here rather than inherited from the parent
-        // `<nav>`: the base `button` rule matches this element directly, and a
-        // matching declaration always beats an inherited one whatever the layer.
-        // Without it these sub-items render Cormorant beside their sibling
-        // NavItem links, which are `<a>` and so do inherit the nav's Inter.
-        className={`flex items-center gap-1 whitespace-nowrap min-h-11 text-sm font-sans transition-all duration-300 km-focus-visible rounded-sm px-2 -mx-1 text-left outline-none ${
-            isActive
-                ? 'opacity-100 font-medium km-interactive'
-                : 'opacity-70 font-light km-interactive hover:opacity-90'
-        }`}
-    >
-        {label}
-        {/* No /40 alpha: it compounded with the button's opacity to ~0.28 (fails
-            AA). Full text-primary rides the button opacity (0.7 inactive / 1.0
-            active), which clears 4.5:1 while the badge stays visually distinct via
-            size + tracking. */}
-        {badge && <span className="text-[10px] text-primary uppercase tracking-wider">{badge}</span>}
-    </button>
-);
-
 export default function Sidebar({ mobileOpen = false, onMobileClose }: SidebarProps) {
     const location = useLocation();
-    const { sessionType, setSessionType } = usePuzzleMode();
-    const isPuzzlesRoute = location.pathname.startsWith('/puzzles');
     const closeButtonRef = useRef<HTMLButtonElement>(null);
 
     // Track the mobile (drawer) breakpoint so we can mark the always-mounted aside
@@ -219,34 +174,7 @@ export default function Sidebar({ mobileOpen = false, onMobileClose }: SidebarPr
                     <div onClick={handleLinkClick}><NavItem to="/" label="Home" isActive={location.pathname === '/'} /></div>
 
                     <NavGroup id="nav-group-training" label="Training">
-                        {/* Train (formerly Puzzles) with sub-items */}
-                        <div>
-                            <div onClick={handleLinkClick}><NavItem to="/puzzles" label="Train" isActive={location.pathname === '/puzzles'} /></div>
-                            {isPuzzlesRoute && (
-                                <div className="ml-6 mt-2 space-y-1 border-l border-primary/10 pl-2">
-                                    <SubNavItem
-                                        label="Standard"
-                                        isActive={sessionType === 'standard'}
-                                        onClick={() => setSessionType('standard')}
-                                        tooltip="Classic puzzle solving - fully available now"
-                                    />
-                                    <SubNavItem
-                                        label="Timed"
-                                        badge="SOON"
-                                        isActive={sessionType === 'timed'}
-                                        onClick={() => setSessionType('timed')}
-                                        tooltip="Coming soon: Race against the clock"
-                                    />
-                                    <SubNavItem
-                                        label="Accuracy Goal"
-                                        badge="SOON"
-                                        isActive={sessionType === 'accuracy_goal'}
-                                        onClick={() => setSessionType('accuracy_goal')}
-                                        tooltip="Coming soon: Focus on precision"
-                                    />
-                                </div>
-                            )}
-                        </div>
+                        <div onClick={handleLinkClick}><NavItem to="/puzzles" label="Train" isActive={location.pathname === '/puzzles'} /></div>
                         <div onClick={handleLinkClick}><NavItem to="/library" label="Library" isActive={location.pathname.startsWith('/library')} /></div>
                     </NavGroup>
 

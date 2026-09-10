@@ -3,10 +3,11 @@ import { ISSUES_URL } from '../utils/links';
 
 export function ReportProblem() {
     const { pathname } = useLocation();
-    // Hide on mobile while on the puzzle training route so the fixed button
-    // cannot intercept board squares or action controls at the bottom of the
-    // viewport. Still visible on desktop (md+) where layout headroom is ample.
-    const hiddenOnMobile = pathname === '/puzzles';
+    // Hide on mobile on interaction-heavy routes so the fixed button cannot
+    // intercept board squares or action controls at the bottom of the viewport.
+    // Still visible on desktop (md+) where layout headroom is ample.
+    const normalizedPathname = pathname.replace(/\/$/, '');
+    const hiddenOnMobile = ['/puzzles', '/engine'].includes(normalizedPathname);
 
     return (
         // Complementary landmark so this persistent utility link isn't page content

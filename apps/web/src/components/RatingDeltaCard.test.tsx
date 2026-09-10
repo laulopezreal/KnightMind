@@ -38,9 +38,9 @@ describe('RatingDeltaCard', () => {
     expect(screen.getByText(/Low confidence/)).toBeInTheDocument();
   });
 
-  it('shows "—" and an explanation when there is no measurable change', () => {
+  it('shows "No data" and an explanation when there is no measurable change', () => {
     render(<RatingDeltaCard data={resp({ rating: { start: null, end: null, net_change: null, reference_rating: 0, reference_is_approx: false }, stats: { ...resp({}).stats, games: 0 } })} timeControlLabel="Rapid" />);
-    expect(screen.getByText('—')).toBeInTheDocument();
+    expect(screen.getByText('No data')).toBeInTheDocument();
     expect(screen.getByText(/Not enough games/)).toBeInTheDocument();
   });
 

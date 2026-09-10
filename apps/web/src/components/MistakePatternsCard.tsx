@@ -45,7 +45,7 @@ export function MistakePatternsCard({ data }: MistakePatternsCardProps) {
             ) : (
                 <p className="font-sans text-sm text-primary/70">
                     {pending > 0
-                        ? 'Still analysing your mistakes — patterns appear once one recurs.'
+                        ? 'Still analysing your mistakes. Patterns appear once one recurs.'
                         : 'No habit has recurred often enough to name yet.'}
                 </p>
             )}

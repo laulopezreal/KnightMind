@@ -53,7 +53,7 @@ export function TopMistakeCausesCard({ data }: TopMistakeCausesCardProps) {
                 ) : (
                     <p className="font-sans text-sm text-primary/70">
                         No cause has come up {min_for_ranking} times yet, so nothing here is
-                        a pattern worth training. Keep playing — this fills in on its own.
+                        a pattern worth training. Keep playing. This fills in on its own.
                     </p>
                 )}
 

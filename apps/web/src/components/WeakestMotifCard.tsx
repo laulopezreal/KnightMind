@@ -84,7 +84,7 @@ export function WeakestMotifCard({ motifs, trainingEnabled = true }: WeakestMoti
     return (
       <StatCard
         label="Weakest motif"
-        value="—"
+        value="No data"
         sub="Not enough attempts yet to name a weakest area."
         footer={insightsLink}
       />

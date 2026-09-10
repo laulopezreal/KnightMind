@@ -469,7 +469,7 @@ export default function Ops() {
                                     {recentJobs.map(job => (
                                         <tr key={job.id} className="hover:bg-primary/[0.01] transition-colors group">
                                             <td className="px-6 py-4 font-mono opacity-50 group-hover:opacity-100 border-r border-primary/5">
-                                                #{job.id?.substring(0, 6) ?? '—'}
+                                                #{job.id?.substring(0, 6) ?? 'No ID'}
                                             </td>
                                             <td className="px-6 py-4 border-r border-primary/5 font-medium opacity-80">
                                                 {job.username}
@@ -487,13 +487,13 @@ export default function Ops() {
                                             <td className="px-6 py-4 text-right">
                                                 {job.result_json ? (
                                                     <span className="inline-block whitespace-nowrap font-sans text-primary/80">
-                                                        {job.result_json.generated != null ? `${job.result_json.generated} res` : '—'}
+                                                        {job.result_json.generated != null ? `${job.result_json.generated} res` : 'No data'}
                                                         <span className="text-[10px] opacity-50 font-mono ml-1.5">
                                                             {calculateCacheRate(job.result_json.cache_hits ?? 0, job.result_json.cache_misses ?? 0)}% hit
                                                         </span>
                                                     </span>
                                                 ) : (
-                                                    <span className="text-[10px] opacity-40">—</span>
+                                                    <span className="text-[10px] opacity-40">No result</span>
                                                 )}
                                                 {job.error_message && (
                                                     <span className="text-negative block mt-1 leading-tight max-w-[180px] truncate text-left" title={job.error_message}>

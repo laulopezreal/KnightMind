@@ -43,21 +43,26 @@ describe('ReportProblem', () => {
     expect(link).toHaveClass('w-11');
   });
 
-  it('should use flex on non-puzzle routes', () => {
-    renderWithRoute('/dashboard');
+  it.each(['/dashboard', '/engine/training', '/puzzles/archive'])(
+    'should use flex on ordinary route %s',
+    (route) => {
+      renderWithRoute(route);
 
-    const link = screen.getByRole('link', { name: /report a problem/i });
-    expect(link).toHaveClass('flex');
-    expect(link).not.toHaveClass('hidden');
-  });
+      const link = screen.getByRole('link', { name: /report a problem/i });
+      expect(link).toHaveClass('flex');
+      expect(link).not.toHaveClass('hidden');
+    }
+  );
 
-  it('should be hidden on mobile on the puzzle route', () => {
-    renderWithRoute('/puzzles');
+  it.each(['/puzzles', '/puzzles/', '/engine', '/engine/'])(
+    'should be hidden on mobile and visible on desktop on %s',
+    (route) => {
+      renderWithRoute(route);
 
-    const link = screen.getByRole('link', { name: /report a problem/i });
-    // hidden md:flex — not visible on mobile, visible on desktop
-    expect(link).toHaveClass('hidden');
-    expect(link).toHaveClass('md:flex');
-    expect(link).not.toHaveClass('flex');
-  });
+      const link = screen.getByRole('link', { name: /report a problem/i });
+      expect(link).toHaveClass('hidden');
+      expect(link).toHaveClass('md:flex');
+      expect(link).not.toHaveClass('flex');
+    }
+  );
 });
