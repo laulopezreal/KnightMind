@@ -60,4 +60,13 @@ describe('ReportProblem', () => {
     expect(link).toHaveClass('md:flex');
     expect(link).not.toHaveClass('flex');
   });
+
+  it('should be hidden on mobile on the engine route', () => {
+    renderWithRoute('/engine');
+
+    const link = screen.getByRole('link', { name: /report a problem/i });
+    expect(link).toHaveClass('hidden');
+    expect(link).toHaveClass('md:flex');
+    expect(link).not.toHaveClass('flex');
+  });
 });
