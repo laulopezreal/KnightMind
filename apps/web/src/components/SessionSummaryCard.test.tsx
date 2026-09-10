@@ -91,6 +91,34 @@ describe('SessionSummaryCard', () => {
     expect(await screen.findByText('80%', undefined, { timeout: 4000 })).toBeInTheDocument();
   });
 
+  it('distinguishes review attempts from the number of puzzles in the session', async () => {
+    render(
+      <SessionSummaryCard
+        sessionSummary={{
+          ...mockSessionSummary,
+          requested_n: 5,
+          pass_count: 2,
+          fail_count: 13,
+        }}
+        achievements={mockAchievements}
+        onStartNewSession={vi.fn()}
+      />
+    );
+
+    const result = screen.getByLabelText('Session result');
+    expect(result).toHaveTextContent('Passed attempts');
+    expect(result).toHaveTextContent('Failed attempts');
+    expect(result).toHaveTextContent('Attempt accuracy');
+    expect(await screen.findByText('2', undefined, { timeout: 4000 })).toBeInTheDocument();
+    expect(await screen.findByText('13', undefined, { timeout: 4000 })).toBeInTheDocument();
+    expect(await screen.findByText('13%', undefined, { timeout: 4000 })).toBeInTheDocument();
+    const context = screen.getByText('15 review attempts across 5 puzzles.');
+    expect(context).toBeVisible();
+    expect(context).toHaveAttribute('id', 'session-attempt-context');
+    expect(result).toHaveAttribute('aria-describedby', 'session-attempt-context');
+    expect(result).toHaveAccessibleDescription('15 review attempts across 5 puzzles.');
+  });
+
   it('should display total time', () => {
     render(
       <SessionSummaryCard

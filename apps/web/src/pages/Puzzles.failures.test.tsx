@@ -675,6 +675,105 @@ describe('Puzzles — honest failure handling', () => {
             expect(mockHandleReviewPuzzle).toHaveBeenLastCalledWith('fail');
         });
 
+        it('keeps the revealed solution and played board after a same-puzzle stats fold', async () => {
+            const pendingReview = deferred<boolean>();
+            mockHandleReviewPuzzle.mockReturnValue(pendingReview.promise);
+            vi.mocked(revealPuzzle).mockResolvedValue({
+                best_move_uci: 'e2e4',
+                solution_pv: ['e2e4', 'e7e5', 'g1f3'],
+            } as never);
+            const sessionBaseline = makeSessionReturn();
+            currentSessionReturn = sessionBaseline;
+            const user = userEvent.setup();
+            const { rerender } = render(<Puzzles />);
+
+            await user.click(screen.getByRole('button', { name: /reveal best move solution/i }));
+            expect(await screen.findByText('Solution line')).toBeInTheDocument();
+            expect(screen.getByText(/e4\s+e5\s+Nf3/)).toBeInTheDocument();
+            expect(screen.getByRole('gridcell', { name: 'e4, white pawn' })).toBeInTheDocument();
+
+            currentSessionReturn = {
+                ...sessionBaseline,
+                puzzles: [{ ...puzzle, attempts: 1, pass_count: 0 }, { ...puzzle, id: 'p2' }],
+            };
+            rerender(<Puzzles />);
+            await act(async () => {
+                await new Promise((resolve) => setTimeout(resolve, 2200));
+            });
+
+            expect(screen.getByText('Solution line')).toBeInTheDocument();
+            expect(screen.getByText(/e4\s+e5\s+Nf3/)).toBeInTheDocument();
+            expect(screen.getByText(/you chose to reveal/i)).toBeInTheDocument();
+            expect(screen.getByRole('gridcell', { name: 'e4, white pawn' })).toBeInTheDocument();
+            expect(screen.getByRole('gridcell', { name: 'e2, empty' })).toBeInTheDocument();
+            expect(screen.getByRole('gridcell', { name: 'e5, black pawn' })).toBeInTheDocument();
+            expect(screen.getByRole('gridcell', { name: 'f3, white knight' })).toBeInTheDocument();
+
+            pendingReview.resolve(true);
+            await act(async () => { await pendingReview.promise; });
+
+            currentSessionReturn = {
+                ...currentSessionReturn,
+                puzzles: [{ ...puzzle, attempts: 2, pass_count: 0 }, { ...puzzle, id: 'p2' }],
+            };
+            rerender(<Puzzles />);
+
+            expect(screen.queryByText('Solution line')).not.toBeInTheDocument();
+            expect(screen.getByRole('gridcell', { name: 'e2, white pawn' })).toBeInTheDocument();
+            expect(screen.getByRole('gridcell', { name: 'e4, empty' })).toBeInTheDocument();
+        });
+
+        it('stops stale solution playback for an unexplained same-ID replacement', async () => {
+            const pendingReview = deferred<boolean>();
+            mockHandleReviewPuzzle.mockReturnValue(pendingReview.promise);
+            vi.mocked(revealPuzzle).mockResolvedValue({
+                best_move_uci: 'e2e4',
+                solution_pv: ['e2e4', 'e7e5', 'g1f3'],
+            } as never);
+            currentSessionReturn = makeSessionReturn();
+            const user = userEvent.setup();
+            const { rerender } = render(<Puzzles />);
+
+            await user.click(screen.getByRole('button', { name: /reveal best move solution/i }));
+            expect(await screen.findByText('Solution line')).toBeInTheDocument();
+
+            currentSessionReturn = {
+                ...currentSessionReturn,
+                puzzles: [{ ...puzzle }, { ...puzzle, id: 'p2' }],
+            };
+            rerender(<Puzzles />);
+            await new Promise((resolve) => setTimeout(resolve, 2200));
+
+            expect(screen.queryByText('Solution line')).not.toBeInTheDocument();
+            expect(screen.getByRole('gridcell', { name: 'e2, white pawn' })).toBeInTheDocument();
+            expect(screen.getByRole('gridcell', { name: 'e4, empty' })).toBeInTheDocument();
+            expect(screen.getByRole('gridcell', { name: 'e5, empty' })).toBeInTheDocument();
+            expect(screen.getByRole('gridcell', { name: 'g1, white knight' })).toBeInTheDocument();
+        });
+
+        it('clears the revealed solution and resets the board for the next puzzle identity', async () => {
+            currentSessionReturn = makeSessionReturn();
+            const user = userEvent.setup();
+            const { rerender } = render(<Puzzles />);
+
+            await user.click(screen.getByRole('button', { name: /reveal best move solution/i }));
+            expect(await screen.findByText('Solution')).toBeInTheDocument();
+            expect(screen.getByRole('gridcell', { name: 'e4, white pawn' })).toBeInTheDocument();
+
+            await user.click(screen.getByRole('button', { name: /next puzzle/i }));
+            await waitFor(() => expect(mockSetCurrentIndex).toHaveBeenCalledWith(1));
+            currentSessionReturn = {
+                ...currentSessionReturn,
+                currentIndex: 1,
+            };
+            rerender(<Puzzles />);
+
+            expect(screen.queryByText('Solution')).not.toBeInTheDocument();
+            expect(screen.getByText('Find the best move...')).toBeInTheDocument();
+            expect(screen.getByRole('gridcell', { name: 'e2, white pawn' })).toBeInTheDocument();
+            expect(screen.getByRole('gridcell', { name: 'e4, empty' })).toBeInTheDocument();
+        });
+
         it('ignores a delayed same-ID check response after the puzzle is rehydrated', async () => {
             const pendingCheck = deferred<{ correct: boolean; result: string }>();
             vi.mocked(checkPuzzle).mockReturnValue(pendingCheck.promise as never);
@@ -717,6 +816,20 @@ describe('Puzzles — honest failure handling', () => {
             rerender(<Puzzles />);
             await user.click(screen.getByRole('button', { name: /check entered move/i }));
             expect(checkPuzzle).toHaveBeenCalledTimes(checkCallsBeforeSubmit + 2);
+            expect(checkPuzzle).toHaveBeenNthCalledWith(
+                checkCallsBeforeSubmit + 1,
+                'p1',
+                'testplayer',
+                'e2e4',
+                0,
+            );
+            expect(checkPuzzle).toHaveBeenNthCalledWith(
+                checkCallsBeforeSubmit + 2,
+                'p1',
+                'testplayer',
+                'e2e4',
+                0,
+            );
 
             // A's stale finalizer must not release B's ownership. A third
             // submission while B is pending must therefore be ignored.
