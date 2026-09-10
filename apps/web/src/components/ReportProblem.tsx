@@ -6,7 +6,8 @@ export function ReportProblem() {
     // Hide on mobile on interaction-heavy routes so the fixed button cannot
     // intercept board squares or action controls at the bottom of the viewport.
     // Still visible on desktop (md+) where layout headroom is ample.
-    const hiddenOnMobile = pathname === '/puzzles' || pathname === '/engine';
+    const normalizedPathname = pathname.replace(/\/$/, '');
+    const hiddenOnMobile = ['/puzzles', '/engine'].includes(normalizedPathname);
 
     return (
         // Complementary landmark so this persistent utility link isn't page content
