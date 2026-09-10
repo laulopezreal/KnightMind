@@ -393,6 +393,8 @@ describe('Issue #154: finish button on final puzzle', () => {
         expect(screen.queryByRole('button', { name: 'Finish Session' })).not.toBeInTheDocument();
         expect(screen.getByText(/session complete/i)).toBeInTheDocument();
         // SessionSummaryCard is rendered via the existing {sessionSummary && ...} block
-        expect(screen.getByTestId('session-summary')).toBeInTheDocument();
+        const summary = screen.getByTestId('session-summary');
+        expect(summary).toBeInTheDocument();
+        expect(summary.parentElement).toHaveClass('scroll-mt-24', 'lg:scroll-mt-6');
     });
 });

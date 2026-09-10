@@ -413,6 +413,7 @@ export default function Puzzles() {
         requestDiagnosis: boolean;
         diagnosisOwner: TerminalDiagnosisOwner;
     } | null>(null);
+    const reviewStatsFoldInstanceRef = useRef<typeof currentPuzzle>(null);
     if (puzzleInstanceRef.current !== currentPuzzle) {
         // A same-id reference change (e.g. the review hook calling setPuzzles to
         // fold fresh server stats back into the queue item) must NOT reset the
@@ -422,6 +423,21 @@ export default function Puzzles() {
         // dropped on any reference change (including same-id rehydration).
         // Puzzle-check ownership needs a fresh epoch on any reference change.
         const isSamePuzzle = puzzleInstanceRef.current?.id === currentPuzzle?.id;
+        const outcomeDecision = outcomeDecisionRef.current;
+        const hasReviewStatsDelta = isSamePuzzle && Boolean(currentPuzzle) && (
+            currentPuzzle?.attempts !== puzzleInstanceRef.current?.attempts
+            || currentPuzzle?.pass_count !== puzzleInstanceRef.current?.pass_count
+            || currentPuzzle?.fail_count !== puzzleInstanceRef.current?.fail_count
+            || currentPuzzle?.last_reviewed_at !== puzzleInstanceRef.current?.last_reviewed_at
+            || currentPuzzle?.last_result !== puzzleInstanceRef.current?.last_result
+            || currentPuzzle?.next_due_at !== puzzleInstanceRef.current?.next_due_at
+        );
+        const isActiveReviewStatsFold = isSamePuzzle
+            && outcomeWriteRef.current !== null
+            && outcomeDecision?.puzzleId === currentPuzzle?.id
+            && outcomeDecision.epoch === puzzleEpochRef.current
+            && hasReviewStatsDelta;
+        reviewStatsFoldInstanceRef.current = isActiveReviewStatsFold ? currentPuzzle : null;
         puzzleInstanceRef.current = currentPuzzle;
         puzzleEpochRef.current += 1;
         checkingPuzzleRef.current = null;
@@ -1202,24 +1218,27 @@ export default function Puzzles() {
 
     // Sync game board when puzzle changes (setState during render, not in effect)
     const [prevPuzzle, setPrevPuzzle] = useState(currentPuzzle);
+    const presentationResetEpochRef = useRef(0);
     if (currentPuzzle && currentPuzzle !== prevPuzzle) {
-        const puzzleIdentityChanged = currentPuzzle.id !== prevPuzzle?.id;
+        const preserveReviewPresentation = reviewStatsFoldInstanceRef.current === currentPuzzle;
+        reviewStatsFoldInstanceRef.current = null;
         setPrevPuzzle(currentPuzzle);
-        setGame(new Chess(currentPuzzle.fen));
-        // Drop any solution held for the previous puzzle.
-        setRevealedMove(null);
-        setRevealedPv([]);
-        // Restart the multi-move line and clear click selection for the new puzzle.
-        dispatchBoard({ type: 'RESET_ATTEMPTED_LINE' });
-        dispatchBoard({ type: 'SET_LINE_PLY_INDEX', index: 0 });
-        dispatchBoard({ type: 'SET_CLICK_FROM', square: null });
-        setActionError(null);
         // A review response may fold updated attempts into a new object for the
-        // same resolved puzzle. Keep its hint fact; clear only for a new puzzle.
-        if (puzzleIdentityChanged) {
+        // same resolved puzzle. Keep all presentation state owned by that puzzle;
+        // an otherwise unexplained same-id replacement remains a fresh instance.
+        if (!preserveReviewPresentation) {
+            presentationResetEpochRef.current += 1;
+            setGame(new Chess(currentPuzzle.fen));
+            setRevealedMove(null);
+            setRevealedPv([]);
+            dispatchBoard({ type: 'RESET_ATTEMPTED_LINE' });
+            dispatchBoard({ type: 'SET_LINE_PLY_INDEX', index: 0 });
+            dispatchBoard({ type: 'SET_CLICK_FROM', square: null });
+            setActionError(null);
             setMotifHint(null);
             setMotifHintAsked(false);
             usedHintForCurrentPuzzleRef.current = false;
+            stopPlayback();
         }
     }
 
@@ -1272,14 +1291,16 @@ export default function Puzzles() {
     }, [presentationSessionState]);
 
     // Reset clue and start timer when puzzle changes (side effects in effect)
+    const effectPresentationResetEpochRef = useRef(-1);
     useEffect(() => {
-        if (currentPuzzle) {
-            clueReset();
-            startPuzzleTimer();
-            // A still-running solution playback belongs to the previous puzzle
-            // and would overwrite the fresh board with stale positions.
-            stopPlayback();
-        }
+        if (!currentPuzzle) return;
+        if (effectPresentationResetEpochRef.current === presentationResetEpochRef.current) return;
+        effectPresentationResetEpochRef.current = presentationResetEpochRef.current;
+        clueReset();
+        startPuzzleTimer();
+        // A still-running solution playback belongs to the previous puzzle
+        // and would overwrite the fresh board with stale positions.
+        stopPlayback();
     }, [currentPuzzle, clueReset, startPuzzleTimer]);
 
     const onPieceDrop = (sourceSquare: string, targetSquare: string, promotion: string = 'q') => {
@@ -2368,7 +2389,7 @@ export default function Puzzles() {
 
             {/* Session Summary */}
             {completedSummary && presentationSessionState === 'completed' && (
-                <div ref={summaryRef} className="lg:order-7 scroll-mt-6">
+                <div ref={summaryRef} className="lg:order-7 scroll-mt-24 lg:scroll-mt-6">
                     {warmupMode || warmupReturn ? (
                         <WarmupSummary
                             sessionSummary={completedSummary}
