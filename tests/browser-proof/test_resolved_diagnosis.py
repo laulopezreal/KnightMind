@@ -422,9 +422,9 @@ def run_test(
     review_summary = page.get_by_text(
         "Review your result and any available diagnosis", exact=False
     )
-    assert review_summary.count() == 0, (
-        f"{viewport_name}: Obsolete outer result-review disclosure is still present"
-    )
+    assert (
+        review_summary.count() == 0
+    ), f"{viewport_name}: Obsolete outer result-review disclosure is still present"
 
     # The diagnosis must appear within 5s after the correct answer.
     # The real production flow: checkPuzzle returns correct → handleCheckAnswer
@@ -464,30 +464,30 @@ def run_test(
 
     # Cause ("Loose piece awareness")
     cause = diag.get_by_text("Loose piece awareness", exact=True)
-    assert cause.count() > 0 and cause.first.is_visible(), (
-        f"{viewport_name}: Cause label not visible"
-    )
+    assert (
+        cause.count() > 0 and cause.first.is_visible()
+    ), f"{viewport_name}: Cause label not visible"
 
     # A representative secondary cause is part of the immediate diagnosis hierarchy,
     # before the user activates the collapsed Technical details disclosure.
     secondary_cause = diag.locator("span").filter(
         has_text=re.compile(r"^King safety blindness$")
     )
-    assert secondary_cause.count() > 0 and secondary_cause.first.is_visible(), (
-        f"{viewport_name}: Secondary cause label not immediately visible"
-    )
+    assert (
+        secondary_cause.count() > 0 and secondary_cause.first.is_visible()
+    ), f"{viewport_name}: Secondary cause label not immediately visible"
 
     # Explanation
     explanation = diag.get_by_text(re.compile("pawn passively|central control", re.I))
-    assert explanation.count() > 0 and explanation.first.is_visible(), (
-        f"{viewport_name}: Explanation text not visible"
-    )
+    assert (
+        explanation.count() > 0 and explanation.first.is_visible()
+    ), f"{viewport_name}: Explanation text not visible"
 
     # Next-time guidance
     next_time = diag.get_by_text("Next time", exact=True)
-    assert next_time.count() > 0 and next_time.first.is_visible(), (
-        f"{viewport_name}: 'Next time' recommendation heading not visible"
-    )
+    assert (
+        next_time.count() > 0 and next_time.first.is_visible()
+    ), f"{viewport_name}: 'Next time' recommendation heading not visible"
 
     print(
         "  [OK] Diagnosis heading, primary and secondary causes, explanation, and next-time guidance are visible",
@@ -501,29 +501,27 @@ def run_test(
         "king on h3, rook on e6, queen on a8, bishop on g2", exact=True
     )
     assert details.count() == 1, f"{viewport_name}: Technical disclosure missing"
-    assert not details.evaluate("el => el.open"), (
-        f"{viewport_name}: Technical evidence is expanded by default"
-    )
-    assert not attack_value.is_visible(), (
-        f"{viewport_name}: Detailed attack evidence is visible while collapsed"
-    )
+    assert not details.evaluate(
+        "el => el.open"
+    ), f"{viewport_name}: Technical evidence is expanded by default"
+    assert (
+        not attack_value.is_visible()
+    ), f"{viewport_name}: Detailed attack evidence is visible while collapsed"
     collapsed_height = diag.evaluate("el => el.getBoundingClientRect().height")
-    assert collapsed_height < 620, (
-        f"{viewport_name}: Collapsed diagnosis is not compact ({collapsed_height:.1f}px)"
-    )
+    assert (
+        collapsed_height < 620
+    ), f"{viewport_name}: Collapsed diagnosis is not compact ({collapsed_height:.1f}px)"
 
     summary.scroll_into_view_if_needed()
     summary_box = summary.bounding_box()
-    assert summary_box is not None and summary_box["height"] >= 44, (
-        f"{viewport_name}: Technical disclosure target is below 44px"
-    )
-    assert summary.evaluate(
-        """el => {
+    assert (
+        summary_box is not None and summary_box["height"] >= 44
+    ), f"{viewport_name}: Technical disclosure target is below 44px"
+    assert summary.evaluate("""el => {
             const rect = el.getBoundingClientRect();
             const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
             return hit === el || el.contains(hit);
-        }"""
-    ), f"{viewport_name}: Technical disclosure is occluded at its tap center"
+        }"""), f"{viewport_name}: Technical disclosure is occluded at its tap center"
 
     center_x = summary_box["x"] + summary_box["width"] / 2
     center_y = summary_box["y"] + summary_box["height"] / 2
@@ -532,14 +530,14 @@ def run_test(
     else:
         page.mouse.click(center_x, center_y)
     page.wait_for_function("el => el.open", arg=details.element_handle())
-    assert attack_value.is_visible(), (
-        f"{viewport_name}: Detailed evidence did not become visible"
-    )
+    assert (
+        attack_value.is_visible()
+    ), f"{viewport_name}: Detailed evidence did not become visible"
 
     expanded_height = diag.evaluate("el => el.getBoundingClientRect().height")
-    assert expanded_height > collapsed_height + 80, (
-        f"{viewport_name}: Disclosure did not reveal the full evidence packet"
-    )
+    assert (
+        expanded_height > collapsed_height + 80
+    ), f"{viewport_name}: Disclosure did not reveal the full evidence packet"
     geometry = details.evaluate(
         """el => Array.from(el.querySelectorAll('dl > div')).map(row => {
             const label = row.querySelector('dt').getBoundingClientRect();
@@ -553,25 +551,25 @@ def run_test(
             };
         })"""
     )
-    assert all(abs(row["labelLeft"] - row["valueLeft"]) <= 2 for row in geometry), (
-        f"{viewport_name}: Evidence labels and values are not stacked: {geometry}"
-    )
-    assert min(row["valueWidth"] for row in geometry) >= 180, (
-        f"{viewport_name}: Evidence values collapse into a narrow column: {geometry}"
-    )
-    assert max(row["valueLines"] for row in geometry) <= 4, (
-        f"{viewport_name}: Evidence wraps into a one-word-per-line column: {geometry}"
-    )
+    assert all(
+        abs(row["labelLeft"] - row["valueLeft"]) <= 2 for row in geometry
+    ), f"{viewport_name}: Evidence labels and values are not stacked: {geometry}"
+    assert (
+        min(row["valueWidth"] for row in geometry) >= 180
+    ), f"{viewport_name}: Evidence values collapse into a narrow column: {geometry}"
+    assert (
+        max(row["valueLines"] for row in geometry) <= 4
+    ), f"{viewport_name}: Evidence wraps into a one-word-per-line column: {geometry}"
 
     summary.focus()
     summary.press("Enter")
-    assert not details.evaluate("el => el.open"), (
-        f"{viewport_name}: Enter did not close the native disclosure"
-    )
+    assert not details.evaluate(
+        "el => el.open"
+    ), f"{viewport_name}: Enter did not close the native disclosure"
     summary.press("Space")
-    assert details.evaluate("el => el.open"), (
-        f"{viewport_name}: Space did not reopen the native disclosure"
-    )
+    assert details.evaluate(
+        "el => el.open"
+    ), f"{viewport_name}: Space did not reopen the native disclosure"
     print(
         f"  [OK] {theme} theme: compact collapsed card, 44px real input, keyboard disclosure, readable expanded evidence",
         flush=True,

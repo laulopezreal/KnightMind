@@ -1,10 +1,11 @@
 import hashlib
+import uuid
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import TypedDict
+from datetime import datetime, timedelta, timezone
+from typing import TypedDict, cast
 
-from sqlalchemy import Row, func, select
+from sqlalchemy import CursorResult, Row, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -34,8 +35,25 @@ class ImportSummaryRow(TypedDict):
     as a type error -- exactly what the gate is for.
     """
 
-    last_imported_at: str
-    last_new_games: int
+    last_imported_at: str | None
+    last_new_games: int | None
+    status: str
+    operation_id: str | None
+    started_at: str | None
+    updated_at: str | None
+    completed_at: str | None
+    error: str | None
+
+
+IMPORT_LEASE_DURATION = timedelta(hours=1)
+
+
+def _as_utc_iso(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc).isoformat()
 
 
 @dataclass
@@ -267,9 +285,147 @@ class GameRepository:
                     username=username_lower,
                     last_imported_at=ts,
                     last_new_games=new_games,
+                    status="succeeded",
+                    started_at=ts,
+                    updated_at=ts,
+                    completed_at=ts,
                 )
             )
+        if existing:
+            existing.status = "succeeded"
+            existing.updated_at = ts
+            existing.completed_at = ts
+            existing.error = None
         self.db.commit()
+
+    def begin_import(
+        self, username: str, started_at: datetime | None = None
+    ) -> str | None:
+        """Claim the durable per-username import lease, or return None if active."""
+        from services.api.models import ImportSummary
+
+        username_lower = canonical_username(username)
+        now = started_at or datetime.now(timezone.utc)
+        # Postgres is the only supported database. This closes the absent-row
+        # race where two first imports could both observe no summary before an
+        # INSERT establishes the username primary key.
+        lock_key = int.from_bytes(
+            hashlib.sha256(f"import:{username_lower}".encode()).digest()[:8],
+            byteorder="big",
+            signed=True,
+        )
+        self.db.execute(select(func.pg_advisory_xact_lock(lock_key)))
+        summary = self.db.get(ImportSummary, username_lower)
+        if (
+            summary is not None
+            and summary.status == "importing"
+            and summary.updated_at is not None
+            and summary.updated_at.replace(tzinfo=timezone.utc)
+            >= now - IMPORT_LEASE_DURATION
+        ):
+            self.db.commit()
+            return None
+
+        operation_id = str(uuid.uuid4())
+        if summary is None:
+            summary = ImportSummary(username=username_lower)
+            self.db.add(summary)
+        summary.status = "importing"
+        summary.operation_id = operation_id
+        summary.started_at = now
+        summary.updated_at = now
+        summary.completed_at = None
+        summary.error = None
+        self.db.commit()
+        return operation_id
+
+    def heartbeat_import(
+        self,
+        username: str,
+        operation_id: str,
+        updated_at: datetime | None = None,
+        *,
+        commit: bool = True,
+    ) -> bool:
+        """Renew only the currently-owned import lease."""
+        from services.api.models import ImportSummary
+
+        statement = (
+            update(ImportSummary)
+            .where(
+                ImportSummary.username == canonical_username(username),
+                ImportSummary.status == "importing",
+                ImportSummary.operation_id == operation_id,
+            )
+            .values(updated_at=updated_at or datetime.now(timezone.utc))
+            .execution_options(synchronize_session=False)
+        )
+        affected_rows = cast(CursorResult, self.db.execute(statement)).rowcount
+        if commit:
+            self.db.commit()
+        return affected_rows == 1
+
+    def finish_import(
+        self,
+        username: str,
+        operation_id: str,
+        new_games: int,
+        completed_at: datetime | None = None,
+    ) -> bool:
+        """Publish a successful result only when this operation still owns it."""
+        from services.api.models import ImportSummary
+
+        now = completed_at or datetime.now(timezone.utc)
+        statement = (
+            update(ImportSummary)
+            .where(
+                ImportSummary.username == canonical_username(username),
+                ImportSummary.status == "importing",
+                ImportSummary.operation_id == operation_id,
+            )
+            .values(
+                status="succeeded",
+                last_imported_at=now,
+                last_new_games=new_games,
+                updated_at=now,
+                completed_at=now,
+                error=None,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        affected_rows = cast(CursorResult, self.db.execute(statement)).rowcount
+        self.db.commit()
+        return affected_rows == 1
+
+    def fail_import(
+        self,
+        username: str,
+        operation_id: str,
+        error: str,
+        completed_at: datetime | None = None,
+    ) -> bool:
+        """Record a safe terminal failure without clobbering a newer owner."""
+        from services.api.models import ImportSummary
+
+        now = completed_at or datetime.now(timezone.utc)
+        statement = (
+            update(ImportSummary)
+            .where(
+                ImportSummary.username == canonical_username(username),
+                ImportSummary.status == "importing",
+                ImportSummary.operation_id == operation_id,
+            )
+            .values(
+                status="failed",
+                updated_at=now,
+                completed_at=now,
+                error=error,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        affected_rows = cast(CursorResult, self.db.execute(statement)).rowcount
+        self.db.commit()
+        return affected_rows == 1
 
     def get_last_import_summary(self, username: str) -> ImportSummaryRow | None:
         """Get the last import summary for a user from the database."""
@@ -278,9 +434,21 @@ class GameRepository:
         summary = self.db.get(ImportSummary, canonical_username(username))
         if not summary:
             return None
+        status = summary.status
+        if (
+            status == "importing"
+            and summary.updated_at is not None
+            and summary.updated_at.replace(tzinfo=timezone.utc)
+            < datetime.now(timezone.utc) - IMPORT_LEASE_DURATION
+        ):
+            status = "interrupted"
         return {
-            "last_imported_at": summary.last_imported_at.replace(
-                tzinfo=timezone.utc
-            ).isoformat(),
+            "last_imported_at": _as_utc_iso(summary.last_imported_at),
             "last_new_games": summary.last_new_games,
+            "status": status,
+            "operation_id": summary.operation_id,
+            "started_at": _as_utc_iso(summary.started_at),
+            "updated_at": _as_utc_iso(summary.updated_at),
+            "completed_at": _as_utc_iso(summary.completed_at),
+            "error": summary.error,
         }
