@@ -15,6 +15,8 @@ import { DataStateError, DataStateSkeleton } from '../components/DataState';
 
 type OnboardingPhase = 'idle' | 'importing' | 'generating' | 'complete';
 
+const IMPORT_STATUS_MAX_CONSECUTIVE_FAILURES = 3;
+
 const idleImportStatus: ImportStatusResponse = {
   last_imported_at: null,
   last_new_games: null,
@@ -231,12 +233,14 @@ export default function Home() {
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let completedWithoutJobChecks = 0;
+    let consecutiveFailures = 0;
     const owner = username;
 
     const poll = async () => {
       try {
         const status = await getImportStatus(owner);
         if (cancelled || owner !== activeUsernameRef.current) return;
+        consecutiveFailures = 0;
         setImportStatus({ ...idleImportStatus, ...status });
         if (status.status === 'importing') {
           timer = setTimeout(poll, 1500);
@@ -279,7 +283,17 @@ export default function Home() {
           setIsError(true);
         }
       } catch {
-        if (!cancelled) timer = setTimeout(poll, 1500);
+        if (cancelled || owner !== activeUsernameRef.current) return;
+        consecutiveFailures += 1;
+        if (consecutiveFailures >= IMPORT_STATUS_MAX_CONSECUTIVE_FAILURES) {
+          setOnboardingPhase('idle');
+          setActionStatus(
+            "We couldn't check the import's progress. It may still be running on the server. Retry when you're ready."
+          );
+          setIsError(true);
+          return;
+        }
+        timer = setTimeout(poll, 1500);
       }
     };
 

@@ -289,6 +289,59 @@ describe('Home', () => {
   });
 
   describe('active-work recovery', () => {
+    it('bounds failed status polling after a confirmed 409 reattachment', async () => {
+      vi.useFakeTimers();
+      try {
+        const api = await import('../api');
+        const { ApiError } = await import('../api/core');
+        mockUsername = 'testplayer';
+        vi.mocked(api.getUserStatus).mockResolvedValue({
+          username: 'testplayer', games_count: 0, puzzles_count: 0, due_count: 0,
+          next_due_at: null, has_new_games: false,
+        });
+        vi.mocked(api.validateChessComUser).mockResolvedValue({ valid: true, username: 'testplayer' });
+        vi.mocked(api.importChessComGames).mockRejectedValue(
+          new ApiError('An import is already in progress', 409),
+        );
+        vi.mocked(api.getImportStatus)
+          .mockResolvedValueOnce({
+            last_imported_at: null, last_new_games: null, status: 'idle', operation_id: null,
+            started_at: null, updated_at: null, completed_at: null, error: null,
+          })
+          .mockResolvedValueOnce({
+            last_imported_at: null, last_new_games: null, status: 'importing', operation_id: 'other-tab-import',
+            started_at: '2026-09-11T06:00:00Z', updated_at: '2026-09-11T06:00:10Z',
+            completed_at: null, error: null,
+          })
+          .mockRejectedValue(new Error('status endpoint unavailable'));
+
+        render(<Home />);
+        await act(async () => {});
+        fireEvent.click(screen.getByRole('button', { name: /import games/i }));
+        await act(async () => {});
+
+        expect(screen.getByText('Importing games from Chess.com...')).toBeInTheDocument();
+        expect(api.importChessComGames).toHaveBeenCalledTimes(1);
+
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(4500);
+        });
+
+        expect(screen.getByText(/couldn't check the import's progress/i)).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: /retry/i })).toBeEnabled();
+        expect(api.getImportStatus).toHaveBeenCalledTimes(5);
+        expect(api.importChessComGames).toHaveBeenCalledTimes(1);
+
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(60_000);
+        });
+        expect(api.getImportStatus).toHaveBeenCalledTimes(5);
+        expect(api.importChessComGames).toHaveBeenCalledTimes(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('reattaches when another tab wins the import race without offering a retry', async () => {
       const api = await import('../api');
       const { ApiError } = await import('../api/core');
