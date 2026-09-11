@@ -382,6 +382,11 @@ async def import_chesscom_games(
             sequentially, so only one thread touches the session at a time.
             """
             nonlocal new_games, skipped
+            if not game_repository.heartbeat_import(
+                username, operation_id, commit=False
+            ):
+                db.rollback()
+                raise HTTPException(status_code=409, detail="Import ownership changed")
             for game in games:
                 try:
                     is_new, _ = game_repository.store_game(
@@ -407,7 +412,6 @@ async def import_chesscom_games(
                     new_games += 1
                 else:
                     skipped += 1
-            game_repository.heartbeat_import(username, operation_id, commit=False)
             db.commit()
 
         # Incremental sync: fetch only monthly archives that could contain new

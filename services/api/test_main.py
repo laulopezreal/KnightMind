@@ -870,6 +870,88 @@ def test_import_terminalization_is_atomic_across_stale_database_sessions(
         current_session.close()
 
 
+@patch("services.api.main.import_all_games")
+def test_replaced_import_cannot_commit_a_stale_batch(
+    mock_import_games, client_with_db, db_engine
+):
+    """A replaced importer cannot steal a game or distort its owner's count."""
+    from services.ingest import ChessGame
+
+    session_factory = sessionmaker(bind=db_engine, autocommit=False, autoflush=False)
+    current_session = session_factory()
+    current_repository = GameRepository(current_session)
+    replacement_operation: str | None = None
+    game = ChessGame(
+        url="https://www.chess.com/game/live/replaced-batch",
+        pgn='[Event "Test"]\n\n1. e4 e5 1/2-1/2',
+        time_control="600",
+        end_time=1704067200,
+        rated=True,
+        white_username="testuser",
+        black_username="opponent",
+        white_result="win",
+        black_result="lose",
+    )
+
+    async def replace_lease_before_stale_batch(username, since=None):
+        nonlocal replacement_operation
+        summary = current_session.get(ImportSummary, "testuser")
+        assert summary is not None
+        summary.updated_at = datetime.now(timezone.utc) - timedelta(hours=2)
+        current_session.commit()
+        replacement_operation = current_repository.begin_import("testuser")
+        assert replacement_operation is not None
+        yield game
+
+    mock_import_games.side_effect = replace_lease_before_stale_batch
+
+    try:
+        stale_response = client_with_db.post("/import/chesscom?username=testuser")
+
+        assert stale_response.status_code == 409
+        assert stale_response.json()["detail"] == "Import ownership changed"
+        current_session.expire_all()
+        assert current_repository.get_game_count("testuser") == 0
+        active = current_repository.get_last_import_summary("testuser")
+        assert active is not None
+        assert active["status"] == "importing"
+        assert active["operation_id"] == replacement_operation
+        assert active["last_new_games"] is None
+
+        assert replacement_operation is not None
+        assert current_repository.heartbeat_import(
+            "testuser", replacement_operation, commit=False
+        )
+        is_new, _ = current_repository.store_game(
+            username="testuser",
+            url=game.url,
+            pgn=game.pgn,
+            white_username=game.white_username,
+            black_username=game.black_username,
+            white_result=game.white_result,
+            black_result=game.black_result,
+            time_control=game.time_control,
+            end_time=game.end_time,
+            rated=game.rated,
+            commit=False,
+        )
+        current_session.commit()
+        assert is_new is True
+        assert current_repository.finish_import(
+            "testuser", replacement_operation, new_games=int(is_new)
+        )
+
+        current_session.expire_all()
+        terminal = current_repository.get_last_import_summary("testuser")
+        assert terminal is not None
+        assert terminal["status"] == "succeeded"
+        assert terminal["operation_id"] == replacement_operation
+        assert terminal["last_new_games"] == 1
+        assert current_repository.get_game_count("testuser") == 1
+    finally:
+        current_session.close()
+
+
 def test_expired_import_lease_is_truthfully_retryable(client_with_db, db_session):
     repository = GameRepository(db_session)
     old_operation = repository.begin_import(
