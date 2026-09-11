@@ -20,6 +20,7 @@ export async function importChessComGames(username: string): Promise<ImportResul
     } catch (err) {
         if (err instanceof ApiError) {
             if (err.statusCode === 404) throw new ApiError('User not found', 404, err.detail);
+            if (err.statusCode === 409) throw new ApiError('An import is already in progress', 409, err.detail);
             if (err.statusCode === 429) throw new ApiError('Rate limited by Chess.com', 429, err.detail);
             if (err.statusCode === 502) throw new ApiError('Network error connecting to Chess.com', 502, err.detail);
         }
@@ -36,6 +37,12 @@ export interface ValidateUserResponse {
 export interface ImportStatusResponse {
     last_imported_at: string | null;
     last_new_games: number | null;
+    status: 'idle' | 'importing' | 'succeeded' | 'failed' | 'interrupted';
+    operation_id: string | null;
+    started_at: string | null;
+    updated_at: string | null;
+    completed_at: string | null;
+    error: string | null;
 }
 
 export interface UserStatus {

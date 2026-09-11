@@ -66,22 +66,29 @@ export function SessionSummaryCard({
                 </div>
             </header>
 
-            <div className="grid grid-cols-3 gap-3 sm:gap-6 mb-6" aria-label="Session result">
+            <div
+                className="grid grid-cols-3 gap-3 sm:gap-6 mb-2"
+                aria-label="Session result"
+                aria-describedby="session-attempt-context"
+            >
                 <div className="text-center">
                     <div className="text-3xl font-serif text-positive"><AnimatedNumber value={sessionSummary.pass_count} /></div>
-                    <div className="text-xs uppercase tracking-widest text-primary/70 mt-1">Passed</div>
+                    <div className="text-xs uppercase tracking-widest text-primary/70 mt-1">Passed attempts</div>
                 </div>
                 <div className="text-center">
                     <div className="text-3xl font-serif text-negative"><AnimatedNumber value={sessionSummary.fail_count} /></div>
-                    <div className="text-xs uppercase tracking-widest text-primary/70 mt-1">Failed</div>
+                    <div className="text-xs uppercase tracking-widest text-primary/70 mt-1">Failed attempts</div>
                 </div>
                 <div className="text-center">
                     <div className="text-3xl font-serif text-primary">
                         <AnimatedNumber value={calculateAccuracy(sessionSummary.pass_count, sessionSummary.fail_count)} suffix="%" />
                     </div>
-                    <div className="text-xs uppercase tracking-widest text-primary/70 mt-1">Accuracy</div>
+                    <div className="text-xs uppercase tracking-widest text-primary/70 mt-1">Attempt accuracy</div>
                 </div>
             </div>
+            <p id="session-attempt-context" className="text-center text-sm text-primary/70 mb-6">
+                {total} review {total === 1 ? 'attempt' : 'attempts'} across {sessionSummary.requested_n} {sessionSummary.requested_n === 1 ? 'puzzle' : 'puzzles'}.
+            </p>
 
             {/* Closeout actions: Back to Dashboard is the primary ritual close;
                 Start New Session is secondary. Do not trap the user in a forced ritual. */}

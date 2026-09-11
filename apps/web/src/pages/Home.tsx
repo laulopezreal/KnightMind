@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { importChessComGames, getImportStatus, validateChessComUser, getUserStatus, type UserStatus } from '../api/users';
+import { importChessComGames, getImportStatus, validateChessComUser, getUserStatus, type ImportStatusResponse, type UserStatus } from '../api/users';
 import { ApiError } from '../api/core';
 import { generatePuzzles } from '../api/puzzles';
 import { useChessUsername } from '../context/ChessUsernameContext';
@@ -13,13 +13,20 @@ import { LoadingSpinner } from '../components/LoadingSpinner';
 import { DataStateError, DataStateSkeleton } from '../components/DataState';
 
 
-type ImportStatus = {
-  lastImportedAt: string | null;
-  lastNewGames: number | null;
-};
-
-
 type OnboardingPhase = 'idle' | 'importing' | 'generating' | 'complete';
+
+const IMPORT_STATUS_MAX_CONSECUTIVE_FAILURES = 3;
+
+const idleImportStatus: ImportStatusResponse = {
+  last_imported_at: null,
+  last_new_games: null,
+  status: 'idle',
+  operation_id: null,
+  started_at: null,
+  updated_at: null,
+  completed_at: null,
+  error: null,
+};
 
 /**
  * Hero heading, rendered in every state — loading, error, loaded — so the page
@@ -48,10 +55,7 @@ export default function Home() {
   const [pageError, setPageError] = useState<string | null>(null);
 
   // Import states
-  const [importStatus, setImportStatus] = useState<ImportStatus>({
-    lastImportedAt: null,
-    lastNewGames: null,
-  });
+  const [importStatus, setImportStatus] = useState<ImportStatusResponse>(idleImportStatus);
 
   // Inline connect form (new-user CTA — works on all viewports)
   const [showConnect, setShowConnect] = useState(false);
@@ -64,36 +68,58 @@ export default function Home() {
 
   // Onboarding state
   const [onboardingPhase, setOnboardingPhase] = useState<OnboardingPhase>('idle');
-  const [generatingJobId, setGeneratingJobId] = useState<string | null>(null);
+  const [generatingJobId, setGeneratingJobId] = useState<string | null>(() => (
+    username ? localStorage.getItem(`knightmind:lastJob:${username}`) : null
+  ));
   // Puzzles actually created by this run, derived from the status delta.
   // `null` = we couldn't determine it, so the modal drops the number rather
   // than guessing.
   const [generatedPuzzleCount, setGeneratedPuzzleCount] = useState<number | null>(null);
   const puzzlesBeforeImportRef = useRef(0);
+  const activeUsernameRef = useRef(username);
+  activeUsernameRef.current = username;
+  const actionSequenceRef = useRef(0);
+  const generationOwnerRef = useRef<string | null>(generatingJobId ? username : null);
+  const redirectOnGenerationSuccessRef = useRef(false);
 
   // Job polling for puzzle generation
   const { job: generationJob } = useJobPolling(generatingJobId, {
     enabled: onboardingPhase === 'generating',
     onSuccess: async () => {
-      // Re-read the status so the celebration can quote the real puzzle count.
-      // It used to print `newGamesCount` — the number of GAMES imported — so a
-      // 40-game import announced "40 puzzles generated" and then dropped the
-      // user on a dashboard showing 6.
+      const owner = generationOwnerRef.current || activeUsernameRef.current;
+      const shouldRedirect = generationOwnerRef.current === null
+        ? true
+        : redirectOnGenerationSuccessRef.current;
+      if (!owner || owner !== activeUsernameRef.current) return;
+      localStorage.removeItem(`knightmind:lastJob:${owner}`);
       try {
-        const freshStatus = await getUserStatus(username);
+        const freshStatus = await getUserStatus(owner);
+        if (owner !== activeUsernameRef.current) return;
         setUserStatus(freshStatus);
         setGeneratedPuzzleCount(
           Math.max(0, freshStatus.puzzles_count - puzzlesBeforeImportRef.current),
         );
       } catch {
-        // Non-critical: the modal falls back to count-free copy.
+        if (owner !== activeUsernameRef.current) return;
         setGeneratedPuzzleCount(null);
       }
-      setOnboardingPhase('complete');
-      // Show celebration for 3 seconds, then redirect
-      setTimeout(() => navigate('/dashboard'), 3000);
+      setGeneratingJobId(null);
+      generationOwnerRef.current = null;
+      if (shouldRedirect) {
+        setOnboardingPhase('complete');
+        setTimeout(() => {
+          if (owner === activeUsernameRef.current) navigate('/dashboard');
+        }, 3000);
+      } else {
+        setActionStatus('Puzzle generation complete. Your dashboard is ready.');
+        setIsError(false);
+        setOnboardingPhase('idle');
+      }
     },
     onError: (err) => {
+      const owner = generationOwnerRef.current || activeUsernameRef.current;
+      if (!owner || owner !== activeUsernameRef.current) return;
+      localStorage.removeItem(`knightmind:lastJob:${owner}`);
       // The stall error is honest copy ("the job may still be running"), so it
       // must not be framed as a definitive failure; real failures keep the
       // "failed:" prefix. Either way, join the manual-hint sentence without
@@ -104,8 +130,26 @@ export default function Home() {
       setIsError(true);
       setOnboardingPhase('idle');
       setGeneratingJobId(null);
+      generationOwnerRef.current = null;
     }
   });
+
+  // A saved id is only a username-scoped pointer. GET /jobs/{id}, through
+  // useJobPolling, remains authoritative for progress and outcome.
+  useEffect(() => {
+    actionSequenceRef.current += 1;
+    setActionStatus(null);
+    setIsError(false);
+    setLoading(false);
+    setGeneratedPuzzleCount(null);
+    const savedJobId = username
+      ? localStorage.getItem(`knightmind:lastJob:${username}`)
+      : null;
+    generationOwnerRef.current = savedJobId ? username : null;
+    redirectOnGenerationSuccessRef.current = false;
+    setGeneratingJobId(savedJobId);
+    setOnboardingPhase(savedJobId ? 'generating' : 'idle');
+  }, [username]);
 
   // Fetch all page data on mount
   const loadPageData = useCallback(async () => {
@@ -140,10 +184,28 @@ export default function Home() {
       }
 
       if (importResult.status === 'fulfilled') {
-        setImportStatus({
-          lastImportedAt: importResult.value.last_imported_at,
-          lastNewGames: importResult.value.last_new_games,
-        });
+        const recoveredImport = { ...idleImportStatus, ...importResult.value };
+        setImportStatus(recoveredImport);
+        const savedJobId = localStorage.getItem(`knightmind:lastJob:${username}`);
+        if (savedJobId) {
+          generationOwnerRef.current = username;
+          redirectOnGenerationSuccessRef.current = false;
+          setGeneratingJobId(savedJobId);
+          setOnboardingPhase('generating');
+          setActionStatus('Resuming puzzle generation...');
+        } else if (recoveredImport.status === 'importing') {
+          setOnboardingPhase('importing');
+          setActionStatus('Importing games from Chess.com...');
+          setIsError(false);
+        } else if (recoveredImport.status === 'failed' || recoveredImport.status === 'interrupted') {
+          setOnboardingPhase('idle');
+          setActionStatus(
+            recoveredImport.status === 'interrupted'
+              ? 'The previous import stopped updating. It is safe to try again.'
+              : recoveredImport.error || 'The previous import did not complete. You can try again.'
+          );
+          setIsError(true);
+        }
       }
 
       // Only show page error if both requests fail
@@ -163,6 +225,84 @@ export default function Home() {
   useEffect(() => {
     loadPageData();
   }, [loadPageData]);
+
+  // While Home is mounted, re-read the server lifecycle until the active
+  // import terminalizes. This never replays POST /import/chesscom.
+  useEffect(() => {
+    if (!username || onboardingPhase !== 'importing') return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let completedWithoutJobChecks = 0;
+    let consecutiveFailures = 0;
+    const owner = username;
+
+    const poll = async () => {
+      try {
+        const status = await getImportStatus(owner);
+        if (cancelled || owner !== activeUsernameRef.current) return;
+        consecutiveFailures = 0;
+        setImportStatus({ ...idleImportStatus, ...status });
+        if (status.status === 'importing') {
+          timer = setTimeout(poll, 1500);
+          return;
+        }
+        if (status.status === 'succeeded') {
+          const savedJobId = localStorage.getItem(`knightmind:lastJob:${owner}`);
+          if (savedJobId) {
+            generationOwnerRef.current = owner;
+            redirectOnGenerationSuccessRef.current = false;
+            setGeneratingJobId(savedJobId);
+            setOnboardingPhase('generating');
+            setActionStatus('Resuming puzzle generation...');
+          } else {
+            // The POST owner starts generation immediately after receiving the
+            // import response. Give that username-scoped job pointer a bounded
+            // moment to land before declaring the follow-up manual.
+            if (status.last_new_games && completedWithoutJobChecks < 3) {
+              completedWithoutJobChecks += 1;
+              timer = setTimeout(poll, 500);
+              return;
+            }
+            setOnboardingPhase('idle');
+            setActionStatus(
+              status.last_new_games
+                ? 'Import complete. Open Daily Puzzles to generate puzzles from the new games.'
+                : 'No new games. You’re all caught up!'
+            );
+            setIsError(false);
+          }
+          return;
+        }
+        if (status.status === 'failed' || status.status === 'interrupted') {
+          setOnboardingPhase('idle');
+          setActionStatus(
+            status.status === 'interrupted'
+              ? 'The previous import stopped updating. It is safe to try again.'
+              : status.error || 'The import did not complete. You can try again.'
+          );
+          setIsError(true);
+        }
+      } catch {
+        if (cancelled || owner !== activeUsernameRef.current) return;
+        consecutiveFailures += 1;
+        if (consecutiveFailures >= IMPORT_STATUS_MAX_CONSECUTIVE_FAILURES) {
+          setOnboardingPhase('idle');
+          setActionStatus(
+            "We couldn't check the import's progress. It may still be running on the server. Retry when you're ready."
+          );
+          setIsError(true);
+          return;
+        }
+        timer = setTimeout(poll, 1500);
+      }
+    };
+
+    timer = setTimeout(poll, 1500);
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [username, onboardingPhase]);
 
   // Refresh data when window regains focus (e.g. after solving puzzles)
   useEffect(() => {
@@ -206,11 +346,16 @@ export default function Home() {
   };
 
   const handleImport = async () => {
-    if (!username.trim()) {
+    const owner = username.trim();
+    if (!owner) {
       setActionStatus('Please enter a Chess.com username');
       setIsError(true);
       return;
     }
+    const actionSequence = ++actionSequenceRef.current;
+    const ownsAction = () => (
+      actionSequence === actionSequenceRef.current && owner === activeUsernameRef.current
+    );
 
     // Validate username exists on Chess.com before importing
     setLoading(true);
@@ -218,7 +363,8 @@ export default function Home() {
     setIsError(false);
 
     try {
-      const validation = await validateChessComUser(username.trim());
+      const validation = await validateChessComUser(owner);
+      if (!ownsAction()) return;
       if (!validation.valid) {
         setActionStatus('Username not found on Chess.com. Please check spelling.');
         setIsError(true);
@@ -226,6 +372,7 @@ export default function Home() {
         return;
       }
     } catch {
+      if (!ownsAction()) return;
       setActionStatus('Could not validate username. Continuing with import...');
       // Continue anyway if validation fails
     }
@@ -234,7 +381,8 @@ export default function Home() {
     setOnboardingPhase('importing');
 
     try {
-      const result = await importChessComGames(username);
+      const result = await importChessComGames(owner);
+      if (!ownsAction()) return;
       let generationFailed = false;
 
       if (result.games_count === 0 || result.new_games === 0) {
@@ -248,7 +396,11 @@ export default function Home() {
         setOnboardingPhase('generating');
 
         try {
-          const jobResult = await generatePuzzles(username);
+          const jobResult = await generatePuzzles(owner);
+          if (!ownsAction()) return;
+          localStorage.setItem(`knightmind:lastJob:${owner}`, jobResult.job_id);
+          generationOwnerRef.current = owner;
+          redirectOnGenerationSuccessRef.current = true;
           setGeneratingJobId(jobResult.job_id);
         } catch (error) {
           console.error('Failed to start puzzle generation job:', error);
@@ -260,15 +412,17 @@ export default function Home() {
           generationFailed = true;
         }
       }
-      setImportStatus({
-        lastImportedAt: new Date().toISOString(),
-        lastNewGames: result.new_games,
-      });
+      setImportStatus(current => ({
+        ...current,
+        last_imported_at: new Date().toISOString(),
+        last_new_games: result.new_games,
+        status: 'succeeded',
+      }));
 
       // Refresh user status after successful import
       try {
-        const freshStatus = await getUserStatus(username);
-        setUserStatus(freshStatus);
+        const freshStatus = await getUserStatus(owner);
+        if (ownsAction()) setUserStatus(freshStatus);
       } catch {
         // Non-critical — status will refresh on next page load
       }
@@ -277,6 +431,24 @@ export default function Home() {
         setIsError(false);
       }
     } catch (error) {
+      if (!ownsAction()) return;
+      if (error instanceof ApiError && error.statusCode === 409) {
+        try {
+          const status = await getImportStatus(owner);
+          if (!ownsAction()) return;
+          if (status.status === 'importing') {
+            setImportStatus({ ...idleImportStatus, ...status });
+            setActionStatus('Importing games from Chess.com...');
+            setIsError(false);
+            setOnboardingPhase('importing');
+            return;
+          }
+        } catch {
+          // If the server lifecycle cannot confirm active work, preserve the
+          // original 409 failure below rather than claiming the import resumed.
+        }
+        if (!ownsAction()) return;
+      }
       if (error instanceof ApiError) {
         if (error.detail) console.error('[import]', error.detail);
         setActionStatus(error.message);
@@ -286,7 +458,7 @@ export default function Home() {
       setIsError(true);
       setOnboardingPhase('idle');
     } finally {
-      setLoading(false);
+      if (ownsAction()) setLoading(false);
     }
   };
 
@@ -432,9 +604,9 @@ export default function Home() {
               >
                 {loading ? 'Syncing...' : hasData ? 'Sync New Games' : 'Import Games'}
               </button>
-              {importStatus.lastImportedAt && (
+              {importStatus.last_imported_at && (
                 <span className="text-sm font-sans text-primary/70">
-                  Last synced {formatRelativeTime(importStatus.lastImportedAt)}
+                  Last synced {formatRelativeTime(importStatus.last_imported_at)}
                 </span>
               )}
             </div>
@@ -469,7 +641,7 @@ export default function Home() {
 
         {/* Importing phase */}
         {onboardingPhase === 'importing' && (
-          <div className="max-w-lg flex items-center gap-4">
+          <div className="max-w-lg flex items-center gap-4" role="status" aria-live="polite">
             <LoadingSpinner size="sm" label="Importing games" />
             <p className="text-lg font-sans text-primary/70">{actionStatus || 'Importing games...'}</p>
           </div>
@@ -486,7 +658,7 @@ export default function Home() {
                 error={generationJob.status === 'failed' ? (generationJob.error || generationJob.message) : undefined}
               />
             ) : (
-              <div className="flex items-center gap-4">
+              <div className="flex items-center gap-4" role="status" aria-live="polite">
                 <LoadingSpinner size="sm" label="Starting puzzle generation" />
                 <p className="text-lg font-sans text-primary/70">Starting puzzle generation...</p>
               </div>
