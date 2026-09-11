@@ -221,6 +221,12 @@ class ImportResponse(BaseModel):
 class ImportStatusResponse(BaseModel):
     last_imported_at: str | None
     last_new_games: int | None
+    status: str
+    operation_id: str | None
+    started_at: str | None
+    updated_at: str | None
+    completed_at: str | None
+    error: str | None
 
 
 class UserStatusResponse(BaseModel):
@@ -358,12 +364,15 @@ async def import_chesscom_games(
     # First-importer-wins: claim the handle for this account if unowned, else
     # 403 if another account already owns it. No-op when auth is disabled.
     claim_username_if_unowned(account, username, db)
+    game_repository = GameRepository(db)
+    operation_id = game_repository.begin_import(username)
+    if operation_id is None:
+        raise HTTPException(status_code=409, detail="An import is already in progress")
+
     try:
         count = 0
         new_games = 0
         skipped = 0
-
-        game_repository = GameRepository(db)
 
         def persist_batch(games: list[ChessGame]) -> None:
             """Store a batch of games in a single transaction.
@@ -398,6 +407,7 @@ async def import_chesscom_games(
                     new_games += 1
                 else:
                     skipped += 1
+            game_repository.heartbeat_import(username, operation_id, commit=False)
             db.commit()
 
         # Incremental sync: fetch only monthly archives that could contain new
@@ -417,9 +427,11 @@ async def import_chesscom_games(
         if batch:
             await asyncio.to_thread(persist_batch, batch)
 
-        await asyncio.to_thread(
-            game_repository.record_import_summary, username, new_games
+        lifecycle_finished = await asyncio.to_thread(
+            game_repository.finish_import, username, operation_id, new_games
         )
+        if not lifecycle_finished:
+            raise HTTPException(status_code=409, detail="Import ownership changed")
 
         # Fresh games are on file — record the current ratings alongside them
         # so rating history never depends on a manual snapshot (best-effort).
@@ -436,23 +448,41 @@ async def import_chesscom_games(
         )
 
     except UserNotFoundError as e:
+        game_repository.fail_import(
+            username, operation_id, "Chess.com user was not found."
+        )
         raise HTTPException(status_code=404, detail=str(e)) from e
     except RateLimitError as e:
+        game_repository.fail_import(
+            username, operation_id, "Chess.com rate limited this import."
+        )
         raise HTTPException(
             status_code=429,
             detail=str(e),
             headers={"Retry-After": str(e.retry_after)} if e.retry_after else None,
         ) from e
     except NetworkError as e:
+        game_repository.fail_import(
+            username, operation_id, "Chess.com could not be reached."
+        )
         raise HTTPException(status_code=502, detail=str(e)) from e
     except ChessComImportError as e:
+        game_repository.fail_import(
+            username, operation_id, "The Chess.com import could not complete."
+        )
         raise HTTPException(status_code=400, detail=str(e)) from e
     except HTTPException:
+        game_repository.fail_import(
+            username, operation_id, "The import could not complete."
+        )
         raise
     except Exception as e:
         # Log the real error server-side; return a generic message so raw
         # exception/DB text never reaches the caller (dim 23).
         logger.exception("Unexpected error importing Chess.com games")
+        game_repository.fail_import(
+            username, operation_id, "The import could not complete."
+        )
         raise HTTPException(status_code=500, detail="Internal server error") from e
 
 
@@ -462,16 +492,22 @@ def get_import_status(
     db: Session = Depends(get_db),
     account: Account | None = Depends(require_account),
 ):
-    """Get the last import summary for a user."""
+    """Get the durable import lifecycle and last successful summary for a user."""
     assert_owns_username(account, username, db)
     game_repository = GameRepository(db)
     summary = game_repository.get_last_import_summary(username)
     if not summary:
-        return ImportStatusResponse(last_imported_at=None, last_new_games=None)
-    return ImportStatusResponse(
-        last_imported_at=summary.get("last_imported_at"),
-        last_new_games=summary.get("last_new_games"),
-    )
+        return ImportStatusResponse(
+            last_imported_at=None,
+            last_new_games=None,
+            status="idle",
+            operation_id=None,
+            started_at=None,
+            updated_at=None,
+            completed_at=None,
+            error=None,
+        )
+    return ImportStatusResponse(**summary)
 
 
 @app.get("/")

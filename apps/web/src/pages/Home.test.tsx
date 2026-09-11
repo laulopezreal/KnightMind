@@ -4,14 +4,17 @@ import Home from './Home';
 
 let mockUsername = '';
 const mockSetUsername = vi.fn((u: string) => { mockUsername = u; });
+const mockNavigate = vi.fn();
 let jobOnError: ((err: Error) => void) | undefined;
 let jobOnSuccess: (() => void | Promise<void>) | undefined;
+let polledJobId: string | null = null;
+let mockGenerationJob: { status: string; progress?: number; message?: string; error?: string } | null = null;
 
 vi.mock('react-router-dom', () => ({
   Link: ({ children, to, ...props }: { children: React.ReactNode; to: string; [key: string]: unknown }) => (
     <a href={to} {...props}>{children}</a>
   ),
-  useNavigate: () => vi.fn(),
+  useNavigate: () => mockNavigate,
 }));
 
 vi.mock('../context/ChessUsernameContext', () => ({
@@ -44,9 +47,10 @@ vi.mock('../api/puzzles', () => ({
 
 vi.mock('../hooks/useJobPolling', () => ({
   useJobPolling: (_id: string | null, opts?: { onSuccess?: () => void | Promise<void>; onError?: (e: Error) => void }) => {
+    polledJobId = _id;
     jobOnSuccess = opts?.onSuccess;
     jobOnError = opts?.onError;
-    return { job: null, isPolling: false };
+    return { job: mockGenerationJob, isPolling: mockGenerationJob?.status === 'running' };
   },
 }));
 
@@ -55,7 +59,9 @@ vi.mock('../components/Modal', () => ({
 }));
 
 vi.mock('../components/JobStatusCard', () => ({
-  JobStatusCard: () => null,
+  JobStatusCard: ({ status, message }: { status: string; message?: string }) => (
+    <div role="status">{status}: {message}</div>
+  ),
 }));
 
 vi.mock('../components/LoadingSpinner', () => ({
@@ -69,6 +75,10 @@ describe('Home', () => {
     mockSetUsername.mockImplementation((u: string) => { mockUsername = u; });
     jobOnError = undefined;
     jobOnSuccess = undefined;
+    polledJobId = null;
+    mockGenerationJob = null;
+    localStorage.clear();
+    mockNavigate.mockReset();
 
     const api = await import('../api');
     (api.getImportStatus as ReturnType<typeof vi.fn>).mockResolvedValue({ last_imported_at: null, last_new_games: null });
@@ -264,6 +274,109 @@ describe('Home', () => {
 
       expect(screen.queryByRole('textbox', { name: /Chess\.com Username/i })).not.toBeInTheDocument();
       expect(screen.getByRole('button', { name: /Connect Chess\.com Account/i })).toBeInTheDocument();
+    });
+  });
+
+  describe('active-work recovery', () => {
+    it('reattaches to an import after unmount without repeating the write', async () => {
+      const api = await import('../api');
+      const puzzles = await import('../api/puzzles');
+      mockUsername = 'testplayer';
+      vi.mocked(api.getUserStatus).mockResolvedValue({
+        username: 'testplayer', games_count: 0, puzzles_count: 0, due_count: 0,
+        next_due_at: null, has_new_games: false,
+      });
+      vi.mocked(api.validateChessComUser).mockResolvedValue({ valid: true, username: 'testplayer' });
+      vi.mocked(puzzles.generatePuzzles).mockResolvedValue({ job_id: 'generation-after-import' });
+
+      let resolveImport!: (value: { message: string; games_count: number; new_games: number; skipped_duplicates: number }) => void;
+      vi.mocked(api.importChessComGames).mockReturnValue(new Promise((resolve) => { resolveImport = resolve; }));
+      vi.mocked(api.getImportStatus)
+        .mockResolvedValueOnce({ last_imported_at: null, last_new_games: null, status: 'idle', operation_id: null, started_at: null, updated_at: null, completed_at: null, error: null })
+        .mockResolvedValue({ last_imported_at: null, last_new_games: null, status: 'importing', operation_id: 'import-1', started_at: '2026-09-11T06:00:00Z', updated_at: '2026-09-11T06:00:10Z', completed_at: null, error: null });
+
+      const first = render(<Home />);
+      fireEvent.click(await screen.findByRole('button', { name: /import games/i }));
+      await waitFor(() => expect(api.importChessComGames).toHaveBeenCalledTimes(1));
+      first.unmount();
+
+      render(<Home />);
+
+      expect(await screen.findByText(/Importing games/i)).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /import games|sync new games/i })).not.toBeInTheDocument();
+      expect(api.importChessComGames).toHaveBeenCalledTimes(1);
+
+      vi.mocked(api.getImportStatus).mockResolvedValue({
+        last_imported_at: '2026-09-11T06:01:00Z', last_new_games: 2, status: 'succeeded',
+        operation_id: 'import-1', started_at: '2026-09-11T06:00:00Z',
+        updated_at: '2026-09-11T06:01:00Z', completed_at: '2026-09-11T06:01:00Z', error: null,
+      });
+      await act(async () => resolveImport({ message: 'done', games_count: 2, new_games: 2, skipped_duplicates: 0 }));
+
+      expect(
+        await screen.findByText('Starting puzzle generation...', {}, { timeout: 3000 })
+      ).toBeInTheDocument();
+      expect(puzzles.generatePuzzles).toHaveBeenCalledTimes(1);
+      expect(polledJobId).toBe('generation-after-import');
+      expect(api.importChessComGames).toHaveBeenCalledTimes(1);
+    });
+
+    it('recovers a generation job through server-backed polling', async () => {
+      const api = await import('../api');
+      const puzzles = await import('../api/puzzles');
+      mockUsername = 'testplayer';
+      localStorage.setItem('knightmind:lastJob:testplayer', 'generation-42');
+      mockGenerationJob = { status: 'running', progress: 40, message: 'Analyzing your games' };
+      vi.mocked(api.getUserStatus).mockResolvedValue({
+        username: 'testplayer', games_count: 12, puzzles_count: 0, due_count: 0,
+        next_due_at: null, has_new_games: true,
+      });
+      vi.mocked(api.getImportStatus).mockResolvedValue({
+        last_imported_at: '2026-09-11T06:00:00Z', last_new_games: 12,
+        status: 'succeeded', operation_id: 'import-1', started_at: '2026-09-11T05:59:00Z',
+        updated_at: '2026-09-11T06:00:00Z', completed_at: '2026-09-11T06:00:00Z', error: null,
+      });
+
+      render(<Home />);
+
+      await waitFor(() => {
+        expect(screen.getByText('running: Analyzing your games')).toBeInTheDocument();
+      });
+      expect(polledJobId).toBe('generation-42');
+      expect(puzzles.generatePuzzles).not.toHaveBeenCalled();
+      expect(api.importChessComGames).not.toHaveBeenCalled();
+
+      await act(async () => { await jobOnSuccess?.(); });
+      expect(await screen.findByText('Puzzle generation complete. Your dashboard is ready.')).toBeInTheDocument();
+      expect(localStorage.getItem('knightmind:lastJob:testplayer')).toBeNull();
+      expect(mockNavigate).not.toHaveBeenCalled();
+    });
+
+    it('does not reveal an old username recovery response after switching accounts', async () => {
+      const api = await import('../api');
+      let resolveAlice!: (value: unknown) => void;
+      vi.mocked(api.getUserStatus).mockResolvedValue({
+        username: 'bob', games_count: 2, puzzles_count: 1, due_count: 0,
+        next_due_at: null, has_new_games: false,
+      });
+      vi.mocked(api.getImportStatus)
+        .mockReturnValueOnce(new Promise((resolve) => { resolveAlice = resolve; }) as never)
+        .mockResolvedValueOnce({ last_imported_at: null, last_new_games: null, status: 'idle', operation_id: null, started_at: null, updated_at: null, completed_at: null, error: null });
+
+      mockUsername = 'alice';
+      const { rerender } = render(<Home />);
+      await waitFor(() => expect(api.getImportStatus).toHaveBeenCalledWith('alice'));
+      mockUsername = 'bob';
+      rerender(<Home />);
+      await waitFor(() => expect(api.getImportStatus).toHaveBeenCalledWith('bob'));
+
+      await act(async () => resolveAlice({
+        last_imported_at: null, last_new_games: null, status: 'importing', operation_id: 'alice-import',
+        started_at: '2026-09-11T06:00:00Z', updated_at: '2026-09-11T06:00:10Z', completed_at: null, error: null,
+      }));
+
+      expect(screen.queryByText(/Importing games/i)).not.toBeInTheDocument();
+      expect(await screen.findByRole('button', { name: /sync new games/i })).toBeEnabled();
     });
   });
 

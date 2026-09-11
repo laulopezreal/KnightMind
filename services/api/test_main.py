@@ -8,11 +8,13 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.orm import sessionmaker
 
 from services.api.day_boundary import utc_today
 from services.api.main import app, get_db
 from services.api.models import (
     Game,
+    ImportSummary,
     Job,
     JobStatus,
     PuzzleStats,
@@ -709,6 +711,200 @@ def test_import_status_after_import(mock_import_games, client_with_db):
     assert isinstance(data["last_new_games"], int)
 
 
+def test_import_status_exposes_active_username_owned_lifecycle(
+    client_with_db, db_session
+):
+    """A remounted client can distinguish a live import from an idle page."""
+    repository = GameRepository(db_session)
+
+    operation_id = repository.begin_import("TestUser")
+
+    assert operation_id is not None
+    response = client_with_db.get("/import/status?username=testuser")
+    assert response.status_code == 200
+    data = response.json()
+    assert data == {
+        "last_imported_at": None,
+        "last_new_games": None,
+        "status": "importing",
+        "operation_id": operation_id,
+        "started_at": data["started_at"],
+        "updated_at": data["updated_at"],
+        "completed_at": None,
+        "error": None,
+    }
+    assert data["started_at"] is not None
+    assert data["updated_at"] is not None
+    assert repository.begin_import("testuser") is None
+
+
+def test_import_lifecycle_only_terminalizes_the_current_operation(
+    client_with_db, db_session
+):
+    """A stale request cannot overwrite the active import's outcome."""
+    repository = GameRepository(db_session)
+    operation_id = repository.begin_import("testuser")
+    assert operation_id is not None
+
+    assert repository.finish_import("testuser", "stale-operation", 99) is False
+    assert (
+        repository.fail_import("testuser", "stale-operation", "stale failure") is False
+    )
+    assert repository.finish_import("testuser", operation_id, 4) is True
+
+    response = client_with_db.get("/import/status?username=testuser")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "succeeded"
+    assert data["operation_id"] == operation_id
+    assert data["last_new_games"] == 4
+    assert data["completed_at"] is not None
+    assert data["error"] is None
+
+
+@pytest.mark.parametrize("terminal_status", ["succeeded", "failed"])
+def test_import_terminalization_is_atomic_across_stale_database_sessions(
+    db_engine, terminal_status
+):
+    """A session that cached an expired lease cannot overwrite its replacement."""
+    session_factory = sessionmaker(bind=db_engine, autocommit=False, autoflush=False)
+    stale_session = session_factory()
+    current_session = session_factory()
+    try:
+        stale_repository = GameRepository(stale_session)
+        current_repository = GameRepository(current_session)
+        stale_operation = stale_repository.begin_import(
+            "testuser", started_at=datetime.now(timezone.utc) - timedelta(hours=2)
+        )
+        assert stale_operation is not None
+
+        # Keep the old ORM row live in this identity map while another request
+        # atomically replaces the expired lease in its own database session.
+        cached_summary = stale_session.get(ImportSummary, "testuser")
+        assert cached_summary is not None
+        current_operation = current_repository.begin_import("testuser")
+        assert current_operation is not None
+        assert current_operation != stale_operation
+        assert cached_summary.operation_id == stale_operation
+
+        current_session.expire_all()
+        before_stale_heartbeat = current_repository.get_last_import_summary("testuser")
+        assert before_stale_heartbeat is not None
+        assert (
+            stale_repository.heartbeat_import(
+                "testuser",
+                stale_operation,
+                updated_at=datetime.now(timezone.utc) + timedelta(hours=1),
+            )
+            is False
+        )
+        current_session.expire_all()
+        after_stale_heartbeat = current_repository.get_last_import_summary("testuser")
+        assert after_stale_heartbeat is not None
+        assert (
+            after_stale_heartbeat["updated_at"] == before_stale_heartbeat["updated_at"]
+        )
+
+        if terminal_status == "succeeded":
+            stale_result = stale_repository.finish_import(
+                "testuser", stale_operation, new_games=99
+            )
+        else:
+            stale_result = stale_repository.fail_import(
+                "testuser", stale_operation, "stale failure"
+            )
+        assert stale_result is False
+
+        current_session.expire_all()
+        status = current_repository.get_last_import_summary("testuser")
+        assert status is not None
+        assert status["status"] == "importing"
+        assert status["operation_id"] == current_operation
+        assert status["last_new_games"] is None
+        assert status["completed_at"] is None
+        assert status["error"] is None
+
+        if terminal_status == "succeeded":
+            assert (
+                current_repository.finish_import(
+                    "testuser", current_operation, new_games=4
+                )
+                is True
+            )
+            assert (
+                current_repository.finish_import(
+                    "testuser", current_operation, new_games=5
+                )
+                is False
+            )
+        else:
+            assert (
+                current_repository.fail_import(
+                    "testuser", current_operation, "current failure"
+                )
+                is True
+            )
+            assert (
+                current_repository.fail_import(
+                    "testuser", current_operation, "duplicate failure"
+                )
+                is False
+            )
+
+        current_session.expire_all()
+        terminal = current_repository.get_last_import_summary("testuser")
+        assert terminal is not None
+        assert terminal["status"] == terminal_status
+        assert terminal["operation_id"] == current_operation
+        assert terminal["completed_at"] is not None
+        if terminal_status == "succeeded":
+            assert terminal["last_new_games"] == 4
+            assert terminal["last_imported_at"] is not None
+            assert terminal["error"] is None
+        else:
+            assert terminal["last_new_games"] is None
+            assert terminal["last_imported_at"] is None
+            assert terminal["error"] == "current failure"
+    finally:
+        stale_session.close()
+        current_session.close()
+
+
+def test_expired_import_lease_is_truthfully_retryable(client_with_db, db_session):
+    repository = GameRepository(db_session)
+    old_operation = repository.begin_import(
+        "testuser", started_at=datetime.now(timezone.utc) - timedelta(hours=2)
+    )
+    assert old_operation is not None
+
+    interrupted = client_with_db.get("/import/status?username=testuser").json()
+    assert interrupted["status"] == "interrupted"
+    assert interrupted["operation_id"] == old_operation
+
+    replacement = repository.begin_import("testuser")
+    assert replacement is not None
+    assert replacement != old_operation
+
+
+def test_import_failure_keeps_last_success_and_exposes_safe_error(
+    client_with_db, db_session
+):
+    repository = GameRepository(db_session)
+    repository.record_import_summary("testuser", 3, "2026-09-10T12:00:00+00:00")
+    operation_id = repository.begin_import("testuser")
+    assert operation_id is not None
+
+    assert repository.fail_import(
+        "testuser", operation_id, "The Chess.com import could not complete."
+    )
+
+    data = client_with_db.get("/import/status?username=testuser").json()
+    assert data["status"] == "failed"
+    assert data["last_new_games"] == 3
+    assert data["last_imported_at"].startswith("2026-09-10T12:00:00")
+    assert data["error"] == "The Chess.com import could not complete."
+
+
 @patch("services.api.main.import_all_games")
 def test_import_chesscom_deduplication(mock_import_games, client_with_db):
     """Test that duplicate games are not re-imported."""
@@ -780,8 +976,9 @@ def test_import_chesscom_batches_commits(mock_import_games, client_with_db, db_s
     assert data["new_games"] == total_games
     assert data["skipped_duplicates"] == 0
 
-    # Two game batches (200 + 50) plus the import-summary write.
-    assert mock_commit.call_count == 3
+    # One durable lease claim, two game batches (200 + 50), and the terminal
+    # import-summary write. Heartbeats share the batch transactions.
+    assert mock_commit.call_count == 4
 
 
 def _chesscom_game(url: str, end_time: int) -> dict:

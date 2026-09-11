@@ -617,8 +617,14 @@ class ImportSummary(Base):
     __table_args__ = {"extend_existing": True}
 
     username: Mapped[str] = mapped_column(String, primary_key=True)
-    last_imported_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    last_new_games: Mapped[int] = mapped_column(Integer, default=0)
+    last_imported_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_new_games: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    status: Mapped[str] = mapped_column(String, default="idle", nullable=False)
+    operation_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class Game(Base):
