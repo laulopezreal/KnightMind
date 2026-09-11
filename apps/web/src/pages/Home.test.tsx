@@ -39,7 +39,18 @@ vi.mock('../api/users', async () => {
   };
 });
 
-vi.mock('../api/core', () => ({ ApiError: class extends Error { detail?: string } }));
+vi.mock('../api/core', () => ({
+  ApiError: class extends Error {
+    statusCode: number;
+    detail?: string;
+
+    constructor(message: string, statusCode: number, detail?: string) {
+      super(message);
+      this.statusCode = statusCode;
+      this.detail = detail;
+    }
+  },
+}));
 
 vi.mock('../api/puzzles', () => ({
   generatePuzzles: vi.fn(),
@@ -278,6 +289,107 @@ describe('Home', () => {
   });
 
   describe('active-work recovery', () => {
+    it('reattaches when another tab wins the import race without offering a retry', async () => {
+      const api = await import('../api');
+      const { ApiError } = await import('../api/core');
+      mockUsername = 'testplayer';
+      vi.mocked(api.getUserStatus).mockResolvedValue({
+        username: 'testplayer', games_count: 0, puzzles_count: 0, due_count: 0,
+        next_due_at: null, has_new_games: false,
+      });
+      vi.mocked(api.validateChessComUser).mockResolvedValue({ valid: true, username: 'testplayer' });
+      vi.mocked(api.importChessComGames).mockRejectedValue(
+        new ApiError('An import is already in progress', 409),
+      );
+      vi.mocked(api.getImportStatus)
+        .mockResolvedValueOnce({
+          last_imported_at: null, last_new_games: null, status: 'idle', operation_id: null,
+          started_at: null, updated_at: null, completed_at: null, error: null,
+        })
+        .mockResolvedValue({
+          last_imported_at: null, last_new_games: null, status: 'importing', operation_id: 'other-tab-import',
+          started_at: '2026-09-11T06:00:00Z', updated_at: '2026-09-11T06:00:10Z',
+          completed_at: null, error: null,
+        });
+
+      render(<Home />);
+      fireEvent.click(await screen.findByRole('button', { name: /import games/i }));
+
+      expect(await screen.findByText('Importing games from Chess.com...')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /retry/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /import games|sync new games/i })).not.toBeInTheDocument();
+      expect(api.importChessComGames).toHaveBeenCalledTimes(1);
+
+      await waitFor(() => expect(api.getImportStatus).toHaveBeenCalledTimes(3), { timeout: 2500 });
+      expect(api.importChessComGames).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps the 409 failure actionable when no active import can be confirmed', async () => {
+      const api = await import('../api');
+      const { ApiError } = await import('../api/core');
+      mockUsername = 'testplayer';
+      vi.mocked(api.getUserStatus).mockResolvedValue({
+        username: 'testplayer', games_count: 0, puzzles_count: 0, due_count: 0,
+        next_due_at: null, has_new_games: false,
+      });
+      vi.mocked(api.validateChessComUser).mockResolvedValue({ valid: true, username: 'testplayer' });
+      vi.mocked(api.importChessComGames).mockRejectedValue(
+        new ApiError('An import is already in progress', 409),
+      );
+      vi.mocked(api.getImportStatus).mockResolvedValue({
+        last_imported_at: null, last_new_games: null, status: 'idle', operation_id: null,
+        started_at: null, updated_at: null, completed_at: null, error: null,
+      });
+
+      render(<Home />);
+      fireEvent.click(await screen.findByRole('button', { name: /import games/i }));
+
+      expect(await screen.findByText('An import is already in progress')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /retry/i })).toBeEnabled();
+      expect(api.importChessComGames).toHaveBeenCalledTimes(1);
+    });
+
+    it('ignores a concurrent-import reconciliation after the username changes', async () => {
+      const api = await import('../api');
+      const { ApiError } = await import('../api/core');
+      let resolveReconciliation!: (value: unknown) => void;
+      mockUsername = 'alice';
+      vi.mocked(api.getUserStatus).mockResolvedValue({
+        username: 'alice', games_count: 0, puzzles_count: 0, due_count: 0,
+        next_due_at: null, has_new_games: false,
+      });
+      vi.mocked(api.validateChessComUser).mockResolvedValue({ valid: true, username: 'alice' });
+      vi.mocked(api.importChessComGames).mockRejectedValue(
+        new ApiError('An import is already in progress', 409),
+      );
+      vi.mocked(api.getImportStatus)
+        .mockResolvedValueOnce({
+          last_imported_at: null, last_new_games: null, status: 'idle', operation_id: null,
+          started_at: null, updated_at: null, completed_at: null, error: null,
+        })
+        .mockReturnValueOnce(new Promise((resolve) => { resolveReconciliation = resolve; }) as never)
+        .mockResolvedValueOnce({
+          last_imported_at: null, last_new_games: null, status: 'idle', operation_id: null,
+          started_at: null, updated_at: null, completed_at: null, error: null,
+        });
+
+      const { rerender } = render(<Home />);
+      fireEvent.click(await screen.findByRole('button', { name: /import games/i }));
+      await waitFor(() => expect(api.getImportStatus).toHaveBeenCalledTimes(2));
+
+      mockUsername = 'bob';
+      rerender(<Home />);
+      await waitFor(() => expect(api.getImportStatus).toHaveBeenCalledWith('bob'));
+      await act(async () => resolveReconciliation({
+        last_imported_at: null, last_new_games: null, status: 'importing', operation_id: 'alice-import',
+        started_at: '2026-09-11T06:00:00Z', updated_at: '2026-09-11T06:00:10Z',
+        completed_at: null, error: null,
+      }));
+
+      expect(screen.queryByText('Importing games from Chess.com...')).not.toBeInTheDocument();
+      expect(await screen.findByRole('button', { name: /import games/i })).toBeEnabled();
+    });
+
     it('reattaches to an import after unmount without repeating the write', async () => {
       const api = await import('../api');
       const puzzles = await import('../api/puzzles');

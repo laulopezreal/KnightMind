@@ -138,6 +138,7 @@ export default function Home() {
     actionSequenceRef.current += 1;
     setActionStatus(null);
     setIsError(false);
+    setLoading(false);
     setGeneratedPuzzleCount(null);
     const savedJobId = username
       ? localStorage.getItem(`knightmind:lastJob:${username}`)
@@ -417,6 +418,23 @@ export default function Home() {
       }
     } catch (error) {
       if (!ownsAction()) return;
+      if (error instanceof ApiError && error.statusCode === 409) {
+        try {
+          const status = await getImportStatus(owner);
+          if (!ownsAction()) return;
+          if (status.status === 'importing') {
+            setImportStatus({ ...idleImportStatus, ...status });
+            setActionStatus('Importing games from Chess.com...');
+            setIsError(false);
+            setOnboardingPhase('importing');
+            return;
+          }
+        } catch {
+          // If the server lifecycle cannot confirm active work, preserve the
+          // original 409 failure below rather than claiming the import resumed.
+        }
+        if (!ownsAction()) return;
+      }
       if (error instanceof ApiError) {
         if (error.detail) console.error('[import]', error.detail);
         setActionStatus(error.message);
