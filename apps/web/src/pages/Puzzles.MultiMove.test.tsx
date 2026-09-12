@@ -267,10 +267,10 @@ describe('Multi-move (full-PV) solve flow', () => {
         await waitFor(() =>
             expect(screen.getByText(/now find the next move in the line/i)).toBeInTheDocument()
         );
-        expect(screen.queryByText('Correct! Excellent.')).not.toBeInTheDocument();
+        expect(screen.queryByText('Solved')).not.toBeInTheDocument();
 
         await playMove(user, 'c2c4');
-        await waitFor(() => expect(screen.getByText('Correct! Excellent.')).toBeInTheDocument());
+        await waitFor(() => expect(screen.getByText('Solved')).toBeInTheDocument());
 
         // The two checks carried the right ply indices (0 then 2).
         expect(mockCheckPuzzle).toHaveBeenNthCalledWith(1, 'pv-1', 'testplayer', 'd2d4', 0);
@@ -286,7 +286,7 @@ describe('Multi-move (full-PV) solve flow', () => {
         await enableTypeInput(user);
         await playMove(user, 'd2d4');
         await playMove(user, 'c2c4');
-        await waitFor(() => expect(screen.getByText('Correct! Excellent.')).toBeInTheDocument());
+        await waitFor(() => expect(screen.getByText('Solved')).toBeInTheDocument());
 
         // Advancing records the verified pass with the FULL line (space-joined).
         await user.click(screen.getByRole('button', { name: 'Finish Session' }));
@@ -318,7 +318,7 @@ describe('Multi-move (full-PV) solve flow', () => {
 
         await enableTypeInput(user);
         await playMove(user, 'd2d4');
-        await waitFor(() => expect(screen.getByText('Correct! Excellent.')).toBeInTheDocument());
+        await waitFor(() => expect(screen.getByText('Solved')).toBeInTheDocument());
 
         expect(mockCheckPuzzle).toHaveBeenCalledTimes(1);
         expect(mockCheckPuzzle).toHaveBeenCalledWith('pv-1', 'testplayer', 'd2d4', 0);

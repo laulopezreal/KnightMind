@@ -266,7 +266,7 @@ async function renderAndSolveCorrectly(user: ReturnType<typeof userEvent.setup>)
     const input = screen.getByPlaceholderText('e.g. e2e4');
     await user.type(input, 'e2e4');
     await user.click(screen.getByText('Check Move'));
-    await waitFor(() => expect(screen.getByText('Correct! Excellent.')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('Solved')).toBeInTheDocument());
 }
 
 /** Helper: reach the post-incorrect state on the final puzzle. */

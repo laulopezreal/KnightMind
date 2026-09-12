@@ -338,7 +338,7 @@ describe('Puzzles — honest failure handling', () => {
         render(<Puzzles />);
 
         await typeAndCheck(user, 'e2e4');
-        await waitFor(() => expect(screen.getByText('Correct! Excellent.')).toBeInTheDocument());
+        await waitFor(() => expect(screen.getByText('Solved')).toBeInTheDocument());
 
         await user.click(screen.getByRole('button', { name: /next puzzle/i }));
 
@@ -354,7 +354,7 @@ describe('Puzzles — honest failure handling', () => {
         render(<Puzzles />);
 
         await typeAndCheck(user, 'e2e4');
-        await waitFor(() => expect(screen.getByText('Correct! Excellent.')).toBeInTheDocument());
+        await waitFor(() => expect(screen.getByText('Solved')).toBeInTheDocument());
 
         await user.click(screen.getByRole('button', { name: /next puzzle/i }));
 
@@ -362,13 +362,13 @@ describe('Puzzles — honest failure handling', () => {
         expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     });
 
-    it('summarises a server-verified solve before the secondary puzzle record disclosure', async () => {
+    it('summarises a recorded solve before the secondary puzzle record disclosure', async () => {
         const user = userEvent.setup();
         render(<Puzzles />);
 
         await typeAndCheck(user, 'e2e4');
 
-        const summary = await screen.findByText('You found the server-verified move without revealing the solution.');
+        const summary = await screen.findByText('Recorded as a pass for this session.');
         const nextPuzzle = screen.getByRole('button', { name: /next puzzle/i });
         const disclosure = screen.getByText('Puzzle record').closest('details');
         expect(summary).toBeVisible();
@@ -523,7 +523,7 @@ describe('Puzzles — honest failure handling', () => {
             pendingTimeoutReview.resolve(false);
             await waitFor(() => expect(screen.getByRole('button', { name: /mark as failed/i })).toBeInTheDocument());
             pendingCheck.resolve({ correct: true, result: 'pass' });
-            await waitFor(() => expect(screen.queryByText('Correct! Excellent.')).not.toBeInTheDocument());
+            await waitFor(() => expect(screen.queryByText('Solved')).not.toBeInTheDocument());
             expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(1);
             expect(mockHandleReviewPuzzle).not.toHaveBeenCalledWith('pass', expect.anything(), expect.anything());
             expect(mockSetCurrentIndex).not.toHaveBeenCalled();
@@ -542,7 +542,7 @@ describe('Puzzles — honest failure handling', () => {
             expect(mockSetCurrentIndex).not.toHaveBeenCalled();
         });
 
-        it('starts a fresh checkable exposure after an ordinary failed retry', async () => {
+        it('keeps a persisted failure as the only session result after a practice solve', async () => {
             vi.mocked(checkPuzzle)
                 .mockResolvedValueOnce({ correct: false, result: 'fail' } as never)
                 .mockResolvedValueOnce({ correct: true, result: 'pass' } as never);
@@ -561,10 +561,14 @@ describe('Puzzles — honest failure handling', () => {
             await user.type(input, 'e2e4');
             await user.click(screen.getByRole('button', { name: /check entered move/i }));
 
-            await waitFor(() => expect(screen.getByText('Correct! Excellent.')).toBeInTheDocument());
+            await waitFor(() => expect(screen.getByText('Solved in practice')).toBeInTheDocument());
+            expect(screen.getByText('This puzzle remains failed for this session.')).toBeInTheDocument();
+            expect(screen.queryByText(/server-verified move/i)).not.toBeInTheDocument();
+            expect(screen.queryByText(/without revealing the solution/i)).not.toBeInTheDocument();
             expect(checkPuzzle).toHaveBeenCalledTimes(checkCallsBeforeRetry + 2);
-            expect(mockHandleReviewPuzzle).toHaveBeenLastCalledWith('pass', undefined, 'e2e4');
-            expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(2);
+            expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(1);
+            expect(mockHandleReviewPuzzle).toHaveBeenCalledWith('fail');
+            expect(mockHandleReviewPuzzle).not.toHaveBeenCalledWith('pass', undefined, 'e2e4');
         });
 
         it('restarts the timed exposure only after an ordinary failed review persists', async () => {
@@ -592,7 +596,7 @@ describe('Puzzles — honest failure handling', () => {
             await waitFor(() => expect(mockStartPuzzleTimer.mock.calls.length).toBeGreaterThan(1));
         });
 
-        it('restarts the timed exposure after a timeout retry and lets its new timeout own one fail', async () => {
+        it('keeps a retry timeout as practice after the first fail is recorded', async () => {
             mockSessionType = 'timed';
             const user = userEvent.setup();
             render(<Puzzles />);
@@ -605,8 +609,9 @@ describe('Puzzles — honest failure handling', () => {
             await waitFor(() => expect(mockStartPuzzleTimer.mock.calls.length).toBeGreaterThan(1));
 
             act(() => timedOut?.());
-            await waitFor(() => expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(2));
-            expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(2);
+            await waitFor(() => expect(screen.getByText('Not this one. Take another look.')).toBeInTheDocument());
+            expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(1);
+            expect(mockHandleReviewPuzzle).toHaveBeenCalledWith('fail');
         });
 
         it('starts a fresh Focus Practice timeout exposure while stale checks remain rejected', async () => {
@@ -639,9 +644,10 @@ describe('Puzzles — honest failure handling', () => {
             expect(checkPuzzle).toHaveBeenCalledTimes(checkCallsBeforeRetry + 2);
 
             retryCheck.resolve({ correct: true, result: 'pass' });
-            await waitFor(() => expect(screen.getByText('Correct! Excellent.')).toBeInTheDocument());
-            expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(2);
-            expect(mockHandleReviewPuzzle).toHaveBeenLastCalledWith('pass', undefined, 'e2e4');
+            await waitFor(() => expect(screen.getByText('Solved in practice')).toBeInTheDocument());
+            expect(screen.getByText('This puzzle remains failed for this session.')).toBeInTheDocument();
+            expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(1);
+            expect(mockHandleReviewPuzzle).toHaveBeenCalledWith('fail');
         });
 
         it('keeps a failed reveal decision through a delayed correct check', async () => {
@@ -664,7 +670,7 @@ describe('Puzzles — honest failure handling', () => {
 
             await waitFor(() => expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(1));
             expect(mockHandleReviewPuzzle).not.toHaveBeenCalledWith('pass', expect.anything(), expect.anything());
-            expect(screen.queryByText('Correct! Excellent.')).not.toBeInTheDocument();
+            expect(screen.queryByText('Solved')).not.toBeInTheDocument();
 
             await user.click(screen.getByRole('button', { name: /next puzzle/i }));
             await waitFor(() =>
@@ -791,7 +797,7 @@ describe('Puzzles — honest failure handling', () => {
             pendingCheck.resolve({ correct: true, result: 'pass' });
 
             await waitFor(() => expect(mockHandleReviewPuzzle).not.toHaveBeenCalled());
-            expect(screen.queryByText('Correct! Excellent.')).not.toBeInTheDocument();
+            expect(screen.queryByText('Solved')).not.toBeInTheDocument();
             expect(mockSetCurrentIndex).not.toHaveBeenCalled();
         });
 
@@ -851,7 +857,7 @@ describe('Puzzles — honest failure handling', () => {
             // own response arrives.
             checkB.resolve({ correct: true, result: 'pass' });
             await waitFor(() => expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(1));
-            expect(screen.getByText('Correct! Excellent.')).toBeInTheDocument();
+            expect(screen.getByText('Solved')).toBeInTheDocument();
         });
     });
 

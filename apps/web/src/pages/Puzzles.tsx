@@ -60,6 +60,14 @@ type TerminalDiagnosisOwner = {
     username: string;
 };
 
+type PersistedPuzzleOutcome = {
+    puzzleId: string;
+    username: string;
+    sessionId: string | null;
+    puzzleIndex: number;
+    result: 'pass' | 'fail';
+};
+
 // ─── Puzzle-board state reducer ────────────────────────────────────────────
 // These state variables are tightly coupled: they are always co-updated at
 // puzzle transitions (new puzzle, retry after fail, reveal) so a reducer keeps
@@ -247,6 +255,11 @@ export default function Puzzles() {
     // retry after a failed one). Cleared on failure so move-on retries with
     // the idempotency key the session hook kept.
     const outcomeWriteRef = useRef<Promise<boolean> | null>(null);
+    // One queue position contributes one terminal result to its session. A
+    // persisted fail may be retried for practice, but that retry must never
+    // create a later pass review or erase the session's original failure.
+    const persistedOutcomeRef = useRef<PersistedPuzzleOutcome | null>(null);
+    const [practiceRetryOwner, setPracticeRetryOwner] = useState<PersistedPuzzleOutcome | null>(null);
     // Rung 0 of the hint ladder (§5.1): the motif, asked for explicitly.
     // Held here rather than in `useClue` because that hook is shared with
     // Engine analysis, which has no motif and no gate -- renumbering its rungs
@@ -381,6 +394,14 @@ export default function Puzzles() {
     const startPuzzleTimer = timer.startPuzzleTimer;
     const currentPuzzle = puzzles[currentIndex];
     const currentPuzzleTitle = currentPuzzle?.title?.trim() || null;
+    const ownsCurrentQueuePosition = (outcome: PersistedPuzzleOutcome | null) => Boolean(
+        outcome
+        && outcome.puzzleId === currentPuzzle?.id
+        && outcome.username === username
+        && outcome.sessionId === activeSessionId
+        && outcome.puzzleIndex === currentIndex
+    );
+    const isPracticeRetry = ownsCurrentQueuePosition(practiceRetryOwner);
     // A solve check owns one puzzle at a time. The same action is reachable
     // through typed input, Enter, click-to-move, drag, and keyboard movement;
     // disable rendering alone cannot close that race before React re-renders.
@@ -449,6 +470,8 @@ export default function Puzzles() {
             diagnosisEpochRef.current += 1;
             outcomeDecisionRef.current = null;
             outcomeWriteRef.current = null;
+            persistedOutcomeRef.current = null;
+            setPracticeRetryOwner(null);
             setDiagnosisResult(null);
             setDiagnosisLoadingOwner(null);
         }
@@ -601,6 +624,18 @@ export default function Puzzles() {
         if (!currentPuzzle) return Promise.resolve(false);
         const puzzleId = currentPuzzle.id;
         const epoch = puzzleEpochRef.current;
+        const persistedOutcome = persistedOutcomeRef.current;
+        if (ownsCurrentQueuePosition(persistedOutcome)) {
+            if (requestDiagnosis) {
+                requestDiagnosisForResolvedOutcome({
+                    puzzleId,
+                    puzzleEpoch: epoch,
+                    diagnosisEpoch: diagnosisEpochRef.current,
+                    username,
+                });
+            }
+            return Promise.resolve(true);
+        }
         const existingDecision = outcomeDecisionRef.current;
         const decision = existingDecision?.puzzleId === puzzleId && existingDecision.epoch === epoch
             ? existingDecision
@@ -624,6 +659,18 @@ export default function Puzzles() {
             ? handleReviewPuzzle(decision.result)
             : handleReviewPuzzle(decision.result, undefined, decision.attemptedMove);
         const writePromise = Promise.resolve(review)
+            .then((recorded) => {
+                if (recorded && !ownsCurrentQueuePosition(persistedOutcomeRef.current)) {
+                    persistedOutcomeRef.current = {
+                        puzzleId,
+                        username,
+                        sessionId: activeSessionId,
+                        puzzleIndex: currentIndex,
+                        result: decision.result,
+                    };
+                }
+                return recorded;
+            })
             .catch((err) => {
                 console.error('Failed to record puzzle outcome:', err);
                 return false;
@@ -668,6 +715,10 @@ export default function Puzzles() {
         setDiagnosisLoadingOwner(null);
         setDiagnosisConfirmationOwner(null);
         setDiagnosisConfirmationError(null);
+        const persistedOutcome = persistedOutcomeRef.current;
+        if (ownsCurrentQueuePosition(persistedOutcome) && persistedOutcome?.result === 'fail') {
+            setPracticeRetryOwner(persistedOutcome);
+        }
         usedHintForCurrentPuzzleRef.current = false;
         dispatchBoard({ type: 'RESET' });
         setGame(new Chess(currentPuzzle.fen));
@@ -1329,6 +1380,8 @@ export default function Puzzles() {
             dispatchBoard({ type: 'RESET' });
             outcomeDecisionRef.current = null;
             outcomeWriteRef.current = null;
+            persistedOutcomeRef.current = null;
+            setPracticeRetryOwner(null);
             setMotifHint(null);
             setMotifHintAsked(false);
             usedHintForCurrentPuzzleRef.current = false;
@@ -1355,7 +1408,9 @@ export default function Puzzles() {
                 // sent its own review here -- which is why the solve was not
                 // recorded until the user moved on, and why a panel shown in
                 // between saw attempts = 0.
-                if (outcomeWriteRef.current) {
+                if (status === 'correct' && isPracticeRetry) {
+                    recorded = true;
+                } else if (outcomeWriteRef.current) {
                     recorded = await outcomeWriteRef.current;
                 } else {
                     const solvedLine = attemptedLine.length > 0
@@ -2105,11 +2160,15 @@ export default function Puzzles() {
                             )}
                             {status === 'correct' && (
                                 <div className="text-center">
-                                    <p className="text-positive font-serif text-2xl animate-teedin">Correct! Excellent.</p>
+                                    <p className="text-positive font-serif text-2xl animate-teedin">
+                                        {isPracticeRetry ? 'Solved in practice' : 'Solved'}
+                                    </p>
                                     <p className="text-primary/70 font-sans text-sm mt-2 animate-teedin">
-                                        {usedHintForCurrentPuzzleRef.current
-                                            ? 'You found the server-verified move after using a hint.'
-                                            : 'You found the server-verified move without revealing the solution.'}
+                                        {isPracticeRetry
+                                            ? 'This puzzle remains failed for this session.'
+                                            : usedHintForCurrentPuzzleRef.current
+                                                ? 'Solved with a hint. Recorded as a pass for this session.'
+                                                : 'Recorded as a pass for this session.'}
                                     </p>
                                     {lastFeedback && (
                                         <p className="text-positive font-sans text-sm mt-2 animate-teedin">{lastFeedback}</p>

@@ -308,7 +308,7 @@ describe('Puzzle hint ladder', () => {
         expect(screen.getByText('Move the pawn')).toBeInTheDocument();
     });
 
-    it('summarises a server-verified solve that used a hint', async () => {
+    it('summarises a recorded solve without server-internal wording', async () => {
         const user = userEvent.setup();
         const { rerender } = render(<Puzzles />);
 
@@ -318,10 +318,10 @@ describe('Puzzle hint ladder', () => {
         await user.type(screen.getByPlaceholderText('e.g. e2e4'), 'e2e4');
         await user.click(screen.getByRole('button', { name: /check entered move/i }));
 
-        expect(await screen.findByText('You found the server-verified move after using a hint.')).toBeVisible();
+        expect(await screen.findByText('Solved with a hint. Recorded as a pass for this session.')).toBeVisible();
         servedPuzzle = { ...servedPuzzle, attempts: 1, pass_count: 1 };
         rerender(<Puzzles />);
-        expect(screen.getByText('You found the server-verified move after using a hint.')).toBeVisible();
+        expect(screen.getByText('Solved with a hint. Recorded as a pass for this session.')).toBeVisible();
     });
 
     it('does not carry a prior puzzle hint into a genuinely new puzzle identity', async () => {
@@ -337,8 +337,8 @@ describe('Puzzle hint ladder', () => {
         await user.type(screen.getByPlaceholderText('e.g. e2e4'), 'e2e4');
         await user.click(screen.getByRole('button', { name: /check entered move/i }));
 
-        expect(await screen.findByText('You found the server-verified move without revealing the solution.')).toBeVisible();
-        expect(screen.queryByText('You found the server-verified move after using a hint.')).not.toBeInTheDocument();
+        expect(await screen.findByText('Recorded as a pass for this session.')).toBeVisible();
+        expect(screen.queryByText(/server-verified move/i)).not.toBeInTheDocument();
     });
 
     it('ignores a late motif hint response owned by the previous puzzle', async () => {
@@ -362,7 +362,7 @@ describe('Puzzle hint ladder', () => {
         await user.click(screen.getByRole('button', { name: /type move manually/i }));
         await user.type(screen.getByPlaceholderText('e.g. e2e4'), 'e2e4');
         await user.click(screen.getByRole('button', { name: /check entered move/i }));
-        expect(await screen.findByText('You found the server-verified move without revealing the solution.')).toBeVisible();
+        expect(await screen.findByText('Recorded as a pass for this session.')).toBeVisible();
     });
 
     it('ignores a late solution hint response owned by the previous puzzle', async () => {
@@ -385,7 +385,7 @@ describe('Puzzle hint ladder', () => {
         await user.click(screen.getByRole('button', { name: /type move manually/i }));
         await user.type(screen.getByPlaceholderText('e.g. e2e4'), 'e2e4');
         await user.click(screen.getByRole('button', { name: /check entered move/i }));
-        expect(await screen.findByText('You found the server-verified move without revealing the solution.')).toBeVisible();
+        expect(await screen.findByText('Recorded as a pass for this session.')).toBeVisible();
     });
 
     it('does not render the completed-session summary while a session is still active', async () => {
