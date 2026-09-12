@@ -230,7 +230,7 @@ function makeSessionReturn(overrides: Partial<UsePuzzleSessionReturn> = {}): Use
         setIsLoading: vi.fn(),
         handleStartSession: vi.fn().mockResolvedValue(undefined),
         handleCompleteSession: vi.fn().mockResolvedValue(undefined),
-        handleReviewPuzzle: vi.fn().mockResolvedValue(undefined),
+        handleReviewPuzzle: vi.fn().mockImplementation(async (result: 'pass' | 'fail') => ({ persisted: true, result })),
         handleUseHint: mockHandleUseHint,
         calculateRecentPerformance: vi.fn().mockReturnValue(0),
         getPerformanceTrend: vi.fn().mockReturnValue('stable'),

@@ -177,7 +177,7 @@ vi.mock('chess.js', () => {
     return { Chess: MockChess };
 });
 
-const mockHandleReviewPuzzle = vi.fn().mockResolvedValue(undefined);
+const mockHandleReviewPuzzle = vi.fn().mockImplementation(async (result: 'pass' | 'fail') => ({ persisted: true, result }));
 const mockSessionReturn = vi.fn();
 
 vi.mock('../hooks/usePuzzleSession', () => ({

@@ -196,7 +196,7 @@ vi.mock('chess.js', () => {
 });
 
 // Controlled mock for usePuzzleSession — configured per-test via mockReturn
-const mockHandleReviewPuzzle = vi.fn().mockResolvedValue(undefined);
+const mockHandleReviewPuzzle = vi.fn().mockImplementation(async (result: 'pass' | 'fail') => ({ persisted: true, result }));
 const mockSessionReturn = vi.fn();
 
 vi.mock('../hooks/usePuzzleSession', () => ({
@@ -365,7 +365,9 @@ describe('Issue #154: finish button on final puzzle', () => {
         const user = userEvent.setup();
         let resolveReview!: () => void;
         const slowReview = vi.fn().mockImplementation(
-            () => new Promise<void>((resolve) => { resolveReview = resolve; })
+            (result: 'pass' | 'fail') => new Promise<{ persisted: true; result: 'pass' | 'fail' }>((resolve) => {
+                resolveReview = () => resolve({ persisted: true, result });
+            })
         );
         mockSessionReturn.mockReturnValue(makeSessionReturn({
             sessionState: 'active',

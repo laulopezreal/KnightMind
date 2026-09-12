@@ -87,16 +87,19 @@ export interface UsePuzzleSessionReturn {
     handleStartSession: () => Promise<void>;
     handleCompleteSession: () => Promise<void>;
     /**
-     * Submit one review. Resolves `true` when the review is safely recorded (or
-     * when a concurrent submission already owns it) and `false` when it failed —
-     * the caller MUST NOT advance past the puzzle on `false`, or the attempt is
-     * silently lost.
+     * Submit one review. A persisted completion carries the server-authoritative
+     * result. The caller MUST NOT advance when `persisted` is false, or the
+     * attempt is silently lost.
      */
-    handleReviewPuzzle: (result: 'pass' | 'fail', timeMs?: number, attemptedMove?: string) => Promise<boolean>;
+    handleReviewPuzzle: (result: 'pass' | 'fail', timeMs?: number, attemptedMove?: string) => Promise<PuzzleReviewCompletion>;
     handleUseHint: () => Promise<void>;
     calculateRecentPerformance: (history: Array<{ time: number; result: 'pass' | 'fail' }>, minutes?: number) => number;
     getPerformanceTrend: (history: Array<{ time: number; result: 'pass' | 'fail' }>) => 'improving' | 'declining' | 'stable';
 }
+
+export type PuzzleReviewCompletion =
+    | { persisted: true; result: 'pass' | 'fail' }
+    | { persisted: false };
 
 // ─── Helpers (pure functions) ───────────────────────────────────────
 
@@ -421,14 +424,14 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
     // ── handleReviewPuzzle ──
     // Concurrent callers must await the owner's real write, not a synthetic
     // success. Timer, reveal, and solve paths can overlap before React renders.
-    const reviewOwnerPromiseRef = useRef<Promise<boolean> | null>(null);
+    const reviewOwnerPromiseRef = useRef<Promise<PuzzleReviewCompletion> | null>(null);
     // Idempotency key for the current submission. Held across an error so a
     // manual retry of the *same* submission replays idempotently on the server;
     // cleared after success so the next distinct submission gets a fresh key.
     const reviewKeyRef = useRef<string | null>(null);
     const currentPuzzle = puzzles[currentIndex];
-    const handleReviewPuzzle = useCallback((result: 'pass' | 'fail', timeMs?: number, attemptedMove?: string): Promise<boolean> => {
-        if (!currentPuzzle || !username.trim()) return Promise.resolve(false);
+    const handleReviewPuzzle = useCallback((result: 'pass' | 'fail', timeMs?: number, attemptedMove?: string): Promise<PuzzleReviewCompletion> => {
+        if (!currentPuzzle || !username.trim()) return Promise.resolve({ persisted: false });
         if (reviewOwnerPromiseRef.current) return reviewOwnerPromiseRef.current;
 
         if (!reviewKeyRef.current) {
@@ -508,12 +511,12 @@ export function usePuzzleSession(opts: UsePuzzleSessionOptions): UsePuzzleSessio
             // try again" or a revealed solution (both of which re-review the same
             // puzzle) inflate the count and end the session before the last
             // puzzle, stranding a dead "Next Puzzle" button.
-            return true;
+            return { persisted: true, result: effectiveResult } as const;
         }).catch((err) => {
             console.error('Failed to review puzzle:', err);
             setError(err instanceof Error ? err.message : 'Failed to review puzzle');
             // Keep reviewKeyRef so a manual retry replays idempotently server-side.
-            return false;
+            return { persisted: false } as const;
         }).finally(() => {
             reviewOwnerPromiseRef.current = null;
         });

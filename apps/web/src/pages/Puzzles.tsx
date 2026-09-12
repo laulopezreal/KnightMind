@@ -659,17 +659,24 @@ export default function Puzzles() {
             ? handleReviewPuzzle(decision.result)
             : handleReviewPuzzle(decision.result, undefined, decision.attemptedMove);
         const writePromise = Promise.resolve(review)
-            .then((recorded) => {
-                if (recorded && !ownsCurrentQueuePosition(persistedOutcomeRef.current)) {
+            .then((completion) => {
+                if (!completion.persisted) return false;
+
+                const authoritativeResult = completion.result;
+                if (!ownsCurrentQueuePosition(persistedOutcomeRef.current)) {
                     persistedOutcomeRef.current = {
                         puzzleId,
                         username,
                         sessionId: activeSessionId,
                         puzzleIndex: currentIndex,
-                        result: decision.result,
+                        result: authoritativeResult,
                     };
                 }
-                return recorded;
+                if (authoritativeResult !== decision.result) {
+                    outcomeDecisionRef.current = { ...decision, result: authoritativeResult };
+                    setStatus(authoritativeResult === 'pass' ? 'correct' : 'incorrect');
+                }
+                return true;
             })
             .catch((err) => {
                 console.error('Failed to record puzzle outcome:', err);
@@ -1433,6 +1440,17 @@ export default function Puzzles() {
                 setActionError("We couldn't save that result. You're still on this puzzle. Check your connection and try again.");
                 return;
             }
+
+            // The advance click can race the solve-time review. If the server
+            // authoritatively rejected that client pass, the awaiting click must
+            // yield to the failed-result transition instead of moving past it.
+            const persistedOutcome = persistedOutcomeRef.current;
+            if (
+                status === 'correct'
+                && !isPracticeRetry
+                && ownsCurrentQueuePosition(persistedOutcome)
+                && persistedOutcome?.result === 'fail'
+            ) return;
 
             // One step of progress per puzzle finished — so retries (mark-failed
             // / reveal) never advance or complete the session early. Complete
