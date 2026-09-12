@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { flushSync } from 'react-dom';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act, waitFor } from '@testing-library/react';
-import { usePuzzleSession, type UsePuzzleSessionOptions, calculateRecentPerformance, getPerformanceTrend } from './usePuzzleSession';
+import { usePuzzleSession, type PuzzleReviewCompletion, type UsePuzzleSessionOptions, calculateRecentPerformance, getPerformanceTrend } from './usePuzzleSession';
 import { setupMockLocalStorage } from '../test/helpers';
 
 // ─── Mocks ──────────────────────────────────────────────────────────
@@ -738,12 +738,14 @@ describe('usePuzzleSession', () => {
             makeReviewResponse({ result: 'fail', verified: true, source: 'server_verified' }),
         );
 
+        let completion: PuzzleReviewCompletion | undefined;
         await act(async () => {
-            await result.current.handleReviewPuzzle('pass', undefined, 'e2e4');
+            completion = await result.current.handleReviewPuzzle('pass', undefined, 'e2e4');
         });
 
         // Streak must NOT advance on a server-rejected solve, and the history
         // must record the server's outcome, not the client's claim.
+        expect(completion).toEqual({ persisted: true, result: 'fail' });
         expect(result.current.streak).toBe(0);
         expect(result.current.performanceHistory.at(-1)?.result).toBe('fail');
     });
@@ -786,8 +788,8 @@ describe('usePuzzleSession', () => {
         }));
 
         let concurrentSettled = false;
-        let ownerPromise!: Promise<boolean>;
-        let concurrentPromise!: Promise<boolean>;
+        let ownerPromise!: Promise<PuzzleReviewCompletion>;
+        let concurrentPromise!: Promise<PuzzleReviewCompletion>;
         act(() => {
             ownerPromise = result.current.handleReviewPuzzle('fail');
             concurrentPromise = result.current.handleReviewPuzzle('pass');
@@ -806,7 +808,7 @@ describe('usePuzzleSession', () => {
             resolveReview(makeReviewResponse({ result: 'fail' }));
             await ownerPromise;
         });
-        expect(await concurrentPromise).toBe(true);
+        expect(await concurrentPromise).toEqual({ persisted: true, result: 'fail' });
     });
 
     it('releases a failed owner for an idempotent retry', async () => {
@@ -821,10 +823,10 @@ describe('usePuzzleSession', () => {
         await act(async () => {
             const owner = result.current.handleReviewPuzzle('fail');
             expect(result.current.handleReviewPuzzle('pass')).toBe(owner);
-            expect(await owner).toBe(false);
+            expect(await owner).toEqual({ persisted: false });
         });
         await act(async () => {
-            expect(await result.current.handleReviewPuzzle('fail')).toBe(true);
+            expect(await result.current.handleReviewPuzzle('fail')).toEqual({ persisted: true, result: 'fail' });
         });
         expect(mockedReviewPuzzle).toHaveBeenCalledTimes(2);
         expect(mockedReviewPuzzle.mock.calls[0][5]).toBe(mockedReviewPuzzle.mock.calls[1][5]);

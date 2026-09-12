@@ -15,12 +15,7 @@ export interface ManualPuzzleResult {
 }
 
 export interface Puzzle {
-    /**
-     * What to render as this puzzle's name. Nickname when the gate permits and
-     * one exists, provenance ("12 Mar · Sicilian · move 18") otherwise. Never
-     * empty, so render it directly -- do NOT fall back to `title`, which the
-     * resolution gate nulls for unattempted puzzles.
-     */
+    /** Game/source provenance used when the optional title is blank or withheld. */
     display_name: string;
     id: string;
     username: string;

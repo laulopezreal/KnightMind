@@ -60,6 +60,14 @@ type TerminalDiagnosisOwner = {
     username: string;
 };
 
+type PersistedPuzzleOutcome = {
+    puzzleId: string;
+    username: string;
+    sessionId: string | null;
+    puzzleIndex: number;
+    result: 'pass' | 'fail';
+};
+
 // ─── Puzzle-board state reducer ────────────────────────────────────────────
 // These state variables are tightly coupled: they are always co-updated at
 // puzzle transitions (new puzzle, retry after fail, reveal) so a reducer keeps
@@ -247,6 +255,11 @@ export default function Puzzles() {
     // retry after a failed one). Cleared on failure so move-on retries with
     // the idempotency key the session hook kept.
     const outcomeWriteRef = useRef<Promise<boolean> | null>(null);
+    // One queue position contributes one terminal result to its session. A
+    // persisted fail may be retried for practice, but that retry must never
+    // create a later pass review or erase the session's original failure.
+    const persistedOutcomeRef = useRef<PersistedPuzzleOutcome | null>(null);
+    const [practiceRetryOwner, setPracticeRetryOwner] = useState<PersistedPuzzleOutcome | null>(null);
     // Rung 0 of the hint ladder (§5.1): the motif, asked for explicitly.
     // Held here rather than in `useClue` because that hook is shared with
     // Engine analysis, which has no motif and no gate -- renumbering its rungs
@@ -380,6 +393,17 @@ export default function Puzzles() {
 
     const startPuzzleTimer = timer.startPuzzleTimer;
     const currentPuzzle = puzzles[currentIndex];
+    const currentPuzzleTitle = currentPuzzle?.title?.trim() || null;
+    const ownsCurrentQueuePosition = (outcome: PersistedPuzzleOutcome | null) => Boolean(
+        outcome
+        && outcome.puzzleId === currentPuzzle?.id
+        && outcome.username === username
+        && outcome.sessionId === activeSessionId
+        && outcome.puzzleIndex === currentIndex
+    );
+    const persistedFailForCurrentQueuePosition = ownsCurrentQueuePosition(persistedOutcomeRef.current)
+        && persistedOutcomeRef.current?.result === 'fail';
+    const isPracticeRetry = ownsCurrentQueuePosition(practiceRetryOwner);
     // A solve check owns one puzzle at a time. The same action is reachable
     // through typed input, Enter, click-to-move, drag, and keyboard movement;
     // disable rendering alone cannot close that race before React re-renders.
@@ -448,6 +472,8 @@ export default function Puzzles() {
             diagnosisEpochRef.current += 1;
             outcomeDecisionRef.current = null;
             outcomeWriteRef.current = null;
+            persistedOutcomeRef.current = null;
+            setPracticeRetryOwner(null);
             setDiagnosisResult(null);
             setDiagnosisLoadingOwner(null);
         }
@@ -600,6 +626,18 @@ export default function Puzzles() {
         if (!currentPuzzle) return Promise.resolve(false);
         const puzzleId = currentPuzzle.id;
         const epoch = puzzleEpochRef.current;
+        const persistedOutcome = persistedOutcomeRef.current;
+        if (ownsCurrentQueuePosition(persistedOutcome)) {
+            if (requestDiagnosis) {
+                requestDiagnosisForResolvedOutcome({
+                    puzzleId,
+                    puzzleEpoch: epoch,
+                    diagnosisEpoch: diagnosisEpochRef.current,
+                    username,
+                });
+            }
+            return Promise.resolve(true);
+        }
         const existingDecision = outcomeDecisionRef.current;
         const decision = existingDecision?.puzzleId === puzzleId && existingDecision.epoch === epoch
             ? existingDecision
@@ -623,6 +661,25 @@ export default function Puzzles() {
             ? handleReviewPuzzle(decision.result)
             : handleReviewPuzzle(decision.result, undefined, decision.attemptedMove);
         const writePromise = Promise.resolve(review)
+            .then((completion) => {
+                if (!completion.persisted) return false;
+
+                const authoritativeResult = completion.result;
+                if (!ownsCurrentQueuePosition(persistedOutcomeRef.current)) {
+                    persistedOutcomeRef.current = {
+                        puzzleId,
+                        username,
+                        sessionId: activeSessionId,
+                        puzzleIndex: currentIndex,
+                        result: authoritativeResult,
+                    };
+                }
+                if (authoritativeResult !== decision.result) {
+                    outcomeDecisionRef.current = { ...decision, result: authoritativeResult };
+                    setStatus(authoritativeResult === 'pass' ? 'correct' : 'incorrect');
+                }
+                return true;
+            })
             .catch((err) => {
                 console.error('Failed to record puzzle outcome:', err);
                 return false;
@@ -648,12 +705,11 @@ export default function Puzzles() {
     // stale, while the fresh exposure may accept exactly one new solve check.
     // This is called only after the failed review has landed.
     const beginFreshExposureAfterPersistedFail = () => {
-        const terminalDecision = outcomeDecisionRef.current;
+        const persistedOutcome = persistedOutcomeRef.current;
         if (
             !currentPuzzle ||
-            terminalDecision?.puzzleId !== currentPuzzle.id ||
-            terminalDecision.epoch !== puzzleEpochRef.current ||
-            terminalDecision.result !== 'fail'
+            !ownsCurrentQueuePosition(persistedOutcome) ||
+            persistedOutcome?.result !== 'fail'
         ) return false;
 
         puzzleEpochRef.current += 1;
@@ -667,6 +723,7 @@ export default function Puzzles() {
         setDiagnosisLoadingOwner(null);
         setDiagnosisConfirmationOwner(null);
         setDiagnosisConfirmationError(null);
+        setPracticeRetryOwner(persistedOutcome);
         usedHintForCurrentPuzzleRef.current = false;
         dispatchBoard({ type: 'RESET' });
         setGame(new Chess(currentPuzzle.fen));
@@ -1328,6 +1385,8 @@ export default function Puzzles() {
             dispatchBoard({ type: 'RESET' });
             outcomeDecisionRef.current = null;
             outcomeWriteRef.current = null;
+            persistedOutcomeRef.current = null;
+            setPracticeRetryOwner(null);
             setMotifHint(null);
             setMotifHintAsked(false);
             usedHintForCurrentPuzzleRef.current = false;
@@ -1354,7 +1413,9 @@ export default function Puzzles() {
                 // sent its own review here -- which is why the solve was not
                 // recorded until the user moved on, and why a panel shown in
                 // between saw attempts = 0.
-                if (outcomeWriteRef.current) {
+                if (status === 'correct' && isPracticeRetry) {
+                    recorded = true;
+                } else if (outcomeWriteRef.current) {
                     recorded = await outcomeWriteRef.current;
                 } else {
                     const solvedLine = attemptedLine.length > 0
@@ -1377,6 +1438,17 @@ export default function Puzzles() {
                 setActionError("We couldn't save that result. You're still on this puzzle. Check your connection and try again.");
                 return;
             }
+
+            // The advance click can race the solve-time review. If the server
+            // authoritatively rejected that client pass, the awaiting click must
+            // yield to the failed-result transition instead of moving past it.
+            const persistedOutcome = persistedOutcomeRef.current;
+            if (
+                status === 'correct'
+                && !isPracticeRetry
+                && ownsCurrentQueuePosition(persistedOutcome)
+                && persistedOutcome?.result === 'fail'
+            ) return;
 
             // One step of progress per puzzle finished — so retries (mark-failed
             // / reveal) never advance or complete the session early. Complete
@@ -1850,16 +1922,28 @@ export default function Puzzles() {
                             />
                         </div>
                         {/* Compact board-adjacent context: mobile-only, non-interactive meta */}
-                        <div data-testid="mobile-puzzle-context" className="lg:hidden mt-3 flex items-center justify-between text-xs font-sans text-primary/70 px-1">
-                            <span className="uppercase tracking-wide">
-                                {currentPuzzle.side_to_move === 'white' ? 'White to move' : 'Black to move'}
-                            </span>
-                            {currentPuzzle.primary_motif && (
-                                <span className="px-2 py-0.5 bg-primary/10 rounded-sm">
-                                    {formatMotifName(currentPuzzle.primary_motif)}
+                        <div data-testid="mobile-puzzle-context" className="lg:hidden mt-3 px-1 space-y-2 text-xs font-sans text-primary/70">
+                            <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0">
+                                    <span className="block uppercase tracking-wide">
+                                        {currentPuzzleTitle ? 'Puzzle title' : 'From game'}
+                                    </span>
+                                    <span className={`block mt-0.5 break-words text-primary ${currentPuzzleTitle ? 'font-serif text-base' : 'font-sans text-sm'}`}>
+                                        {currentPuzzleTitle ?? currentPuzzle.display_name}
+                                    </span>
+                                </div>
+                                <span className="shrink-0 whitespace-nowrap">Puzzle {currentIndex + 1} of {puzzles.length}</span>
+                            </div>
+                            <div className="flex items-center justify-between gap-3">
+                                <span className="uppercase tracking-wide">
+                                    {currentPuzzle.side_to_move === 'white' ? 'White to move' : 'Black to move'}
                                 </span>
-                            )}
-                            <span className="font-mono">{currentIndex + 1}/{puzzles.length}</span>
+                                {currentPuzzle.primary_motif && (
+                                    <span className="px-2 py-0.5 bg-primary/10 rounded-sm">
+                                        {formatMotifName(currentPuzzle.primary_motif)}
+                                    </span>
+                                )}
+                            </div>
                         </div>
 
                         {/* Compact mobile session progress. The full panel below
@@ -1875,8 +1959,8 @@ export default function Puzzles() {
                                         <span className="mx-2 text-primary/30">·</span>
                                         Hints <span className="font-mono text-primary/80">{hintsUsed}</span>
                                     </span>
-                                    <span className="font-mono">
-                                        {reviewedCount} / {sessionSummary.requested_n}
+                                    <span className="whitespace-nowrap">
+                                        Puzzle {reviewedCount} of {sessionSummary.requested_n}
                                     </span>
                                 </div>
                                 <div
@@ -1917,8 +2001,8 @@ export default function Puzzles() {
                                                             ? `Session in Progress (${sessionSummary.session_type.replace('_', ' ')})`
                                                             : 'Session in Progress'}
                                                 </span>
-                                                <span className="text-sm font-mono text-primary/70">
-                                                    {reviewedCount} / {sessionSummary.requested_n}
+                                                <span className="text-sm font-sans text-primary/70 whitespace-nowrap">
+                                                    Puzzle {reviewedCount} of {sessionSummary.requested_n}
                                                 </span>
                                             </div>
 
@@ -2040,31 +2124,30 @@ export default function Puzzles() {
                                         </div>
                                     )}
 
-                                    <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
-                                        <div className="flex items-center gap-2 min-w-0">
-                                            <span className="font-serif text-xl text-primary">
-                                                {currentPuzzle.display_name}
-                                                {/* text-primary/70, not opacity-50: axe measured the
-                                                    latter at 3.56:1 on the card tint (needs 4.5).
-                                                    Same fix the sidebar nav already made — an alpha
-                                                    colour also lets tooling compute the ratio, which
-                                                    element opacity defeats. */}
-                                                {/* whitespace-nowrap: without it the counter wraps
-                                                    mid-token after long opening names and the title
-                                                    reads "…move 18 1" with "/ 2" on the next line. */}
-                                                <span className="text-base font-normal text-primary/70 ml-2 font-sans whitespace-nowrap">
-                                                    {currentIndex + 1} / {puzzles.length}
+                                    <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-2">
+                                        <div className="flex flex-wrap items-center gap-2 min-w-0">
+                                            <div className="min-w-0">
+                                                <span className="block text-xs font-sans uppercase tracking-widest text-primary/70">
+                                                    {currentPuzzleTitle ? 'Puzzle title' : 'From game'}
                                                 </span>
-                                            </span>
+                                                <span className={`block break-words text-primary ${currentPuzzleTitle ? 'font-serif text-xl' : 'font-sans text-base'}`}>
+                                                    {currentPuzzleTitle ?? currentPuzzle.display_name}
+                                                </span>
+                                            </div>
                                             {currentPuzzle.primary_motif && (
                                                 <span className="text-sm font-sans text-primary/70 px-2 py-1 bg-primary/10 rounded-sm">
                                                     {formatMotifName(currentPuzzle.primary_motif)}
                                                 </span>
                                             )}
                                         </div>
-                                        <span className="font-sans text-xs tracking-widest uppercase text-primary/70 shrink-0">
-                                            {currentPuzzle.side_to_move === 'white' ? 'White to Move' : 'Black to Move'}
-                                        </span>
+                                        <div className="font-sans text-xs tracking-widest uppercase text-primary/70 shrink-0 text-right space-y-1">
+                                            <span className="block normal-case tracking-normal whitespace-nowrap">
+                                                Puzzle {currentIndex + 1} of {puzzles.length}
+                                            </span>
+                                            <span className="block">
+                                                {currentPuzzle.side_to_move === 'white' ? 'White to Move' : 'Black to Move'}
+                                            </span>
+                                        </div>
                                     </div>
                                 </div>
                             </div>
@@ -2093,11 +2176,15 @@ export default function Puzzles() {
                             )}
                             {status === 'correct' && (
                                 <div className="text-center">
-                                    <p className="text-positive font-serif text-2xl animate-teedin">Correct! Excellent.</p>
+                                    <p className="text-positive font-serif text-2xl animate-teedin">
+                                        {isPracticeRetry ? 'Solved in practice' : 'Solved'}
+                                    </p>
                                     <p className="text-primary/70 font-sans text-sm mt-2 animate-teedin">
-                                        {usedHintForCurrentPuzzleRef.current
-                                            ? 'You found the server-verified move after using a hint.'
-                                            : 'You found the server-verified move without revealing the solution.'}
+                                        {isPracticeRetry
+                                            ? 'This puzzle remains failed for this session.'
+                                            : usedHintForCurrentPuzzleRef.current
+                                                ? 'Solved with a hint. Recorded as a pass for this session.'
+                                                : 'Recorded as a pass for this session.'}
                                     </p>
                                     {lastFeedback && (
                                         <p className="text-positive font-sans text-sm mt-2 animate-teedin">{lastFeedback}</p>
@@ -2108,7 +2195,9 @@ export default function Puzzles() {
                                 <div className="text-center">
                                     <p className="text-negative font-serif text-2xl animate-teedin">Not this one. Take another look.</p>
                                     <p className="text-primary/70 font-sans text-sm mt-2 animate-teedin">
-                                        Nothing has been recorded yet. Try again, or record the failure before seeing the solution.
+                                        {persistedFailForCurrentQueuePosition
+                                            ? 'This failure is recorded for this session. Try again for practice.'
+                                            : 'Nothing has been recorded yet. Try again, or record the failure before seeing the solution.'}
                                     </p>
                                     {lastFeedback && (
                                         <p className="text-negative font-sans text-sm mt-2 animate-teedin">{lastFeedback}</p>
@@ -2123,7 +2212,7 @@ export default function Puzzles() {
                                     {/* Human notation (SAN), not raw UCI — "Qxf7#" reads as
                                         chess; "h5f7" reads as coordinates. Played out on the
                                         board by the reveal playback at the same time. */}
-                                    <p className="text-primary font-serif text-xl">
+                                    <p className="text-primary font-mono text-xl leading-relaxed break-words [overflow-wrap:anywhere]">
                                         {currentPuzzle
                                             ? uciLineToSan(
                                                 currentPuzzle.fen,
@@ -2134,9 +2223,6 @@ export default function Puzzles() {
                                     {lastFeedback && (
                                         <p className="text-primary/80 font-sans text-sm mt-2 animate-teedin">{lastFeedback}</p>
                                     )}
-                                    <p className="text-primary/70 font-sans text-sm mt-2 animate-teedin">
-                                        You chose to reveal the server-provided solution.
-                                    </p>
                                 </div>
                             )}
                         </div>
@@ -2304,35 +2390,47 @@ export default function Puzzles() {
                                         </div>
                                     )}
 
-                                    <div className="grid grid-cols-2 gap-2 md:gap-3">
+                                    {persistedFailForCurrentQueuePosition ? (
                                         <button
                                             type="button"
-                                            onClick={async () => {
+                                            onClick={() => {
                                                 setActionError(null);
-                                                if (!await recordPuzzleOutcome('fail')) {
-                                                    outcomeWriteRef.current = null;
-                                                    setActionError("We couldn't save that result. Nothing was recorded. Check your connection and try again.");
-                                                    return;
-                                                }
                                                 beginFreshExposureAfterPersistedFail();
                                             }}
-                                            className="px-2 py-3 md:px-6 md:py-4 border border-primary/20 text-primary rounded-sm font-serif text-sm md:text-lg transition-all km-interactive km-focus-visible whitespace-nowrap md:whitespace-normal">
-                                            <span className="md:hidden">Record fail & retry</span>
-                                            <span className="hidden md:inline">Mark as Failed & Try Again</span>
+                                            className="w-full px-6 py-4 bg-primary text-bg-primary rounded-sm font-serif text-lg transition-opacity km-interactive km-focus-visible">
+                                            Try again
                                         </button>
-                                        <button
-                                            type="button"
-                                            onClick={handleRevealSolution}
-                                            aria-label={puzzleActionA11yCopy.showSolutionLabel}
-                                            // One primary per state. On the final puzzle "Finish
-                                            // Session" below is the primary action, so this steps
-                                            // down to the outline treatment rather than competing
-                                            // with it (previously they were solid-ink and orange,
-                                            // three button identities on one screen).
-                                            className={`px-2 py-3 md:px-6 md:py-4 rounded-sm font-serif text-sm md:text-lg transition-all km-interactive km-focus-visible ${isFinalPuzzle ? 'border border-primary/20 text-primary' : 'bg-primary text-bg-primary'}`}>
-                                            Show Solution
-                                        </button>
-                                    </div>
+                                    ) : (
+                                        <div className="grid grid-cols-2 gap-2 md:gap-3">
+                                            <button
+                                                type="button"
+                                                onClick={async () => {
+                                                    setActionError(null);
+                                                    if (!await recordPuzzleOutcome('fail')) {
+                                                        outcomeWriteRef.current = null;
+                                                        setActionError("We couldn't save that result. Nothing was recorded. Check your connection and try again.");
+                                                        return;
+                                                    }
+                                                    beginFreshExposureAfterPersistedFail();
+                                                }}
+                                                className="px-2 py-3 md:px-6 md:py-4 border border-primary/20 text-primary rounded-sm font-serif text-sm md:text-lg transition-all km-interactive km-focus-visible whitespace-nowrap md:whitespace-normal">
+                                                <span className="md:hidden">Record fail & retry</span>
+                                                <span className="hidden md:inline">Mark as Failed & Try Again</span>
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={handleRevealSolution}
+                                                aria-label={puzzleActionA11yCopy.showSolutionLabel}
+                                                // One primary per state. On the final puzzle "Finish
+                                                // Session" below is the primary action, so this steps
+                                                // down to the outline treatment rather than competing
+                                                // with it (previously they were solid-ink and orange,
+                                                // three button identities on one screen).
+                                                className={`px-2 py-3 md:px-6 md:py-4 rounded-sm font-serif text-sm md:text-lg transition-all km-interactive km-focus-visible ${isFinalPuzzle ? 'border border-primary/20 text-primary' : 'bg-primary text-bg-primary'}`}>
+                                                Show Solution
+                                            </button>
+                                        </div>
+                                    )}
 
                                     {/* Special button for completing session when final puzzle is failed */}
                                     {isFinalPuzzle && (
