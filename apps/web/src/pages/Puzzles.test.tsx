@@ -238,7 +238,9 @@ describe('Puzzles', () => {
 
     const generate = await screen.findByRole('button', { name: /Generate New/i });
     await waitFor(() => expect(generate).toBeEnabled());
-    generate.click();
+    await act(async () => {
+      generate.click();
+    });
 
     // The generation-specific recovery is the observable signal.
     await screen.findByRole('button', { name: 'Try generation again' });
@@ -281,8 +283,10 @@ describe('Puzzles', () => {
     });
   });
 
-  it('should show back to dashboard link', () => {
-    render(<Puzzles />);
+  it('should show back to dashboard link', async () => {
+    await act(async () => {
+      render(<Puzzles />);
+    });
 
     expect(screen.getByText(/Back to Dashboard/)).toBeInTheDocument();
   });
@@ -869,7 +873,9 @@ describe('Puzzles', () => {
       first.unmount();
       localStorage.setItem('knightmind:session:testplayer', 'older-active-session');
       mockSearchParams = new URLSearchParams(`warmup_return=${encodeURIComponent(token!)}`);
-      render(<Puzzles />);
+      await act(async () => {
+        render(<Puzzles />);
+      });
 
       expect(screen.queryByRole('heading', { name: 'Warmup complete' })).not.toBeInTheDocument();
       expect(mockGetSession).not.toHaveBeenCalled();
@@ -939,7 +945,9 @@ describe('Puzzles', () => {
       view.rerender(<Puzzles />);
       await waitFor(() => expect(screen.queryByRole('heading', { name: 'Warmup complete' })).not.toBeInTheDocument());
       mockUsername = 'testplayer';
-      view.rerender(<Puzzles />);
+      await act(async () => {
+        view.rerender(<Puzzles />);
+      });
 
       expect(screen.queryByRole('heading', { name: 'Warmup complete' })).not.toBeInTheDocument();
       expect(WarmupSummary.readReturnToken(token, 'testplayer')).toBeNull();
@@ -991,7 +999,9 @@ describe('Puzzles', () => {
       expect(mockNavigate).toHaveBeenCalledWith('/dashboard', { replace: true });
 
       first.unmount();
-      render(<Puzzles />);
+      await act(async () => {
+        render(<Puzzles />);
+      });
       expect(screen.queryByRole('heading', { name: 'Warmup complete' })).not.toBeInTheDocument();
     });
 
@@ -1012,7 +1022,9 @@ describe('Puzzles', () => {
 
       await user.click(screen.getByRole('button', { name: 'Back to Dashboard' }));
       view.unmount();
-      render(<Puzzles />);
+      await act(async () => {
+        render(<Puzzles />);
+      });
 
       expect(screen.queryByRole('heading', { name: 'Warmup complete' })).not.toBeInTheDocument();
       expect(startSession).not.toHaveBeenCalled();
