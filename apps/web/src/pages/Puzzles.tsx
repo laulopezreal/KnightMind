@@ -401,6 +401,8 @@ export default function Puzzles() {
         && outcome.sessionId === activeSessionId
         && outcome.puzzleIndex === currentIndex
     );
+    const persistedFailForCurrentQueuePosition = ownsCurrentQueuePosition(persistedOutcomeRef.current)
+        && persistedOutcomeRef.current?.result === 'fail';
     const isPracticeRetry = ownsCurrentQueuePosition(practiceRetryOwner);
     // A solve check owns one puzzle at a time. The same action is reachable
     // through typed input, Enter, click-to-move, drag, and keyboard movement;
@@ -703,12 +705,11 @@ export default function Puzzles() {
     // stale, while the fresh exposure may accept exactly one new solve check.
     // This is called only after the failed review has landed.
     const beginFreshExposureAfterPersistedFail = () => {
-        const terminalDecision = outcomeDecisionRef.current;
+        const persistedOutcome = persistedOutcomeRef.current;
         if (
             !currentPuzzle ||
-            terminalDecision?.puzzleId !== currentPuzzle.id ||
-            terminalDecision.epoch !== puzzleEpochRef.current ||
-            terminalDecision.result !== 'fail'
+            !ownsCurrentQueuePosition(persistedOutcome) ||
+            persistedOutcome?.result !== 'fail'
         ) return false;
 
         puzzleEpochRef.current += 1;
@@ -722,10 +723,7 @@ export default function Puzzles() {
         setDiagnosisLoadingOwner(null);
         setDiagnosisConfirmationOwner(null);
         setDiagnosisConfirmationError(null);
-        const persistedOutcome = persistedOutcomeRef.current;
-        if (ownsCurrentQueuePosition(persistedOutcome) && persistedOutcome?.result === 'fail') {
-            setPracticeRetryOwner(persistedOutcome);
-        }
+        setPracticeRetryOwner(persistedOutcome);
         usedHintForCurrentPuzzleRef.current = false;
         dispatchBoard({ type: 'RESET' });
         setGame(new Chess(currentPuzzle.fen));
@@ -2197,7 +2195,9 @@ export default function Puzzles() {
                                 <div className="text-center">
                                     <p className="text-negative font-serif text-2xl animate-teedin">Not this one. Take another look.</p>
                                     <p className="text-primary/70 font-sans text-sm mt-2 animate-teedin">
-                                        Nothing has been recorded yet. Try again, or record the failure before seeing the solution.
+                                        {persistedFailForCurrentQueuePosition
+                                            ? 'This failure is recorded for this session. Try again for practice.'
+                                            : 'Nothing has been recorded yet. Try again, or record the failure before seeing the solution.'}
                                     </p>
                                     {lastFeedback && (
                                         <p className="text-negative font-sans text-sm mt-2 animate-teedin">{lastFeedback}</p>
@@ -2390,35 +2390,47 @@ export default function Puzzles() {
                                         </div>
                                     )}
 
-                                    <div className="grid grid-cols-2 gap-2 md:gap-3">
+                                    {persistedFailForCurrentQueuePosition ? (
                                         <button
                                             type="button"
-                                            onClick={async () => {
+                                            onClick={() => {
                                                 setActionError(null);
-                                                if (!await recordPuzzleOutcome('fail')) {
-                                                    outcomeWriteRef.current = null;
-                                                    setActionError("We couldn't save that result. Nothing was recorded. Check your connection and try again.");
-                                                    return;
-                                                }
                                                 beginFreshExposureAfterPersistedFail();
                                             }}
-                                            className="px-2 py-3 md:px-6 md:py-4 border border-primary/20 text-primary rounded-sm font-serif text-sm md:text-lg transition-all km-interactive km-focus-visible whitespace-nowrap md:whitespace-normal">
-                                            <span className="md:hidden">Record fail & retry</span>
-                                            <span className="hidden md:inline">Mark as Failed & Try Again</span>
+                                            className="w-full px-6 py-4 bg-primary text-bg-primary rounded-sm font-serif text-lg transition-opacity km-interactive km-focus-visible">
+                                            Try again
                                         </button>
-                                        <button
-                                            type="button"
-                                            onClick={handleRevealSolution}
-                                            aria-label={puzzleActionA11yCopy.showSolutionLabel}
-                                            // One primary per state. On the final puzzle "Finish
-                                            // Session" below is the primary action, so this steps
-                                            // down to the outline treatment rather than competing
-                                            // with it (previously they were solid-ink and orange,
-                                            // three button identities on one screen).
-                                            className={`px-2 py-3 md:px-6 md:py-4 rounded-sm font-serif text-sm md:text-lg transition-all km-interactive km-focus-visible ${isFinalPuzzle ? 'border border-primary/20 text-primary' : 'bg-primary text-bg-primary'}`}>
-                                            Show Solution
-                                        </button>
-                                    </div>
+                                    ) : (
+                                        <div className="grid grid-cols-2 gap-2 md:gap-3">
+                                            <button
+                                                type="button"
+                                                onClick={async () => {
+                                                    setActionError(null);
+                                                    if (!await recordPuzzleOutcome('fail')) {
+                                                        outcomeWriteRef.current = null;
+                                                        setActionError("We couldn't save that result. Nothing was recorded. Check your connection and try again.");
+                                                        return;
+                                                    }
+                                                    beginFreshExposureAfterPersistedFail();
+                                                }}
+                                                className="px-2 py-3 md:px-6 md:py-4 border border-primary/20 text-primary rounded-sm font-serif text-sm md:text-lg transition-all km-interactive km-focus-visible whitespace-nowrap md:whitespace-normal">
+                                                <span className="md:hidden">Record fail & retry</span>
+                                                <span className="hidden md:inline">Mark as Failed & Try Again</span>
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={handleRevealSolution}
+                                                aria-label={puzzleActionA11yCopy.showSolutionLabel}
+                                                // One primary per state. On the final puzzle "Finish
+                                                // Session" below is the primary action, so this steps
+                                                // down to the outline treatment rather than competing
+                                                // with it (previously they were solid-ink and orange,
+                                                // three button identities on one screen).
+                                                className={`px-2 py-3 md:px-6 md:py-4 rounded-sm font-serif text-sm md:text-lg transition-all km-interactive km-focus-visible ${isFinalPuzzle ? 'border border-primary/20 text-primary' : 'bg-primary text-bg-primary'}`}>
+                                                Show Solution
+                                            </button>
+                                        </div>
+                                    )}
 
                                     {/* Special button for completing session when final puzzle is failed */}
                                     {isFinalPuzzle && (

@@ -639,7 +639,7 @@ describe('Puzzles — honest failure handling', () => {
             expect(screen.queryByText('Solved')).not.toBeInTheDocument();
             expect(screen.queryByText(/recorded as a pass/i)).not.toBeInTheDocument();
 
-            await user.click(screen.getByRole('button', { name: /record fail & retry/i }));
+            await user.click(screen.getByRole('button', { name: 'Try again' }));
             expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(1);
 
             const input = screen.getByPlaceholderText('e.g. e2e4');
@@ -655,6 +655,69 @@ describe('Puzzles — honest failure handling', () => {
             await waitFor(() => expect(mockSetCurrentIndex).toHaveBeenCalledWith(1));
             expect(mockHandleCompleteSession).not.toHaveBeenCalled();
             expect(setReviewedCount).toHaveBeenCalledTimes(1);
+        });
+
+        it('retries an authoritative fail after the review hook folds fresh stats into the same puzzle', async () => {
+            const pendingReview = deferred<PuzzleReviewCompletion>();
+            mockHandleReviewPuzzle.mockReturnValue(pendingReview.promise);
+            vi.mocked(checkPuzzle)
+                .mockResolvedValueOnce({ correct: true, result: 'pass' } as never)
+                .mockResolvedValueOnce({ correct: true, result: 'pass' } as never);
+            const setReviewedCount = vi.fn();
+            currentSessionReturn = {
+                ...makeSessionReturn(),
+                setReviewedCount,
+            };
+            const sessionBaseline = currentSessionReturn;
+            const user = userEvent.setup();
+            const { rerender } = render(<Puzzles />);
+
+            await typeAndCheck(user, 'e2e4');
+            await waitFor(() => expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(1));
+
+            await act(async () => {
+                pendingReview.resolve(persistedReview('fail'));
+                await pendingReview.promise;
+                await Promise.resolve();
+            });
+            expect(await screen.findByText('Not this one. Take another look.')).toBeInTheDocument();
+
+            // Match usePuzzleSession's post-review setPuzzles update: the queue
+            // position and puzzle id are unchanged, but the fresh stats object
+            // advances the page's puzzle exposure epoch before retry is clicked.
+            currentSessionReturn = {
+                ...sessionBaseline,
+                puzzles: [{
+                    ...puzzle,
+                    attempts: 1,
+                    fail_count: 1,
+                    last_result: 'fail',
+                }, { ...puzzle, id: 'p2' }],
+            };
+            rerender(<Puzzles />);
+
+            expect(screen.getByText('This failure is recorded for this session. Try again for practice.')).toBeInTheDocument();
+            expect(screen.queryByText(/nothing has been recorded yet/i)).not.toBeInTheDocument();
+            expect(screen.queryByRole('button', { name: /mark as failed|record fail/i })).not.toBeInTheDocument();
+
+            await user.click(screen.getByRole('button', { name: 'Try again' }));
+            expect(screen.getByText('Find the best move...')).toBeInTheDocument();
+
+            const input = screen.getByPlaceholderText('e.g. e2e4');
+            await user.clear(input);
+            await user.type(input, 'e2e4');
+            await user.click(screen.getByRole('button', { name: /check entered move/i }));
+
+            expect(await screen.findByText('Solved in practice')).toBeInTheDocument();
+            expect(screen.getByText('This puzzle remains failed for this session.')).toBeInTheDocument();
+            expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(1);
+            expect(mockHandleReviewPuzzle).toHaveBeenCalledWith('pass', undefined, 'e2e4');
+            expect(mockHandleReviewPuzzle).not.toHaveBeenCalledWith('fail');
+
+            await user.click(screen.getByRole('button', { name: /next puzzle/i }));
+            await waitFor(() => expect(mockSetCurrentIndex).toHaveBeenCalledWith(1));
+            expect(setReviewedCount).toHaveBeenCalledTimes(1);
+            expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(1);
         });
 
         it('restarts the timed exposure only after an ordinary failed review persists', async () => {
@@ -691,7 +754,7 @@ describe('Puzzles — honest failure handling', () => {
             act(() => timedOut?.());
             await waitFor(() => expect(mockHandleReviewPuzzle).toHaveBeenCalledWith('fail'));
 
-            await user.click(screen.getByRole('button', { name: /mark as failed/i }));
+            await user.click(screen.getByRole('button', { name: 'Try again' }));
             await waitFor(() => expect(mockStartPuzzleTimer.mock.calls.length).toBeGreaterThan(1));
 
             act(() => timedOut?.());
@@ -715,7 +778,7 @@ describe('Puzzles — honest failure handling', () => {
             act(() => timedOut?.());
             await waitFor(() => expect(mockHandleReviewPuzzle).toHaveBeenCalledWith('fail'));
 
-            await user.click(screen.getByRole('button', { name: /mark as failed/i }));
+            await user.click(screen.getByRole('button', { name: 'Try again' }));
             const input = screen.getByPlaceholderText('e.g. e2e4');
             await user.clear(input);
             await user.type(input, 'e2e4');
