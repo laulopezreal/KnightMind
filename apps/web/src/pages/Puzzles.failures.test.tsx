@@ -546,6 +546,11 @@ describe('Puzzles — honest failure handling', () => {
             vi.mocked(checkPuzzle)
                 .mockResolvedValueOnce({ correct: false, result: 'fail' } as never)
                 .mockResolvedValueOnce({ correct: true, result: 'pass' } as never);
+            const setReviewedCount = vi.fn();
+            currentSessionReturn = {
+                ...makeSessionReturn(),
+                setReviewedCount,
+            };
             const user = userEvent.setup();
             render(<Puzzles />);
             const checkCallsBeforeRetry = vi.mocked(checkPuzzle).mock.calls.length;
@@ -569,6 +574,17 @@ describe('Puzzles — honest failure handling', () => {
             expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(1);
             expect(mockHandleReviewPuzzle).toHaveBeenCalledWith('fail');
             expect(mockHandleReviewPuzzle).not.toHaveBeenCalledWith('pass', undefined, 'e2e4');
+
+            await user.click(screen.getByRole('button', { name: /next puzzle/i }));
+
+            await waitFor(() => expect(mockSetCurrentIndex).toHaveBeenCalledWith(1));
+            expect(mockSetCurrentIndex).toHaveBeenCalledTimes(1);
+            expect(mockHandleReviewPuzzle).toHaveBeenCalledTimes(1);
+            expect(mockHandleReviewPuzzle).toHaveBeenCalledWith('fail');
+            expect(mockHandleReviewPuzzle).not.toHaveBeenCalledWith('pass', expect.anything(), expect.anything());
+            expect(setReviewedCount).toHaveBeenCalledTimes(1);
+            const advanceProgress = setReviewedCount.mock.calls[0][0] as (count: number) => number;
+            expect(advanceProgress(0)).toBe(1);
         });
 
         it('restarts the timed exposure only after an ordinary failed review persists', async () => {
