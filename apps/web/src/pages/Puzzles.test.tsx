@@ -707,6 +707,11 @@ describe('Puzzles', () => {
 
       await waitFor(() => expect(reviewPuzzle).toHaveBeenCalled());
       expect(screen.queryByText('Practice recorded. Your normal review date is unchanged.')).not.toBeInTheDocument();
+      expect(screen.getByText('Solution')).toBeInTheDocument();
+      const notation = screen.getByText('e2e4');
+      expect(notation).toHaveClass('font-mono');
+      expect(notation).not.toHaveClass('font-serif');
+      expect(screen.queryByText('You chose to reveal the server-provided solution.')).not.toBeInTheDocument();
     });
 
 
@@ -1117,18 +1122,51 @@ describe('Puzzles', () => {
       await waitFor(() => {
         expect(screen.getByText('Session in Progress')).toBeInTheDocument();
       });
-      // Two counters are rendered — the desktop panel and the compact mobile
-      // strip — with CSS (not conditional rendering) choosing which is visible,
-      // so both are in the DOM under jsdom.
-      expect(screen.getAllByText('3 / 5')).toHaveLength(2);
+      // The desktop panel and compact mobile strip both identify the value as
+      // puzzle progress rather than leaving a bare fraction beside the source.
+      expect(screen.getAllByText('Puzzle 3 of 5')).toHaveLength(2);
       expect(
-        within(screen.getByTestId('mobile-session-progress')).getByText('3 / 5'),
+        within(screen.getByTestId('mobile-session-progress')).getByText('Puzzle 3 of 5'),
       ).toBeInTheDocument();
 
       // Wait for session-state persistence effect to flush before cleanup
       await waitFor(() => {
         expect(localStorage.getItem('knightmind:sessionState:testplayer')).not.toBeNull();
       });
+    });
+
+    it('labels display_name as game provenance when no real title is present', async () => {
+      localStorage.setItem('knightmind:session:testplayer', 'test-session-123');
+      mockGetSession.mockResolvedValue(mockActiveSession);
+      mockGetDuePuzzles.mockResolvedValue({
+        due_count: 1,
+        returned_count: 1,
+        now: new Date().toISOString(),
+        puzzles: [{ ...mockPuzzles[0], display_name: '5 Aug · move 17', title: '   ' }],
+      });
+
+      render(<Puzzles />);
+
+      expect(await screen.findAllByText('From game')).toHaveLength(2);
+      expect(screen.getAllByText('5 Aug · move 17')).toHaveLength(2);
+      expect(screen.queryByText('Puzzle title')).not.toBeInTheDocument();
+    });
+
+    it('labels and renders a nonblank puzzle title as the primary identity', async () => {
+      localStorage.setItem('knightmind:session:testplayer', 'test-session-123');
+      mockGetSession.mockResolvedValue(mockActiveSession);
+      mockGetDuePuzzles.mockResolvedValue({
+        due_count: 1,
+        returned_count: 1,
+        now: new Date().toISOString(),
+        puzzles: [{ ...mockPuzzles[0], display_name: '5 Aug · move 17', title: 'Back-rank finish' }],
+      });
+
+      render(<Puzzles />);
+
+      expect(await screen.findAllByText('Puzzle title')).toHaveLength(2);
+      expect(screen.getAllByText('Back-rank finish')).toHaveLength(2);
+      expect(screen.queryByText('From game')).not.toBeInTheDocument();
     });
 
     it('should clear localStorage when saved session is already completed', async () => {
@@ -1278,7 +1316,7 @@ describe('Puzzles', () => {
       render(<Puzzles />);
 
       await waitFor(() => {
-        expect(screen.getAllByText('2 / 5').length).toBeGreaterThan(0);
+        expect(screen.getAllByText('Puzzle 2 of 5').length).toBeGreaterThan(0);
       });
     });
   });

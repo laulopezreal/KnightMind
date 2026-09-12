@@ -380,6 +380,7 @@ export default function Puzzles() {
 
     const startPuzzleTimer = timer.startPuzzleTimer;
     const currentPuzzle = puzzles[currentIndex];
+    const currentPuzzleTitle = currentPuzzle?.title?.trim() || null;
     // A solve check owns one puzzle at a time. The same action is reachable
     // through typed input, Enter, click-to-move, drag, and keyboard movement;
     // disable rendering alone cannot close that race before React re-renders.
@@ -1850,16 +1851,28 @@ export default function Puzzles() {
                             />
                         </div>
                         {/* Compact board-adjacent context: mobile-only, non-interactive meta */}
-                        <div data-testid="mobile-puzzle-context" className="lg:hidden mt-3 flex items-center justify-between text-xs font-sans text-primary/70 px-1">
-                            <span className="uppercase tracking-wide">
-                                {currentPuzzle.side_to_move === 'white' ? 'White to move' : 'Black to move'}
-                            </span>
-                            {currentPuzzle.primary_motif && (
-                                <span className="px-2 py-0.5 bg-primary/10 rounded-sm">
-                                    {formatMotifName(currentPuzzle.primary_motif)}
+                        <div data-testid="mobile-puzzle-context" className="lg:hidden mt-3 px-1 space-y-2 text-xs font-sans text-primary/70">
+                            <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0">
+                                    <span className="block uppercase tracking-wide">
+                                        {currentPuzzleTitle ? 'Puzzle title' : 'From game'}
+                                    </span>
+                                    <span className={`block mt-0.5 break-words text-primary ${currentPuzzleTitle ? 'font-serif text-base' : 'font-sans text-sm'}`}>
+                                        {currentPuzzleTitle ?? currentPuzzle.display_name}
+                                    </span>
+                                </div>
+                                <span className="shrink-0 whitespace-nowrap">Puzzle {currentIndex + 1} of {puzzles.length}</span>
+                            </div>
+                            <div className="flex items-center justify-between gap-3">
+                                <span className="uppercase tracking-wide">
+                                    {currentPuzzle.side_to_move === 'white' ? 'White to move' : 'Black to move'}
                                 </span>
-                            )}
-                            <span className="font-mono">{currentIndex + 1}/{puzzles.length}</span>
+                                {currentPuzzle.primary_motif && (
+                                    <span className="px-2 py-0.5 bg-primary/10 rounded-sm">
+                                        {formatMotifName(currentPuzzle.primary_motif)}
+                                    </span>
+                                )}
+                            </div>
                         </div>
 
                         {/* Compact mobile session progress. The full panel below
@@ -1875,8 +1888,8 @@ export default function Puzzles() {
                                         <span className="mx-2 text-primary/30">·</span>
                                         Hints <span className="font-mono text-primary/80">{hintsUsed}</span>
                                     </span>
-                                    <span className="font-mono">
-                                        {reviewedCount} / {sessionSummary.requested_n}
+                                    <span className="whitespace-nowrap">
+                                        Puzzle {reviewedCount} of {sessionSummary.requested_n}
                                     </span>
                                 </div>
                                 <div
@@ -1917,8 +1930,8 @@ export default function Puzzles() {
                                                             ? `Session in Progress (${sessionSummary.session_type.replace('_', ' ')})`
                                                             : 'Session in Progress'}
                                                 </span>
-                                                <span className="text-sm font-mono text-primary/70">
-                                                    {reviewedCount} / {sessionSummary.requested_n}
+                                                <span className="text-sm font-sans text-primary/70 whitespace-nowrap">
+                                                    Puzzle {reviewedCount} of {sessionSummary.requested_n}
                                                 </span>
                                             </div>
 
@@ -2040,31 +2053,30 @@ export default function Puzzles() {
                                         </div>
                                     )}
 
-                                    <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
-                                        <div className="flex items-center gap-2 min-w-0">
-                                            <span className="font-serif text-xl text-primary">
-                                                {currentPuzzle.display_name}
-                                                {/* text-primary/70, not opacity-50: axe measured the
-                                                    latter at 3.56:1 on the card tint (needs 4.5).
-                                                    Same fix the sidebar nav already made — an alpha
-                                                    colour also lets tooling compute the ratio, which
-                                                    element opacity defeats. */}
-                                                {/* whitespace-nowrap: without it the counter wraps
-                                                    mid-token after long opening names and the title
-                                                    reads "…move 18 1" with "/ 2" on the next line. */}
-                                                <span className="text-base font-normal text-primary/70 ml-2 font-sans whitespace-nowrap">
-                                                    {currentIndex + 1} / {puzzles.length}
+                                    <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-2">
+                                        <div className="flex flex-wrap items-center gap-2 min-w-0">
+                                            <div className="min-w-0">
+                                                <span className="block text-xs font-sans uppercase tracking-widest text-primary/70">
+                                                    {currentPuzzleTitle ? 'Puzzle title' : 'From game'}
                                                 </span>
-                                            </span>
+                                                <span className={`block break-words text-primary ${currentPuzzleTitle ? 'font-serif text-xl' : 'font-sans text-base'}`}>
+                                                    {currentPuzzleTitle ?? currentPuzzle.display_name}
+                                                </span>
+                                            </div>
                                             {currentPuzzle.primary_motif && (
                                                 <span className="text-sm font-sans text-primary/70 px-2 py-1 bg-primary/10 rounded-sm">
                                                     {formatMotifName(currentPuzzle.primary_motif)}
                                                 </span>
                                             )}
                                         </div>
-                                        <span className="font-sans text-xs tracking-widest uppercase text-primary/70 shrink-0">
-                                            {currentPuzzle.side_to_move === 'white' ? 'White to Move' : 'Black to Move'}
-                                        </span>
+                                        <div className="font-sans text-xs tracking-widest uppercase text-primary/70 shrink-0 text-right space-y-1">
+                                            <span className="block normal-case tracking-normal whitespace-nowrap">
+                                                Puzzle {currentIndex + 1} of {puzzles.length}
+                                            </span>
+                                            <span className="block">
+                                                {currentPuzzle.side_to_move === 'white' ? 'White to Move' : 'Black to Move'}
+                                            </span>
+                                        </div>
                                     </div>
                                 </div>
                             </div>
@@ -2123,7 +2135,7 @@ export default function Puzzles() {
                                     {/* Human notation (SAN), not raw UCI — "Qxf7#" reads as
                                         chess; "h5f7" reads as coordinates. Played out on the
                                         board by the reveal playback at the same time. */}
-                                    <p className="text-primary font-serif text-xl">
+                                    <p className="text-primary font-mono text-xl leading-relaxed break-words [overflow-wrap:anywhere]">
                                         {currentPuzzle
                                             ? uciLineToSan(
                                                 currentPuzzle.fen,
@@ -2134,9 +2146,6 @@ export default function Puzzles() {
                                     {lastFeedback && (
                                         <p className="text-primary/80 font-sans text-sm mt-2 animate-teedin">{lastFeedback}</p>
                                     )}
-                                    <p className="text-primary/70 font-sans text-sm mt-2 animate-teedin">
-                                        You chose to reveal the server-provided solution.
-                                    </p>
                                 </div>
                             )}
                         </div>

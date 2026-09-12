@@ -387,7 +387,8 @@ describe('Puzzles — honest failure handling', () => {
 
         await user.click(screen.getByRole('button', { name: /reveal/i }));
 
-        expect(await screen.findByText('You chose to reveal the server-provided solution.')).toBeVisible();
+        expect(await screen.findByText('Solution')).toBeVisible();
+        expect(screen.queryByText('You chose to reveal the server-provided solution.')).not.toBeInTheDocument();
         const diagnosis = await screen.findByTestId('post-resolution-diagnosis');
         expect(diagnosis).toBeVisible();
         expect(screen.getByText('Loose piece awareness')).toBeVisible();
@@ -703,7 +704,7 @@ describe('Puzzles — honest failure handling', () => {
 
             expect(screen.getByText('Solution line')).toBeInTheDocument();
             expect(screen.getByText(/e4\s+e5\s+Nf3/)).toBeInTheDocument();
-            expect(screen.getByText(/you chose to reveal/i)).toBeInTheDocument();
+            expect(screen.queryByText(/you chose to reveal/i)).not.toBeInTheDocument();
             expect(screen.getByRole('gridcell', { name: 'e4, white pawn' })).toBeInTheDocument();
             expect(screen.getByRole('gridcell', { name: 'e2, empty' })).toBeInTheDocument();
             expect(screen.getByRole('gridcell', { name: 'e5, black pawn' })).toBeInTheDocument();
